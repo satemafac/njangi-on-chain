@@ -1,0 +1,13 @@
+[package]
+name = "njangi"
+version = "0.1.0"
+published-at = "0x0"
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "testnet" }
+SuiExt = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework-ext", rev = "testnet" }
+
+[addresses]
+njangi = "0x123"
+sui = "0x2"
+sui_ext = "0x2" 

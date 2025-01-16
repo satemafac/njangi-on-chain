@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  prover:
+    image: mystenlabs/zklogin:latest
+    ports:
+      - "5001:5001"
+    environment:
+      - PORT=5001
+      - RUST_LOG=info
+    restart: unless-stopped
+
+  salt:
+    image: mystenlabs/zklogin-salt:latest
+    ports:
+      - "5002:5002"
+    environment:
+      - PORT=5002
+      - RUST_LOG=info
+    restart: unless-stopped 
