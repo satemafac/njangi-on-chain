@@ -17,9 +17,9 @@ interface CircleFormData {
   name: string;
   contributionAmount: number;
   cycleLength: CycleLength;
-  cycleDay: number | WeekDay; // Can be 1-28 for monthly/quarterly or a weekday for weekly
+  cycleDay: number | WeekDay;
   cycleType: CycleType;
-  rotationStyle?: RotationStyle; // Only used when cycleType is 'rotational'
+  rotationStyle?: RotationStyle;
   numberOfMembers: number;
   securityDeposit: number;
   penaltyRules: {
@@ -33,6 +33,107 @@ interface CircleFormData {
     verificationRequired: boolean;
   };
 }
+
+// Contract-specific constants
+const MIN_MEMBERS = 3;
+const MAX_MEMBERS = 20;
+
+// Type conversion maps for contract interaction
+const CYCLE_LENGTH_MAP = {
+  weekly: 0,
+  monthly: 1,
+  quarterly: 2,
+} as const;
+
+const CYCLE_TYPE_MAP = {
+  rotational: 0,
+  'smart-goal': 1,
+  auction: 2,
+} as const;
+
+const GOAL_TYPE_MAP = {
+  amount: 0,
+  date: 1,
+} as const;
+
+const WEEKDAY_MAP = {
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+  sunday: 7,
+} as const;
+
+// Validation function for form data
+const validateFormData = (formData: CircleFormData): string[] => {
+  const errors: string[] = [];
+  
+  if (!formData.name) {
+    errors.push('Circle name is required');
+  }
+  
+  if (formData.contributionAmount <= 0) {
+    errors.push('Contribution amount must be greater than 0');
+  }
+  
+  if (formData.securityDeposit < formData.contributionAmount / 2) {
+    errors.push('Security deposit must be at least 50% of contribution amount');
+  }
+  
+  if (formData.numberOfMembers < MIN_MEMBERS || formData.numberOfMembers > MAX_MEMBERS) {
+    errors.push(`Number of members must be between ${MIN_MEMBERS} and ${MAX_MEMBERS}`);
+  }
+  
+  if (formData.cycleType === 'smart-goal' && formData.smartGoal) {
+    if (formData.smartGoal.goalType === 'amount' && (!formData.smartGoal.targetAmount || formData.smartGoal.targetAmount <= 0)) {
+      errors.push('Target amount must be greater than 0');
+    }
+    if (formData.smartGoal.goalType === 'date' && !formData.smartGoal.targetDate) {
+      errors.push('Target date is required');
+    }
+  }
+  
+  return errors;
+};
+
+// Function to prepare form data for contract
+const prepareCircleCreationData = (formData: CircleFormData) => {
+  const cycle_length = CYCLE_LENGTH_MAP[formData.cycleLength];
+  const cycle_day = typeof formData.cycleDay === 'string' 
+    ? WEEKDAY_MAP[formData.cycleDay as WeekDay]
+    : formData.cycleDay;
+  const circle_type = CYCLE_TYPE_MAP[formData.cycleType];
+  
+  const goal_type = formData.smartGoal 
+    ? { some: GOAL_TYPE_MAP[formData.smartGoal.goalType] }
+    : { none: null };
+    
+  const target_amount = formData.smartGoal?.goalType === 'amount'
+    ? { some: formData.smartGoal.targetAmount || 0 }
+    : { none: null };
+    
+  const target_date = formData.smartGoal?.goalType === 'date' && formData.smartGoal.targetDate
+    ? { some: new Date(formData.smartGoal.targetDate).getTime() }
+    : { none: null };
+
+  return {
+    name: new TextEncoder().encode(formData.name),
+    contribution_amount: formData.contributionAmount,
+    security_deposit: formData.securityDeposit,
+    cycle_length,
+    cycle_day,
+    circle_type,
+    max_members: formData.numberOfMembers,
+    late_payment: formData.penaltyRules.latePayment,
+    missed_meeting: formData.penaltyRules.missedMeeting,
+    goal_type,
+    target_amount,
+    target_date,
+    verification_required: formData.smartGoal?.verificationRequired || false,
+  };
+};
 
 interface InviteMember {
   type: 'email' | 'phone';
@@ -68,6 +169,8 @@ export default function CreateCircle() {
   const [inviteType, setInviteType] = useState<'email' | 'phone'>('email');
   const [inviteLink, setInviteLink] = useState('');
   const [showCopiedToast, setShowCopiedToast] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchPrice = async () => {
@@ -148,8 +251,31 @@ export default function CreateCircle() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    console.log('Form submitted:', formData);
-    setCurrentStep(2);
+    
+    // Clear previous errors
+    setValidationErrors([]);
+    setError(null);
+    
+    // Validate form data
+    const errors = validateFormData(formData);
+    if (errors.length > 0) {
+      setValidationErrors(errors);
+      return;
+    }
+    
+    try {
+      // Prepare data for contract
+      const contractData = prepareCircleCreationData(formData);
+      
+      // TODO: Call contract to create circle using Sui SDK
+      console.log('Creating circle with data:', contractData);
+      
+      // Move to invite step on success
+      setCurrentStep(2);
+    } catch (error) {
+      console.error('Error creating circle:', error);
+      setError('Failed to create circle. Please try again.');
+    }
   };
 
   const handleCustomUSDInput = (type: 'contribution' | 'deposit', value: string) => {
@@ -237,6 +363,42 @@ export default function CreateCircle() {
             </div>
           ) : currentStep === 1 ? (
             <form onSubmit={handleSubmit} className="space-y-8">
+              {/* Error Display */}
+              {error && (
+                <div className="p-4 bg-red-50 border border-red-200 rounded-md">
+                  <div className="flex">
+                    <div className="flex-shrink-0">
+                      <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                    <div className="ml-3">
+                      <h3 className="text-sm font-medium text-red-800">Error</h3>
+                      <p className="text-sm text-red-700 mt-1">{error}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {validationErrors.length > 0 && (
+                <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-md">
+                  <div className="flex">
+                    <div className="flex-shrink-0">
+                      <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                    <div className="ml-3">
+                      <h3 className="text-sm font-medium text-yellow-800">Please fix the following issues:</h3>
+                      <ul className="mt-2 text-sm text-yellow-700 list-disc list-inside">
+                        {validationErrors.map((error, index) => (
+                          <li key={index}>{error}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Group Name */}
               <div className="space-y-2">
                 <div className="flex items-center">
