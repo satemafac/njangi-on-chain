@@ -26,6 +26,12 @@ interface CircleFormData {
     latePayment: boolean;
     missedMeeting: boolean;
   };
+  smartGoal?: {
+    goalType: 'amount' | 'date';
+    targetAmount?: number;
+    targetDate?: string;
+    verificationRequired: boolean;
+  };
 }
 
 interface InviteMember {
@@ -623,6 +629,174 @@ export default function CreateCircle() {
                   </Tooltip.Provider>
                 )}
               </div>
+
+              {/* Add Smart Goal Fields when cycleType is smart-goal */}
+              {formData.cycleType === 'smart-goal' && (
+                <div className="space-y-6 border-t pt-6">
+                  <h3 className="text-lg font-medium text-gray-900">Smart Goal Settings</h3>
+                  
+                  {/* Goal Type Selection */}
+                  <div className="space-y-2">
+                    <div className="flex items-center">
+                      <label className="block text-sm font-medium text-gray-700">
+                        Goal Type
+                      </label>
+                      <InfoTooltip>
+                        <p>Choose how you want to define your group's goal</p>
+                        <p className="text-gray-300 text-xs mt-1">Amount-based: Set a specific savings target</p>
+                        <p className="text-gray-300 text-xs mt-1">Date-based: Set a target completion date</p>
+                      </InfoTooltip>
+                    </div>
+                    <Select.Root
+                      value={formData.smartGoal?.goalType || 'amount'}
+                      onValueChange={(value: 'amount' | 'date') => {
+                        setFormData(prev => ({
+                          ...prev,
+                          smartGoal: {
+                            ...prev.smartGoal,
+                            goalType: value,
+                            targetAmount: value === 'amount' ? 0 : undefined,
+                            targetDate: value === 'date' ? undefined : undefined,
+                            verificationRequired: prev.smartGoal?.verificationRequired || false
+                          }
+                        }));
+                      }}
+                    >
+                      <Select.Trigger
+                        className="inline-flex items-center justify-between w-full px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        aria-label="Goal type"
+                      >
+                        <Select.Value />
+                        <Select.Icon className="ml-2">
+                          <ChevronDownIcon />
+                        </Select.Icon>
+                      </Select.Trigger>
+                      <Select.Portal>
+                        <Select.Content className="overflow-hidden bg-white rounded-md shadow-lg">
+                          <Select.Viewport className="p-1">
+                            <Select.Item
+                              value="amount"
+                              className="relative flex items-center px-8 py-2 text-sm text-gray-700 rounded-md hover:bg-blue-50 hover:text-blue-700 focus:bg-blue-50 focus:text-blue-700 outline-none cursor-pointer"
+                            >
+                              <Select.ItemText>Amount-based Goal</Select.ItemText>
+                              <Select.ItemIndicator className="absolute left-2 inline-flex items-center">
+                                <CheckIcon />
+                              </Select.ItemIndicator>
+                            </Select.Item>
+                            <Select.Item
+                              value="date"
+                              className="relative flex items-center px-8 py-2 text-sm text-gray-700 rounded-md hover:bg-blue-50 hover:text-blue-700 focus:bg-blue-50 focus:text-blue-700 outline-none cursor-pointer"
+                            >
+                              <Select.ItemText>Date-based Goal</Select.ItemText>
+                              <Select.ItemIndicator className="absolute left-2 inline-flex items-center">
+                                <CheckIcon />
+                              </Select.ItemIndicator>
+                            </Select.Item>
+                          </Select.Viewport>
+                        </Select.Content>
+                      </Select.Portal>
+                    </Select.Root>
+                  </div>
+
+                  {/* Target Amount Field - Show when goalType is 'amount' */}
+                  {formData.smartGoal?.goalType === 'amount' && (
+                    <div className="space-y-2">
+                      <div className="flex items-center">
+                        <label className="block text-sm font-medium text-gray-700">
+                          Target Amount
+                        </label>
+                        <InfoTooltip>
+                          <p>The total amount your group aims to save</p>
+                          <p className="text-gray-300 text-xs mt-1">Must be greater than individual contribution amount</p>
+                          <p className="text-gray-300 text-xs mt-1">Can&apos;t be changed once circle is created</p>
+                        </InfoTooltip>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-gray-500">$</span>
+                        <input
+                          type="number"
+                          value={formData.smartGoal?.targetAmount ? formData.smartGoal.targetAmount * suiPrice : ''}
+                          onChange={(e) => {
+                            const usdAmount = parseFloat(e.target.value);
+                            if (!isNaN(usdAmount)) {
+                              setFormData(prev => ({
+                                ...prev,
+                                smartGoal: {
+                                  ...prev.smartGoal!,
+                                  targetAmount: convertUSDtoSUI(usdAmount)
+                                }
+                              }));
+                            }
+                          }}
+                          placeholder="Enter target amount in USD"
+                          className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                          min={formData.contributionAmount * suiPrice}
+                          step="100"
+                        />
+                        <span className="text-gray-500">USD</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Target Date Field - Show when goalType is 'date' */}
+                  {formData.smartGoal?.goalType === 'date' && (
+                    <div className="space-y-2">
+                      <div className="flex items-center">
+                        <label className="block text-sm font-medium text-gray-700">
+                          Target Date
+                        </label>
+                        <InfoTooltip>
+                          <p>When you want to achieve your savings goal</p>
+                          <p className="text-gray-300 text-xs mt-1">Must be at least one month in the future</p>
+                        </InfoTooltip>
+                      </div>
+                      <input
+                        type="date"
+                        value={formData.smartGoal?.targetDate || ''}
+                        onChange={(e) => {
+                          setFormData(prev => ({
+                            ...prev,
+                            smartGoal: {
+                              ...prev.smartGoal!,
+                              targetDate: e.target.value
+                            }
+                          }));
+                        }}
+                        min={new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}
+                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                      />
+                    </div>
+                  )}
+
+                  {/* Verification Required Toggle */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center">
+                      <label className="text-sm text-gray-700">
+                        Require Goal Verification
+                      </label>
+                      <InfoTooltip>
+                        <p>Enable if goal completion needs admin verification</p>
+                        <p className="text-gray-300 text-xs mt-1">Useful for goals tied to specific achievements</p>
+                      </InfoTooltip>
+                    </div>
+                    <Switch.Root
+                      checked={formData.smartGoal?.verificationRequired || false}
+                      onCheckedChange={(checked) => {
+                        setFormData(prev => ({
+                          ...prev,
+                          smartGoal: {
+                            ...prev.smartGoal!,
+                            verificationRequired: checked
+                          }
+                        }));
+                      }}
+                      className="w-11 h-6 bg-gray-200 rounded-full relative data-[state=checked]:bg-blue-500 transition-colors duration-200"
+                    >
+                      <Switch.Thumb className="block w-5 h-5 bg-white rounded-full shadow-lg transition-transform duration-200 transform translate-x-0.5 data-[state=checked]:translate-x-[22px]" />
+                    </Switch.Root>
+                  </div>
+                </div>
+              )}
 
               {/* Penalty Rules */}
               <div className="space-y-4">

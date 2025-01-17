@@ -15,6 +15,7 @@ module njangi::circle {
     const CIRCLE_STATUS_CREATED: u8 = 0;
     const CIRCLE_STATUS_ACTIVE: u8 = 1;
     const CIRCLE_STATUS_PAUSED: u8 = 2;
+    const CIRCLE_STATUS_COMPLETED: u8 = 3;
 
     // Constants for member status
     const MEMBER_STATUS_ACTIVE: u8 = 0;
@@ -554,41 +555,54 @@ module njangi::circle {
         ctx: &mut TxContext
     ) {
         let cycle_info = option::borrow(&circle.current_cycle_info);
-        let total_payout = circle.contribution_amount * circle.member_count;
-        assert!(coin::value(&treasury.balance) >= total_payout, EINSUFFICIENT_TREASURY_BALANCE);
         
-        // Transfer payout
-        let payout = coin::split(&mut treasury.balance, total_payout, ctx);
-        transfer::public_transfer(payout, cycle_info.payout_recipient);
+        // Check if this is the final cycle (all members have received payout)
+        let is_final_cycle = if (option::is_some(&circle.rotation_history)) {
+            let history = option::borrow(&circle.rotation_history);
+            history.total_cycles_completed + 1 == circle.member_count
+        } else {
+            false
+        };
 
-        // Record payout
-        let cycle_info = option::borrow_mut(&mut circle.current_cycle_info);
-        cycle_info.payout_completed = true;
-        cycle_info.payout_time = option::some(clock::timestamp_ms(clock));
+        if (is_final_cycle) {
+            process_final_rotational_cycle(circle, treasury, clock, ctx);
+        } else {
+            // ... existing rotational payout code ...
+            let total_payout = circle.contribution_amount * circle.member_count;
+            assert!(coin::value(&treasury.balance) >= total_payout, EINSUFFICIENT_TREASURY_BALANCE);
+            
+            // Transfer payout
+            let payout = coin::split(&mut treasury.balance, total_payout, ctx);
+            transfer::public_transfer(payout, cycle_info.payout_recipient);
 
-        event::emit(PayoutMade {
-            circle_id: object::uid_to_inner(&circle.id),
-            recipient: cycle_info.payout_recipient,
-            amount: total_payout,
-            cycle: cycle_info.cycle_number,
-        });
+            // Record payout
+            let cycle_info = option::borrow_mut(&mut circle.current_cycle_info);
+            cycle_info.payout_completed = true;
+            cycle_info.payout_time = option::some(clock::timestamp_ms(clock));
 
-        // Store completed cycle in history
-        if (option::is_some(&mut circle.rotation_history)) {
-            let history = option::borrow_mut(&mut circle.rotation_history);
-            table::add(&mut history.cycles, cycle_info.cycle_number, *cycle_info);
-            history.last_completed_cycle = cycle_info.cycle_number;
-            history.total_cycles_completed = history.total_cycles_completed + 1;
-
-            event::emit(CycleCompleted {
+            event::emit(PayoutMade {
                 circle_id: object::uid_to_inner(&circle.id),
-                cycle_number: cycle_info.cycle_number,
-                total_collected: cycle_info.total_collected,
-                completion_time: clock::timestamp_ms(clock),
+                recipient: cycle_info.payout_recipient,
+                amount: total_payout,
+                cycle: cycle_info.cycle_number,
             });
 
-            // Setup next cycle
-            setup_next_cycle(circle, clock);
+            // Store completed cycle in history and setup next cycle
+            if (option::is_some(&mut circle.rotation_history)) {
+                let history = option::borrow_mut(&mut circle.rotation_history);
+                table::add(&mut history.cycles, cycle_info.cycle_number, *cycle_info);
+                history.last_completed_cycle = cycle_info.cycle_number;
+                history.total_cycles_completed = history.total_cycles_completed + 1;
+
+                event::emit(CycleCompleted {
+                    circle_id: object::uid_to_inner(&circle.id),
+                    cycle_number: cycle_info.cycle_number,
+                    total_collected: cycle_info.total_collected,
+                    completion_time: clock::timestamp_ms(clock),
+                });
+
+                setup_next_cycle(circle, clock);
+            };
         };
     }
 
@@ -1334,6 +1348,21 @@ module njangi::circle {
                 let payout = coin::split(&mut treasury.balance, share_amount, ctx);
                 transfer::public_transfer(payout, *member);
                 
+                // Return security deposit for member in good standing
+                if (table::contains(&circle.member_deposits, *member)) {
+                    let deposit_amount = *table::borrow(&circle.member_deposits, *member);
+                    let deposit = coin::split(&mut treasury.balance, deposit_amount, ctx);
+                    transfer::public_transfer(deposit, *member);
+                    table::remove(&mut circle.member_deposits, *member);
+                    
+                    event::emit(SecurityDepositReturned {
+                        circle_id: object::uid_to_inner(&circle.id),
+                        member: *member,
+                        amount: deposit_amount,
+                        reason: b"Smart goal completed",
+                    });
+                };
+                
                 event::emit(PayoutMade {
                     circle_id: object::uid_to_inner(&circle.id),
                     recipient: *member,
@@ -1355,6 +1384,21 @@ module njangi::circle {
                 let payout = coin::split(&mut treasury.balance, payout_amount, ctx);
                 transfer::public_transfer(payout, *member);
                 
+                // Return security deposit for member in good standing
+                if (table::contains(&circle.member_deposits, *member)) {
+                    let deposit_amount = *table::borrow(&circle.member_deposits, *member);
+                    let deposit = coin::split(&mut treasury.balance, deposit_amount, ctx);
+                    transfer::public_transfer(deposit, *member);
+                    table::remove(&mut circle.member_deposits, *member);
+                    
+                    event::emit(SecurityDepositReturned {
+                        circle_id: object::uid_to_inner(&circle.id),
+                        member: *member,
+                        amount: deposit_amount,
+                        reason: b"Smart goal completed",
+                    });
+                };
+                
                 event::emit(PayoutMade {
                     circle_id: object::uid_to_inner(&circle.id),
                     recipient: *member,
@@ -1370,7 +1414,77 @@ module njangi::circle {
         if (option::is_some(&mut circle.smart_goal)) {
             let goal = option::borrow_mut(&mut circle.smart_goal);
             goal.completed = true;
+            circle.status = CIRCLE_STATUS_COMPLETED;
         };
+
+        event::emit(GoalDistributionCompleted {
+            circle_id: object::uid_to_inner(&circle.id),
+            total_amount,
+            distribution_type: goal.distribution_type,
+            completion_time: clock::timestamp_ms(clock),
+        });
+    }
+
+    // Add function to process final rotational cycle
+    fun process_final_rotational_cycle(
+        circle: &mut NjangiCircle,
+        treasury: &mut CircleTreasury,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let cycle_info = option::borrow(&circle.current_cycle_info);
+        let total_payout = circle.contribution_amount * circle.member_count;
+        assert!(coin::value(&treasury.balance) >= total_payout, EINSUFFICIENT_TREASURY_BALANCE);
+        
+        // Process final payout
+        let payout = coin::split(&mut treasury.balance, total_payout, ctx);
+        transfer::public_transfer(payout, cycle_info.payout_recipient);
+
+        // Return security deposits to all members in good standing
+        let i = 0;
+        while (i < vector::length(&circle.members)) {
+            let member = vector::borrow(&circle.members, i);
+            if (table::contains(&circle.member_deposits, *member)) {
+                let member_state = table::borrow(&circle.member_states, *member);
+                if (member_state.status == MEMBER_STATUS_ACTIVE) {
+                    let deposit_amount = *table::borrow(&circle.member_deposits, *member);
+                    let deposit = coin::split(&mut treasury.balance, deposit_amount, ctx);
+                    transfer::public_transfer(deposit, *member);
+                    table::remove(&mut circle.member_deposits, *member);
+                    
+                    event::emit(SecurityDepositReturned {
+                        circle_id: object::uid_to_inner(&circle.id),
+                        member: *member,
+                        amount: deposit_amount,
+                        reason: b"Rotational circle completed",
+                    });
+                };
+            };
+            i = i + 1;
+        };
+
+        // Update circle status
+        circle.status = CIRCLE_STATUS_COMPLETED;
+
+        event::emit(CircleCompleted {
+            circle_id: object::uid_to_inner(&circle.id),
+            completion_time: clock::timestamp_ms(clock),
+            total_cycles: circle.current_cycle,
+        });
+    }
+
+    // Add new events
+    struct SecurityDepositReturned has copy, drop {
+        circle_id: ID,
+        member: address,
+        amount: u64,
+        reason: vector<u8>,
+    }
+
+    struct CircleCompleted has copy, drop {
+        circle_id: ID,
+        completion_time: u64,
+        total_cycles: u64,
     }
 
     // Add function to check if payout is due and process it
