@@ -360,6 +360,29 @@ export default function CreateCircle() {
                   <p className="text-gray-600">Members contribute towards a shared savings goal with automatic distribution upon completion</p>
                 </button>
               </div>
+
+              {/* Cancel Button */}
+              <div className="flex justify-center mt-8">
+                <button
+                  onClick={() => router.push('/dashboard')}
+                  className="group inline-flex items-center px-6 py-3 text-base font-medium text-gray-700 bg-white border-2 border-gray-200 rounded-xl shadow-sm hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200"
+                >
+                  <svg 
+                    className="w-5 h-5 mr-2 text-gray-400 group-hover:text-gray-500 transition-colors duration-200" 
+                    fill="none" 
+                    viewBox="0 0 24 24" 
+                    stroke="currentColor"
+                  >
+                    <path 
+                      strokeLinecap="round" 
+                      strokeLinejoin="round" 
+                      strokeWidth={2} 
+                      d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0 9 9 0 01-18 0z"
+                    />
+                  </svg>
+                  Return to Dashboard
+                </button>
+              </div>
             </div>
           ) : currentStep === 1 ? (
             <form onSubmit={handleSubmit} className="space-y-8">
@@ -804,7 +827,7 @@ export default function CreateCircle() {
                         Goal Type
                       </label>
                       <InfoTooltip>
-                        <p>Choose how you want to define your group's goal</p>
+                        <p>Choose how you want to define your group&apos;s goal</p>
                         <p className="text-gray-300 text-xs mt-1">Amount-based: Set a specific savings target</p>
                         <p className="text-gray-300 text-xs mt-1">Date-based: Set a target completion date</p>
                       </InfoTooltip>

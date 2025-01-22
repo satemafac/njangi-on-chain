@@ -10,7 +10,11 @@
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
-    "@mysten/sui": "^1.18.1",
+    "@mysten/dapp-kit": "^0.14.47",
+    "@mysten/sui": "^1.20.0",
+    "@mysten/sui.js": "^0.54.1",
+    "@mysten/wallet-kit": "^0.8.6",
+    "@mysten/wallet-standard": "^0.13.23",
     "@radix-ui/react-label": "^2.1.1",
     "@radix-ui/react-radio-group": "^1.2.2",
     "@radix-ui/react-select": "^2.1.4",

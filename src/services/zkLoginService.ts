@@ -11,6 +11,7 @@ import {
   jwtToAddress,
 } from '@mysten/sui/zklogin';
 import { decodeJwt } from 'jose';
+import { SuiTransactionBlockResponse, ExecuteTransactionRequestType } from '@mysten/sui/client';
 
 const FULLNODE_URL = 'https://fullnode.devnet.sui.io:443';
 const GOOGLE_OAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -54,6 +55,25 @@ export interface AccountData {
   maxEpoch: number;
   picture?: string;
   name?: string;
+}
+
+export interface TransactionOptions {
+  gasBudget?: number;
+  requestType?: ExecuteTransactionRequestType;
+}
+
+export interface TransactionResult {
+  digest: string;
+  status: 'success' | 'failure';
+  error?: string;
+  gasUsed?: {
+    computationCost: string;
+    storageCost: string;
+    storageRebate: string;
+  };
+  confirmedLocalExecution?: boolean;
+  timestampMs?: string;
+  checkpoint?: string;
 }
 
 export class ZkLoginService {
@@ -221,41 +241,155 @@ export class ZkLoginService {
     return Ed25519Keypair.fromSecretKey(keyPair.secretKey);
   }
 
-  public async sendTransaction(account: AccountData): Promise<string> {
-    // Create and sign the transaction
+  /**
+   * Prepares a transaction block with custom content
+   * @param account The account data for the transaction
+   * @param prepareBlock Callback function to prepare the transaction block
+   * @returns Prepared transaction block
+   */
+  private async prepareTransactionBlock(
+    account: AccountData,
+    prepareBlock: (txb: TransactionBlock) => void
+  ): Promise<TransactionBlock> {
     const txb = new TransactionBlock();
     txb.setSender(account.userAddr);
+    
+    // Let the caller customize the transaction block
+    prepareBlock(txb);
+    
+    return txb;
+  }
 
-    const ephemeralKeyPair = this.keypairFromSecretKey(account.ephemeralPrivateKey);
-    const { bytes, signature: userSignature } = await txb.sign({
-      client: this.suiClient,
-      signer: ephemeralKeyPair,
-    });
+  /**
+   * Signs and executes a transaction with custom content
+   * @param account The account data for the transaction
+   * @param prepareBlock Callback function to prepare the transaction block
+   * @param options Transaction options
+   * @returns Transaction result
+   */
+  public async sendTransaction(
+    account: AccountData,
+    prepareBlock: (txb: TransactionBlock) => void,
+    options: TransactionOptions = {}
+  ): Promise<TransactionResult> {
+    try {
+      // Prepare transaction block with custom content
+      const txb = await this.prepareTransactionBlock(account, prepareBlock);
 
-    // Generate address seed
-    const addressSeed = genAddressSeed(
-      BigInt(account.userSalt),
-      'sub',
-      account.sub,
-      account.aud
-    ).toString();
+      // Set gas budget if provided
+      if (options.gasBudget) {
+        txb.setGasBudget(options.gasBudget);
+      }
 
-    // Create the zkLogin signature
-    const zkLoginSignature: string = getZkLoginSignature({
-      inputs: {
-        ...account.zkProofs,
-        addressSeed,
-      },
-      maxEpoch: account.maxEpoch,
-      userSignature,
-    });
+      // Sign with ephemeral keypair
+      const ephemeralKeyPair = this.keypairFromSecretKey(account.ephemeralPrivateKey);
+      const { bytes, signature: userSignature } = await txb.sign({
+        client: this.suiClient,
+        signer: ephemeralKeyPair,
+      });
 
-    // Execute the transaction
-    const executeRes = await this.suiClient.executeTransactionBlock({
-      transactionBlock: bytes,
-      signature: zkLoginSignature,
-    });
+      // Generate address seed
+      const addressSeed = genAddressSeed(
+        BigInt(account.userSalt),
+        'sub',
+        account.sub,
+        account.aud
+      ).toString();
 
-    return executeRes.digest;
+      // Create zkLogin signature
+      const zkLoginSignature = getZkLoginSignature({
+        inputs: {
+          ...account.zkProofs,
+          addressSeed,
+        },
+        maxEpoch: account.maxEpoch,
+        userSignature,
+      });
+
+      // Execute transaction with options
+      const executeRes = await this.suiClient.executeTransactionBlock({
+        transactionBlock: bytes,
+        signature: zkLoginSignature,
+        options: {
+          showEffects: true,
+          showEvents: true,
+          showInput: true,
+          showObjectChanges: true,
+        },
+        ...(options.requestType && { requestType: options.requestType }),
+      });
+
+      // Process transaction response
+      return this.processTransactionResponse(executeRes);
+    } catch (error) {
+      console.error('Transaction failed:', error);
+      return {
+        digest: '',
+        status: 'failure',
+        error: error instanceof Error ? error.message : 'Unknown error occurred',
+      };
+    }
+  }
+
+  /**
+   * Process transaction response and extract relevant information
+   * @param response Transaction response from Sui
+   * @returns Processed transaction result
+   */
+  private processTransactionResponse(
+    response: SuiTransactionBlockResponse
+  ): TransactionResult {
+    const effects = response.effects;
+    
+    if (!effects) {
+      return {
+        digest: response.digest,
+        status: 'failure',
+        error: 'No transaction effects available',
+      };
+    }
+
+    const result: TransactionResult = {
+      digest: response.digest,
+      status: effects.status.status === 'success' ? 'success' : 'failure',
+      gasUsed: effects.gasUsed,
+      confirmedLocalExecution: response.confirmedLocalExecution || undefined,
+      timestampMs: response.timestampMs?.toString(),
+      checkpoint: response.checkpoint?.toString(),
+    };
+
+    if (effects.status.error) {
+      result.error = effects.status.error;
+    }
+
+    return result;
+  }
+
+  /**
+   * Get transaction status and details
+   * @param digest Transaction digest
+   * @returns Transaction details
+   */
+  public async getTransactionStatus(digest: string): Promise<TransactionResult> {
+    try {
+      const txResponse = await this.suiClient.getTransactionBlock({
+        digest,
+        options: {
+          showEffects: true,
+          showEvents: true,
+          showInput: true,
+          showObjectChanges: true,
+        },
+      });
+
+      return this.processTransactionResponse(txResponse);
+    } catch (error) {
+      console.error('Failed to get transaction status:', error);
+      return {
+        digest,
+        status: 'failure',
+        error: error instanceof Error ? error.message : 'Failed to fetch transaction status',
+      };
+    }
   }
 } 
