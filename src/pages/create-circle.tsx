@@ -100,28 +100,40 @@ const validateFormData = (formData: CircleFormData): string[] => {
 
 // Function to prepare form data for contract
 const prepareCircleCreationData = (formData: CircleFormData) => {
+  // Convert cycle length to contract format
   const cycle_length = CYCLE_LENGTH_MAP[formData.cycleLength];
+  
+  // Convert cycle day to contract format
   const cycle_day = typeof formData.cycleDay === 'string' 
     ? WEEKDAY_MAP[formData.cycleDay as WeekDay]
     : formData.cycleDay;
+  
+  // Convert circle type to contract format
   const circle_type = CYCLE_TYPE_MAP[formData.cycleType];
   
+  // Convert goal type to Option<u8>
   const goal_type = formData.smartGoal 
     ? { some: GOAL_TYPE_MAP[formData.smartGoal.goalType] }
     : { none: null };
     
-  const target_amount = formData.smartGoal?.goalType === 'amount'
-    ? { some: formData.smartGoal.targetAmount || 0 }
+  // Convert target amount to Option<u64>
+  const target_amount = formData.smartGoal?.goalType === 'amount' && formData.smartGoal.targetAmount
+    ? { some: BigInt(Math.floor(formData.smartGoal.targetAmount * 1e9)).toString() }
     : { none: null };
     
+  // Convert target date to Option<u64> (Unix timestamp in seconds)
   const target_date = formData.smartGoal?.goalType === 'date' && formData.smartGoal.targetDate
-    ? { some: new Date(formData.smartGoal.targetDate).getTime() }
+    ? { some: BigInt(Math.floor(new Date(formData.smartGoal.targetDate).getTime() / 1000)).toString() }
     : { none: null };
 
+  // Convert amounts to MIST (1 SUI = 1e9 MIST)
+  const contribution_amount = BigInt(Math.floor(formData.contributionAmount * 1e9)).toString();
+  const security_deposit = BigInt(Math.floor(formData.securityDeposit * 1e9)).toString();
+
   return {
-    name: new TextEncoder().encode(formData.name),
-    contribution_amount: formData.contributionAmount,
-    security_deposit: formData.securityDeposit,
+    name: Array.from(new TextEncoder().encode(formData.name)), // Convert string to bytes
+    contribution_amount,
+    security_deposit,
     cycle_length,
     cycle_day,
     circle_type,
@@ -132,6 +144,7 @@ const prepareCircleCreationData = (formData: CircleFormData) => {
     target_amount,
     target_date,
     verification_required: formData.smartGoal?.verificationRequired || false,
+    rotation_style: formData.rotationStyle === 'auction-based' ? 1 : 0,
   };
 };
 
