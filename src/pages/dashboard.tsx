@@ -20,7 +20,7 @@ export default function Dashboard() {
   useEffect(() => {
     const fetchBalance = async () => {
       if (userAddress) {
-        const client = new SuiClient({ url: 'https://fullnode.devnet.sui.io:443' });
+        const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
         const balance = await client.getBalance({
           owner: userAddress,
           coinType: '0x2::sui::SUI'

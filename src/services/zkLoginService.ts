@@ -13,7 +13,7 @@ import {
 import { decodeJwt } from 'jose';
 import { SuiTransactionBlockResponse, ExecuteTransactionRequestType } from '@mysten/sui/client';
 
-const FULLNODE_URL = 'https://fullnode.devnet.sui.io:443';
+const FULLNODE_URL = 'https://fullnode.testnet.sui.io:443';
 const GOOGLE_OAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const FACEBOOK_OAUTH_URL = 'https://www.facebook.com/v18.0/dialog/oauth';
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
