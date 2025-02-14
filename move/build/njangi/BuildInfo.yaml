@@ -1,0 +1,32 @@
+---
+compiled_package_info:
+  package_name: njangi
+  address_alias_instantiation:
+    njangi: "0000000000000000000000000000000000000000000000000000000000000000"
+    std: "0000000000000000000000000000000000000000000000000000000000000001"
+    sui: "0000000000000000000000000000000000000000000000000000000000000002"
+    usdc: a1ec7fc00a6f40db9693ad1415d0c193ad3906494428cf252621037bd7117e29
+  source_digest: B16282D7363C4B46F915E44ABF5BA7019B0784D4369196B7F5AA08F7531A8453
+  build_flags:
+    dev_mode: false
+    test_mode: false
+    generate_docs: false
+    save_disassembly: false
+    install_dir: ~
+    force_recompilation: false
+    lock_file: "./Move.lock"
+    fetch_deps_only: false
+    skip_fetch_latest_git_deps: false
+    default_flavor: sui
+    default_edition: ~
+    deps_as_root: false
+    silence_warnings: false
+    warnings_are_errors: false
+    json_errors: false
+    additional_named_addresses: {}
+    lint_flag:
+      no_lint: false
+      lint: false
+dependencies:
+  - MoveStdlib
+  - Sui
