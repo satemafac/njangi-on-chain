@@ -3,9 +3,13 @@ import { SuiClient } from '@mysten/sui/client';
 import { bcs } from '@mysten/sui/bcs';
 import type { CircleFormData, CycleLength, WeekDay } from '../types/circle';
 
+// Package ID from published contract
+const PACKAGE_ID = "0xdd063e4331d7dc940b34bdc8c78d925452ddee09d86875a4cd2059c09e55e190";
+
 // Constants from Move contract
 const CIRCLE_TYPE_ROTATIONAL = 0;
 const CIRCLE_TYPE_SMART_GOAL = 1;
+const ROTATION_STYLE_FIXED = 0;
 const GOAL_TYPE_AMOUNT = 0;
 const GOAL_TYPE_TIME = 1;
 
@@ -17,7 +21,7 @@ const WEEKDAY_MAP: Record<WeekDay, number> = {
   thursday: 4,
   friday: 5,
   saturday: 6,
-  sunday: 7,
+  sunday: 0, // Changed to 0 to match contract
 };
 
 const CYCLE_LENGTH_MAP: Record<CycleLength, number> = {
@@ -27,11 +31,17 @@ const CYCLE_LENGTH_MAP: Record<CycleLength, number> = {
 };
 
 export class CircleService {
-  constructor(private suiClient: SuiClient, private packageId: string) {}
+  constructor(private suiClient: SuiClient) {}
 
   async createCircle(formData: CircleFormData) {
     try {
       const tx = new TransactionBlock();
+      
+      // Get clock object
+      const [clock] = tx.moveCall({
+        target: '0x2::clock::clock',
+        arguments: [],
+      });
       
       // 1. Convert name to UTF-8 bytes
       const nameBytes = new TextEncoder().encode(formData.name);
@@ -59,35 +69,71 @@ export class CircleService {
       const targetDate = formData.cycleType === 'smart-goal' && 
         formData.smartGoal?.goalType === 'date' && 
         formData.smartGoal.targetDate
-          ? [BigInt(Math.floor(new Date(formData.smartGoal.targetDate).getTime() / 1000))]
+          ? [BigInt(Math.floor(new Date(formData.smartGoal.targetDate).getTime()))]
           : [];
       
       // 5. Build transaction
       tx.moveCall({
-        target: `${this.packageId}::circle::create_circle`,
+        target: `${PACKAGE_ID}::njangi_circle::create_circle`,
         arguments: [
-          // Required arguments
           tx.pure(nameBytes),                    // name: vector<u8>
           tx.pure.u64(contributionAmount),       // contribution_amount: u64
           tx.pure.u64(securityDeposit),         // security_deposit: u64
-          tx.pure.u8(CYCLE_LENGTH_MAP[formData.cycleLength]), // cycle_length: u8
-          tx.pure.u8(cycleDay),                 // cycle_day: u8
+          tx.pure.u64(CYCLE_LENGTH_MAP[formData.cycleLength]), // cycle_length: u64
+          tx.pure.u64(cycleDay),                // cycle_day: u64
           tx.pure.u8(formData.cycleType === 'rotational' ? CIRCLE_TYPE_ROTATIONAL : CIRCLE_TYPE_SMART_GOAL), // circle_type: u8
           tx.pure.u64(formData.numberOfMembers), // max_members: u64
-          tx.pure.bool(formData.penaltyRules.latePayment),   // late_payment: bool
-          tx.pure.bool(formData.penaltyRules.missedMeeting), // missed_meeting: bool
-          
-          // Optional arguments for smart goals
+          tx.pure.u8(ROTATION_STYLE_FIXED),     // rotation_style: u8
+          tx.pure(bcs.vector(bcs.bool()).serialize([
+            formData.penaltyRules.latePayment,
+            formData.penaltyRules.missedMeeting
+          ])),                                  // penalty_rules: vector<bool>
           tx.pure(bcs.vector(bcs.u8()).serialize(goalType)),     // goal_type: Option<u8>
           tx.pure(bcs.vector(bcs.u64()).serialize(targetAmount)), // target_amount: Option<u64>
           tx.pure(bcs.vector(bcs.u64()).serialize(targetDate)),   // target_date: Option<u64>
           tx.pure.bool(formData.smartGoal?.verificationRequired || false), // verification_required: bool
+          clock,                               // clock: &Clock
         ],
       });
 
       return tx;
     } catch (error) {
       console.error('Error creating circle transaction:', error);
+      throw error;
+    }
+  }
+
+  async joinCircle(circleId: string, depositAmount: number) {
+    try {
+      const tx = new TransactionBlock();
+      
+      // Get clock object
+      const [clock] = tx.moveCall({
+        target: '0x2::clock::clock',
+        arguments: [],
+      });
+
+      // Create deposit coin
+      const [depositCoin] = tx.moveCall({
+        target: '0x2::coin::mint_for_testing',
+        typeArguments: ['0x2::sui::SUI'],
+        arguments: [tx.pure.u64(BigInt(Math.floor(depositAmount * 1e9)))],
+      });
+
+      // Join the circle
+      tx.moveCall({
+        target: `${PACKAGE_ID}::njangi_circle::join_circle`,
+        arguments: [
+          tx.object(circleId),    // circle: &mut Circle
+          depositCoin,            // deposit: Coin<SUI>
+          tx.pure(bcs.vector(bcs.u64()).serialize([])), // position: Option<u64>
+          clock,                  // clock: &Clock
+        ],
+      });
+
+      return tx;
+    } catch (error) {
+      console.error('Error creating join circle transaction:', error);
       throw error;
     }
   }
@@ -99,7 +145,7 @@ export class CircleService {
       
       for (const address of memberAddresses) {
         tx.moveCall({
-          target: `${this.packageId}::circle::invite_member`,
+          target: `${PACKAGE_ID}::njangi_circle::invite_member`,
           typeArguments: [],
           arguments: [
             tx.object(circleId), // circle: &mut NjangiCircle

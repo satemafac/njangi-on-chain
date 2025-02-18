@@ -1,4 +1,6 @@
 # Njangi Smart Contract Documentation
+#npx tsx salt-service.ts - npm run dev
+ - sui move build
 
 ## Overview
 The Njangi smart contract is a decentralized savings and credit system implemented on the Sui blockchain. It supports multiple types of savings circles including rotational, goal-based, and auction-based models.
