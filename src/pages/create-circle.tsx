@@ -116,35 +116,40 @@ const prepareCircleCreationData = (formData: CircleFormData) => {
     ? { some: GOAL_TYPE_MAP[formData.smartGoal.goalType] }
     : { none: null };
     
-  // Convert target amount to Option<u64>
+  // Convert target amount to Option<u64> (in MIST)
   const target_amount = formData.smartGoal?.goalType === 'amount' && formData.smartGoal.targetAmount
-    ? { some: BigInt(Math.floor(formData.smartGoal.targetAmount * 1e9)).toString() }
+    ? { some: BigInt(Math.round(formData.smartGoal.targetAmount * 1e9)) }
     : { none: null };
     
   // Convert target date to Option<u64> (Unix timestamp in seconds)
   const target_date = formData.smartGoal?.goalType === 'date' && formData.smartGoal.targetDate
-    ? { some: BigInt(Math.floor(new Date(formData.smartGoal.targetDate).getTime() / 1000)).toString() }
+    ? { some: BigInt(Math.round(new Date(formData.smartGoal.targetDate).getTime() / 1000)) }
     : { none: null };
 
   // Convert amounts to MIST (1 SUI = 1e9 MIST)
-  const contribution_amount = BigInt(Math.floor(formData.contributionAmount * 1e9)).toString();
-  const security_deposit = BigInt(Math.floor(formData.securityDeposit * 1e9)).toString();
+  const contribution_amount = BigInt(Math.round(formData.contributionAmount * 1e9));
+  const security_deposit = BigInt(Math.round(formData.securityDeposit * 1e9));
+
+  // Convert penalty rules to array of booleans
+  const penalty_rules = [
+    formData.penaltyRules.latePayment,
+    formData.penaltyRules.missedMeeting
+  ];
 
   return {
-    name: Array.from(new TextEncoder().encode(formData.name)), // Convert string to bytes
+    name: formData.name,
     contribution_amount,
     security_deposit,
     cycle_length,
     cycle_day,
     circle_type,
     max_members: formData.numberOfMembers,
-    late_payment: formData.penaltyRules.latePayment,
-    missed_meeting: formData.penaltyRules.missedMeeting,
+    rotation_style: formData.rotationStyle === 'auction-based' ? 1 : 0,
+    penalty_rules,
     goal_type,
     target_amount,
     target_date,
     verification_required: formData.smartGoal?.verificationRequired || false,
-    rotation_style: formData.rotationStyle === 'auction-based' ? 1 : 0,
   };
 };
 
@@ -156,7 +161,7 @@ interface InviteMember {
 
 export default function CreateCircle() {
   const router = useRouter();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, account } = useAuth();
   const [currentStep, setCurrentStep] = useState(0); // Start at step 0 for circle type selection
   const [useCustomContribution, setUseCustomContribution] = useState(false);
   const [useCustomDeposit, setUseCustomDeposit] = useState(false);
@@ -280,16 +285,66 @@ export default function CreateCircle() {
       // Prepare data for contract
       const contractData = prepareCircleCreationData(formData);
       
-      // TODO: Call contract to create circle using Sui SDK
-      console.log('Creating circle with data:', contractData);
+      // Convert BigInt values to strings for JSON serialization
+      const serializedData = {
+        ...contractData,
+        contribution_amount: contractData.contribution_amount.toString(),
+        security_deposit: contractData.security_deposit.toString(),
+        target_amount: contractData.target_amount?.some 
+          ? { some: contractData.target_amount.some.toString() }
+          : { none: null },
+        target_date: contractData.target_date?.some
+          ? { some: contractData.target_date.some.toString() }
+          : { none: null }
+      };
+      
+      // Call the backend to send transaction using zkLogin
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'sendTransaction',
+          account,
+          circleData: serializedData,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        if (response.status === 401 && result.requireReauth) {
+          // Session expired, need to re-authenticate
+          const currentPath = '/create-circle';
+          const searchParams = new URLSearchParams();
+          searchParams.append('redirect', currentPath);
+          // Preserve form data in session storage
+          sessionStorage.setItem('createCircleFormData', JSON.stringify(formData));
+          router.push(`/login?${searchParams.toString()}`);
+          return;
+        }
+        throw new Error(result.error || 'Transaction failed.');
+      }
       
       // Move to invite step on success
       setCurrentStep(2);
-    } catch (error) {
-      console.error('Error creating circle:', error);
-      setError('Failed to create circle. Please try again.');
+    } catch (err) {
+      console.error('Error creating circle:', err);
+      setError(err instanceof Error ? err.message : 'Failed to create circle. Please try again.');
     }
   };
+
+  // Add effect to restore form data after re-authentication
+  React.useEffect(() => {
+    const savedFormData = sessionStorage.getItem('createCircleFormData');
+    if (savedFormData) {
+      try {
+        setFormData(JSON.parse(savedFormData));
+        sessionStorage.removeItem('createCircleFormData');
+      } catch (e) {
+        console.error('Error restoring form data:', e);
+      }
+    }
+  }, []);
 
   const handleCustomUSDInput = (type: 'contribution' | 'deposit', value: string) => {
     const numValue = value === '' ? 0 : parseFloat(value);

@@ -2,10 +2,13 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { ZkLoginService, SetupData, AccountData, OAuthProvider } from '@/services/zkLoginService';
 import { Transaction } from '@mysten/sui/transactions';
 
+// Add at the top with other imports
+interface RPCError extends Error {
+  code?: number;
+}
+
 // Simple in-memory session store (in production, use Redis or a proper session store)
 const sessions = new Map<string, SetupData & { account?: AccountData }>();
-
-const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID || '';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -59,27 +62,57 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!account) {
           return res.status(400).json({ error: 'Account data is required' });
         }
-        const txDigest = await instance.sendTransaction(
-          account,
-          (txb: Transaction) => {
-            txb.moveCall({
-              target: `${PACKAGE_ID}::njangi::create_circle`,
-              arguments: [
-                txb.pure.string(circleData.name),
-                txb.pure.u64(circleData.contribution_amount),
-                txb.pure.u64(circleData.security_deposit),
-                txb.pure.u8(circleData.cycle_length),
-                txb.pure.u8(circleData.cycle_day),
-                txb.pure.u8(circleData.circle_type),
-                txb.pure.u8(circleData.max_members),
-                txb.pure.u64(circleData.late_payment),
-                txb.pure.u64(circleData.missed_meeting),
-                txb.pure.bool(circleData.verification_required)
-              ]
+        try {
+          const txDigest = await instance.sendTransaction(
+            account,
+            (txb: Transaction) => {
+              // Set sender before building transaction
+              txb.setSender(account.userAddr);
+              
+              txb.moveCall({
+                target: `0xd9ecf9d1749fc36770a1c3d379428383774e796169154095671e7be2c29f39ad::njangi_circle::create_circle`,
+                arguments: [
+                  txb.pure.string(circleData.name),
+                  txb.pure.u64(BigInt(circleData.contribution_amount)),
+                  txb.pure.u64(BigInt(circleData.security_deposit)),
+                  txb.pure.u64(circleData.cycle_length),
+                  txb.pure.u64(circleData.cycle_day),
+                  txb.pure.u8(circleData.circle_type),
+                  txb.pure.u64(circleData.max_members),
+                  txb.pure.u8(circleData.rotation_style),
+                  txb.pure.vector('bool', circleData.penalty_rules),
+                  txb.pure.option('u8', circleData.goal_type?.some),
+                  txb.pure.option('u64', circleData.target_amount?.some ? BigInt(circleData.target_amount.some) : null),
+                  txb.pure.option('u64', circleData.target_date?.some ? BigInt(circleData.target_date.some) : null),
+                  txb.pure.bool(circleData.verification_required),
+                  txb.object("0x6")  // Clock object
+                ]
+              });
+            }
+          );
+          return res.status(200).json({ digest: txDigest });
+        } catch (err) {
+          // Check for any signature/proof/verification related errors
+          if (err instanceof Error && 
+              (err.message.toLowerCase().includes('invalid user signature') || 
+               err.message.toLowerCase().includes('groth16 proof verify failed') ||
+               err.message.toLowerCase().includes('signature is not valid') ||
+               err.message.toLowerCase().includes('cryptographic error') ||
+               (err as RPCError).code === -32002)) {
+            // Clear the session and force re-authentication
+            sessions.delete(sessionId);
+            return res.status(401).json({ 
+              error: 'Your session has expired. Please sign in again to refresh your credentials.',
+              requireReauth: true 
             });
           }
-        );
-        return res.status(200).json({ digest: txDigest });
+          // Handle other transaction errors
+          console.error('Transaction error:', err);
+          return res.status(500).json({ 
+            error: 'Failed to execute transaction. Please try again.',
+            details: err instanceof Error ? err.message : 'Unknown error'
+          });
+        }
 
       default:
         return res.status(400).json({ error: 'Invalid action' });
