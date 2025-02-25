@@ -21,6 +21,7 @@ const FACEBOOK_CLIENT_ID = process.env.NEXT_PUBLIC_FACEBOOK_CLIENT_ID;
 const REDIRECT_URI = process.env.NEXT_PUBLIC_REDIRECT_URI;
 const SALT_SERVICE_URL = 'http://localhost:5002/get-salt'; // Local salt service endpoint
 const MAX_EPOCH = 2; // keep ephemeral keys active for this many Sui epochs from now (1 epoch ~= 24h)
+const GRAPHQL_URL = 'https://sui-testnet.mystenlabs.com/graphql';
 
 export type OAuthProvider = 'Google' | 'Facebook';
 
@@ -74,6 +75,12 @@ export interface TransactionResult {
   confirmedLocalExecution?: boolean;
   timestampMs?: string;
   checkpoint?: string;
+}
+
+interface ProofPoints {
+  a: string[];
+  b: string[][];
+  c: string[];
 }
 
 export class ZkLoginService {
@@ -142,6 +149,75 @@ export class ZkLoginService {
     return { loginUrl, setupData };
   }
 
+  /**
+   * Format proof points to ensure proper BigInt conversion and validation
+   */
+  private formatProofPoints(proofPoints: ProofPoints) {
+    if (!proofPoints || !proofPoints.a || !proofPoints.b || !proofPoints.c) {
+      throw new Error('Invalid proof points structure');
+    }
+
+    try {
+      return {
+        a: proofPoints.a.map((point: string) => BigInt(point).toString()),
+        b: proofPoints.b.map((row: string[]) => 
+          Array.isArray(row) 
+            ? row.map(point => BigInt(point).toString())
+            : [BigInt(row).toString(), BigInt(row).toString()]
+        ),
+        c: proofPoints.c.map((point: string) => BigInt(point).toString())
+      };
+    } catch (error) {
+      throw new Error(`Failed to format proof points: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Generate user address from JWT and salt
+   */
+  private async generateUserAddress(jwt: string, userSalt: bigint): Promise<string> {
+    const decoded = decodeJwt(jwt);
+    const aud = Array.isArray(decoded.aud) ? decoded.aud[0] : decoded.aud;
+    
+    if (!decoded.sub || !aud) {
+      throw new Error('Missing required JWT claims (sub or aud)');
+    }
+    
+    try {
+      return jwtToAddress(jwt, userSalt);
+    } catch (error) {
+      throw new Error(`Failed to generate user address: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Validate account data and proof expiration
+   */
+  private async validateAccountData(account: AccountData): Promise<void> {
+    if (!account.ephemeralPrivateKey || !account.zkProofs || !account.userSalt || !account.sub || !account.aud) {
+      throw new Error('Invalid account data: missing required fields');
+    }
+
+    // Validate current epoch
+    const { epoch } = await this.suiClient.getLatestSuiSystemState();
+    if (Number(epoch) >= account.maxEpoch) {
+      throw new Error('Proof has expired. Please re-authenticate to get a new proof.');
+    }
+
+    // Validate proof structure
+    const { proofPoints } = account.zkProofs;
+    if (!proofPoints || !proofPoints.a || !proofPoints.b || !proofPoints.c) {
+      throw new Error('Invalid proof structure: missing proof points');
+    }
+
+    // Validate salt
+    try {
+      BigInt(account.userSalt);
+    } catch {
+      throw new Error('Invalid user salt format');
+    }
+  }
+
   public async handleCallback(token: string, setupData: SetupData): Promise<{ 
     address: string;
     zkProofs: ZkLoginProofs;
@@ -154,34 +230,30 @@ export class ZkLoginService {
     // Both providers now give us a JWT directly
     const jwt = token;
 
-    // Decode the JWT
+    // Decode and validate the JWT
     const jwtPayload = decodeJwt(jwt);
     if (!jwtPayload.sub || !jwtPayload.aud) {
       throw new Error('Missing required JWT claims');
     }
 
-    console.log('JWT payload:', {
+    console.log('Processing JWT payload:', {
       sub: jwtPayload.sub,
       aud: jwtPayload.aud,
-      picture: jwtPayload.picture,
-      name: jwtPayload.name,
+      exp: jwtPayload.exp,
+      iat: jwtPayload.iat,
       clientId: setupData.provider === 'Google' ? GOOGLE_CLIENT_ID : FACEBOOK_CLIENT_ID
     });
 
-    // Get salt from the salt service
+    // Get salt from the salt service with improved error handling
     const clientId = setupData.provider === 'Google' ? GOOGLE_CLIENT_ID : FACEBOOK_CLIENT_ID;
     if (!clientId) {
-      throw new Error(`${setupData.provider} Client ID is not configured. Please check your .env.local file.`);
+      throw new Error(`${setupData.provider} Client ID is not configured`);
     }
 
-    console.log('Using Client ID:', clientId);
     const saltResponse = await fetch(SALT_SERVICE_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        token: jwt,
-        client_id: clientId
-      })
+      body: JSON.stringify({ token: jwt, client_id: clientId })
     });
 
     if (!saltResponse.ok) {
@@ -192,25 +264,24 @@ export class ZkLoginService {
     const { salt } = await saltResponse.json();
     const userSalt = BigInt(salt);
 
-    // Get the user's Sui address
-    const userAddr = jwtToAddress(jwt, userSalt);
+    // Generate user address
+    const userAddr = await this.generateUserAddress(jwt, userSalt);
 
-    // Get the ephemeral key pair
+    // Get ephemeral keypair and validate
     const ephemeralKeyPair = this.keypairFromSecretKey(setupData.ephemeralPrivateKey);
-    const ephemeralPublicKey = ephemeralKeyPair.getPublicKey();
+    const extendedEphemeralPublicKey = getExtendedEphemeralPublicKey(ephemeralKeyPair.getPublicKey());
 
-    // Get the zero-knowledge proof
+    // Prepare proof request with improved validation
     const proofRequest = {
       maxEpoch: setupData.maxEpoch,
       jwtRandomness: setupData.randomness,
-      extendedEphemeralPublicKey: getExtendedEphemeralPublicKey(ephemeralPublicKey),
+      extendedEphemeralPublicKey,
       jwt,
       salt: userSalt.toString(),
       keyClaimName: 'sub'
     };
 
-    console.log('Requesting proof with:', proofRequest);
-
+    // Get and validate the zero-knowledge proof
     const proofResponse = await fetch('https://prover-dev.mystenlabs.com/v1', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -219,11 +290,17 @@ export class ZkLoginService {
 
     if (!proofResponse.ok) {
       const errorText = await proofResponse.text();
-      console.error('Prover service error:', errorText);
       throw new Error(`Prover service error: ${errorText}`);
     }
 
     const zkProofs = await proofResponse.json();
+
+    // Validate proof structure with new helper
+    try {
+      this.formatProofPoints(zkProofs.proofPoints);
+    } catch (error) {
+      throw new Error(`Invalid proof structure: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
 
     return { 
       address: userAddr, 
@@ -239,6 +316,16 @@ export class ZkLoginService {
   private keypairFromSecretKey(privateKeyBase64: string): Ed25519Keypair {
     const keyPair = decodeSuiPrivateKey(privateKeyBase64);
     return Ed25519Keypair.fromSecretKey(keyPair.secretKey);
+  }
+
+  /**
+   * Get public key from private key
+   * @param privateKeyBase64 Base64 encoded private key
+   * @returns Base64 encoded public key
+   */
+  public getPublicKeyFromPrivate(privateKeyBase64: string): string {
+    const keyPair = this.keypairFromSecretKey(privateKeyBase64);
+    return keyPair.getPublicKey().toBase64();
   }
 
   /**
@@ -260,6 +347,85 @@ export class ZkLoginService {
     return txb;
   }
 
+  private async verifyZkLoginSignature(
+    bytes: Uint8Array | string,
+    signature: string,
+    userAddress: string
+  ): Promise<boolean> {
+    try {
+        // Ensure bytes are properly Base64 encoded
+        const bytesBase64 = typeof bytes === 'string' 
+            ? bytes 
+            : Buffer.from(bytes).toString('base64');
+
+        // For zkLogin signatures starting with 'BQ', we need to keep the original format
+        const signatureBase64 = signature.startsWith('BQ') ? signature : Buffer.from(signature).toString('base64');
+
+        const query = `
+            query VerifyZkloginSignature($bytes: Base64!, $signature: Base64!, $address: SuiAddress!) {
+                verifyZkloginSignature(
+                    bytes: $bytes,
+                    signature: $signature,
+                    intentScope: TRANSACTION_DATA,
+                    author: $address
+                ) {
+                    success
+                    errors
+                }
+            }
+        `;
+
+        const response = await fetch(GRAPHQL_URL, {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify({
+                query,
+                variables: {
+                    bytes: bytesBase64,
+                    signature: signatureBase64,
+                    address: userAddress
+                }
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`GraphQL request failed: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+        
+        if (result.errors) {
+            console.error('GraphQL verification errors:', result.errors);
+            throw new Error(`GraphQL verification failed: ${result.errors[0].message}`);
+        }
+
+        const verifyResult = result.data?.verifyZkloginSignature;
+        if (!verifyResult) {
+            throw new Error('No verification result returned from server');
+        }
+
+        if (!verifyResult.success) {
+            if (verifyResult.errors?.some((error: string) => error.includes('Groth16 proof verify failed'))) {
+                throw new Error('zkLogin proof verification failed. This could be due to an expired session or invalid proof. Please try re-authenticating.');
+            }
+            
+            if (verifyResult.errors?.some((error: string) => error.includes('epoch'))) {
+                throw new Error('Session has expired. Please re-authenticate to get a new proof.');
+            }
+
+            throw new Error(`Signature verification failed: ${verifyResult.errors?.join(', ') || 'Unknown error'}`);
+        }
+        
+        return verifyResult.success;
+    } catch (err) {
+        console.error('Signature verification error:', err);
+        throw err;
+    }
+  }
+
   /**
    * Signs and executes a transaction with custom content
    * @param account The account data for the transaction
@@ -273,61 +439,134 @@ export class ZkLoginService {
     options: TransactionOptions = {}
   ): Promise<TransactionResult> {
     try {
-      // Prepare transaction block with custom content
-      const txb = await this.prepareTransactionBlock(account, prepareBlock);
+        // Validate account data and check epoch expiration
+        await this.validateAccountData(account);
 
-      // Set gas budget if provided
-      if (options.gasBudget) {
-        txb.setGasBudget(options.gasBudget);
-      }
+        // Get ephemeral keypair from stored private key
+        const ephemeralKeyPair = this.keypairFromSecretKey(account.ephemeralPrivateKey);
 
-      // Sign with ephemeral keypair
-      const ephemeralKeyPair = this.keypairFromSecretKey(account.ephemeralPrivateKey);
-      const { bytes, signature: userSignature } = await txb.sign({
-        client: this.suiClient,
-        signer: ephemeralKeyPair,
-      });
+        // Validate current epoch against maxEpoch
+        const { epoch } = await this.suiClient.getLatestSuiSystemState();
+        const currentEpoch = Number(epoch);
+        if (currentEpoch >= account.maxEpoch) {
+            throw new Error('Session has expired. Please re-authenticate to get a new proof.');
+        }
 
-      // Generate address seed
-      const addressSeed = genAddressSeed(
-        BigInt(account.userSalt),
-        'sub',
-        account.sub,
-        account.aud
-      ).toString();
+        // Generate address seed for verification
+        const addressSeed = genAddressSeed(
+            BigInt(account.userSalt),
+            'sub',
+            account.sub,
+            account.aud
+        ).toString();
 
-      // Create zkLogin signature
-      const zkLoginSignature = getZkLoginSignature({
-        inputs: {
-          ...account.zkProofs,
-          addressSeed,
-        },
-        maxEpoch: account.maxEpoch,
-        userSignature,
-      });
+        // Create and prepare transaction block
+        const txb = new TransactionBlock();
+        txb.setSender(account.userAddr);
+        
+        // Let the caller customize the transaction block
+        prepareBlock(txb);
 
-      // Execute transaction with options
-      const executeRes = await this.suiClient.executeTransactionBlock({
-        transactionBlock: bytes,
-        signature: zkLoginSignature,
-        options: {
-          showEffects: true,
-          showEvents: true,
-          showInput: true,
-          showObjectChanges: true,
-        },
-        ...(options.requestType && { requestType: options.requestType }),
-      });
+        // Set gas budget with validation
+        const DEFAULT_GAS_BUDGET = 50000000; // 0.05 SUI
+        const gasBudget = options.gasBudget || DEFAULT_GAS_BUDGET;
+        if (gasBudget <= 0) {
+            throw new Error('Invalid gas budget');
+        }
+        txb.setGasBudget(gasBudget);
 
-      // Process transaction response
-      return this.processTransactionResponse(executeRes);
-    } catch (error) {
-      console.error('Transaction failed:', error);
-      return {
-        digest: '',
-        status: 'failure',
-        error: error instanceof Error ? error.message : 'Unknown error occurred',
-      };
+        // Sign the transaction block
+        const { bytes, signature: userSignature } = await txb.sign({
+            client: this.suiClient,
+            signer: ephemeralKeyPair,
+        });
+
+        // Format and validate proof points
+        let formattedProofPoints;
+        try {
+            formattedProofPoints = this.formatProofPoints(account.zkProofs.proofPoints);
+        } catch (error) {
+            throw new Error(`Invalid proof points: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+
+        // Create zkLogin signature with validated components
+        const zkLoginSignature = getZkLoginSignature({
+            inputs: {
+                ...account.zkProofs,
+                proofPoints: formattedProofPoints,
+                addressSeed,
+                issBase64Details: account.zkProofs.issBase64Details,
+                headerBase64: account.zkProofs.headerBase64
+            },
+            maxEpoch: account.maxEpoch,
+            userSignature,
+        });
+
+        // Verify signature before sending
+        try {
+            const isValid = await this.verifyZkLoginSignature(
+                bytes,
+                zkLoginSignature,
+                account.userAddr
+            );
+
+            if (!isValid) {
+                throw new Error('Failed to verify zkLogin signature');
+            }
+        } catch (error) {
+            if (error instanceof Error && 
+                (error.message.includes('Groth16 proof verify failed') || 
+                 error.message.includes('epoch'))) {
+                throw new Error('Session has expired or proof is invalid. Please re-authenticate.');
+            }
+            throw error;
+        }
+
+        // Execute transaction with improved error handling
+        const result = await this.suiClient.executeTransactionBlock({
+            transactionBlock: bytes,
+            signature: zkLoginSignature,
+            options: {
+                showEffects: true,
+                showEvents: true,
+                showInput: true,
+                showObjectChanges: true,
+            },
+            requestType: options.requestType || 'WaitForLocalExecution'
+        });
+
+        if (!result) {
+            throw new Error('No transaction response received');
+        }
+
+        const txResult = this.processTransactionResponse(result);
+        if (txResult.status === 'failure') {
+            throw new Error(txResult.error || 'Transaction failed');
+        }
+
+        return txResult;
+    } catch (err) {
+        console.error('Transaction error:', err);
+        
+        if (err instanceof Error) {
+            // Check for specific error types
+            if (err.message.includes('epoch has expired') || 
+                err.message.includes('maxEpoch') || 
+                err.message.includes('proof verify failed') ||
+                err.message.includes('Session has expired')) {
+                throw new Error('Session expired: Please re-authenticate');
+            }
+            
+            if (err.message.includes('insufficient gas')) {
+                throw new Error('Insufficient gas: Please ensure you have enough SUI for gas');
+            }
+
+            if (err.message.includes('Invalid proof points')) {
+                throw new Error('Invalid proof structure: Please re-authenticate');
+            }
+        }
+        
+        throw new Error('Failed to execute transaction. Please try again.');
     }
   }
 
@@ -339,8 +578,15 @@ export class ZkLoginService {
   private processTransactionResponse(
     response: SuiTransactionBlockResponse
   ): TransactionResult {
+    if (!response) {
+      return {
+        digest: '',
+        status: 'failure',
+        error: 'No transaction response received',
+      };
+    }
+
     const effects = response.effects;
-    
     if (!effects) {
       return {
         digest: response.digest,

@@ -312,14 +312,9 @@ export default function CreateCircle() {
       const result = await response.json();
 
       if (!response.ok) {
-        if (response.status === 401 && result.requireReauth) {
-          // Session expired, need to re-authenticate
-          const currentPath = '/create-circle';
-          const searchParams = new URLSearchParams();
-          searchParams.append('redirect', currentPath);
-          // Preserve form data in session storage
-          sessionStorage.setItem('createCircleFormData', JSON.stringify(formData));
-          router.push(`/login?${searchParams.toString()}`);
+        if (response.status === 401) {
+          // Session expired or authentication failed, redirect to dashboard
+          router.push('/dashboard');
           return;
         }
         throw new Error(result.error || 'Transaction failed.');
