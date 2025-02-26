@@ -158,16 +158,62 @@ export class ZkLoginService {
     }
 
     try {
-      return {
-        a: proofPoints.a.map((point: string) => BigInt(point).toString()),
-        b: proofPoints.b.map((row: string[]) => 
-          Array.isArray(row) 
-            ? row.map(point => BigInt(point).toString())
-            : [BigInt(row).toString(), BigInt(row).toString()]
-        ),
-        c: proofPoints.c.map((point: string) => BigInt(point).toString())
+      // Deep clone to avoid modifying the original
+      const formattedPoints: {
+        a: string[];
+        b: string[][];
+        c: string[];
+      } = {
+        a: [],
+        b: [],
+        c: []
       };
+
+      // Format a points - must be array of BigInt strings
+      formattedPoints.a = proofPoints.a.map((point: string) => {
+        try {
+          return BigInt(point).toString();
+        } catch (error) {
+          console.error('Invalid a point:', point, error);
+          throw new Error(`Invalid a point format: ${point}, ${error instanceof Error ? error.message : String(error)}`);
+        }
+      });
+
+      // Format b points - must be array of arrays with 2 elements each
+      formattedPoints.b = proofPoints.b.map((row: string[] | string) => {
+        if (Array.isArray(row) && row.length === 2) {
+          return row.map(point => BigInt(point).toString());
+        } else if (Array.isArray(row)) {
+          // Handle malformed array
+          console.error('Invalid b point row:', row);
+          throw new Error(`Invalid b point row format: expected 2 elements, got ${row.length}`);
+        } else {
+          // Sometimes b comes as a flat array that needs pairing
+          console.error('Warning: fixing b point format:', row);
+          return [BigInt(row).toString(), BigInt(0).toString()];
+        }
+      });
+
+      // Format c points - must be array of BigInt strings
+      formattedPoints.c = proofPoints.c.map((point: string) => {
+        try {
+          return BigInt(point).toString();
+        } catch (error) {
+          console.error('Invalid c point:', point, error);
+          throw new Error(`Invalid c point format: ${point}, ${error instanceof Error ? error.message : String(error)}`);
+        }
+      });
+
+      // Log successful formatting
+      console.log('Successfully formatted proof points:', {
+        a_length: formattedPoints.a.length,
+        b_length: formattedPoints.b.length, 
+        c_length: formattedPoints.c.length
+      });
+
+      return formattedPoints;
     } catch (error) {
+      console.error('Proof point formatting error:', error);
       throw new Error(`Failed to format proof points: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
@@ -439,134 +485,179 @@ export class ZkLoginService {
     options: TransactionOptions = {}
   ): Promise<TransactionResult> {
     try {
-        // Validate account data and check epoch expiration
-        await this.validateAccountData(account);
+      // Validate account data and check epoch expiration
+      await this.validateAccountData(account);
 
-        // Get ephemeral keypair from stored private key
-        const ephemeralKeyPair = this.keypairFromSecretKey(account.ephemeralPrivateKey);
+      // Get ephemeral keypair from stored private key
+      const ephemeralKeyPair = this.keypairFromSecretKey(account.ephemeralPrivateKey);
 
-        // Validate current epoch against maxEpoch
-        const { epoch } = await this.suiClient.getLatestSuiSystemState();
-        const currentEpoch = Number(epoch);
-        if (currentEpoch >= account.maxEpoch) {
-            throw new Error('Session has expired. Please re-authenticate to get a new proof.');
-        }
+      // Validate current epoch against maxEpoch
+      const { epoch } = await this.suiClient.getLatestSuiSystemState();
+      const currentEpoch = Number(epoch);
+      console.log(`Current epoch: ${currentEpoch}, maxEpoch: ${account.maxEpoch}`);
+      if (currentEpoch >= account.maxEpoch) {
+        throw new Error('Session has expired. Please re-authenticate to get a new proof.');
+      }
 
-        // Generate address seed for verification
-        const addressSeed = genAddressSeed(
-            BigInt(account.userSalt),
-            'sub',
-            account.sub,
-            account.aud
-        ).toString();
+      // Check all proof fields are present
+      if (!account.zkProofs.proofPoints || !account.zkProofs.issBase64Details || !account.zkProofs.headerBase64) {
+        throw new Error('Invalid proof data: Missing required proof components');
+      }
 
-        // Create and prepare transaction block
-        const txb = new TransactionBlock();
-        txb.setSender(account.userAddr);
+      // Generate address seed for verification
+      const addressSeed = genAddressSeed(
+        BigInt(account.userSalt),
+        'sub',
+        account.sub,
+        account.aud
+      ).toString();
+      console.log(`Generated address seed: ${addressSeed}`);
+
+      // Create and prepare transaction block
+      const txb = new TransactionBlock();
+      txb.setSender(account.userAddr);
+      
+      // Let the caller customize the transaction block
+      prepareBlock(txb);
+
+      // Set gas budget with validation - increase default gas for zkLogin transactions
+      const DEFAULT_GAS_BUDGET = 50000000; // 0.05 SUI
+      const gasBudget = options.gasBudget || DEFAULT_GAS_BUDGET;
+      if (gasBudget <= 0) {
+        throw new Error('Invalid gas budget');
+      }
+      txb.setGasBudget(gasBudget);
+
+      // Sign the transaction block with ephemeral key
+      console.log('Signing transaction with ephemeral key...');
+      const { bytes, signature: userSignature } = await txb.sign({
+        client: this.suiClient,
+        signer: ephemeralKeyPair,
+      });
+
+      // Format and validate proof points
+      console.log('Formatting proof points for zkLogin signature...');
+      try {
+        // Deep clone the proof points to ensure we don't modify the original
+        const proofPointsClone = JSON.parse(JSON.stringify(account.zkProofs.proofPoints));
         
-        // Let the caller customize the transaction block
-        prepareBlock(txb);
-
-        // Set gas budget with validation
-        const DEFAULT_GAS_BUDGET = 50000000; // 0.05 SUI
-        const gasBudget = options.gasBudget || DEFAULT_GAS_BUDGET;
-        if (gasBudget <= 0) {
-            throw new Error('Invalid gas budget');
+        // Verify all required proof point components exist
+        if (!proofPointsClone.a || !proofPointsClone.b || !proofPointsClone.c ||
+            !Array.isArray(proofPointsClone.a) || !Array.isArray(proofPointsClone.b) || !Array.isArray(proofPointsClone.c)) {
+          throw new Error('Proof points missing required components');
         }
-        txb.setGasBudget(gasBudget);
-
-        // Sign the transaction block
-        const { bytes, signature: userSignature } = await txb.sign({
-            client: this.suiClient,
-            signer: ephemeralKeyPair,
+        
+        // Format the proof points according to Sui zkLogin requirements
+        const formattedProofPoints = {
+          a: proofPointsClone.a.map((point: string | number) => BigInt(point).toString()),
+          b: proofPointsClone.b.map((pair: string | number | Array<string | number>) => {
+            // Handle b points correctly - must be pairs
+            if (Array.isArray(pair) && pair.length === 2) {
+              return pair.map((point: string | number) => BigInt(point).toString());
+            } else if (!Array.isArray(pair)) {
+              // If not an array, create a pair with [point, 0]
+              return [BigInt(pair).toString(), "0"];
+            } else {
+              // If array but not length 2, log and throw error
+              console.error('Invalid b point format:', pair);
+              throw new Error(`Invalid b point format: expected pair but got array of length ${pair.length}`);
+            }
+          }),
+          c: proofPointsClone.c.map((point: string | number) => BigInt(point).toString()),
+        };
+        
+        console.log('Proof points formatted successfully');
+        
+        // Create zkLogin signature with the exact format required by Sui
+        console.log('Creating zkLogin signature with components:', {
+          hasAddressSeed: !!addressSeed,
+          userSignatureLength: userSignature?.length,
+          maxEpoch: account.maxEpoch,
+          proofPointsA: formattedProofPoints.a?.length,
+          proofPointsB: formattedProofPoints.b?.length,
+          proofPointsC: formattedProofPoints.c?.length,
+          hasHeaderBase64: !!account.zkProofs.headerBase64,
+          hasIssBase64Details: !!account.zkProofs.issBase64Details?.value
         });
 
-        // Format and validate proof points
-        let formattedProofPoints;
-        try {
-            formattedProofPoints = this.formatProofPoints(account.zkProofs.proofPoints);
-        } catch (error) {
-            throw new Error(`Invalid proof points: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        // Ensure we have all the required inputs
+        if (!addressSeed || !userSignature || !account.zkProofs.headerBase64 ||
+            !account.zkProofs.issBase64Details || !account.zkProofs.issBase64Details.value) {
+          throw new Error('Missing required zkLogin signature components');
         }
 
-        // Create zkLogin signature with validated components
+        // Create the zkLogin signature
         const zkLoginSignature = getZkLoginSignature({
-            inputs: {
-                ...account.zkProofs,
-                proofPoints: formattedProofPoints,
-                addressSeed,
-                issBase64Details: account.zkProofs.issBase64Details,
-                headerBase64: account.zkProofs.headerBase64
-            },
-            maxEpoch: account.maxEpoch,
-            userSignature,
+          inputs: {
+            ...account.zkProofs,
+            proofPoints: formattedProofPoints,
+            addressSeed,
+          },
+          maxEpoch: account.maxEpoch,
+          userSignature,
         });
-
-        // Verify signature before sending
-        try {
-            const isValid = await this.verifyZkLoginSignature(
-                bytes,
-                zkLoginSignature,
-                account.userAddr
-            );
-
-            if (!isValid) {
-                throw new Error('Failed to verify zkLogin signature');
-            }
-        } catch (error) {
-            if (error instanceof Error && 
-                (error.message.includes('Groth16 proof verify failed') || 
-                 error.message.includes('epoch'))) {
-                throw new Error('Session has expired or proof is invalid. Please re-authenticate.');
-            }
-            throw error;
-        }
-
-        // Execute transaction with improved error handling
+        
+        console.log('Generated zkLogin signature:', zkLoginSignature.substring(0, 20) + '...');
+        
+        // Execute transaction
+        console.log('Executing transaction with zkLogin signature...');
         const result = await this.suiClient.executeTransactionBlock({
-            transactionBlock: bytes,
-            signature: zkLoginSignature,
-            options: {
-                showEffects: true,
-                showEvents: true,
-                showInput: true,
-                showObjectChanges: true,
-            },
-            requestType: options.requestType || 'WaitForLocalExecution'
+          transactionBlock: bytes,
+          signature: zkLoginSignature,
+          options: {
+            showEffects: true,
+            showEvents: true,
+            showInput: true,
+            showObjectChanges: true,
+          },
+          requestType: options.requestType || 'WaitForLocalExecution'
         });
-
+        
         if (!result) {
-            throw new Error('No transaction response received');
+          throw new Error('No transaction response received');
         }
-
+        
+        // Process and return transaction result
         const txResult = this.processTransactionResponse(result);
         if (txResult.status === 'failure') {
-            throw new Error(txResult.error || 'Transaction failed');
+          throw new Error(txResult.error || 'Transaction failed');
         }
-
+        
         return txResult;
+      } catch (error) {
+        // Handle proof formatting errors
+        console.error('Error in proof formatting or signature generation:', error);
+        if (error instanceof Error) {
+          throw new Error(`zkLogin signature error: ${error.message}`);
+        }
+        throw error;
+      }
     } catch (err) {
-        console.error('Transaction error:', err);
-        
-        if (err instanceof Error) {
-            // Check for specific error types
-            if (err.message.includes('epoch has expired') || 
-                err.message.includes('maxEpoch') || 
-                err.message.includes('proof verify failed') ||
-                err.message.includes('Session has expired')) {
-                throw new Error('Session expired: Please re-authenticate');
-            }
-            
-            if (err.message.includes('insufficient gas')) {
-                throw new Error('Insufficient gas: Please ensure you have enough SUI for gas');
-            }
-
-            if (err.message.includes('Invalid proof points')) {
-                throw new Error('Invalid proof structure: Please re-authenticate');
-            }
+      console.error('Transaction error:', err);
+      
+      if (err instanceof Error) {
+        // Check for specific error types
+        if (err.message.includes('epoch has expired') || 
+            err.message.includes('maxEpoch') || 
+            err.message.includes('proof verify failed') ||
+            err.message.includes('Groth16') ||
+            err.message.includes('Signature is not valid') ||
+            err.message.includes('Session has expired')) {
+          throw new Error('Session expired: Please re-authenticate');
         }
         
-        throw new Error('Failed to execute transaction. Please try again.');
+        if (err.message.includes('insufficient gas')) {
+          throw new Error('Insufficient gas: Please ensure you have enough SUI for gas');
+        }
+
+        if (err.message.includes('Invalid proof') || 
+            err.message.includes('proof points') ||
+            err.message.includes('zkLogin signature error')) {
+          throw new Error('Invalid proof structure: Please re-authenticate');
+        }
+      }
+      
+      throw new Error('Failed to execute transaction. Please try again.');
     }
   }
 

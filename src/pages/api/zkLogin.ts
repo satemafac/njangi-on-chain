@@ -227,34 +227,106 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
+          // Make sure we're using the session's account data rather than what was sent
+          // This ensures we have the latest and valid account data
+          console.log('Using account data from session for transaction');
+
+          // Check for missing proof components
+          if (!session.account.zkProofs?.proofPoints?.a || 
+              !session.account.zkProofs?.proofPoints?.b ||
+              !session.account.zkProofs?.proofPoints?.c ||
+              !session.account.zkProofs?.issBase64Details ||
+              !session.account.zkProofs?.headerBase64) {
+            console.error('Missing proof components in session account data');
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({
+              error: 'Invalid proof data in session. Please login again.',
+              requireRelogin: true
+            });
+          }
+
+          // Ensure salt and address seed can be generated
+          try {
+            BigInt(session.account.userSalt);
+          } catch (error) {
+            console.error('Invalid salt format:', error);
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({
+              error: 'Invalid account data: salt is not properly formatted. Please login again.',
+              requireRelogin: true
+            });
+          }
+
+          // Log transaction parameters for debugging
+          console.log('Transaction parameters:', {
+            circleType: circleData.circle_type,
+            contributionAmount: circleData.contribution_amount.toString(),
+            securityDeposit: circleData.security_deposit.toString(),
+            maxMembers: circleData.max_members
+          });
+
           // Attempt to send the transaction
-          const txDigest = await instance.sendTransaction(
-            session.account,
-            (txb: Transaction) => {
-              txb.setSender(session.account!.userAddr);
+          try {
+            const txResult = await instance.sendTransaction(
+              session.account,
+              (txb: Transaction) => {
+                txb.setSender(session.account!.userAddr);
+                
+                txb.moveCall({
+                  target: `0xd9ecf9d1749fc36770a1c3d379428383774e796169154095671e7be2c29f39ad::njangi_circle::create_circle`,
+                  arguments: [
+                    txb.pure.string(circleData.name),
+                    txb.pure.u64(contribution),
+                    txb.pure.u64(deposit),
+                    txb.pure.u64(circleData.cycle_length),
+                    txb.pure.u64(circleData.cycle_day),
+                    txb.pure.u8(circleData.circle_type),
+                    txb.pure.u64(circleData.max_members),
+                    txb.pure.u8(circleData.rotation_style),
+                    txb.pure.vector('bool', circleData.penalty_rules),
+                    txb.pure.option('u8', circleData.goal_type?.some),
+                    txb.pure.option('u64', circleData.target_amount?.some ? BigInt(circleData.target_amount.some) : null),
+                    txb.pure.option('u64', circleData.target_date?.some ? BigInt(circleData.target_date.some) : null),
+                    txb.pure.bool(circleData.verification_required),
+                    txb.object("0x6")  // Clock object
+                  ]
+                });
+              }
+            );
+            
+            console.log('Transaction successful:', txResult);
+            return res.status(200).json({ 
+              digest: txResult.digest,
+              status: txResult.status,
+              gasUsed: txResult.gasUsed
+            });
+          } catch (txError) {
+            console.error('Transaction execution error:', txError);
+            
+            // Check if the error is related to proof verification
+            if (txError instanceof Error && 
+                (txError.message.includes('proof verify failed') ||
+                 txError.message.includes('Session expired') ||
+                 txError.message.includes('re-authenticate'))) {
               
-              txb.moveCall({
-                target: `0xd9ecf9d1749fc36770a1c3d379428383774e796169154095671e7be2c29f39ad::njangi_circle::create_circle`,
-                arguments: [
-                  txb.pure.string(circleData.name),
-                  txb.pure.u64(contribution),
-                  txb.pure.u64(deposit),
-                  txb.pure.u64(circleData.cycle_length),
-                  txb.pure.u64(circleData.cycle_day),
-                  txb.pure.u8(circleData.circle_type),
-                  txb.pure.u64(circleData.max_members),
-                  txb.pure.u8(circleData.rotation_style),
-                  txb.pure.vector('bool', circleData.penalty_rules),
-                  txb.pure.option('u8', circleData.goal_type?.some),
-                  txb.pure.option('u64', circleData.target_amount?.some ? BigInt(circleData.target_amount.some) : null),
-                  txb.pure.option('u64', circleData.target_date?.some ? BigInt(circleData.target_date.some) : null),
-                  txb.pure.bool(circleData.verification_required),
-                  txb.object("0x6")  // Clock object
-                ]
+              // Clear the session for authentication errors
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+              
+              return res.status(401).json({
+                error: 'Your session has expired. Please login again.',
+                requireRelogin: true
               });
             }
-          );
-          return res.status(200).json({ digest: txDigest });
+            
+            // For other errors, keep the session but return error
+            return res.status(500).json({ 
+              error: txError instanceof Error ? txError.message : 'Failed to execute transaction',
+              requireRelogin: false
+            });
+          }
         } catch (err) {
           // Check for any signature/proof/verification related errors
           if (err instanceof Error && 
@@ -270,13 +342,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
             return res.status(401).json({ 
               error: 'Your session has expired. Please try again from the dashboard.',
+              requireRelogin: true
             });
           }
           // Handle other transaction errors
           console.error('Transaction error:', err);
           return res.status(500).json({ 
             error: 'Failed to execute transaction. Please try again.',
-            details: err instanceof Error ? err.message : 'Unknown error'
+            details: err instanceof Error ? err.message : 'Unknown error',
+            requireRelogin: false
           });
         }
 
