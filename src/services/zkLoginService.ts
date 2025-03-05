@@ -328,7 +328,7 @@ export class ZkLoginService {
     };
 
     // Get and validate the zero-knowledge proof
-    const proofResponse = await fetch('https://prover-dev.mystenlabs.com/v1', {
+    const proofResponse = await fetch('http://localhost:5003/v1', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(proofRequest)

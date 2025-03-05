@@ -1,0 +1,1 @@
+{"maxEpoch": 123, "jwtRandomness": "123456789", "extendedEphemeralPublicKey": "AAAA", "jwt": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjEyMzQ1Njc4OTAiLCJ0eXAiOiJKV1QifQ.eyJzdWIiOiIxMjM0NTY3ODkwIiwiYXVkIjoidGVzdC1hdWRpZW5jZSIsImlhdCI6MTUxNjIzOTAyMiwiZXhwIjoxNTE2MjM5MDIyfQ.signature", "salt": "123456789", "keyClaimName": "sub"}

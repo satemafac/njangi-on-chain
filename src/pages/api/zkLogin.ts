@@ -275,7 +275,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 txb.setSender(session.account!.userAddr);
                 
                 txb.moveCall({
-                  target: `0xd9ecf9d1749fc36770a1c3d379428383774e796169154095671e7be2c29f39ad::njangi_circle::create_circle`,
+                  target: `0x3668a1e8e51453627141a2d2043e0244242dfe38c2f324686f6b4ec76d4d5a6d::njangi_circle::create_circle`,
                   arguments: [
                     txb.pure.string(circleData.name),
                     txb.pure.u64(contribution),

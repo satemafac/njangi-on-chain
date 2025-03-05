@@ -1,0 +1,13 @@
+{
+  "name": "db-check",
+  "version": "1.0.0",
+  "description": "Database check utility for zkLogin salt database",
+  "main": "db-check.js",
+  "type": "commonjs",
+  "dependencies": {
+    "better-sqlite3": "^8.0.0"
+  },
+  "scripts": {
+    "check": "node db-check.js"
+  }
+}

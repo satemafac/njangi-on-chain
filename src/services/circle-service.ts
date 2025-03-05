@@ -4,7 +4,7 @@ import { bcs } from '@mysten/sui/bcs';
 import type { CircleFormData, CycleLength, WeekDay } from '../types/circle';
 
 // Package ID from published contract
-const PACKAGE_ID = "0xdd063e4331d7dc940b34bdc8c78d925452ddee09d86875a4cd2059c09e55e190";
+const PACKAGE_ID = "0x3668a1e8e51453627141a2d2043e0244242dfe38c2f324686f6b4ec76d4d5a6d";
 
 // Constants from Move contract
 const CIRCLE_TYPE_ROTATIONAL = 0;

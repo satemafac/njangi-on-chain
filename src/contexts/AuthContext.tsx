@@ -1,7 +1,23 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { AccountData } from '@/services/zkLoginService';
+import { AccountData, OAuthProvider } from '@/services/zkLoginService';
 import { ZkLoginClient } from '@/services/zkLoginClient';
-import type { OAuthProvider } from '@/services/zkLoginService';
+
+// Define CircleData interface based on required parameters
+interface CircleData {
+  name: string;
+  contribution_amount: string | number;
+  security_deposit: string | number;
+  cycle_length: number;
+  cycle_day: number;
+  circle_type: number;
+  max_members: number;
+  rotation_style: number;
+  penalty_rules: boolean[];
+  goal_type?: { some?: number };
+  target_amount?: { some?: string | number };
+  target_date?: { some?: string | number };
+  verification_required: boolean;
+}
 
 interface AuthContextType {
   account: AccountData | null;
@@ -11,7 +27,7 @@ interface AuthContextType {
   login: (provider: OAuthProvider) => Promise<void>;
   logout: () => void;
   handleCallback: (jwt: string) => Promise<AccountData>;
-  sendTransaction: () => Promise<string>;
+  sendTransaction: (circleData: CircleData) => Promise<string>;
   setUserAddress: (address: string) => void;
   setIsAuthenticated: (value: boolean) => void;
   setError: (error: string) => void;
@@ -91,9 +107,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return accountData;
   };
 
-  const sendTransaction = async () => {
+  const sendTransaction = async (circleData: CircleData) => {
     if (!account) throw new Error('Not logged in');
-    const { digest } = await zkLogin.sendTransaction(account);
+    const { digest } = await zkLogin.sendTransaction(account, circleData);
     return digest;
   };
 
