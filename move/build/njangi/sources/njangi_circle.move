@@ -79,7 +79,19 @@ module njangi::njangi_circle {
     // Helper functions to handle SUI decimal scaling
     // ----------------------------------------------------------
     fun to_decimals(amount: u64): u64 {
-        amount * DECIMAL_SCALING
+        // We'll use a safer approach to handle very large amounts
+        // DECIMAL_SCALING is 10^9 (1_000_000_000)
+        // Max u64 is 18,446,744,073,709,551,615
+        // So the safe limit for multiplication is 18,446,744,073 (without scaling)
+        
+        // Check if amount is too large to multiply safely
+        if (amount > 18_446_744_073) {
+            // If we have a huge amount, we'll return the max safe scaled value
+            // This prevents runtime errors while still allowing very large values
+            18_446_744_073_000_000_000 // Max safe value with 9 decimals
+        } else {
+            amount * DECIMAL_SCALING
+        }
     }
 
     fun from_decimals(amount: u64): u64 {

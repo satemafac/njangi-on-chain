@@ -1,20 +1,29 @@
 version: '3.8'
 
 services:
-  prover:
-    image: mystenlabs/zklogin:latest
+  backend:
+    image: mysten/zklogin:prover-stable
+    platform: linux/amd64
     ports:
-      - "5001:5001"
+      - "5001:8080"
     environment:
-      - PORT=5001
       - RUST_LOG=info
+      - ZKEY=/app/zkey/zkLogin.zkey
+      - WITNESS_BINARIES=/app/binaries
+    volumes:
+      - ./zkLogin.zkey:/app/zkey/zkLogin.zkey
+      - ./zkLogin.zkey:/app/binaries/prod/zkLogin.zkey
     restart: unless-stopped
 
-  salt:
-    image: mystenlabs/zklogin-salt:latest
+  frontend:
+    image: mysten/zklogin:prover-fe-stable
+    platform: linux/amd64
+    command: '8080'
     ports:
-      - "5002:5002"
+      - "5003:8080"
     environment:
-      - PORT=5002
-      - RUST_LOG=info
+      - PROVER_URI=http://backend:8080/input
+      - NODE_ENV=production
+      - DEBUG=zkLogin:info,jwks
+      - PROVER_TIMEOUT=45
     restart: unless-stopped 
