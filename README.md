@@ -251,5 +251,22 @@ use sui_ext::usdc::USDC;
 3. Advanced treasury management
 4. Improved scalability
 
+## Development Setup
+
+### zkLogin.zkey File
+The project requires a large zkLogin.zkey file (588MB) which is not included in the repository due to GitHub file size limitations. 
+
+To set up your development environment:
+1. Run the provided download script to fetch the file:
+   ```
+   ./download-main-zkey.sh   # For mainnet/testnet
+   # OR
+   ./download-test-zkey.sh   # For testing environments
+   ```
+2. This will download and place the zkLogin.zkey file in the root directory
+3. The file is already added to .gitignore to prevent accidental commits
+
+This file is required for the zkLogin services to function properly as referenced in the docker-compose.yml configuration.
+
 ## License
 [Specify License]
