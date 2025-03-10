@@ -16,14 +16,16 @@ import { SuiTransactionBlockResponse, ExecuteTransactionRequestType } from '@mys
 const FULLNODE_URL = 'https://fullnode.testnet.sui.io:443';
 const GOOGLE_OAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const FACEBOOK_OAUTH_URL = 'https://www.facebook.com/v18.0/dialog/oauth';
+const APPLE_OAUTH_URL = 'https://appleid.apple.com/auth/authorize';
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
 const FACEBOOK_CLIENT_ID = process.env.NEXT_PUBLIC_FACEBOOK_CLIENT_ID;
+const APPLE_CLIENT_ID = process.env.NEXT_PUBLIC_APPLE_CLIENT_ID;
 const REDIRECT_URI = process.env.NEXT_PUBLIC_REDIRECT_URI;
 const SALT_SERVICE_URL = 'http://localhost:5002/get-salt'; // Local salt service endpoint
 const MAX_EPOCH = 2; // keep ephemeral keys active for this many Sui epochs from now (1 epoch ~= 24h)
 const GRAPHQL_URL = 'https://sui-testnet.mystenlabs.com/graphql';
 
-export type OAuthProvider = 'Google' | 'Facebook';
+export type OAuthProvider = 'Google' | 'Facebook' | 'Apple';
 
 export interface ZkLoginProofs {
   proofPoints: {
@@ -104,6 +106,7 @@ export class ZkLoginService {
     if (
       !GOOGLE_CLIENT_ID || 
       !FACEBOOK_CLIENT_ID || 
+      !APPLE_CLIENT_ID ||
       !REDIRECT_URI
     ) {
       throw new Error('Missing OAuth configuration');
@@ -135,7 +138,7 @@ export class ZkLoginService {
         scope: 'openid profile email'
       });
       loginUrl = `${GOOGLE_OAUTH_URL}?${params.toString()}`;
-    } else {
+    } else if (provider === 'Facebook') {
       const params = new URLSearchParams({
         client_id: FACEBOOK_CLIENT_ID,
         redirect_uri: REDIRECT_URI,
@@ -144,6 +147,16 @@ export class ZkLoginService {
         nonce: nonce, // Use nonce directly instead of state for OIDC
       });
       loginUrl = `${FACEBOOK_OAUTH_URL}?${params.toString()}`;
+    } else { // Apple
+      const params = new URLSearchParams({
+        client_id: APPLE_CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        response_type: 'id_token',
+        scope: 'openid email name',
+        response_mode: 'fragment',
+        nonce: nonce,
+      });
+      loginUrl = `${APPLE_OAUTH_URL}?${params.toString()}`;
     }
 
     return { loginUrl, setupData };
@@ -287,11 +300,11 @@ export class ZkLoginService {
       aud: jwtPayload.aud,
       exp: jwtPayload.exp,
       iat: jwtPayload.iat,
-      clientId: setupData.provider === 'Google' ? GOOGLE_CLIENT_ID : FACEBOOK_CLIENT_ID
+      clientId: setupData.provider === 'Google' ? GOOGLE_CLIENT_ID : setupData.provider === 'Facebook' ? FACEBOOK_CLIENT_ID : APPLE_CLIENT_ID
     });
 
     // Get salt from the salt service with improved error handling
-    const clientId = setupData.provider === 'Google' ? GOOGLE_CLIENT_ID : FACEBOOK_CLIENT_ID;
+    const clientId = setupData.provider === 'Google' ? GOOGLE_CLIENT_ID : setupData.provider === 'Facebook' ? FACEBOOK_CLIENT_ID : APPLE_CLIENT_ID;
     if (!clientId) {
       throw new Error(`${setupData.provider} Client ID is not configured`);
     }

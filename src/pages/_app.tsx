@@ -2,11 +2,25 @@ import React from 'react';
 import '@/styles/globals.css';
 import type { AppProps } from 'next/app';
 import { AuthProvider } from '../contexts/AuthContext';
+import { ActivityDetector } from '@/components/ActivityDetector';
+import { IdleWarningModal } from '@/components/IdleWarningModal';
+import { useAuth } from '@/contexts/AuthContext';
 
-export default function App({ Component, pageProps }: AppProps) {
+function AppContent({ Component, pageProps }: AppProps) {
+  const { isAuthenticated } = useAuth();
+
+  return (
+    <ActivityDetector>
+      {isAuthenticated && <IdleWarningModal />}
+      <Component {...pageProps} />
+    </ActivityDetector>
+  );
+}
+
+export default function App(props: AppProps) {
   return (
     <AuthProvider>
-      <Component {...pageProps} />
+      <AppContent {...props} />
     </AuthProvider>
   );
 } 
