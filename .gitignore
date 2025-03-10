@@ -22,6 +22,7 @@
 
 # misc
 .DS_Store
+**/.DS_Store
 *.pem
 
 # debug
@@ -29,9 +30,11 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+debug-*.cjs
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -44,3 +47,20 @@ polymedia-zklogin-demo/
 
 # large files
 *.zkey
+
+# database files
+*.db
+dump.rdb
+
+# build artifacts
+build/
+.next/
+tsconfig.tsbuildinfo
+
+# Editors
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
