@@ -41,3 +41,27 @@ yarn-error.log*
 next-env.d.ts
 sui-zklogin-demo/
 polymedia-zklogin-demo/
+
+# large files
+zkLogin.zkey
+*.zip
+*.tar.gz
+*.tar
+*.rar
+*.7z
+*.iso
+*.dmg
+*.exe
+*.dll
+*.so
+*.dylib
+*.mp4
+*.mov
+*.avi
+*.wav
+*.mp3
+*.flac
+*.log
+*.dump
+*.sqlite
+*.db
