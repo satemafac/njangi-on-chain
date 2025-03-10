@@ -72,18 +72,64 @@ export class ZkLoginClient {
   }
 
   public async handleCallback(jwt: string): Promise<AccountData> {
-    const response = await fetch('/api/zkLogin', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'handleCallback', jwt })
-    });
+    // Set up a retry mechanism with backoff
+    let retries = 0;
+    const maxRetries = 3;
+    const baseBackoff = 1500; // 1.5 seconds base
     
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to process authentication');
+    while (true) {
+      try {
+        const response = await fetch('/api/zkLogin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'handleCallback', jwt })
+        });
+        
+        // Handle processing status (202)
+        if (response.status === 202) {
+          const data = await response.json();
+          
+          // Only log on first retry
+          if (retries === 0) {
+            console.log('Authentication processing:', data.message);
+          }
+          
+          retries++;
+          
+          // If we've tried too many times, throw an error
+          if (retries > maxRetries) {
+            throw new Error('Authentication is taking too long. Please try again.');
+          }
+          
+          // Exponential backoff with jitter
+          const jitter = Math.random() * 500;
+          const backoff = baseBackoff * Math.pow(1.5, retries) + jitter;
+          
+          console.log(`Retry ${retries}/${maxRetries} after ${Math.round(backoff)}ms...`);
+          await new Promise(resolve => setTimeout(resolve, backoff));
+          continue; // Try again
+        }
+        
+        // Handle other errors
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Failed to process authentication');
+        }
+        
+        // Success - return the account data
+        return response.json();
+      } catch (err) {
+        // If we've hit our retry limit or received a non-processing error, rethrow
+        if (retries > maxRetries || !(err instanceof Error && err.message.includes('taking too long'))) {
+          throw err;
+        }
+        
+        // Otherwise, try again after backoff
+        const backoff = baseBackoff * Math.pow(1.5, retries) + (Math.random() * 500);
+        await new Promise(resolve => setTimeout(resolve, backoff));
+        retries++;
+      }
     }
-    
-    return response.json();
   }
 
   public async sendTransaction(account: AccountData, circleData: CircleData): Promise<{ digest: string; requireRelogin?: boolean }> {

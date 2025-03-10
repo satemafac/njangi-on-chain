@@ -1,5 +1,5 @@
 # Njangi Smart Contract Documentation
-#npx tsx salt-service.ts - npm run dev
+#npx tsx salt-service.ts - npm run dev - ./start-zklogin-services.sh
  - sui move build
 
 ## Overview

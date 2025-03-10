@@ -9,6 +9,7 @@ interface RPCError extends Error {
 
 // Constants
 const MAX_EPOCH = 2; // Number of epochs to keep session alive (1 epoch ~= 24h)
+const PROCESSING_COOLDOWN = 30000; // 30 seconds between processing attempts for the same session
 
 // Simple in-memory session store (in production, use Redis or a proper session store)
 const sessions = new Map<string, SetupData & { account?: AccountData }>();
@@ -89,6 +90,9 @@ function cleanupUserSessions(userAddr: string, currentSessionId: string) {
   }
 }
 
+// Add after MAX_EPOCH constant
+const PROCESSING_SESSIONS = new Map<string, { startTime: number, promise: Promise<AccountData> }>();
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -137,38 +141,87 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         try {
+          // Check if this session is already being processed to prevent duplicate processing
+          const processingInfo = PROCESSING_SESSIONS.get(sessionId);
+          if (processingInfo) {
+            const elapsedTime = Date.now() - processingInfo.startTime;
+            
+            // If the process has been running for less than the cooldown, return a "processing" status
+            if (elapsedTime < PROCESSING_COOLDOWN) {
+              console.log(`Session ${sessionId} is already being processed (${elapsedTime}ms elapsed)`);
+              return res.status(202).json({ 
+                status: 'processing',
+                message: 'Authentication is being processed. Please wait.' 
+              });
+            } else {
+              // If it's been too long, remove the processing lock and try again
+              console.log(`Processing timeout for session ${sessionId}, retrying`);
+              PROCESSING_SESSIONS.delete(sessionId);
+            }
+          }
+
           // Get and validate setup data
           const savedSetup = validateSession(sessionId, 'handleCallback');
-          const result = await instance.handleCallback(jwt, savedSetup);
-
-          // Clean up any existing sessions for this user
-          cleanupUserSessions(result.address, sessionId);
-
-          // Store account data with all required fields
-          const accountData: AccountData = {
-            provider: savedSetup.provider,
-            userAddr: result.address,
-            zkProofs: result.zkProofs,
-            ephemeralPrivateKey: savedSetup.ephemeralPrivateKey,
-            userSalt: result.userSalt,
-            sub: result.sub,
-            aud: result.aud,
-            maxEpoch: savedSetup.maxEpoch,
-            picture: result.picture,
-            name: result.name
-          };
-
-          // Log the account data being stored
+          
+          // If we already have account data, return it immediately
+          if (savedSetup.account) {
+            console.log(`Session ${sessionId} already has account data, returning immediately`);
+            return res.status(200).json(savedSetup.account);
+          }
+          
+          // Create a promise that will resolve with the account data
+          const processPromise = (async () => {
+            const result = await instance.handleCallback(jwt, savedSetup);
+            
+            // Clean up any existing sessions for this user
+            cleanupUserSessions(result.address, sessionId);
+            
+            // Create the account data object
+            const accountData: AccountData = {
+              provider: savedSetup.provider,
+              userAddr: result.address,
+              zkProofs: result.zkProofs,
+              ephemeralPrivateKey: savedSetup.ephemeralPrivateKey,
+              userSalt: result.userSalt,
+              sub: result.sub,
+              aud: result.aud,
+              maxEpoch: savedSetup.maxEpoch,
+              picture: result.picture,
+              name: result.name
+            };
+            
+            // Store the account data in the session
+            sessions.set(sessionId, { ...savedSetup, account: accountData });
+            
+            // Clean up the processing lock
+            PROCESSING_SESSIONS.delete(sessionId);
+            
+            return accountData;
+          })();
+          
+          // Store the processing promise and timestamp
+          PROCESSING_SESSIONS.set(sessionId, {
+            startTime: Date.now(),
+            promise: processPromise
+          });
+          
+          // Wait for the promise to resolve
+          const accountData = await processPromise;
+          
           console.log('Storing account data:', {
             sessionId,
-            address: result.address,
+            address: accountData.userAddr,
             maxEpoch: savedSetup.maxEpoch,
             ephemeralPublicKey: instance.getPublicKeyFromPrivate(savedSetup.ephemeralPrivateKey)
           });
-
-          sessions.set(sessionId, { ...savedSetup, account: accountData });
+          
           return res.status(200).json(accountData);
         } catch (err) {
+          // Clean up the processing lock if there was an error
+          if (sessionId) {
+            PROCESSING_SESSIONS.delete(sessionId);
+          }
+          
           console.error('HandleCallback error:', err);
           // If session validation failed, clear cookie and session
           if (err instanceof Error && err.message.includes('Session')) {
