@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { AccountData, OAuthProvider } from '@/services/zkLoginService';
 import { ZkLoginClient } from '@/services/zkLoginClient';
+import { useIdleTimer } from '@/hooks/useIdleTimer';
 
 // Define CircleData interface based on required parameters
 interface CircleData {
@@ -31,6 +32,7 @@ interface AuthContextType {
   setUserAddress: (address: string) => void;
   setIsAuthenticated: (value: boolean) => void;
   setError: (error: string) => void;
+  resetIdleTimer: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -41,6 +43,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [userAddress, setUserAddress] = useState('');
   const [error, setError] = useState<string | null>(null);
   const zkLogin = ZkLoginClient.getInstance();
+
+  const handleAutoLogout = () => {
+    if (isAuthenticated) {
+      console.log('Auto-logout triggered after 15 minutes of inactivity');
+      logout();
+    }
+  };
+
+  const { resetTimer: resetIdleTimer } = useIdleTimer({
+    onIdle: handleAutoLogout,
+    idleTime: 15 * 60 * 1000, // 15 minutes in milliseconds
+  });
 
   // Load saved authentication state on mount
   useEffect(() => {
@@ -104,11 +118,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAccount(accountData);
     setUserAddress(accountData.userAddr);
     setIsAuthenticated(true);
+    // Reset idle timer after successful login
+    resetIdleTimer();
     return accountData;
   };
 
   const sendTransaction = async (circleData: CircleData) => {
     if (!account) throw new Error('Not logged in');
+    // Reset idle timer on transaction
+    resetIdleTimer();
     const { digest } = await zkLogin.sendTransaction(account, circleData);
     return digest;
   };
@@ -125,7 +143,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       sendTransaction,
       setUserAddress,
       setIsAuthenticated,
-      setError
+      setError,
+      resetIdleTimer
     }}>
       {children}
     </AuthContext.Provider>
