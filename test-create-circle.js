@@ -19,7 +19,7 @@ async function main() {
   
   // Create a small circle to test
   txb.moveCall({
-    target: `0x3668a1e8e51453627141a2d2043e0244242dfe38c2f324686f6b4ec76d4d5a6d::njangi_circle::create_circle`,
+    target: `0x20cc18715122dbdf12a00b97fdda80f60c3ccbf0b83ab3a78d80f3c0bf4e5ff7::njangi_circle::create_circle`,
     arguments: [
       txb.pure.string("Test Circle"),           // name
       txb.pure.u64("10000000"),                 // contribution_amount (small amount)

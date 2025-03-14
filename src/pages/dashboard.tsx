@@ -1,8 +1,123 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../contexts/AuthContext';
 import Image from 'next/image';
 import { SuiClient } from '@mysten/sui/client';
+import { Tab } from '@headlessui/react';
+import * as Tooltip from '@radix-ui/react-tooltip';
+import { priceService } from '../services/price-service';
+import { toast } from 'react-hot-toast';
+import { Eye, Settings, Trash2, CreditCard } from 'lucide-react';
+
+// Circle type definition
+interface Circle {
+  id: string;
+  name: string;
+  admin: string;
+  contributionAmount: number;
+  securityDeposit: number;
+  cycleLength: number;
+  cycleDay: number;
+  maxMembers: number;
+  currentMembers: number;
+  nextPayoutTime: number;
+  memberStatus: 'active' | 'suspended' | 'exited';
+  isAdmin: boolean;
+}
+
+// Type definitions for SUI event payloads
+interface CircleCreatedEvent {
+  circle_id: string;
+  admin: string;
+  name: string;
+  contribution_amount: string;
+  max_members: string;
+  cycle_length: string;
+}
+
+interface MemberJoinedEvent {
+  circle_id: string;
+  member: string;
+  position?: number;
+}
+
+// Add these type definitions at the top of the file with other interfaces
+interface TransactionBlock {
+  transactions?: Array<{
+    kind: string;
+    target: string;
+    arguments: Array<{
+      kind: string;
+      index: number;
+      type: string;
+      value: string;
+    }>;
+  }>;
+  moveCall?: {
+    packageObjectId: string;
+    module: string;
+    function: string;
+    typeArguments: string[];
+    arguments: string[];
+  };
+}
+
+interface TransactionOptions {
+  showEffects: boolean;
+  showEvents: boolean;
+}
+
+interface TransactionBlockPayload {
+  transactionBlock: TransactionBlock;
+  options: TransactionOptions;
+}
+
+// Declare global wallet type - updated to include all possible wallet objects
+declare global {
+  interface Window {
+    suiWallet?: {
+      // Original API methods
+      constructTransaction?: (txData: {
+        kind: string;
+        data: {
+          packageObjectId: string;
+          module: string;
+          function: string;
+          typeArguments: string[];
+          arguments: string[];
+          gasBudget: number;
+        }
+      }) => unknown;
+      
+      signAndExecuteTransaction?: (tx: {
+        transaction: unknown;
+      }) => Promise<Record<string, unknown>>;
+      
+      // New API methods
+      signAndExecuteTransactionBlock?: (tx: TransactionBlockPayload) => Promise<Record<string, unknown>>;
+      
+      signTransactionBlock?: (tx: {
+        transactionBlock: TransactionBlock;
+        options?: {
+          showEffects?: boolean;
+          showEvents?: boolean;
+        };
+      }) => Promise<unknown>;
+      
+      // General connection methods that might be required
+      hasPermissions?: () => Promise<boolean>;
+      requestPermissions?: () => Promise<boolean>;
+      getAccounts?: () => Promise<string[]>;
+    };
+    
+    // Alternative wallet object names used by different SUI wallet versions
+    sui?: typeof Window.prototype.suiWallet;
+    suix?: typeof Window.prototype.suiWallet;
+    ethos?: typeof Window.prototype.suiWallet;
+    suiet?: typeof Window.prototype.suiWallet;
+    martian?: typeof Window.prototype.suiWallet;
+  }
+}
 
 export default function Dashboard() {
   const router = useRouter();
@@ -10,10 +125,19 @@ export default function Dashboard() {
   const [balance, setBalance] = useState<string>('0');
   const [showFullAddress, setShowFullAddress] = useState(false);
   const [showToast, setShowToast] = useState(false);
+  const [circles, setCircles] = useState<Circle[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
+  const [deleteableCircles, setDeleteableCircles] = useState<Set<string>>(new Set());
+  const [isDeleting, setIsDeleting] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) {
+      console.log("User not authenticated, redirecting to home");
       router.push('/');
+    } else {
+      console.log("User is authenticated:", userAddress);
     }
   }, [isAuthenticated, router]);
 
@@ -31,6 +155,429 @@ export default function Dashboard() {
     fetchBalance();
   }, [userAddress]);
 
+  // Fetch SUI price - only on page load, no interval
+  useEffect(() => {
+    const fetchPrice = async () => {
+      try {
+        const price = await priceService.getSUIPrice();
+        setSuiPrice(price);
+        
+        // Show error toast if price fetching failed but we're using cached data
+        if (priceService.getFetchStatus() === 'error') {
+          toast.error(
+            'Unable to fetch latest SUI price. Using last known price.',
+            {
+              duration: 4000,
+              position: 'bottom-center',
+              icon: '⚠️',
+              style: {
+                border: '1px solid #F87171',
+                padding: '16px',
+                color: '#991B1B',
+              },
+            }
+          );
+        }
+      } catch (error) {
+        console.error('Error in price fetch flow:', error);
+        // Keep using the default price
+      }
+    };
+
+    fetchPrice();
+    // Removed interval to avoid excessive API calls
+  }, []);
+
+  // Use useCallback to memoize the fetchUserCircles function
+  const fetchUserCircles = useCallback(async () => {
+    if (!userAddress) return;
+    
+    setLoading(true);
+    setError(null); // Reset error state
+    try {
+      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      
+      // Define package ID where njangi_circle module is deployed
+      const packageId = "0x20cc18715122dbdf12a00b97fdda80f60c3ccbf0b83ab3a78d80f3c0bf4e5ff7";
+      
+      // Step 1: Find circles created by this user (admin)
+      let createdCircles;
+      try {
+        createdCircles = await client.queryEvents({
+          query: {
+            MoveEventType: `${packageId}::njangi_circle::CircleCreated`
+          },
+          order: 'descending',
+          limit: 50, // Limit to 50 most recent circles
+        });
+      } catch (error) {
+        console.error('Error fetching created circles:', error);
+        createdCircles = { data: [] }; // Provide default empty data
+      }
+      
+      // Step 2: Find circles this user has joined - using the correct filter structure
+      // Instead of trying to filter by sender directly, we'll fetch all MemberJoined events
+      // and filter them in our code
+      let joinedCircles;
+      try {
+        joinedCircles = await client.queryEvents({
+          query: {
+            MoveEventType: `${packageId}::njangi_circle::MemberJoined`
+          },
+          order: 'descending',
+          limit: 100, // Limit to 100 most recent joins
+        });
+      } catch (error) {
+        console.error('Error fetching joined circles:', error);
+        joinedCircles = { data: [] }; // Provide default empty data
+      }
+      
+      // Process both result sets
+      const circleMap = new Map<string, Circle>();
+      
+      // Process created circles (admin)
+      for (const event of createdCircles.data) {
+        const parsedEvent = event.parsedJson as CircleCreatedEvent;
+        if (parsedEvent?.admin === userAddress) {
+          // Check if the contribution amount is suspiciously high (max u64 value)
+          // This is a workaround for a known issue where the contract returns max u64 value
+          const contributionRaw = Number(parsedEvent.contribution_amount) / 1e9;
+          const isUnreasonableAmount = contributionRaw > 1_000_000_000;
+          
+          // If the amount looks suspicious, try to get more accurate data from the transaction
+          if (isUnreasonableAmount && event.id && event.id.txDigest) {
+            try {
+              const txDetails = await fetchTransactionDetails(client, event.id.txDigest);
+              if (txDetails) {
+                circleMap.set(parsedEvent.circle_id, {
+                  id: parsedEvent.circle_id,
+                  name: parsedEvent.name,
+                  admin: parsedEvent.admin,
+                  contributionAmount: txDetails.contributionAmount,
+                  securityDeposit: 0, // Will be filled later
+                  cycleLength: Number(parsedEvent.cycle_length),
+                  cycleDay: txDetails.cycleDay,
+                  maxMembers: Number(parsedEvent.max_members),
+                  currentMembers: 0, // Will be filled later
+                  nextPayoutTime: 0, // Will be filled later
+                  memberStatus: 'active',
+                  isAdmin: true
+                });
+                continue; // Skip to next iteration since we've processed this circle
+              }
+            } catch (err) {
+              console.error('Error fetching transaction details for circle:', err);
+              // Fall back to standard processing below
+            }
+          }
+          
+          // Standard processing (used when tx details not available or fetch fails)
+          circleMap.set(parsedEvent.circle_id, {
+            id: parsedEvent.circle_id,
+            name: parsedEvent.name,
+            admin: parsedEvent.admin,
+            contributionAmount: isUnreasonableAmount ? 0 : contributionRaw,
+            securityDeposit: 0, // Will be filled later
+            cycleLength: Number(parsedEvent.cycle_length),
+            cycleDay: 0, // Will be filled later
+            maxMembers: Number(parsedEvent.max_members),
+            currentMembers: 0, // Will be filled later
+            nextPayoutTime: 0, // Will be filled later
+            memberStatus: 'active',
+            isAdmin: true
+          });
+        }
+      }
+      
+      // Process joined circles (member)
+      for (const event of joinedCircles.data) {
+        const parsedEvent = event.parsedJson as MemberJoinedEvent;
+        if (parsedEvent?.member === userAddress) {
+          // Check if we already have this circle as admin
+          if (!circleMap.has(parsedEvent.circle_id)) {
+            // Need to fetch more details about this circle
+            try {
+              const objectData = await client.getObject({
+                id: parsedEvent.circle_id,
+                options: { showContent: true }
+              });
+              
+              const content = objectData.data?.content;
+              if (content && 'fields' in content) {
+                const fields = content.fields as {
+                  name: string;
+                  admin: string;
+                  contribution_amount: string;
+                  security_deposit: string;
+                  cycle_length: string;
+                  cycle_day: string;
+                  max_members: string;
+                  current_members: string;
+                  next_payout_time: string;
+                };
+                
+                // Check if the contribution amount is suspiciously high (max u64 value)
+                const contributionRaw = Number(fields.contribution_amount) / 1e9;
+                const contributionAmount = contributionRaw > 1_000_000_000 
+                  ? 0 // Default to 0 for now if we see an unreasonable value
+                  : contributionRaw;
+                  
+                circleMap.set(parsedEvent.circle_id, {
+                  id: parsedEvent.circle_id,
+                  name: fields.name,
+                  admin: fields.admin,
+                  contributionAmount: contributionAmount,
+                  securityDeposit: Number(fields.security_deposit) / 1e9,
+                  cycleLength: Number(fields.cycle_length),
+                  cycleDay: Number(fields.cycle_day),
+                  maxMembers: Number(fields.max_members),
+                  currentMembers: Number(fields.current_members),
+                  nextPayoutTime: Number(fields.next_payout_time),
+                  memberStatus: 'active', // Default, will update if needed
+                  isAdmin: fields.admin === userAddress
+                });
+              }
+            } catch (err) {
+              console.error(`Error fetching circle details for ${parsedEvent.circle_id}:`, err);
+            }
+          }
+        }
+      }
+      
+      // Convert map to array and set state
+      setCircles(Array.from(circleMap.values()));
+    } catch (error) {
+      console.error('Error fetching circles:', error);
+      setError('An error occurred while fetching circles. Please try again later.');
+    } finally {
+      setLoading(false);
+    }
+  }, [userAddress]);
+
+  useEffect(() => {
+    fetchUserCircles();
+  }, [userAddress, fetchUserCircles]);
+
+  // Check which circles can be deleted - only for admin circles
+  useEffect(() => {
+    const checkDeleteableCircles = async () => {
+      if (!userAddress || circles.length === 0) return;
+      
+      try {
+        const deleteable = new Set<string>();
+        
+        // For each circle where user is admin, check if it can be deleted
+        for (const circle of circles.filter(c => c.isAdmin)) {
+          try {
+            // For simplicity, we'll check if it meets the basic criteria:
+            // 1. Is admin
+            // 2. Has 0 or 1 members (only admin)
+            if (circle.currentMembers <= 1) {
+              deleteable.add(circle.id);
+            }
+          } catch (error) {
+            console.error(`Error checking if circle ${circle.id} can be deleted:`, error);
+          }
+        }
+        
+        setDeleteableCircles(deleteable);
+      } catch (error) {
+        console.error('Error checking deleteable circles:', error);
+      }
+    };
+    
+    checkDeleteableCircles();
+  }, [circles, userAddress]);
+  
+  // Function to delete a circle
+  const deleteCircle = async (circleId: string) => {
+    console.log("deleteCircle function called with circleId:", circleId);
+    
+    if (!userAddress) {
+      console.log("No userAddress found, returning early");
+      return;
+    }
+    
+    // Check for wallet availability - expanded to check multiple wallet objects
+    const walletDetectionDetails = {
+      suiWallet: !!window.suiWallet,
+      sui: !!window.sui,
+      suix: !!window.suix,
+      ethos: !!window.ethos,
+      suiet: !!window.suiet,
+      martian: !!window.martian
+    };
+    
+    console.log("Wallet detection results:", walletDetectionDetails);
+    
+    // Try to find an available wallet
+    let wallet = null;
+    if (window.suiWallet) {
+      console.log("Using standard SUI wallet");
+      wallet = window.suiWallet;
+    } else if (window.sui) {
+      console.log("Using 'sui' wallet object");
+      wallet = window.sui;
+    } else if (window.suix) {
+      console.log("Using 'suix' wallet object");
+      wallet = window.suix;
+    } else if (window.ethos) {
+      console.log("Using Ethos wallet");
+      wallet = window.ethos;
+    } else if (window.suiet) {
+      console.log("Using Suiet wallet");
+      wallet = window.suiet;
+    } else if (window.martian) {
+      console.log("Using Martian wallet");
+      wallet = window.martian;
+    }
+    
+    if (!wallet) {
+      console.log("No compatible SUI wallet found");
+      toast.error('SUI wallet extension not detected. Please install the SUI wallet and reload the page.');
+      return;
+    }
+    
+    // Log available methods on the wallet object
+    console.log("Available wallet methods:", Object.keys(wallet));
+    
+    // Updated package ID to the newly published contract
+    const packageId = "0x20cc18715122dbdf12a00b97fdda80f60c3ccbf0b83ab3a78d80f3c0bf4e5ff7";
+    console.log("Using packageId:", packageId);
+    
+    setIsDeleting(circleId);
+    console.log("Set isDeleting state to:", circleId);
+    
+    try {
+      // Check for wallet features/capabilities
+      const hasSignAndExecuteTransactionBlock = typeof wallet.signAndExecuteTransactionBlock === 'function';
+      const hasSignTransactionBlock = typeof wallet.signTransactionBlock === 'function';
+      const hasSignAndExecuteTransaction = typeof wallet.signAndExecuteTransaction === 'function';
+      const hasConstructTransaction = typeof wallet.constructTransaction === 'function';
+      const hasSignAndExecuteTransactionV2 = typeof wallet.signAndExecuteTransaction === 'function';
+      
+      console.log("Wallet capabilities:", {
+        signAndExecuteTransactionBlock: hasSignAndExecuteTransactionBlock,
+        signTransactionBlock: hasSignTransactionBlock,
+        signAndExecuteTransaction: hasSignAndExecuteTransaction,
+        constructTransaction: hasConstructTransaction,
+        signAndExecuteTransactionV2: hasSignAndExecuteTransactionV2
+      });
+      
+      let result: Record<string, unknown> | null = null;
+      
+      // Try newer wallet API first (preferred)
+      if (hasSignAndExecuteTransactionBlock && wallet.signAndExecuteTransactionBlock) {
+        console.log("Using signAndExecuteTransactionBlock API");
+        
+        // Create a transaction block for the newer API format
+        const txb: TransactionBlockPayload = {
+          transactionBlock: {
+            // Modern format for transaction block
+            transactions: [
+              {
+                kind: 'MoveCall',
+                target: `${packageId}::njangi_circle::delete_circle`,
+                arguments: [
+                  { kind: 'Input', index: 0, type: 'object', value: circleId }
+                ]
+              }
+            ]
+          },
+          options: {
+            showEffects: true,
+            showEvents: true,
+          }
+        };
+        
+        console.log("Transaction block created:", txb);
+        result = await wallet.signAndExecuteTransactionBlock(txb);
+      }
+      // Try alternative format for signAndExecuteTransactionBlock
+      else if (hasSignAndExecuteTransactionBlock && wallet.signAndExecuteTransactionBlock) {
+        console.log("Using alternative signAndExecuteTransactionBlock format");
+        
+        const txb: TransactionBlockPayload = {
+          transactionBlock: {
+            // Alternative format
+            moveCall: {
+              packageObjectId: packageId,
+              module: 'njangi_circle',
+              function: 'delete_circle',
+              typeArguments: [],
+              arguments: [circleId]
+            }
+          },
+          options: {
+            showEffects: true,
+            showEvents: true,
+          }
+        };
+        
+        console.log("Transaction block created (alternative format):", txb);
+        result = await wallet.signAndExecuteTransactionBlock(txb);
+      }
+      // Fall back to older wallet API
+      else if (hasConstructTransaction && hasSignAndExecuteTransaction && 
+               wallet.constructTransaction && wallet.signAndExecuteTransaction) {
+        console.log("Using legacy transaction flow");
+        const transaction = wallet.constructTransaction({
+          kind: 'moveCall',
+          data: {
+            packageObjectId: packageId,
+            module: 'njangi_circle',
+            function: 'delete_circle',
+            typeArguments: [],
+            arguments: [circleId],
+            gasBudget: 10000000,
+          }
+        });
+        
+        console.log("Transaction constructed:", transaction);
+        result = await wallet.signAndExecuteTransaction({
+          transaction: transaction,
+        });
+      }
+      else {
+        console.error("No compatible wallet API methods found");
+        toast.error('Your wallet does not support the required transaction methods. Please try a different wallet.');
+        setIsDeleting(null);
+        return;
+      }
+      
+      console.log("Transaction execution result:", result);
+      
+      if (result) {
+        toast.success('Circle deleted successfully');
+        
+        // Update the UI - remove the deleted circle
+        setCircles(prevCircles => prevCircles.filter(c => c.id !== circleId));
+        setDeleteableCircles(prev => {
+          const updated = new Set(prev);
+          updated.delete(circleId);
+          return updated;
+        });
+      }
+    } catch (error) {
+      console.error('Error deleting circle:', error);
+      
+      // Show error toast with appropriate message
+      if (error instanceof Error) {
+        if (error.message.includes('ECircleHasActiveMembers')) {
+          toast.error('Cannot delete: Circle has active members');
+        } else if (error.message.includes('ECircleHasContributions')) {
+          toast.error('Cannot delete: Circle has received contributions');
+        } else {
+          toast.error('Error deleting circle: ' + error.message);
+        }
+      } else {
+        toast.error('Error deleting circle');
+      }
+    } finally {
+      setIsDeleting(null);
+    }
+  };
+
   const shortenAddress = (address: string | undefined) => {
     if (!address) return '';
     return `${address.slice(0, 6)}...${address.slice(-6)}`;
@@ -46,6 +593,155 @@ export default function Dashboard() {
     }
   };
 
+  // Format cycle lengths and days for display
+  const formatCycleInfo = (cycleLength: number, cycleDay: number) => {
+    // Cycle length: 0 = weekly, 1 = monthly, 2 = quarterly
+    let cyclePeriod = '';
+    let dayFormat = '';
+    
+    switch (cycleLength) {
+      case 0: // Weekly
+        cyclePeriod = 'Weekly';
+        // For weekly, cycleDay is 0-6 (Sunday-Saturday)
+        // The Move contract uses 0 = Sunday, 1 = Monday, etc.
+        const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        dayFormat = weekdays[cycleDay % 7]; // Ensure we don't go out of bounds
+        break;
+      case 1: // Monthly
+        cyclePeriod = 'Monthly';
+        // In your specific case, 0th day was shown for Monthly cycle
+        // Let's handle this special case and just default to 1st day when we see 0
+        const adjustedDay = cycleDay === 0 ? 1 : cycleDay;
+        dayFormat = getOrdinalSuffix(adjustedDay);
+        break;
+      case 2: // Quarterly
+        cyclePeriod = 'Quarterly';
+        // Same fix for quarterly
+        const adjustedQuarterlyDay = cycleDay === 0 ? 1 : cycleDay;
+        dayFormat = getOrdinalSuffix(adjustedQuarterlyDay);
+        break;
+      default:
+        cyclePeriod = 'Unknown';
+        dayFormat = `Day ${cycleDay === 0 ? 1 : cycleDay}`;
+    }
+    
+    return `${cyclePeriod} (${dayFormat})`;
+  };
+
+  // Helper to format dates with ordinal suffix
+  const getOrdinalSuffix = (day: number) => {
+    const suffixes = ['th', 'st', 'nd', 'rd'];
+    const relevantDigits = (day % 100);
+    const suffix = (relevantDigits >= 11 && relevantDigits <= 13) ? 'th' : suffixes[Math.min(relevantDigits % 10, 3)];
+    return `${day}${suffix} day`;
+  };
+
+  // Format timestamp to readable date
+  const formatDate = (timestamp: number) => {
+    if (!timestamp) return 'Not set';
+    return new Date(timestamp).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  // Utility function to extract the actual contribution amount from transaction data
+  const fetchTransactionDetails = async (client: SuiClient, txDigest: string): Promise<{contributionAmount: number, cycleDay: number} | null> => {
+    try {
+      const txData = await client.getTransactionBlock({
+        digest: txDigest,
+        options: {
+          showInput: true,
+          showEffects: true
+        }
+      });
+      
+      // Check if it's a create_circle transaction with inputs
+      if (txData && txData.transaction?.data?.transaction?.kind === 'ProgrammableTransaction') {
+        const txn = txData.transaction.data.transaction;
+        if (txn.inputs && txn.inputs.length >= 5) { // We need at least 5 inputs for contribution amount and cycle day
+          // Transaction structure for create_circle:
+          // Inputs: name(0), contribution_amount(1), security_deposit(2), cycle_length(3), cycle_day(4)...
+          
+          // Extract contribution amount (input at index 1)
+          const contributionAmountInput = txn.inputs[1];
+          if (contributionAmountInput && contributionAmountInput.type === 'pure' && 
+              contributionAmountInput.valueType === 'u64' && contributionAmountInput.value) {
+            const contributionAmountRaw = Number(contributionAmountInput.value) / 1e9;
+            
+            // Extract cycle day (input at index 4)
+            const cycleDayInput = txn.inputs[4];
+            const cycleDay = cycleDayInput && cycleDayInput.type === 'pure' && 
+                          cycleDayInput.valueType === 'u64' ? Number(cycleDayInput.value) : 0;
+            
+            return {
+              contributionAmount: contributionAmountRaw,
+              cycleDay: cycleDay
+            };
+          }
+        }
+      }
+      return null;
+    } catch (error) {
+      console.error('Error fetching transaction details:', error);
+      return null;
+    }
+  };
+
+  // Format USD value
+  const formatUSD = (amount: number) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+    }).format(amount);
+  };
+
+  // Currency display component
+  const CurrencyDisplay = ({ sui, className = "" }: { sui: number; className?: string }) => {
+    const usd = sui * suiPrice;
+    const isPriceStale = priceService.getFetchStatus() === 'error';
+    
+    // Format SUI with appropriate precision
+    const formattedSui = sui >= 1000 
+      ? sui.toLocaleString(undefined, { maximumFractionDigits: 0 }) 
+      : sui >= 100 
+        ? sui.toFixed(1) 
+        : sui.toFixed(2);
+    
+    return (
+      <Tooltip.Provider>
+        <Tooltip.Root>
+          <Tooltip.Trigger asChild>
+            <span className={`cursor-help ${className} flex items-center`}>
+              {formattedSui} SUI <span className="text-gray-500 mr-1">({formatUSD(usd)})</span>
+              {isPriceStale && <span title="Using cached price">⚠️</span>}
+            </span>
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content
+              className="bg-gray-900 text-white px-3 py-2 rounded text-sm"
+              sideOffset={5}
+            >
+              <div className="space-y-1">
+                <p>SUI Conversion Rate:</p>
+                <p>1 SUI = {formatUSD(suiPrice)}</p>
+                <p className="text-xs text-gray-400">
+                  {isPriceStale 
+                    ? "Using cached price - service temporarily unavailable" 
+                    : "Updated price data from CoinGecko"}
+                </p>
+              </div>
+              <Tooltip.Arrow className="fill-gray-900" />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+      </Tooltip.Provider>
+    );
+  };
+
   if (!isAuthenticated || !account) {
     return null;
   }
@@ -54,7 +750,7 @@ export default function Dashboard() {
     <div className="min-h-screen bg-gray-50">
       {/* Toast Notification */}
       {showToast && (
-        <div className="fixed top-4 right-4 bg-gray-900 text-white px-4 py-2 rounded-lg shadow-lg transition-opacity duration-200 flex items-center space-x-2">
+        <div className="fixed top-4 right-4 bg-gray-900 text-white px-4 py-2 rounded-lg shadow-lg transition-opacity duration-200 flex items-center space-x-2 z-50">
           <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
           </svg>
@@ -185,7 +881,584 @@ export default function Dashboard() {
           {/* Njangi Circles Section */}
           <div className="mt-8">
             <div className="bg-white shadow rounded-lg p-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">My Njangi Circles</h3>
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-lg font-medium text-gray-900">My Njangi Circles</h3>
+                <button
+                  type="button"
+                  onClick={() => router.push('/create-circle')}
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
+                >
+                  <svg
+                    className="w-5 h-5 mr-2"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M12 4v16m8-8H4"
+                    />
+                  </svg>
+                  Create New Circle
+                </button>
+              </div>
+
+              {loading ? (
+                <div className="flex justify-center items-center py-12">
+                  <svg className="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                </div>
+              ) : error ? (
+                <div className="bg-red-50 rounded-lg p-8 text-center">
+                  <svg
+                    className="mx-auto h-12 w-12 text-red-400"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                    />
+                  </svg>
+                  <h3 className="mt-2 text-sm font-medium text-red-900">{error}</h3>
+                  <p className="mt-1 text-sm text-red-500">Please try again later.</p>
+                  <div className="mt-6">
+                    <button
+                      type="button"
+                      onClick={() => fetchUserCircles()}
+                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors duration-200"
+                    >
+                      Try Again
+                    </button>
+                  </div>
+                </div>
+              ) : circles.length > 0 ? (
+                <div>
+                  <Tab.Group>
+                    <Tab.List className="flex space-x-1 rounded-xl bg-blue-50 p-1 mb-6">
+                      <Tab
+                        className={({ selected }) =>
+                          `w-full rounded-lg py-2.5 text-sm font-medium leading-5 transition-colors duration-200
+                           ${selected
+                            ? 'bg-white text-blue-700 shadow'
+                            : 'text-blue-600 hover:bg-white/[0.12] hover:text-blue-700'
+                          }`
+                        }
+                      >
+                        All Circles ({circles.length})
+                      </Tab>
+                      <Tab
+                        className={({ selected }) =>
+                          `w-full rounded-lg py-2.5 text-sm font-medium leading-5 transition-colors duration-200
+                           ${selected
+                            ? 'bg-white text-blue-700 shadow'
+                            : 'text-blue-600 hover:bg-white/[0.12] hover:text-blue-700'
+                          }`
+                        }
+                      >
+                        Administering ({circles.filter(c => c.isAdmin).length})
+                      </Tab>
+                      <Tab
+                        className={({ selected }) =>
+                          `w-full rounded-lg py-2.5 text-sm font-medium leading-5 transition-colors duration-200
+                           ${selected
+                            ? 'bg-white text-blue-700 shadow'
+                            : 'text-blue-600 hover:bg-white/[0.12] hover:text-blue-700'
+                          }`
+                        }
+                      >
+                        Member Only ({circles.filter(c => !c.isAdmin).length})
+                      </Tab>
+                    </Tab.List>
+                    <Tab.Panels>
+                      <Tab.Panel>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                          {circles.map((circle) => (
+                            <div key={circle.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow duration-200">
+                              <div className="p-5 border-b border-gray-100">
+                                <div className="flex justify-between items-start">
+                                  <h3 className="text-lg font-semibold text-gray-900 line-clamp-1">{circle.name}</h3>
+                                  <span className={`text-xs font-medium px-2 py-1 rounded-full ${circle.isAdmin ? "bg-purple-100 text-purple-800" : "bg-blue-100 text-blue-800"}`}>
+                                    {circle.isAdmin ? "Admin" : "Member"}
+                                  </span>
+                                </div>
+                                <div className="mt-2 flex items-center text-sm text-gray-500">
+                                  <svg className="mr-1.5 h-4 w-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                                  </svg>
+                                  {circle.currentMembers} / {circle.maxMembers} members
+                                </div>
+                              </div>
+                              
+                              <div className="px-5 py-3 bg-gray-50 text-sm">
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                                  <div>
+                                    <p className="text-gray-500">Contribution</p>
+                                    <p className="font-medium text-gray-900">
+                                      <CurrencyDisplay sui={circle.contributionAmount} />
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-500">Cycle</p>
+                                    <p className="font-medium text-gray-900">{formatCycleInfo(circle.cycleLength, circle.cycleDay)}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-500">Security Deposit</p>
+                                    <p className="font-medium text-gray-900">
+                                      <CurrencyDisplay sui={circle.securityDeposit} />
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-500">Next Payout</p>
+                                    <p className="font-medium text-gray-900">{formatDate(circle.nextPayoutTime)}</p>
+                                  </div>
+                                </div>
+                              </div>
+                              
+                              <div className="p-4 flex justify-between bg-white border-t border-gray-100">
+                                <Tooltip.Provider>
+                                  <Tooltip.Root>
+                                    <Tooltip.Trigger asChild>
+                                      <button
+                                        onClick={() => router.push(`/circle/${circle.id}`)}
+                                        className="text-blue-600 hover:text-blue-800 font-medium p-2 hover:bg-blue-50 rounded-full transition-colors"
+                                        aria-label="View Details"
+                                      >
+                                        <Eye size={18} />
+                                      </button>
+                                    </Tooltip.Trigger>
+                                    <Tooltip.Portal>
+                                      <Tooltip.Content
+                                        className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                        sideOffset={5}
+                                      >
+                                        View Details
+                                        <Tooltip.Arrow className="fill-gray-800" />
+                                      </Tooltip.Content>
+                                    </Tooltip.Portal>
+                                  </Tooltip.Root>
+                                </Tooltip.Provider>
+                                
+                                <div className="flex items-center space-x-2">
+                                  {circle.isAdmin && (
+                                    <Tooltip.Provider>
+                                      <Tooltip.Root>
+                                        <Tooltip.Trigger asChild>
+                                          <button
+                                            onClick={() => router.push(`/circle/${circle.id}/manage`)}
+                                            className="text-purple-600 hover:text-purple-800 font-medium p-2 hover:bg-purple-50 rounded-full transition-colors"
+                                            aria-label="Manage Circle"
+                                          >
+                                            <Settings size={18} />
+                                          </button>
+                                        </Tooltip.Trigger>
+                                        <Tooltip.Portal>
+                                          <Tooltip.Content
+                                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                            sideOffset={5}
+                                          >
+                                            Manage
+                                            <Tooltip.Arrow className="fill-gray-800" />
+                                          </Tooltip.Content>
+                                        </Tooltip.Portal>
+                                      </Tooltip.Root>
+                                    </Tooltip.Provider>
+                                  )}
+                                  
+                                  {circle.isAdmin && deleteableCircles.has(circle.id) && (
+                                    <Tooltip.Provider>
+                                      <Tooltip.Root>
+                                        <Tooltip.Trigger asChild>
+                                          <button
+                                            onClick={() => {
+                                              console.log("Delete button clicked for circle:", circle.id);
+                                              try {
+                                                deleteCircle(circle.id);
+                                              } catch (e) {
+                                                console.error("Error in delete button click handler:", e);
+                                                toast.error("Error processing delete request");
+                                              }
+                                            }}
+                                            disabled={isDeleting === circle.id}
+                                            className={`text-red-600 hover:text-red-800 font-medium p-2 hover:bg-red-50 rounded-full transition-colors ${
+                                              isDeleting === circle.id ? 'opacity-50 cursor-not-allowed' : ''
+                                            }`}
+                                            aria-label="Delete Circle"
+                                          >
+                                            <Trash2 size={18} />
+                                          </button>
+                                        </Tooltip.Trigger>
+                                        <Tooltip.Portal>
+                                          <Tooltip.Content
+                                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                            sideOffset={5}
+                                          >
+                                            {isDeleting === circle.id ? 'Deleting...' : 'Delete'}
+                                            <Tooltip.Arrow className="fill-gray-800" />
+                                          </Tooltip.Content>
+                                        </Tooltip.Portal>
+                                      </Tooltip.Root>
+                                    </Tooltip.Provider>
+                                  )}
+                                  
+                                  <Tooltip.Provider>
+                                    <Tooltip.Root>
+                                      <Tooltip.Trigger asChild>
+                                        <button
+                                          onClick={() => router.push(`/circle/${circle.id}/contribute`)}
+                                          className="text-green-600 hover:text-green-800 font-medium p-2 hover:bg-green-50 rounded-full transition-colors"
+                                          aria-label="Contribute"
+                                        >
+                                          <CreditCard size={18} />
+                                        </button>
+                                      </Tooltip.Trigger>
+                                      <Tooltip.Portal>
+                                        <Tooltip.Content
+                                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                          sideOffset={5}
+                                        >
+                                          Contribute
+                                          <Tooltip.Arrow className="fill-gray-800" />
+                                        </Tooltip.Content>
+                                      </Tooltip.Portal>
+                                    </Tooltip.Root>
+                                  </Tooltip.Provider>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </Tab.Panel>
+                      
+                      <Tab.Panel>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                          {circles.filter(c => c.isAdmin).map((circle) => (
+                            <div key={circle.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow duration-200">
+                              <div className="p-5 border-b border-gray-100">
+                                <div className="flex justify-between items-start">
+                                  <h3 className="text-lg font-semibold text-gray-900 line-clamp-1">{circle.name}</h3>
+                                  <span className="text-xs font-medium px-2 py-1 rounded-full bg-purple-100 text-purple-800">
+                                    Admin
+                                  </span>
+                                </div>
+                                <div className="mt-2 flex items-center text-sm text-gray-500">
+                                  <svg className="mr-1.5 h-4 w-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                                  </svg>
+                                  {circle.currentMembers} / {circle.maxMembers} members
+                                </div>
+                              </div>
+                              
+                              <div className="px-5 py-3 bg-gray-50 text-sm">
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                                  <div>
+                                    <p className="text-gray-500">Contribution</p>
+                                    <p className="font-medium text-gray-900">
+                                      <CurrencyDisplay sui={circle.contributionAmount} />
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-500">Cycle</p>
+                                    <p className="font-medium text-gray-900">{formatCycleInfo(circle.cycleLength, circle.cycleDay)}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-500">Security Deposit</p>
+                                    <p className="font-medium text-gray-900">
+                                      <CurrencyDisplay sui={circle.securityDeposit} />
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-500">Next Payout</p>
+                                    <p className="font-medium text-gray-900">{formatDate(circle.nextPayoutTime)}</p>
+                                  </div>
+                                </div>
+                              </div>
+                              
+                              <div className="p-4 flex justify-between bg-white border-t border-gray-100">
+                                <Tooltip.Provider>
+                                  <Tooltip.Root>
+                                    <Tooltip.Trigger asChild>
+                                      <button
+                                        onClick={() => router.push(`/circle/${circle.id}`)}
+                                        className="text-blue-600 hover:text-blue-800 font-medium p-2 hover:bg-blue-50 rounded-full transition-colors"
+                                        aria-label="View Details"
+                                      >
+                                        <Eye size={18} />
+                                      </button>
+                                    </Tooltip.Trigger>
+                                    <Tooltip.Portal>
+                                      <Tooltip.Content
+                                        className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                        sideOffset={5}
+                                      >
+                                        View Details
+                                        <Tooltip.Arrow className="fill-gray-800" />
+                                      </Tooltip.Content>
+                                    </Tooltip.Portal>
+                                  </Tooltip.Root>
+                                </Tooltip.Provider>
+                                
+                                <div className="flex items-center space-x-2">
+                                  {circle.isAdmin && (
+                                    <Tooltip.Provider>
+                                      <Tooltip.Root>
+                                        <Tooltip.Trigger asChild>
+                                          <button
+                                            onClick={() => router.push(`/circle/${circle.id}/manage`)}
+                                            className="text-purple-600 hover:text-purple-800 font-medium p-2 hover:bg-purple-50 rounded-full transition-colors"
+                                            aria-label="Manage Circle"
+                                          >
+                                            <Settings size={18} />
+                                          </button>
+                                        </Tooltip.Trigger>
+                                        <Tooltip.Portal>
+                                          <Tooltip.Content
+                                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                            sideOffset={5}
+                                          >
+                                            Manage
+                                            <Tooltip.Arrow className="fill-gray-800" />
+                                          </Tooltip.Content>
+                                        </Tooltip.Portal>
+                                      </Tooltip.Root>
+                                    </Tooltip.Provider>
+                                  )}
+                                  
+                                  {circle.isAdmin && deleteableCircles.has(circle.id) && (
+                                    <Tooltip.Provider>
+                                      <Tooltip.Root>
+                                        <Tooltip.Trigger asChild>
+                                          <button
+                                            onClick={() => {
+                                              console.log("Delete button clicked for circle:", circle.id);
+                                              try {
+                                                deleteCircle(circle.id);
+                                              } catch (e) {
+                                                console.error("Error in delete button click handler:", e);
+                                                toast.error("Error processing delete request");
+                                              }
+                                            }}
+                                            disabled={isDeleting === circle.id}
+                                            className={`text-red-600 hover:text-red-800 font-medium p-2 hover:bg-red-50 rounded-full transition-colors ${
+                                              isDeleting === circle.id ? 'opacity-50 cursor-not-allowed' : ''
+                                            }`}
+                                            aria-label="Delete Circle"
+                                          >
+                                            <Trash2 size={18} />
+                                          </button>
+                                        </Tooltip.Trigger>
+                                        <Tooltip.Portal>
+                                          <Tooltip.Content
+                                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                            sideOffset={5}
+                                          >
+                                            {isDeleting === circle.id ? 'Deleting...' : 'Delete'}
+                                            <Tooltip.Arrow className="fill-gray-800" />
+                                          </Tooltip.Content>
+                                        </Tooltip.Portal>
+                                      </Tooltip.Root>
+                                    </Tooltip.Provider>
+                                  )}
+                                  
+                                  <Tooltip.Provider>
+                                    <Tooltip.Root>
+                                      <Tooltip.Trigger asChild>
+                                        <button
+                                          onClick={() => router.push(`/circle/${circle.id}/contribute`)}
+                                          className="text-green-600 hover:text-green-800 font-medium p-2 hover:bg-green-50 rounded-full transition-colors"
+                                          aria-label="Contribute"
+                                        >
+                                          <CreditCard size={18} />
+                                        </button>
+                                      </Tooltip.Trigger>
+                                      <Tooltip.Portal>
+                                        <Tooltip.Content
+                                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                          sideOffset={5}
+                                        >
+                                          Contribute
+                                          <Tooltip.Arrow className="fill-gray-800" />
+                                        </Tooltip.Content>
+                                      </Tooltip.Portal>
+                                    </Tooltip.Root>
+                                  </Tooltip.Provider>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </Tab.Panel>
+                      
+                      <Tab.Panel>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                          {circles.filter(c => !c.isAdmin).map((circle) => (
+                            <div key={circle.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow duration-200">
+                              <div className="p-5 border-b border-gray-100">
+                                <div className="flex justify-between items-start">
+                                  <h3 className="text-lg font-semibold text-gray-900 line-clamp-1">{circle.name}</h3>
+                                  <span className="text-xs font-medium px-2 py-1 rounded-full bg-blue-100 text-blue-800">
+                                    Member
+                                  </span>
+                                </div>
+                                <div className="mt-2 flex items-center text-sm text-gray-500">
+                                  <svg className="mr-1.5 h-4 w-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                                  </svg>
+                                  {circle.currentMembers} / {circle.maxMembers} members
+                                </div>
+                              </div>
+                              
+                              <div className="px-5 py-3 bg-gray-50 text-sm">
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                                  <div>
+                                    <p className="text-gray-500">Contribution</p>
+                                    <p className="font-medium text-gray-900">
+                                      <CurrencyDisplay sui={circle.contributionAmount} />
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-500">Cycle</p>
+                                    <p className="font-medium text-gray-900">{formatCycleInfo(circle.cycleLength, circle.cycleDay)}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-500">Security Deposit</p>
+                                    <p className="font-medium text-gray-900">
+                                      <CurrencyDisplay sui={circle.securityDeposit} />
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-500">Next Payout</p>
+                                    <p className="font-medium text-gray-900">{formatDate(circle.nextPayoutTime)}</p>
+                                  </div>
+                                </div>
+                              </div>
+                              
+                              <div className="p-4 flex justify-between bg-white border-t border-gray-100">
+                                <Tooltip.Provider>
+                                  <Tooltip.Root>
+                                    <Tooltip.Trigger asChild>
+                                      <button
+                                        onClick={() => router.push(`/circle/${circle.id}`)}
+                                        className="text-blue-600 hover:text-blue-800 font-medium p-2 hover:bg-blue-50 rounded-full transition-colors"
+                                        aria-label="View Details"
+                                      >
+                                        <Eye size={18} />
+                                      </button>
+                                    </Tooltip.Trigger>
+                                    <Tooltip.Portal>
+                                      <Tooltip.Content
+                                        className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                        sideOffset={5}
+                                      >
+                                        View Details
+                                        <Tooltip.Arrow className="fill-gray-800" />
+                                      </Tooltip.Content>
+                                    </Tooltip.Portal>
+                                  </Tooltip.Root>
+                                </Tooltip.Provider>
+                                
+                                <div className="flex items-center space-x-2">
+                                  {circle.isAdmin && (
+                                    <Tooltip.Provider>
+                                      <Tooltip.Root>
+                                        <Tooltip.Trigger asChild>
+                                          <button
+                                            onClick={() => router.push(`/circle/${circle.id}/manage`)}
+                                            className="text-purple-600 hover:text-purple-800 font-medium p-2 hover:bg-purple-50 rounded-full transition-colors"
+                                            aria-label="Manage Circle"
+                                          >
+                                            <Settings size={18} />
+                                          </button>
+                                        </Tooltip.Trigger>
+                                        <Tooltip.Portal>
+                                          <Tooltip.Content
+                                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                            sideOffset={5}
+                                          >
+                                            Manage
+                                            <Tooltip.Arrow className="fill-gray-800" />
+                                          </Tooltip.Content>
+                                        </Tooltip.Portal>
+                                      </Tooltip.Root>
+                                    </Tooltip.Provider>
+                                  )}
+                                  
+                                  {circle.isAdmin && deleteableCircles.has(circle.id) && (
+                                    <Tooltip.Provider>
+                                      <Tooltip.Root>
+                                        <Tooltip.Trigger asChild>
+                                          <button
+                                            onClick={() => {
+                                              console.log("Delete button clicked for circle:", circle.id);
+                                              try {
+                                                deleteCircle(circle.id);
+                                              } catch (e) {
+                                                console.error("Error in delete button click handler:", e);
+                                                toast.error("Error processing delete request");
+                                              }
+                                            }}
+                                            disabled={isDeleting === circle.id}
+                                            className={`text-red-600 hover:text-red-800 font-medium p-2 hover:bg-red-50 rounded-full transition-colors ${
+                                              isDeleting === circle.id ? 'opacity-50 cursor-not-allowed' : ''
+                                            }`}
+                                            aria-label="Delete Circle"
+                                          >
+                                            <Trash2 size={18} />
+                                          </button>
+                                        </Tooltip.Trigger>
+                                        <Tooltip.Portal>
+                                          <Tooltip.Content
+                                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                            sideOffset={5}
+                                          >
+                                            {isDeleting === circle.id ? 'Deleting...' : 'Delete'}
+                                            <Tooltip.Arrow className="fill-gray-800" />
+                                          </Tooltip.Content>
+                                        </Tooltip.Portal>
+                                      </Tooltip.Root>
+                                    </Tooltip.Provider>
+                                  )}
+                                  
+                                  <Tooltip.Provider>
+                                    <Tooltip.Root>
+                                      <Tooltip.Trigger asChild>
+                                        <button
+                                          onClick={() => router.push(`/circle/${circle.id}/contribute`)}
+                                          className="text-green-600 hover:text-green-800 font-medium p-2 hover:bg-green-50 rounded-full transition-colors"
+                                          aria-label="Contribute"
+                                        >
+                                          <CreditCard size={18} />
+                                        </button>
+                                      </Tooltip.Trigger>
+                                      <Tooltip.Portal>
+                                        <Tooltip.Content
+                                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                          sideOffset={5}
+                                        >
+                                          Contribute
+                                          <Tooltip.Arrow className="fill-gray-800" />
+                                        </Tooltip.Content>
+                                      </Tooltip.Portal>
+                                    </Tooltip.Root>
+                                  </Tooltip.Provider>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </Tab.Panel>
+                    </Tab.Panels>
+                  </Tab.Group>
+                </div>
+              ) : (
               <div className="bg-gray-50 rounded-lg p-8 text-center">
                 <svg
                   className="mx-auto h-12 w-12 text-gray-400"
@@ -226,6 +1499,7 @@ export default function Dashboard() {
                   </button>
                 </div>
               </div>
+              )}
             </div>
           </div>
         </div>

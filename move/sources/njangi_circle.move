@@ -54,6 +54,8 @@ module njangi::njangi_circle {
     const EMilestoneDeadlinePassed: u64 = 34;
     const EMilestoneAlreadyVerified: u64 = 35;
     const EMilestonePrerequisiteNotMet: u64 = 36;
+    const ECircleHasActiveMembers: u64 = 37;
+    const ECircleHasContributions: u64 = 38;
 
     // Time constants (all in milliseconds)
     const MS_PER_DAY: u64 = 86_400_000;       // 24 * 60 * 60 * 1000
@@ -134,7 +136,7 @@ module njangi::njangi_circle {
         last_milestone_completed: u64,
     }
 
-    public struct Member has store {
+    public struct Member has store, drop {
         joined_at: u64,
         last_contribution: u64,
         total_contributed: u64,   // in SUI decimals
@@ -157,7 +159,7 @@ module njangi::njangi_circle {
         warnings_with_penalties: vector<u64>, // Timestamps of each warning with penalty
     }
 
-    public struct PenaltyRules has store {
+    public struct PenaltyRules has store, drop {
         late_payment: bool,
         missed_meeting: bool,
         late_payment_fee: u64,
@@ -179,7 +181,7 @@ module njangi::njangi_circle {
         discount_rate: u64,
     }
 
-    public struct Milestone has store {
+    public struct Milestone has store, drop {
         milestone_type: u8,
         target_amount: option::Option<u64>,        // For monetary (in SUI decimals)
         target_duration: option::Option<u64>,      // For time-based (in ms)
@@ -284,6 +286,12 @@ module njangi::njangi_circle {
         submitted_by: address,
         proof_type: u8,
         timestamp: u64,
+    }
+
+    public struct CircleDeleted has copy, drop {
+        circle_id: object::ID,
+        admin: address,
+        name: string::String,
     }
 
     // ----------------------------------------------------------
@@ -481,6 +489,28 @@ module njangi::njangi_circle {
         } else {
             option::none()
         }
+    }
+
+    // ----------------------------------------------------------
+    // Check if a circle is eligible for deletion by admin
+    // ----------------------------------------------------------
+    public fun can_delete_circle(circle: &Circle, admin_addr: address): bool {
+        // Only admin can delete
+        if (circle.admin != admin_addr) {
+            return false
+        };
+        
+        // Must have 0 or 1 members (only admin)
+        if (circle.current_members > 1) {
+            return false
+        };
+        
+        // No contributions allowed
+        if (balance::value(&circle.contributions) > 0) {
+            return false
+        };
+        
+        true
     }
 
     // ----------------------------------------------------------
@@ -1411,5 +1441,89 @@ module njangi::njangi_circle {
     // ----------------------------------------------------------
     public fun get_rotation_order(circle: &Circle): vector<address> {
         circle.rotation_order
+    }
+
+    // ----------------------------------------------------------
+    // Delete Circle
+    // ----------------------------------------------------------
+    public entry fun delete_circle(
+        mut circle: Circle,
+        ctx: &mut tx_context::TxContext
+    ) {
+        // Only admin can delete the circle
+        assert!(tx_context::sender(ctx) == circle.admin, ENotAdmin);
+        
+        // Ensure there are no members other than the admin (current_members starts from 0)
+        assert!(circle.current_members <= 1, ECircleHasActiveMembers);
+        
+        // Ensure no money has been contributed
+        assert!(balance::value(&circle.contributions) == 0, ECircleHasContributions);
+        
+        // Return any deposits to the admin if they joined as a member
+        if (circle.current_members == 1 && table::contains(&circle.members, circle.admin)) {
+            let deposit_balance = balance::value(&circle.deposits);
+            if (deposit_balance > 0) {
+                let deposit_coin = coin::from_balance(
+                    balance::withdraw_all(&mut circle.deposits),
+                    ctx
+                );
+                transfer::public_transfer(deposit_coin, circle.admin);
+            };
+        };
+        
+        // Emit event for circle deletion
+        event::emit(CircleDeleted {
+            circle_id: object::uid_to_inner(&circle.id),
+            admin: circle.admin,
+            name: circle.name,
+        });
+        
+        // In Sui, we can directly delete a shared object if we have it by value
+        // First, extract and destroy all balances if any remain
+        let Circle { 
+            id,
+            name: _,
+            admin: _,
+            contribution_amount: _,
+            security_deposit: _,
+            cycle_length: _,
+            cycle_day: _,
+            circle_type: _,
+            rotation_style: _,
+            max_members: _,
+            current_members: _,
+            members,
+            contributions,
+            deposits,
+            penalties,
+            current_cycle: _,
+            next_payout_time: _,
+            goal_type: _,
+            target_amount: _,
+            target_date: _,
+            verification_required: _,
+            penalty_rules,
+            created_at: _,
+            rotation_order: _,
+            rotation_history: _,
+            current_position: _,
+            active_auction: _,
+            milestones,
+            goal_progress: _,
+            last_milestone_completed: _,
+        } = circle;
+        
+        // Need to consume these values since they're not droppable
+        let _ = penalty_rules;
+        let _ = milestones;
+        
+        // Destroy balances and tables
+        balance::destroy_zero(contributions);
+        balance::destroy_zero(deposits);
+        balance::destroy_zero(penalties);
+        table::drop(members);
+        
+        // Delete the object
+        object::delete(id);
     }
 }
