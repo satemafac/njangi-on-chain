@@ -7,7 +7,8 @@ import { Tab } from '@headlessui/react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
-import { Eye, Settings, Trash2, CreditCard } from 'lucide-react';
+import { Eye, Settings, Trash2, CreditCard, RefreshCw } from 'lucide-react';
+import { ZkLoginError } from '../services/zkLoginClient';
 
 // Circle type definition
 interface Circle {
@@ -121,7 +122,7 @@ declare global {
 
 export default function Dashboard() {
   const router = useRouter();
-  const { isAuthenticated, userAddress, account, logout } = useAuth();
+  const { isAuthenticated, userAddress, account, logout, deleteCircle: authDeleteCircle } = useAuth();
   const [balance, setBalance] = useState<string>('0');
   const [showFullAddress, setShowFullAddress] = useState(false);
   const [showToast, setShowToast] = useState(false);
@@ -389,13 +390,136 @@ export default function Dashboard() {
     checkDeleteableCircles();
   }, [circles, userAddress]);
   
-  // Function to delete a circle
+  // Check for wallet availability on component mount
+  useEffect(() => {
+    const checkWalletAvailability = async () => {
+      // If using zkLogin, we don't need to check for wallet availability
+      if (isAuthenticated && account) {
+        console.log("Using zkLogin authentication, skipping wallet check");
+        return;
+      }
+
+      // Check for wallet extensions
+      const hasWallet = !!(
+        window.suiWallet || 
+        window.sui || 
+        window.suix || 
+        window.ethos || 
+        window.suiet || 
+        window.martian
+      );
+      
+      if (!hasWallet) {
+        console.log("No wallet extension detected");
+        // Only show toast if not using zkLogin
+        if (!isAuthenticated) {
+          toast.error('No SUI wallet extension detected. Please install a SUI wallet or use zkLogin authentication.');
+        }
+      }
+    };
+    
+    checkWalletAvailability();
+  }, [isAuthenticated, account]);
+
+  // New function to delete circle with zkLogin
+  const deleteCircleWithZkLogin = async (circleId: string) => {
+    try {
+      console.log("Deleting circle with zkLogin:", circleId);
+      setIsDeleting(circleId);
+
+      // Use the AuthContext's deleteCircle method
+      const digest = await authDeleteCircle(circleId);
+      
+      console.log('Transaction succeeded with digest:', digest);
+      toast.success('Circle deleted successfully');
+      
+      // Update the UI - remove the deleted circle
+      setCircles(prevCircles => prevCircles.filter(c => c.id !== circleId));
+      setDeleteableCircles(prev => {
+        const updated = new Set(prev);
+        updated.delete(circleId);
+        return updated;
+      });
+      
+    } catch (error: unknown) {
+      console.error('Error deleting circle with zkLogin:', error);
+      
+      // Check if this is a ZkLoginError with requireRelogin flag
+      if (error instanceof ZkLoginError && error.requireRelogin) {
+        toast.error(
+          <div className="flex flex-col">
+            <div>Authentication issue: Please login again</div>
+            <button 
+              onClick={() => window.location.href = '/'} 
+              className="mt-2 bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-sm flex items-center justify-center"
+            >
+              <RefreshCw className="w-3 h-3 mr-1" /> Re-authenticate
+            </button>
+          </div>,
+          { duration: 10000 }
+        );
+        return;
+      }
+      
+      // Show appropriate error message based on the error
+      if (error instanceof Error) {
+        // Log the full error for debugging
+        console.error('Full error details:', {
+          message: error.message,
+          stack: error.stack,
+          name: error.name,
+          isZkLoginError: error instanceof ZkLoginError
+        });
+        
+        if (error.message.includes('ECircleHasActiveMembers') || 
+            error.message.includes('Cannot delete: Circle has active members')) {
+          toast.error('Cannot delete: Circle has active members');
+        } else if (error.message.includes('ECircleHasContributions') || 
+                  error.message.includes('Cannot delete: Circle has received contributions')) {
+          toast.error('Cannot delete: Circle has received contributions');
+        } else if (error.message.includes('EOnlyCircleAdmin') || 
+                  error.message.includes('Only the circle admin')) {
+          toast.error('Cannot delete: Only the circle admin can delete this circle');
+        } else if (error.message.includes('not found') || 
+                  error.message.includes('not accessible')) {
+          toast.error('Circle not found or not accessible');
+        } else if (error.message.includes('Session') || 
+                  error.message.includes('authentication') || 
+                  error.message.includes('expired')) {
+          toast.error(
+            <div className="flex flex-col">
+              <div>Authentication issue: {error.message}</div>
+              <button 
+                onClick={() => window.location.href = '/'} 
+                className="mt-2 bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-sm flex items-center justify-center"
+              >
+                <RefreshCw className="w-3 h-3 mr-1" /> Re-authenticate
+              </button>
+            </div>,
+            { duration: 10000 }
+          );
+        } else {
+          toast.error(`Error: ${error.message}`, {
+            duration: 5000
+          });
+        }
+      } else {
+        toast.error('Error deleting circle', {
+          duration: 5000
+        });
+      }
+    } finally {
+      setIsDeleting(null);
+    }
+  };
+
   const deleteCircle = async (circleId: string) => {
     console.log("deleteCircle function called with circleId:", circleId);
     
-    if (!userAddress) {
-      console.log("No userAddress found, returning early");
-      return;
+    // Check if using zkLogin authentication
+    if (isAuthenticated && account) {
+      console.log("Using zkLogin authentication for deletion");
+      return deleteCircleWithZkLogin(circleId);
     }
     
     // Check for wallet availability - expanded to check multiple wallet objects
@@ -434,7 +558,7 @@ export default function Dashboard() {
     
     if (!wallet) {
       console.log("No compatible SUI wallet found");
-      toast.error('SUI wallet extension not detected. Please install the SUI wallet and reload the page.');
+      toast.error('No wallet detected. Please install a SUI wallet extension or use zkLogin authentication.');
       return;
     }
     

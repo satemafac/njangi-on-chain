@@ -29,6 +29,7 @@ interface AuthContextType {
   logout: () => void;
   handleCallback: (jwt: string) => Promise<AccountData>;
   sendTransaction: (circleData: CircleData) => Promise<string>;
+  deleteCircle: (circleId: string) => Promise<string>;
   setUserAddress: (address: string) => void;
   setIsAuthenticated: (value: boolean) => void;
   setError: (error: string) => void;
@@ -131,6 +132,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return digest;
   };
 
+  const deleteCircle = async (circleId: string) => {
+    if (!account) throw new Error('Not logged in');
+    // Reset idle timer on transaction
+    resetIdleTimer();
+    
+    console.log(`AuthContext: Sending delete request for circle ${circleId}`);
+    
+    try {
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'deleteCircle', 
+          account,
+          circleId
+        })
+      });
+      
+      // Parse response data first to get error details if any
+      const responseData = await response.json();
+      console.log('AuthContext: Delete circle response:', responseData);
+      
+      // If response is not ok, throw a detailed error
+      if (!response.ok) {
+        // Check for specific errors from the API
+        if (response.status === 400 && responseData.error) {
+          // Business logic error (like cannot delete due to active members)
+          throw new Error(responseData.error);
+        } else if (response.status === 401) {
+          // Authentication error
+          const message = responseData.error || 'Authentication failed. Please login again.';
+          throw new Error(message);
+        } else {
+          // Other server errors
+          const errorMessage = responseData.error || 'Failed to delete circle';
+          const detailsMessage = responseData.details ? `\nDetails: ${responseData.details}` : '';
+          throw new Error(`${errorMessage}${detailsMessage}`);
+        }
+      }
+      
+      // Success case
+      return responseData.digest;
+    } catch (error) {
+      console.error('Error in AuthContext.deleteCircle:', error);
+      // Rethrow to let component handle specific error cases
+      throw error;
+    }
+  };
+
   return (
     <AuthContext.Provider value={{ 
       account,
@@ -141,6 +191,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       handleCallback, 
       sendTransaction,
+      deleteCircle,
       setUserAddress,
       setIsAuthenticated,
       setError,
