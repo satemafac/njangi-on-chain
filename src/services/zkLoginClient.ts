@@ -2,7 +2,7 @@ import { AccountData } from './zkLoginService';
 import type { OAuthProvider } from './zkLoginService';
 
 // Custom error class for zkLogin errors that includes requireRelogin property
-class ZkLoginError extends Error {
+export class ZkLoginError extends Error {
   requireRelogin: boolean;
   
   constructor(message: string, requireRelogin: boolean = false) {
@@ -191,6 +191,103 @@ export class ZkLoginClient {
       }
       // Otherwise wrap in a new error
       throw new ZkLoginError(String(error), false);
+    }
+  }
+
+  public async deleteCircle(account: AccountData, circleId: string): Promise<{ digest: string; requireRelogin?: boolean }> {
+    try {
+      // Log key information for debugging
+      console.log('ZkLoginClient: Deleting circle with account:', {
+        address: account.userAddr,
+        circleId: circleId,
+        hasProofPoints: !!account.zkProofs?.proofPoints,
+        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
+        hasHeaderBase64: !!account.zkProofs?.headerBase64,
+        maxEpoch: account.maxEpoch
+      });
+
+      // Verify the account has valid proof data
+      if (!account.zkProofs?.proofPoints || 
+          !account.zkProofs.issBase64Details || 
+          !account.zkProofs.headerBase64) {
+        throw new ZkLoginError(
+          'Missing required authentication data. Please login again.',
+          true
+        );
+      }
+
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'deleteCircle', 
+          account,
+          circleId
+        })
+      });
+      
+      // Try to parse the response even if status is not OK
+      let responseData;
+      try {
+        responseData = await response.json();
+        console.log('ZkLoginClient: Circle deletion response:', 
+          response.status, response.statusText, responseData);
+      } catch (parseError) {
+        console.error('Failed to parse response:', parseError);
+        throw new ZkLoginError(`Failed to parse server response: ${response.statusText}`, false);
+      }
+      
+      // Handle authentication errors (401)
+      if (response.status === 401) {
+        console.error('Authentication error:', responseData);
+        throw new ZkLoginError(
+          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
+          true
+        );
+      }
+      
+      // Handle server errors (500)
+      if (!response.ok) {
+        console.error('Circle deletion failed:', responseData);
+        
+        // Check for specific contract errors
+        const errorMsg = responseData.error || 'Circle deletion failed';
+        
+        if (errorMsg.includes('ECircleHasActiveMembers') || 
+            errorMsg.includes('ECircleHasContributions') ||
+            errorMsg.includes('EOnlyCircleAdmin')) {
+          // These are expected contract error conditions, not authentication errors
+          throw new ZkLoginError(errorMsg, false);
+        }
+        
+        throw new ZkLoginError(
+          errorMsg, 
+          !!responseData.requireRelogin
+        );
+      }
+      
+      // Even for successful response, check if we have a digest
+      if (!responseData.digest) {
+        throw new ZkLoginError('No transaction digest received from server', false);
+      }
+      
+      console.log('ZkLoginClient: Circle deletion succeeded:', responseData);
+      return {
+        digest: responseData.digest,
+        requireRelogin: responseData.requireRelogin
+      };
+    } catch (error) {
+      console.error('ZkLoginClient: Circle deletion error:', error);
+      
+      // Rethrow ZkLoginError as is
+      if (error instanceof ZkLoginError) {
+        throw error;
+      }
+      
+      // Otherwise wrap in a new error
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error('ZkLoginClient: Non-ZkLoginError occurred:', errorMessage);
+      throw new ZkLoginError(errorMessage, false);
     }
   }
 } 
