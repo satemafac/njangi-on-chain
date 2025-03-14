@@ -329,7 +329,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 txb.setSender(session.account!.userAddr);
                 
                 txb.moveCall({
-                  target: `0x20cc18715122dbdf12a00b97fdda80f60c3ccbf0b83ab3a78d80f3c0bf4e5ff7::njangi_circle::create_circle`,
+                  target: `0x1b0b1638cd469c6b92b82e8b7d01a572206cc7ff889c029297aa836bb1e5e363::njangi_circle::create_circle`,
                   arguments: [
                     txb.pure.string(circleData.name),
                     txb.pure.u64(contribution),
@@ -544,11 +544,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 txb.setSender(session.account!.userAddr);
                 
                 // Log transaction creation details
-                console.log(`Building moveCall with package: 0x20cc18715122dbdf12a00b97fdda80f60c3ccbf0b83ab3a78d80f3c0bf4e5ff7, module: njangi_circle, function: delete_circle`);
+                console.log(`Building moveCall with package: 0x1b0b1638cd469c6b92b82e8b7d01a572206cc7ff889c029297aa836bb1e5e363, module: njangi_circle, function: delete_circle`);
                 console.log(`Using circleId: ${circleId} as object argument`);
                 
                 txb.moveCall({
-                  target: `0x20cc18715122dbdf12a00b97fdda80f60c3ccbf0b83ab3a78d80f3c0bf4e5ff7::njangi_circle::delete_circle`,
+                  target: `0x1b0b1638cd469c6b92b82e8b7d01a572206cc7ff889c029297aa836bb1e5e363::njangi_circle::delete_circle`,
                   arguments: [
                     txb.object(circleId)
                   ]

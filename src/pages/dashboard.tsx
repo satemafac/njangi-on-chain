@@ -199,14 +199,16 @@ export default function Dashboard() {
       const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
       
       // Define package ID where njangi_circle module is deployed
-      const packageId = "0x20cc18715122dbdf12a00b97fdda80f60c3ccbf0b83ab3a78d80f3c0bf4e5ff7";
+      const packageId = "0x1b0b1638cd469c6b92b82e8b7d01a572206cc7ff889c029297aa836bb1e5e363";
+      
+      // Note: We use the old package ID for event types but new package ID for direct object queries
       
       // Step 1: Find circles created by this user (admin)
       let createdCircles;
       try {
         createdCircles = await client.queryEvents({
           query: {
-            MoveEventType: `${packageId}::njangi_circle::CircleCreated`
+            MoveEventType: `0x20cc18715122dbdf12a00b97fdda80f60c3ccbf0b83ab3a78d80f3c0bf4e5ff7::njangi_circle::CircleCreated`
           },
           order: 'descending',
           limit: 50, // Limit to 50 most recent circles
@@ -223,7 +225,7 @@ export default function Dashboard() {
       try {
         joinedCircles = await client.queryEvents({
           query: {
-            MoveEventType: `${packageId}::njangi_circle::MemberJoined`
+            MoveEventType: `0x20cc18715122dbdf12a00b97fdda80f60c3ccbf0b83ab3a78d80f3c0bf4e5ff7::njangi_circle::MemberJoined`
           },
           order: 'descending',
           limit: 100, // Limit to 100 most recent joins
@@ -240,53 +242,72 @@ export default function Dashboard() {
       for (const event of createdCircles.data) {
         const parsedEvent = event.parsedJson as CircleCreatedEvent;
         if (parsedEvent?.admin === userAddress) {
-          // Check if the contribution amount is suspiciously high (max u64 value)
-          // This is a workaround for a known issue where the contract returns max u64 value
-          const contributionRaw = Number(parsedEvent.contribution_amount) / 1e9;
-          const isUnreasonableAmount = contributionRaw > 1_000_000_000;
-          
-          // If the amount looks suspicious, try to get more accurate data from the transaction
-          if (isUnreasonableAmount && event.id && event.id.txDigest) {
-            try {
-              const txDetails = await fetchTransactionDetails(client, event.id.txDigest);
-              if (txDetails) {
-                circleMap.set(parsedEvent.circle_id, {
-                  id: parsedEvent.circle_id,
-                  name: parsedEvent.name,
-                  admin: parsedEvent.admin,
-                  contributionAmount: txDetails.contributionAmount,
-                  securityDeposit: 0, // Will be filled later
-                  cycleLength: Number(parsedEvent.cycle_length),
-                  cycleDay: txDetails.cycleDay,
-                  maxMembers: Number(parsedEvent.max_members),
-                  currentMembers: 0, // Will be filled later
-                  nextPayoutTime: 0, // Will be filled later
-                  memberStatus: 'active',
-                  isAdmin: true
-                });
-                continue; // Skip to next iteration since we've processed this circle
-              }
-            } catch (err) {
-              console.error('Error fetching transaction details for circle:', err);
-              // Fall back to standard processing below
+          try {
+            // First verify if the circle still exists (hasn't been deleted)
+            const objectExists = await client.getObject({
+              id: parsedEvent.circle_id,
+              options: { showType: true, showOwner: true }
+            });
+            
+            // Add logging to see object type and package information
+            console.log(`Circle ${parsedEvent.circle_id} belongs to package: ${packageId}`);
+            
+            // Skip this circle if it doesn't exist or is not accessible
+            if (!objectExists.data || objectExists.error) {
+              console.log(`Circle ${parsedEvent.circle_id} no longer exists, skipping...`);
+              continue;
             }
+            
+            // Check if the contribution amount is suspiciously high (max u64 value)
+            // This is a workaround for a known issue where the contract returns max u64 value
+            const contributionRaw = Number(parsedEvent.contribution_amount) / 1e9;
+            const isUnreasonableAmount = contributionRaw > 1_000_000_000;
+            
+            // If the amount looks suspicious, try to get more accurate data from the transaction
+            if (isUnreasonableAmount && event.id && event.id.txDigest) {
+              try {
+                const txDetails = await fetchTransactionDetails(client, event.id.txDigest);
+                if (txDetails) {
+                  circleMap.set(parsedEvent.circle_id, {
+                    id: parsedEvent.circle_id,
+                    name: parsedEvent.name,
+                    admin: parsedEvent.admin,
+                    contributionAmount: txDetails.contributionAmount,
+                    securityDeposit: 0, // Will be filled later
+                    cycleLength: Number(parsedEvent.cycle_length),
+                    cycleDay: txDetails.cycleDay,
+                    maxMembers: Number(parsedEvent.max_members),
+                    currentMembers: 0, // Will be filled later
+                    nextPayoutTime: 0, // Will be filled later
+                    memberStatus: 'active',
+                    isAdmin: true
+                  });
+                  continue; // Skip to next iteration since we've processed this circle
+                }
+              } catch (err) {
+                console.error('Error fetching transaction details for circle:', err);
+                // Fall back to standard processing below
+              }
+            }
+            
+            // Standard processing (used when tx details not available or fetch fails)
+            circleMap.set(parsedEvent.circle_id, {
+              id: parsedEvent.circle_id,
+              name: parsedEvent.name,
+              admin: parsedEvent.admin,
+              contributionAmount: isUnreasonableAmount ? 0 : contributionRaw,
+              securityDeposit: 0, // Will be filled later
+              cycleLength: Number(parsedEvent.cycle_length),
+              cycleDay: 0, // Will be filled later
+              maxMembers: Number(parsedEvent.max_members),
+              currentMembers: 0, // Will be filled later
+              nextPayoutTime: 0, // Will be filled later
+              memberStatus: 'active',
+              isAdmin: true
+            });
+          } catch (error) {
+            console.error(`Error fetching circle details for ${parsedEvent.circle_id}:`, error);
           }
-          
-          // Standard processing (used when tx details not available or fetch fails)
-          circleMap.set(parsedEvent.circle_id, {
-            id: parsedEvent.circle_id,
-            name: parsedEvent.name,
-            admin: parsedEvent.admin,
-            contributionAmount: isUnreasonableAmount ? 0 : contributionRaw,
-            securityDeposit: 0, // Will be filled later
-            cycleLength: Number(parsedEvent.cycle_length),
-            cycleDay: 0, // Will be filled later
-            maxMembers: Number(parsedEvent.max_members),
-            currentMembers: 0, // Will be filled later
-            nextPayoutTime: 0, // Will be filled later
-            memberStatus: 'active',
-            isAdmin: true
-          });
         }
       }
       
@@ -566,7 +587,7 @@ export default function Dashboard() {
     console.log("Available wallet methods:", Object.keys(wallet));
     
     // Updated package ID to the newly published contract
-    const packageId = "0x20cc18715122dbdf12a00b97fdda80f60c3ccbf0b83ab3a78d80f3c0bf4e5ff7";
+    const packageId = "0x1b0b1638cd469c6b92b82e8b7d01a572206cc7ff889c029297aa836bb1e5e363";
     console.log("Using packageId:", packageId);
     
     setIsDeleting(circleId);
@@ -772,20 +793,32 @@ export default function Dashboard() {
     });
   };
 
-  // Utility function to extract the actual contribution amount from transaction data
+  // Update the fetchTransactionDetails function to add additional logging
   const fetchTransactionDetails = async (client: SuiClient, txDigest: string): Promise<{contributionAmount: number, cycleDay: number} | null> => {
     try {
-      const txData = await client.getTransactionBlock({
+      console.log(`Fetching transaction details for: ${txDigest}`);
+      const txDetails = await client.getTransactionBlock({
         digest: txDigest,
         options: {
           showInput: true,
-          showEffects: true
+          showEffects: true,
+          showEvents: true,
+          showObjectChanges: true,
+          showBalanceChanges: true,
         }
       });
+
+      if (!txDetails || !txDetails.transaction?.data?.transaction) {
+        console.log('No transaction data found');
+        return null;
+      }
+
+      // Log the complete transaction for debugging
+      console.log('Transaction data structure:', JSON.stringify(txDetails, null, 2));
       
       // Check if it's a create_circle transaction with inputs
-      if (txData && txData.transaction?.data?.transaction?.kind === 'ProgrammableTransaction') {
-        const txn = txData.transaction.data.transaction;
+      if (txDetails && txDetails.transaction?.data?.transaction?.kind === 'ProgrammableTransaction') {
+        const txn = txDetails.transaction.data.transaction;
         if (txn.inputs && txn.inputs.length >= 5) { // We need at least 5 inputs for contribution amount and cycle day
           // Transaction structure for create_circle:
           // Inputs: name(0), contribution_amount(1), security_deposit(2), cycle_length(3), cycle_day(4)...
