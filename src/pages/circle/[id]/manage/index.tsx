@@ -4,7 +4,7 @@ import { useAuth } from '../../../../contexts/AuthContext';
 import Image from 'next/image';
 import { SuiClient } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Copy, Link } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
 
@@ -63,6 +63,7 @@ export default function ManageCircle() {
   const [circle, setCircle] = useState<Circle | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
+  const [copiedId, setCopiedId] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -306,6 +307,29 @@ export default function ManageCircle() {
     );
   };
 
+  const copyToClipboard = async (text: string, type: 'id' | 'link') => {
+    try {
+      if (type === 'id') {
+        await navigator.clipboard.writeText(text);
+        setCopiedId(true);
+        toast.success('Circle ID copied to clipboard!');
+        setTimeout(() => setCopiedId(false), 2000);
+      } else if (type === 'link') {
+        const shareLink = `${window.location.origin}/circle/${text}/join`;
+        await navigator.clipboard.writeText(shareLink);
+        toast.success('Invite link copied to clipboard!');
+      }
+    } catch (err: unknown) {
+      console.error('Failed to copy:', err);
+      toast.error('Failed to copy to clipboard');
+    }
+  };
+
+  const shortenId = (id: string) => {
+    if (!id) return '';
+    return `${id.slice(0, 10)}...${id.slice(-8)}`;
+  };
+
   if (!isAuthenticated || !account) {
     return null;
   }
@@ -344,9 +368,59 @@ export default function ManageCircle() {
 
           <div className="bg-white shadow rounded-lg overflow-hidden">
             <div className="p-6 border-b border-gray-200">
-              <h2 className="text-xl font-semibold text-gray-900">
-                Manage Circle
-              </h2>
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-semibold text-gray-900">
+                  Manage Circle
+                </h2>
+                {!loading && circle && (
+                  <div className="flex items-center space-x-2 text-sm">
+                    <span className="text-gray-500">ID: {shortenId(id as string)}</span>
+                    <Tooltip.Provider>
+                      <Tooltip.Root>
+                        <Tooltip.Trigger asChild>
+                          <button
+                            onClick={() => copyToClipboard(id as string, 'id')}
+                            className={`text-gray-400 hover:text-blue-600 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200 ${copiedId ? 'text-green-500' : ''}`}
+                          >
+                            <Copy size={16} />
+                          </button>
+                        </Tooltip.Trigger>
+                        <Tooltip.Portal>
+                          <Tooltip.Content
+                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                            sideOffset={5}
+                          >
+                            {copiedId ? 'Copied!' : 'Copy Circle ID'}
+                            <Tooltip.Arrow className="fill-gray-800" />
+                          </Tooltip.Content>
+                        </Tooltip.Portal>
+                      </Tooltip.Root>
+                    </Tooltip.Provider>
+                    
+                    <Tooltip.Provider>
+                      <Tooltip.Root>
+                        <Tooltip.Trigger asChild>
+                          <button
+                            onClick={() => copyToClipboard(id as string, 'link')}
+                            className="text-gray-400 hover:text-blue-600 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200"
+                          >
+                            <Link size={16} />
+                          </button>
+                        </Tooltip.Trigger>
+                        <Tooltip.Portal>
+                          <Tooltip.Content
+                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                            sideOffset={5}
+                          >
+                            Copy Invite Link
+                            <Tooltip.Arrow className="fill-gray-800" />
+                          </Tooltip.Content>
+                        </Tooltip.Portal>
+                      </Tooltip.Root>
+                    </Tooltip.Provider>
+                  </div>
+                )}
+              </div>
               {loading ? (
                 <div className="py-8 flex justify-center">
                   <svg className="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">

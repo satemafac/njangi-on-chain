@@ -8,7 +8,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import * as Dialog from '@radix-ui/react-dialog';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
-import { Eye, Settings, Trash2, CreditCard, RefreshCw, Users, X } from 'lucide-react';
+import { Eye, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link } from 'lucide-react';
 import { ZkLoginError } from '../services/zkLoginClient';
 
 // Circle type definition
@@ -142,6 +142,7 @@ export default function Dashboard() {
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [isJoinDialogOpen, setIsJoinDialogOpen] = useState(false);
   const [circleIdInput, setCircleIdInput] = useState('');
+  const [copiedCircleId, setCopiedCircleId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -929,13 +930,32 @@ export default function Dashboard() {
     return `${address.slice(0, 6)}...${address.slice(-6)}`;
   };
 
-  const copyToClipboard = async (text: string) => {
+  const copyToClipboard = async (text: string, type: 'address' | 'circleId' = 'address') => {
     try {
       await navigator.clipboard.writeText(text);
-      setShowToast(true);
-      setTimeout(() => setShowToast(false), 2000);
+      
+      if (type === 'address') {
+        setShowToast(true);
+        setTimeout(() => setShowToast(false), 2000);
+      } else if (type === 'circleId') {
+        setCopiedCircleId(text);
+        toast.success('Circle ID copied to clipboard!');
+        setTimeout(() => setCopiedCircleId(null), 2000);
+      }
     } catch (err) {
-      console.error('Failed to copy address:', err);
+      console.error(`Failed to copy ${type}:`, err);
+      toast.error(`Failed to copy ${type === 'address' ? 'address' : 'circle ID'}`);
+    }
+  };
+
+  const copyShareLink = async (circleId: string) => {
+    try {
+      const shareLink = `${window.location.origin}/circle/${circleId}/join`;
+      await navigator.clipboard.writeText(shareLink);
+      toast.success('Invite link copied to clipboard!');
+    } catch (err) {
+      console.error('Failed to copy share link:', err);
+      toast.error('Failed to copy invite link');
     }
   };
 
@@ -1111,6 +1131,11 @@ export default function Dashboard() {
     // Reset the input and close the dialog
     setCircleIdInput('');
     setIsJoinDialogOpen(false);
+  };
+
+  const shortenId = (id: string) => {
+    if (!id) return '';
+    return `${id.slice(0, 10)}...${id.slice(-6)}`;
   };
 
   if (!isAuthenticated || !account) {
@@ -1377,6 +1402,58 @@ export default function Dashboard() {
                                   </svg>
                                   {circle.currentMembers} / {circle.maxMembers} members
                                 </div>
+                                
+                                {/* Add circle ID with copy functionality */}
+                                <div className="mt-2 flex items-center space-x-1 text-xs text-gray-500">
+                                  <span>ID: {shortenId(circle.id)}</span>
+                                  <Tooltip.Provider>
+                                    <Tooltip.Root>
+                                      <Tooltip.Trigger asChild>
+                                        <button
+                                          onClick={() => copyToClipboard(circle.id, 'circleId')}
+                                          className={`text-gray-400 hover:text-blue-600 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200 ${copiedCircleId === circle.id ? 'text-green-500' : ''}`}
+                                          aria-label="Copy Circle ID"
+                                        >
+                                          <Copy size={14} />
+                                        </button>
+                                      </Tooltip.Trigger>
+                                      <Tooltip.Portal>
+                                        <Tooltip.Content
+                                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                          sideOffset={5}
+                                        >
+                                          {copiedCircleId === circle.id ? 'Copied!' : 'Copy Circle ID'}
+                                          <Tooltip.Arrow className="fill-gray-800" />
+                                        </Tooltip.Content>
+                                      </Tooltip.Portal>
+                                    </Tooltip.Root>
+                                  </Tooltip.Provider>
+                                  
+                                  {circle.isAdmin && (
+                                    <Tooltip.Provider>
+                                      <Tooltip.Root>
+                                        <Tooltip.Trigger asChild>
+                                          <button
+                                            onClick={() => copyShareLink(circle.id)}
+                                            className="text-gray-400 hover:text-blue-600 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200"
+                                            aria-label="Copy Invite Link"
+                                          >
+                                            <Link size={14} />
+                                          </button>
+                                        </Tooltip.Trigger>
+                                        <Tooltip.Portal>
+                                          <Tooltip.Content
+                                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                            sideOffset={5}
+                                          >
+                                            Copy Invite Link
+                                            <Tooltip.Arrow className="fill-gray-800" />
+                                          </Tooltip.Content>
+                                        </Tooltip.Portal>
+                                      </Tooltip.Root>
+                                    </Tooltip.Provider>
+                                  )}
+                                </div>
                               </div>
                               
                               <div className="px-5 py-3 bg-gray-50 text-sm">
@@ -1536,6 +1613,56 @@ export default function Dashboard() {
                                   </svg>
                                   {circle.currentMembers} / {circle.maxMembers} members
                                 </div>
+                                
+                                {/* Add circle ID with copy functionality */}
+                                <div className="mt-2 flex items-center space-x-1 text-xs text-gray-500">
+                                  <span>ID: {shortenId(circle.id)}</span>
+                                  <Tooltip.Provider>
+                                    <Tooltip.Root>
+                                      <Tooltip.Trigger asChild>
+                                        <button
+                                          onClick={() => copyToClipboard(circle.id, 'circleId')}
+                                          className={`text-gray-400 hover:text-blue-600 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200 ${copiedCircleId === circle.id ? 'text-green-500' : ''}`}
+                                          aria-label="Copy Circle ID"
+                                        >
+                                          <Copy size={14} />
+                                        </button>
+                                      </Tooltip.Trigger>
+                                      <Tooltip.Portal>
+                                        <Tooltip.Content
+                                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                          sideOffset={5}
+                                        >
+                                          {copiedCircleId === circle.id ? 'Copied!' : 'Copy Circle ID'}
+                                          <Tooltip.Arrow className="fill-gray-800" />
+                                        </Tooltip.Content>
+                                      </Tooltip.Portal>
+                                    </Tooltip.Root>
+                                  </Tooltip.Provider>
+                                  
+                                  <Tooltip.Provider>
+                                    <Tooltip.Root>
+                                      <Tooltip.Trigger asChild>
+                                        <button
+                                          onClick={() => copyShareLink(circle.id)}
+                                          className="text-gray-400 hover:text-blue-600 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200"
+                                          aria-label="Copy Invite Link"
+                                        >
+                                          <Link size={14} />
+                                        </button>
+                                      </Tooltip.Trigger>
+                                      <Tooltip.Portal>
+                                        <Tooltip.Content
+                                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                          sideOffset={5}
+                                        >
+                                          Copy Invite Link
+                                          <Tooltip.Arrow className="fill-gray-800" />
+                                        </Tooltip.Content>
+                                      </Tooltip.Portal>
+                                    </Tooltip.Root>
+                                  </Tooltip.Provider>
+                                </div>
                               </div>
                               
                               <div className="px-5 py-3 bg-gray-50 text-sm">
@@ -1694,6 +1821,33 @@ export default function Dashboard() {
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                                   </svg>
                                   {circle.currentMembers} / {circle.maxMembers} members
+                                </div>
+                                
+                                {/* Add circle ID with copy functionality */}
+                                <div className="mt-2 flex items-center space-x-1 text-xs text-gray-500">
+                                  <span>ID: {shortenId(circle.id)}</span>
+                                  <Tooltip.Provider>
+                                    <Tooltip.Root>
+                                      <Tooltip.Trigger asChild>
+                                        <button
+                                          onClick={() => copyToClipboard(circle.id, 'circleId')}
+                                          className={`text-gray-400 hover:text-blue-600 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200 ${copiedCircleId === circle.id ? 'text-green-500' : ''}`}
+                                          aria-label="Copy Circle ID"
+                                        >
+                                          <Copy size={14} />
+                                        </button>
+                                      </Tooltip.Trigger>
+                                      <Tooltip.Portal>
+                                        <Tooltip.Content
+                                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                          sideOffset={5}
+                                        >
+                                          {copiedCircleId === circle.id ? 'Copied!' : 'Copy Circle ID'}
+                                          <Tooltip.Arrow className="fill-gray-800" />
+                                        </Tooltip.Content>
+                                      </Tooltip.Portal>
+                                    </Tooltip.Root>
+                                  </Tooltip.Provider>
                                 </div>
                               </div>
                               
