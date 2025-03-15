@@ -5,6 +5,8 @@ import Image from 'next/image';
 import { SuiClient } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
 import { ArrowLeft } from 'lucide-react';
+import * as Tooltip from '@radix-ui/react-tooltip';
+import { priceService } from '../../../../services/price-service';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -12,7 +14,9 @@ interface Circle {
   name: string;
   admin: string;
   contributionAmount: number;
+  contributionAmountUsd: number;
   securityDeposit: number;
+  securityDepositUsd: number;
   cycleLength: number;
   cycleDay: number;
   maxMembers: number;
@@ -25,13 +29,23 @@ interface CircleFields {
   name: string;
   admin: string;
   contribution_amount: string;
+  contribution_amount_usd?: string; // Now optional since it might be in usd_amounts
   security_deposit: string;
+  security_deposit_usd?: string; // Now optional since it might be in usd_amounts
   cycle_length: string;
   cycle_day: string;
   max_members: string;
   current_members: string;
   next_payout_time: string;
-  [key: string]: string | number | boolean | object;
+  usd_amounts: {
+    fields?: {
+      contribution_amount: string;
+      security_deposit: string;
+      target_amount?: string;
+    }
+  } | string; // Can be an object with fields or a string reference
+  // Use unknown for index signature as a safer alternative to any
+  [key: string]: string | number | boolean | object | unknown;
 }
 
 // Assuming we'll need a Member type as well
@@ -48,6 +62,7 @@ export default function ManageCircle() {
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+  const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -62,6 +77,20 @@ export default function ManageCircle() {
       fetchCircleDetails();
     }
   }, [id, userAddress]);
+
+  useEffect(() => {
+    // Fetch SUI price
+    const fetchPrice = async () => {
+      try {
+        const price = await priceService.getSUIPrice();
+        setSuiPrice(price);
+      } catch (error) {
+        console.error('Error fetching SUI price:', error);
+        // Keep using the default price
+      }
+    };
+    fetchPrice();
+  }, []);
 
   const fetchCircleDetails = async () => {
     if (!id) return;
@@ -79,6 +108,8 @@ export default function ManageCircle() {
       if (objectData.data?.content && 'fields' in objectData.data.content) {
         const fields = objectData.data.content.fields as CircleFields;
         
+        console.log('Circle data from blockchain:', fields);
+        
         const adminAddress = fields.admin;
         
         // If not admin, redirect to view-only page
@@ -88,12 +119,74 @@ export default function ManageCircle() {
           return;
         }
         
+        // Get the USD amounts, checking both direct fields and potentially nested usd_amounts
+        let contributionAmountUsd = 0;
+        let securityDepositUsd = 0;
+        
+        console.log('USD fields check:', {
+          direct_contribution: fields.contribution_amount_usd,
+          direct_security: fields.security_deposit_usd,
+          nested: fields.usd_amounts
+        });
+        
+        // Check for nested usd_amounts structure (this is the new structure)
+        if (fields.usd_amounts) {
+          if (typeof fields.usd_amounts === 'object') {
+            // It could have a nested 'fields' property or direct properties
+            let usdAmounts: { 
+              contribution_amount?: string; 
+              security_deposit?: string; 
+              target_amount?: string;
+              fields?: {
+                contribution_amount: string;
+                security_deposit: string;
+                target_amount?: string;
+              }
+            } = fields.usd_amounts as any;
+            
+            // If it has a fields property, use that
+            if (usdAmounts.fields) {
+              usdAmounts = usdAmounts.fields;
+            }
+            
+            if (usdAmounts.contribution_amount) {
+              contributionAmountUsd = Number(usdAmounts.contribution_amount) / 100;
+              console.log('Using nested contribution amount USD:', contributionAmountUsd);
+            }
+            
+            if (usdAmounts.security_deposit) {
+              securityDepositUsd = Number(usdAmounts.security_deposit) / 100;
+              console.log('Using nested security deposit USD:', securityDepositUsd);
+            }
+          } else if (typeof fields.usd_amounts === 'string') {
+            // If it's a string reference to another object, we need to handle differently
+            console.log('usd_amounts is a string reference:', fields.usd_amounts);
+          }
+        } 
+        // Fallback to direct fields if nested structure not available or empty
+        else if (fields.contribution_amount_usd) {
+          contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
+          console.log('Using direct contribution amount USD:', contributionAmountUsd);
+        }
+        
+        if (!fields.usd_amounts && fields.security_deposit_usd) {
+          securityDepositUsd = Number(fields.security_deposit_usd) / 100;
+          console.log('Using direct security deposit USD:', securityDepositUsd);
+        }
+        
+        console.log('Final USD values:', {
+          contributionAmountUsd,
+          securityDepositUsd
+        });
+        
         setCircle({
           id: id as string,
           name: fields.name,
           admin: fields.admin,
           contributionAmount: Number(fields.contribution_amount) / 1e9,
+          contributionAmountUsd: contributionAmountUsd,
           securityDeposit: Number(fields.security_deposit) / 1e9,
+          securityDepositUsd: securityDepositUsd,
           cycleLength: Number(fields.cycle_length),
           cycleDay: Number(fields.cycle_day),
           maxMembers: Number(fields.max_members),
@@ -131,6 +224,86 @@ export default function ManageCircle() {
   const shortenAddress = (address: string) => {
     if (!address) return '';
     return `${address.slice(0, 6)}...${address.slice(-6)}`;
+  };
+
+  // Format USD value
+  const formatUSD = (amount: number) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+    }).format(amount);
+  };
+
+  // Currency display component
+  const CurrencyDisplay = ({ usd, sui, className = "" }: { usd?: number; sui?: number; className?: string }) => {
+    const isPriceStale = priceService.getFetchStatus() === 'error';
+    
+    console.log('CurrencyDisplay received values:', { usd, sui, type: typeof usd });
+    
+    // Check for invalid inputs and provide defaults with more logging
+    if ((usd === undefined || isNaN(usd)) && (sui === undefined || isNaN(sui))) {
+      console.log('Both USD and SUI values are invalid, defaulting to 0');
+      usd = 0;
+      sui = 0;
+    }
+    
+    // Calculate values based on which parameter is provided
+    let calculatedSui: number;
+    let calculatedUsd: number;
+    
+    if (usd !== undefined && !isNaN(usd)) {
+      // If USD is provided and valid, calculate SUI based on current price
+      calculatedUsd = usd;
+      calculatedSui = suiPrice > 0 ? usd / suiPrice : 0;
+      console.log('Calculated from USD:', { calculatedUsd, calculatedSui, suiPrice });
+    } else if (sui !== undefined && !isNaN(sui)) {
+      // If SUI is provided and valid, calculate USD
+      calculatedSui = sui;
+      calculatedUsd = sui * suiPrice;
+      console.log('Calculated from SUI:', { calculatedUsd, calculatedSui, suiPrice });
+    } else {
+      // Default values if neither is provided or values are invalid
+      calculatedSui = 0;
+      calculatedUsd = 0;
+      console.log('Using default values:', { calculatedUsd, calculatedSui });
+    }
+    
+    // Format SUI with appropriate precision
+    const formattedSui = calculatedSui >= 1000 
+      ? calculatedSui.toLocaleString(undefined, { maximumFractionDigits: 0 }) 
+      : calculatedSui >= 100 
+        ? calculatedSui.toFixed(1) 
+        : calculatedSui.toFixed(2);
+    
+    return (
+      <Tooltip.Provider>
+        <Tooltip.Root>
+          <Tooltip.Trigger asChild>
+            <span className={`cursor-help ${className} flex items-center`}>
+              {formatUSD(calculatedUsd)} <span className="text-gray-500 mr-1">({formattedSui} SUI)</span>
+              {isPriceStale && <span title="Using cached price">⚠️</span>}
+            </span>
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content
+              className="bg-gray-900 text-white px-3 py-2 rounded text-sm"
+              sideOffset={5}
+            >
+              <div className="space-y-1">
+                <p>SUI Conversion Rate:</p>
+                <p>1 SUI = {formatUSD(suiPrice)}</p>
+                <p className="text-xs text-gray-400">
+                  {isPriceStale 
+                    ? "Using cached price - service temporarily unavailable" 
+                    : "Updated price data from CoinGecko"}
+                </p>
+              </div>
+              <Tooltip.Arrow className="fill-gray-900" />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+      </Tooltip.Provider>
+    );
   };
 
   if (!isAuthenticated || !account) {
@@ -194,12 +367,12 @@ export default function ManageCircle() {
                       
                       <div>
                         <p className="text-sm text-gray-500">Contribution Amount</p>
-                        <p className="text-lg font-medium">{circle.contributionAmount} SUI</p>
+                        <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} />
                       </div>
                       
                       <div>
                         <p className="text-sm text-gray-500">Security Deposit</p>
-                        <p className="text-lg font-medium">{circle.securityDeposit} SUI</p>
+                        <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} />
                       </div>
                       
                       <div>

@@ -103,6 +103,14 @@ module njangi::njangi_circle {
     // ----------------------------------------------------------
     // Main data structures
     // ----------------------------------------------------------
+    
+    // New struct to hold USD amounts
+    public struct USDAmounts has store, drop {
+        contribution_amount: u64, // USD amount * 100 (cents)
+        security_deposit: u64,    // USD amount * 100 (cents)
+        target_amount: option::Option<u64>, // USD amount * 100 (cents)
+    }
+    
     public struct Circle has key, store {
         id: object::UID,
         name: string::String,
@@ -134,6 +142,7 @@ module njangi::njangi_circle {
         milestones: vector<Milestone>,
         goal_progress: u64,
         last_milestone_completed: u64,
+        usd_amounts: USDAmounts,    // Combined field for all USD amounts
     }
 
     public struct Member has store, drop {
@@ -204,6 +213,8 @@ module njangi::njangi_circle {
         admin: address,
         name: string::String,
         contribution_amount: u64,
+        contribution_amount_usd: u64, // USD amount in cents
+        security_deposit_usd: u64,    // USD amount in cents
         max_members: u64,
         cycle_length: u64,
     }
@@ -300,7 +311,9 @@ module njangi::njangi_circle {
     public fun create_circle(
         name: vector<u8>,
         contribution_amount: u64,
+        contribution_amount_usd: u64, // USD amount in cents
         security_deposit: u64,
+        security_deposit_usd: u64,    // USD amount in cents
         cycle_length: u64,
         cycle_day: u64,
         circle_type: u8,
@@ -309,6 +322,7 @@ module njangi::njangi_circle {
         penalty_rules: vector<bool>,
         goal_type: option::Option<u8>,
         target_amount: option::Option<u64>,
+        target_amount_usd: option::Option<u64>, // USD amount in cents
         target_date: option::Option<u64>,
         verification_required: bool,
         clock: &clock::Clock,
@@ -334,6 +348,13 @@ module njangi::njangi_circle {
             || (cycle_length > 0 && cycle_day < 28), // monthly/quarterly up to 28
             EInvalidCycleDay
         );
+        
+        // Create USDAmounts structure
+        let usd_amounts = USDAmounts {
+            contribution_amount: contribution_amount_usd,
+            security_deposit: security_deposit_usd,
+            target_amount: target_amount_usd,
+        };
 
         let circle = Circle {
             id: object::new(ctx),
@@ -366,6 +387,7 @@ module njangi::njangi_circle {
             milestones: vector::empty(),
             goal_progress: 0,
             last_milestone_completed: 0,
+            usd_amounts,
         };
 
         event::emit(CircleCreated {
@@ -373,6 +395,8 @@ module njangi::njangi_circle {
             admin: tx_context::sender(ctx),
             name: string::utf8(name),
             contribution_amount: contribution_amount_scaled,
+            contribution_amount_usd,
+            security_deposit_usd,
             max_members,
             cycle_length,
         });
@@ -489,6 +513,19 @@ module njangi::njangi_circle {
         } else {
             option::none()
         }
+    }
+
+    // USD value getters (in cents)
+    public fun get_contribution_amount_usd(circle: &Circle): u64 {
+        circle.usd_amounts.contribution_amount
+    }
+
+    public fun get_security_deposit_usd(circle: &Circle): u64 {
+        circle.usd_amounts.security_deposit
+    }
+
+    public fun get_target_amount_usd(circle: &Circle): Option<u64> {
+        circle.usd_amounts.target_amount
     }
 
     // ----------------------------------------------------------
@@ -1511,11 +1548,13 @@ module njangi::njangi_circle {
             milestones,
             goal_progress: _,
             last_milestone_completed: _,
+            usd_amounts,
         } = circle;
         
         // Need to consume these values since they're not droppable
         let _ = penalty_rules;
         let _ = milestones;
+        let _ = usd_amounts;
         
         // Destroy balances and tables
         balance::destroy_zero(contributions);

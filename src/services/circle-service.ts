@@ -4,7 +4,7 @@ import { bcs } from '@mysten/sui/bcs';
 import type { CircleFormData, CycleLength, WeekDay } from '../types/circle';
 
 // Package ID from published contract
-const PACKAGE_ID = "0x1b0b1638cd469c6b92b82e8b7d01a572206cc7ff889c029297aa836bb1e5e363";
+const PACKAGE_ID = "0x564e7ab05c090f329b98b43ab1d7302df1c38c99e38684aac8201c453f9cd0d4";
 
 // Constants from Move contract
 const CIRCLE_TYPE_ROTATIONAL = 0;
@@ -50,12 +50,16 @@ export class CircleService {
       const contributionAmount = BigInt(Math.floor(formData.contributionAmount * 1e9));
       const securityDeposit = BigInt(Math.floor(formData.securityDeposit * 1e9));
       
-      // 3. Convert cycle day to contract format
+      // 3. Convert USD amounts to cents (integer)
+      const contributionAmountUSD = BigInt(Math.floor(formData.contributionAmountUSD * 100));
+      const securityDepositUSD = BigInt(Math.floor(formData.securityDepositUSD * 100));
+      
+      // 4. Convert cycle day to contract format
       const cycleDay = typeof formData.cycleDay === 'string' 
         ? WEEKDAY_MAP[formData.cycleDay as WeekDay]
         : formData.cycleDay;
 
-      // 4. Prepare smart goal options
+      // 5. Prepare smart goal options
       const goalType = formData.cycleType === 'smart-goal' && formData.smartGoal
         ? [formData.smartGoal.goalType === 'amount' ? GOAL_TYPE_AMOUNT : GOAL_TYPE_TIME]
         : [];
@@ -66,19 +70,28 @@ export class CircleService {
           ? [BigInt(Math.floor(formData.smartGoal.targetAmount * 1e9))]
           : [];
 
+      // 6. Convert target amount USD to cents
+      const targetAmountUSD = formData.cycleType === 'smart-goal' && 
+        formData.smartGoal?.goalType === 'amount' && 
+        formData.smartGoal.targetAmountUSD
+          ? [BigInt(Math.floor(formData.smartGoal.targetAmountUSD * 100))]
+          : [];
+
       const targetDate = formData.cycleType === 'smart-goal' && 
         formData.smartGoal?.goalType === 'date' && 
         formData.smartGoal.targetDate
           ? [BigInt(Math.floor(new Date(formData.smartGoal.targetDate).getTime()))]
           : [];
       
-      // 5. Build transaction
+      // 7. Build transaction
       tx.moveCall({
         target: `${PACKAGE_ID}::njangi_circle::create_circle`,
         arguments: [
           tx.pure(nameBytes),                    // name: vector<u8>
           tx.pure.u64(contributionAmount),       // contribution_amount: u64
-          tx.pure.u64(securityDeposit),         // security_deposit: u64
+          tx.pure.u64(contributionAmountUSD),    // contribution_amount_usd: u64
+          tx.pure.u64(securityDeposit),          // security_deposit: u64
+          tx.pure.u64(securityDepositUSD),       // security_deposit_usd: u64
           tx.pure.u64(CYCLE_LENGTH_MAP[formData.cycleLength]), // cycle_length: u64
           tx.pure.u64(cycleDay),                // cycle_day: u64
           tx.pure.u8(formData.cycleType === 'rotational' ? CIRCLE_TYPE_ROTATIONAL : CIRCLE_TYPE_SMART_GOAL), // circle_type: u8
@@ -90,6 +103,7 @@ export class CircleService {
           ])),                                  // penalty_rules: vector<bool>
           tx.pure(bcs.vector(bcs.u8()).serialize(goalType)),     // goal_type: Option<u8>
           tx.pure(bcs.vector(bcs.u64()).serialize(targetAmount)), // target_amount: Option<u64>
+          tx.pure(bcs.vector(bcs.u64()).serialize(targetAmountUSD)), // target_amount_usd: Option<u64>
           tx.pure(bcs.vector(bcs.u64()).serialize(targetDate)),   // target_date: Option<u64>
           tx.pure.bool(formData.smartGoal?.verificationRequired || false), // verification_required: bool
           clock,                               // clock: &Clock

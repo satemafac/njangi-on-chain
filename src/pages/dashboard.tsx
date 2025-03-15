@@ -5,9 +5,10 @@ import Image from 'next/image';
 import { SuiClient } from '@mysten/sui/client';
 import { Tab } from '@headlessui/react';
 import * as Tooltip from '@radix-ui/react-tooltip';
+import * as Dialog from '@radix-ui/react-dialog';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
-import { Eye, Settings, Trash2, CreditCard, RefreshCw } from 'lucide-react';
+import { Eye, Settings, Trash2, CreditCard, RefreshCw, Users, X } from 'lucide-react';
 import { ZkLoginError } from '../services/zkLoginClient';
 
 // Circle type definition
@@ -16,7 +17,9 @@ interface Circle {
   name: string;
   admin: string;
   contributionAmount: number;
+  contributionAmountUsd: number;
   securityDeposit: number;
+  securityDepositUsd: number;
   cycleLength: number;
   cycleDay: number;
   maxMembers: number;
@@ -32,6 +35,8 @@ interface CircleCreatedEvent {
   admin: string;
   name: string;
   contribution_amount: string;
+  contribution_amount_usd: string;
+  security_deposit_usd: string;
   max_members: string;
   cycle_length: string;
 }
@@ -40,6 +45,9 @@ interface MemberJoinedEvent {
   circle_id: string;
   member: string;
   position?: number;
+  // These fields may or may not be present in the event payload
+  contribution_amount_usd?: string;
+  security_deposit_usd?: string;
 }
 
 // Add these type definitions at the top of the file with other interfaces
@@ -132,6 +140,8 @@ export default function Dashboard() {
   const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
   const [deleteableCircles, setDeleteableCircles] = useState<Set<string>>(new Set());
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [isJoinDialogOpen, setIsJoinDialogOpen] = useState(false);
+  const [circleIdInput, setCircleIdInput] = useState('');
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -191,15 +201,28 @@ export default function Dashboard() {
 
   // Use useCallback to memoize the fetchUserCircles function
   const fetchUserCircles = useCallback(async () => {
-    if (!userAddress) return;
+    console.log('fetchUserCircles starting...');
+    
+    if (!userAddress) {
+      console.log('No user address, skipping fetch');
+      return;
+    }
+    
+    console.log('Fetching circles for user:', userAddress);
     
     setLoading(true);
-    setError(null); // Reset error state
+    setError('');
+    
     try {
-      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      // Create the Sui client
+      const client = new SuiClient({
+        url: 'https://fullnode.testnet.sui.io:443'
+      });
+      
+      console.log('Using package ID:', process.env.NEXT_PUBLIC_PACKAGE_ID);
       
       // Define package ID where njangi_circle module is deployed
-      const packageId = "0x1b0b1638cd469c6b92b82e8b7d01a572206cc7ff889c029297aa836bb1e5e363";
+      const packageId = process.env.NEXT_PUBLIC_PACKAGE_ID;
       
       // Note: We use the old package ID for event types but new package ID for direct object queries
       
@@ -208,7 +231,7 @@ export default function Dashboard() {
       try {
         createdCircles = await client.queryEvents({
           query: {
-            MoveEventType: `0x20cc18715122dbdf12a00b97fdda80f60c3ccbf0b83ab3a78d80f3c0bf4e5ff7::njangi_circle::CircleCreated`
+            MoveEventType: `0x564e7ab05c090f329b98b43ab1d7302df1c38c99e38684aac8201c453f9cd0d4::njangi_circle::CircleCreated`
           },
           order: 'descending',
           limit: 50, // Limit to 50 most recent circles
@@ -225,7 +248,7 @@ export default function Dashboard() {
       try {
         joinedCircles = await client.queryEvents({
           query: {
-            MoveEventType: `0x20cc18715122dbdf12a00b97fdda80f60c3ccbf0b83ab3a78d80f3c0bf4e5ff7::njangi_circle::MemberJoined`
+            MoveEventType: `0x564e7ab05c090f329b98b43ab1d7302df1c38c99e38684aac8201c453f9cd0d4::njangi_circle::MemberJoined`
           },
           order: 'descending',
           limit: 100, // Limit to 100 most recent joins
@@ -258,53 +281,172 @@ export default function Dashboard() {
               continue;
             }
             
-            // Check if the contribution amount is suspiciously high (max u64 value)
-            // This is a workaround for a known issue where the contract returns max u64 value
-            const contributionRaw = Number(parsedEvent.contribution_amount) / 1e9;
-            const isUnreasonableAmount = contributionRaw > 1_000_000_000;
-            
-            // If the amount looks suspicious, try to get more accurate data from the transaction
-            if (isUnreasonableAmount && event.id && event.id.txDigest) {
-              try {
-                const txDetails = await fetchTransactionDetails(client, event.id.txDigest);
-                if (txDetails) {
-                  circleMap.set(parsedEvent.circle_id, {
-                    id: parsedEvent.circle_id,
-                    name: parsedEvent.name,
-                    admin: parsedEvent.admin,
-                    contributionAmount: txDetails.contributionAmount,
-                    securityDeposit: 0, // Will be filled later
-                    cycleLength: Number(parsedEvent.cycle_length),
-                    cycleDay: txDetails.cycleDay,
-                    maxMembers: Number(parsedEvent.max_members),
-                    currentMembers: 0, // Will be filled later
-                    nextPayoutTime: 0, // Will be filled later
-                    memberStatus: 'active',
-                    isAdmin: true
-                  });
-                  continue; // Skip to next iteration since we've processed this circle
-                }
-              } catch (err) {
-                console.error('Error fetching transaction details for circle:', err);
-                // Fall back to standard processing below
-              }
-            }
-            
-            // Standard processing (used when tx details not available or fetch fails)
-            circleMap.set(parsedEvent.circle_id, {
+            // Get the detailed circle data to retrieve USD values
+            const objectData = await client.getObject({
               id: parsedEvent.circle_id,
-              name: parsedEvent.name,
-              admin: parsedEvent.admin,
-              contributionAmount: isUnreasonableAmount ? 0 : contributionRaw,
-              securityDeposit: 0, // Will be filled later
-              cycleLength: Number(parsedEvent.cycle_length),
-              cycleDay: 0, // Will be filled later
-              maxMembers: Number(parsedEvent.max_members),
-              currentMembers: 0, // Will be filled later
-              nextPayoutTime: 0, // Will be filled later
-              memberStatus: 'active',
-              isAdmin: true
+              options: { showContent: true }
             });
+            
+            // Log the entire object to better understand its structure
+            console.log('Full circle object data:', JSON.stringify(objectData.data, null, 2));
+            
+            const content = objectData.data?.content;
+            if (content && 'fields' in content) {
+              // Log the entire fields object to see what properties are available
+              console.log('Circle fields:', JSON.stringify(content.fields, null, 2));
+              
+              const fields = content.fields as {
+                name: string;
+                admin: string;
+                contribution_amount: string;
+                contribution_amount_usd: string;
+                security_deposit: string;
+                security_deposit_usd: string;
+                cycle_length: string;
+                cycle_day: string;
+                max_members: string;
+                current_members: string;
+                next_payout_time: string;
+                // Try to look for nested USD amounts
+                usd_amounts?: {
+                  contribution_amount?: string;
+                  security_deposit?: string;
+                  target_amount?: string;
+                };
+              };
+              
+              // Get the USD amounts, checking all possible structures for USD values
+              let contributionAmountUsd = 0;
+              let securityDepositUsd = 0;
+              
+              // Check for direct fields first
+              if (fields.contribution_amount_usd) {
+                contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
+                console.log('Found direct contribution_amount_usd:', fields.contribution_amount_usd);
+              } 
+              // Then check for nested usd_amounts structure
+              else if (fields.usd_amounts && fields.usd_amounts.contribution_amount) {
+                contributionAmountUsd = Number(fields.usd_amounts.contribution_amount) / 100;
+                console.log('Found usd_amounts.contribution_amount:', fields.usd_amounts.contribution_amount);
+              }
+              // Finally, check if it's in the parsedEvent directly
+              else if (parsedEvent.contribution_amount_usd) {
+                contributionAmountUsd = Number(parsedEvent.contribution_amount_usd) / 100;
+                console.log('Using event contribution_amount_usd:', parsedEvent.contribution_amount_usd);
+              }
+              
+              // Same for security deposit
+              if (fields.security_deposit_usd) {
+                securityDepositUsd = Number(fields.security_deposit_usd) / 100;
+                console.log('Found direct security_deposit_usd:', fields.security_deposit_usd);
+              }
+              else if (fields.usd_amounts && fields.usd_amounts.security_deposit) {
+                securityDepositUsd = Number(fields.usd_amounts.security_deposit) / 100;
+                console.log('Found usd_amounts.security_deposit:', fields.usd_amounts.security_deposit);
+              }
+              else if (parsedEvent.security_deposit_usd) {
+                securityDepositUsd = Number(parsedEvent.security_deposit_usd) / 100;
+                console.log('Using event security_deposit_usd:', parsedEvent.security_deposit_usd);
+              }
+              
+              // Log data for debugging
+              console.log('Circle USD values after processing:', {
+                circleId: parsedEvent.circle_id,
+                contributionUSD: contributionAmountUsd,
+                securityDepositUSD: securityDepositUsd,
+                directFieldsPresent: {
+                  contribution_amount_usd: !!fields.contribution_amount_usd,
+                  security_deposit_usd: !!fields.security_deposit_usd
+                },
+                usdAmountsPresent: !!fields.usd_amounts,
+                parsedEventFields: {
+                  contribution_amount_usd: !!parsedEvent.contribution_amount_usd,
+                  security_deposit_usd: !!parsedEvent.security_deposit_usd
+                }
+              });
+              
+              // Convert SUI values from MIST to SUI
+              const contributionAmountSui = Number(fields.contribution_amount) / 1e9;
+              const securityDepositSui = Number(fields.security_deposit) / 1e9;
+              
+              // Use contribution_amount_usd and security_deposit_usd from event if they exist
+              if (parsedEvent.contribution_amount_usd && contributionAmountUsd === 0) {
+                contributionAmountUsd = Number(parsedEvent.contribution_amount_usd) / 100;
+                console.log('Using contribution_amount_usd from event:', contributionAmountUsd);
+              }
+              
+              if (parsedEvent.security_deposit_usd && securityDepositUsd === 0) {
+                securityDepositUsd = Number(parsedEvent.security_deposit_usd) / 100;
+                console.log('Using security_deposit_usd from event:', securityDepositUsd);
+              }
+              
+              // Debug log the values we've loaded
+              console.log('Final USD values for circle:', {
+                contributionUSD: contributionAmountUsd,
+                securityDepositUSD: securityDepositUsd
+              });
+              
+              circleMap.set(parsedEvent.circle_id, {
+                id: parsedEvent.circle_id,
+                name: fields.name,
+                admin: fields.admin,
+                contributionAmount: contributionAmountSui,
+                contributionAmountUsd: contributionAmountUsd || 0,
+                securityDeposit: securityDepositSui,
+                securityDepositUsd: securityDepositUsd || 0,
+                cycleLength: Number(fields.cycle_length),
+                cycleDay: Number(fields.cycle_day),
+                maxMembers: Number(fields.max_members),
+                currentMembers: Number(fields.current_members),
+                nextPayoutTime: Number(fields.next_payout_time),
+                memberStatus: 'active',
+                isAdmin: true
+              });
+            } else {
+              // Handle case where we can't get full content but can use event data
+              // Check for USD amounts in the event
+              let contributionAmountUsd = 0;
+              let securityDepositUsd = 0;
+              
+              if (parsedEvent.contribution_amount_usd) {
+                contributionAmountUsd = Number(parsedEvent.contribution_amount_usd) / 100;
+              }
+              
+              if (parsedEvent.security_deposit_usd) {
+                securityDepositUsd = Number(parsedEvent.security_deposit_usd) / 100;
+              }
+              
+              // Log event data for debugging
+              console.log('Circle USD values from event:', {
+                circleId: parsedEvent.circle_id,
+                contributionUSD: contributionAmountUsd,
+                securityDepositUSD: securityDepositUsd,
+                rawContributionUSD: parsedEvent.contribution_amount_usd,
+                rawSecurityDepositUSD: parsedEvent.security_deposit_usd,
+                fullParsedEvent: JSON.stringify(parsedEvent)
+              });
+              
+              // Try to get SUI values
+              const contributionRaw = Number(parsedEvent.contribution_amount) / 1e9;
+              const isUnreasonableAmount = contributionRaw > 1_000_000_000;
+              
+              circleMap.set(parsedEvent.circle_id, {
+                id: parsedEvent.circle_id,
+                name: parsedEvent.name,
+                admin: parsedEvent.admin,
+                contributionAmount: isUnreasonableAmount ? 0 : contributionRaw,
+                contributionAmountUsd: contributionAmountUsd || 0,
+                securityDeposit: 0,
+                securityDepositUsd: securityDepositUsd || 0,
+                cycleLength: Number(parsedEvent.cycle_length),
+                cycleDay: 0,
+                maxMembers: Number(parsedEvent.max_members),
+                currentMembers: 0,
+                nextPayoutTime: 0,
+                memberStatus: 'active',
+                isAdmin: parsedEvent.admin === userAddress
+              });
+            }
           } catch (error) {
             console.error(`Error fetching circle details for ${parsedEvent.circle_id}:`, error);
           }
@@ -324,32 +466,91 @@ export default function Dashboard() {
                 options: { showContent: true }
               });
               
+              // Log the entire object to better understand its structure
+              console.log('Member circle object data:', JSON.stringify(objectData.data, null, 2));
+              
               const content = objectData.data?.content;
               if (content && 'fields' in content) {
+                // Log the entire fields object to see what properties are available
+                console.log('Member circle fields:', JSON.stringify(content.fields, null, 2));
+                
                 const fields = content.fields as {
                   name: string;
                   admin: string;
                   contribution_amount: string;
+                  contribution_amount_usd: string;
                   security_deposit: string;
+                  security_deposit_usd: string;
                   cycle_length: string;
                   cycle_day: string;
                   max_members: string;
                   current_members: string;
                   next_payout_time: string;
+                  // Try to look for nested USD amounts
+                  usd_amounts?: {
+                    contribution_amount?: string;
+                    security_deposit?: string;
+                    target_amount?: string;
+                  };
                 };
                 
-                // Check if the contribution amount is suspiciously high (max u64 value)
-                const contributionRaw = Number(fields.contribution_amount) / 1e9;
-                const contributionAmount = contributionRaw > 1_000_000_000 
-                  ? 0 // Default to 0 for now if we see an unreasonable value
-                  : contributionRaw;
-                  
+                // Get the USD amounts, checking both direct fields and potentially nested usd_amounts
+                let contributionAmountUsd = 0;
+                let securityDepositUsd = 0;
+                
+                // Check for direct fields first
+                if (fields.contribution_amount_usd) {
+                  contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
+                } 
+                // Then check for nested usd_amounts structure
+                else if (fields.usd_amounts && fields.usd_amounts.contribution_amount) {
+                  contributionAmountUsd = Number(fields.usd_amounts.contribution_amount) / 100;
+                }
+                
+                // Same for security deposit
+                if (fields.security_deposit_usd) {
+                  securityDepositUsd = Number(fields.security_deposit_usd) / 100;
+                  console.log('Found direct security_deposit_usd:', fields.security_deposit_usd);
+                }
+                else if (fields.usd_amounts && fields.usd_amounts.security_deposit) {
+                  securityDepositUsd = Number(fields.usd_amounts.security_deposit) / 100;
+                  console.log('Found usd_amounts.security_deposit:', fields.usd_amounts.security_deposit);
+                }
+                else if (parsedEvent.security_deposit_usd) {
+                  securityDepositUsd = Number(parsedEvent.security_deposit_usd) / 100;
+                  console.log('Using event security_deposit_usd:', parsedEvent.security_deposit_usd);
+                }
+                
+                // Log data for debugging
+                console.log('Member circle USD values after processing:', {
+                  circleId: parsedEvent.circle_id,
+                  contributionUSD: contributionAmountUsd,
+                  securityDepositUSD: securityDepositUsd,
+                  directFieldsPresent: {
+                    contribution_amount_usd: !!fields.contribution_amount_usd,
+                    security_deposit_usd: !!fields.security_deposit_usd
+                  },
+                  usdAmountsPresent: !!fields.usd_amounts
+                });
+                
+                // We'll use the SUI amounts directly from the contract
+                const contributionAmountSui = Number(fields.contribution_amount) / 1e9;
+                const securityDepositSui = Number(fields.security_deposit) / 1e9;
+                
+                // Debug log the final values we'll use
+                console.log('Final USD values for member circle:', {
+                  contributionUSD: contributionAmountUsd,
+                  securityDepositUSD: securityDepositUsd
+                });
+                
                 circleMap.set(parsedEvent.circle_id, {
                   id: parsedEvent.circle_id,
                   name: fields.name,
                   admin: fields.admin,
-                  contributionAmount: contributionAmount,
-                  securityDeposit: Number(fields.security_deposit) / 1e9,
+                  contributionAmount: contributionAmountSui,
+                  contributionAmountUsd: contributionAmountUsd || 0, 
+                  securityDeposit: securityDepositSui,
+                  securityDepositUsd: securityDepositUsd || 0,
                   cycleLength: Number(fields.cycle_length),
                   cycleDay: Number(fields.cycle_day),
                   maxMembers: Number(fields.max_members),
@@ -587,7 +788,7 @@ export default function Dashboard() {
     console.log("Available wallet methods:", Object.keys(wallet));
     
     // Updated package ID to the newly published contract
-    const packageId = "0x1b0b1638cd469c6b92b82e8b7d01a572206cc7ff889c029297aa836bb1e5e363";
+    const packageId = "0x564e7ab05c090f329b98b43ab1d7302df1c38c99e38684aac8201c453f9cd0d4";
     console.log("Using packageId:", packageId);
     
     setIsDeleting(circleId);
@@ -793,61 +994,6 @@ export default function Dashboard() {
     });
   };
 
-  // Update the fetchTransactionDetails function to add additional logging
-  const fetchTransactionDetails = async (client: SuiClient, txDigest: string): Promise<{contributionAmount: number, cycleDay: number} | null> => {
-    try {
-      console.log(`Fetching transaction details for: ${txDigest}`);
-      const txDetails = await client.getTransactionBlock({
-        digest: txDigest,
-        options: {
-          showInput: true,
-          showEffects: true,
-          showEvents: true,
-          showObjectChanges: true,
-          showBalanceChanges: true,
-        }
-      });
-
-      if (!txDetails || !txDetails.transaction?.data?.transaction) {
-        console.log('No transaction data found');
-        return null;
-      }
-
-      // Log the complete transaction for debugging
-      console.log('Transaction data structure:', JSON.stringify(txDetails, null, 2));
-      
-      // Check if it's a create_circle transaction with inputs
-      if (txDetails && txDetails.transaction?.data?.transaction?.kind === 'ProgrammableTransaction') {
-        const txn = txDetails.transaction.data.transaction;
-        if (txn.inputs && txn.inputs.length >= 5) { // We need at least 5 inputs for contribution amount and cycle day
-          // Transaction structure for create_circle:
-          // Inputs: name(0), contribution_amount(1), security_deposit(2), cycle_length(3), cycle_day(4)...
-          
-          // Extract contribution amount (input at index 1)
-          const contributionAmountInput = txn.inputs[1];
-          if (contributionAmountInput && contributionAmountInput.type === 'pure' && 
-              contributionAmountInput.valueType === 'u64' && contributionAmountInput.value) {
-            const contributionAmountRaw = Number(contributionAmountInput.value) / 1e9;
-            
-            // Extract cycle day (input at index 4)
-            const cycleDayInput = txn.inputs[4];
-            const cycleDay = cycleDayInput && cycleDayInput.type === 'pure' && 
-                          cycleDayInput.valueType === 'u64' ? Number(cycleDayInput.value) : 0;
-            
-            return {
-              contributionAmount: contributionAmountRaw,
-              cycleDay: cycleDay
-            };
-          }
-        }
-      }
-      return null;
-    } catch (error) {
-      console.error('Error fetching transaction details:', error);
-      return null;
-    }
-  };
-
   // Format USD value
   const formatUSD = (amount: number) => {
     return new Intl.NumberFormat('en-US', {
@@ -857,23 +1003,63 @@ export default function Dashboard() {
   };
 
   // Currency display component
-  const CurrencyDisplay = ({ sui, className = "" }: { sui: number; className?: string }) => {
-    const usd = sui * suiPrice;
+  const CurrencyDisplay = ({ usd, sui, className = "" }: { usd?: number; sui?: number; className?: string }) => {
     const isPriceStale = priceService.getFetchStatus() === 'error';
     
+    console.log('CurrencyDisplay inputs:', { usd, sui, suiPrice });
+    
+    // Check for invalid inputs and provide defaults
+    if ((usd === undefined || isNaN(usd)) && (sui === undefined || isNaN(sui))) {
+      console.log('CurrencyDisplay: both usd and sui values are invalid, defaulting to 0');
+      usd = 0;
+      sui = 0;
+    }
+    
+    // Calculate values based on which parameter is provided
+    let calculatedSui: number;
+    let calculatedUsd: number;
+    
+    if (usd !== undefined && !isNaN(usd)) {
+      // If USD is provided and valid, calculate SUI based on current price
+      calculatedUsd = usd;
+      calculatedSui = suiPrice > 0 ? usd / suiPrice : 0;
+      console.log('CurrencyDisplay: using USD value to calculate SUI:', { 
+        usd: calculatedUsd, 
+        sui: calculatedSui,
+        suiPrice 
+      });
+    } else if (sui !== undefined && !isNaN(sui)) {
+      // If SUI is provided and valid, calculate USD
+      calculatedSui = sui;
+      calculatedUsd = sui * suiPrice;
+      console.log('CurrencyDisplay: using SUI value to calculate USD:', { 
+        sui: calculatedSui, 
+        usd: calculatedUsd,
+        suiPrice 
+      });
+    } else {
+      // Default values if neither is provided or values are invalid
+      calculatedSui = 0;
+      calculatedUsd = 0;
+      console.log('CurrencyDisplay: using default values:', { 
+        sui: calculatedSui, 
+        usd: calculatedUsd 
+      });
+    }
+    
     // Format SUI with appropriate precision
-    const formattedSui = sui >= 1000 
-      ? sui.toLocaleString(undefined, { maximumFractionDigits: 0 }) 
-      : sui >= 100 
-        ? sui.toFixed(1) 
-        : sui.toFixed(2);
+    const formattedSui = calculatedSui >= 1000 
+      ? calculatedSui.toLocaleString(undefined, { maximumFractionDigits: 0 }) 
+      : calculatedSui >= 100 
+        ? calculatedSui.toFixed(1) 
+        : calculatedSui.toFixed(2);
     
     return (
       <Tooltip.Provider>
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
             <span className={`cursor-help ${className} flex items-center`}>
-              {formattedSui} SUI <span className="text-gray-500 mr-1">({formatUSD(usd)})</span>
+              {formatUSD(calculatedUsd)} <span className="text-gray-500 mr-1">({formattedSui} SUI)</span>
               {isPriceStale && <span title="Using cached price">⚠️</span>}
             </span>
           </Tooltip.Trigger>
@@ -897,6 +1083,34 @@ export default function Dashboard() {
         </Tooltip.Root>
       </Tooltip.Provider>
     );
+  };
+
+  const handleJoinCircle = (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    // Simple validation - make sure the input isn't empty
+    if (!circleIdInput.trim()) {
+      toast.error('Please enter a valid circle ID');
+      return;
+    }
+    
+    // Extract just the ID if the user pasted the full URL
+    let circleId = circleIdInput.trim();
+    
+    // If the input contains a URL path, extract just the circle ID
+    if (circleId.includes('/circle/')) {
+      const match = circleId.match(/\/circle\/([^\/]+)/);
+      if (match && match[1]) {
+        circleId = match[1];
+      }
+    }
+    
+    // Navigate to the join page for this circle
+    router.push(`/circle/${circleId}/join`);
+    
+    // Reset the input and close the dialog
+    setCircleIdInput('');
+    setIsJoinDialogOpen(false);
   };
 
   if (!isAuthenticated || !account) {
@@ -940,7 +1154,7 @@ export default function Dashboard() {
                   stroke="currentColor" 
                   viewBox="0 0 24 24"
                 >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
                 Logout
               </button>
@@ -1040,26 +1254,36 @@ export default function Dashboard() {
             <div className="bg-white shadow rounded-lg p-6">
               <div className="flex justify-between items-center mb-6">
                 <h3 className="text-lg font-medium text-gray-900">My Njangi Circles</h3>
-                <button
-                  type="button"
-                  onClick={() => router.push('/create-circle')}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
-                >
-                  <svg
-                    className="w-5 h-5 mr-2"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
+                <div className="flex space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsJoinDialogOpen(true)}
+                    className="inline-flex items-center px-4 py-2 border border-blue-600 text-sm font-medium rounded-md shadow-sm text-blue-600 bg-white hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
                   >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M12 4v16m8-8H4"
-                    />
-                  </svg>
-                  Create New Circle
-                </button>
+                    <Users className="w-5 h-5 mr-2" />
+                    Join Circle
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => router.push('/create-circle')}
+                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
+                  >
+                    <svg
+                      className="w-5 h-5 mr-2"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M12 4v16m8-8H4"
+                      />
+                    </svg>
+                    Create New Circle
+                  </button>
+                </div>
               </div>
 
               {loading ? (
@@ -1160,7 +1384,7 @@ export default function Dashboard() {
                                   <div>
                                     <p className="text-gray-500">Contribution</p>
                                     <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay sui={circle.contributionAmount} />
+                                      <CurrencyDisplay usd={circle.contributionAmountUsd} />
                                     </p>
                                   </div>
                                   <div>
@@ -1170,7 +1394,7 @@ export default function Dashboard() {
                                   <div>
                                     <p className="text-gray-500">Security Deposit</p>
                                     <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay sui={circle.securityDeposit} />
+                                      <CurrencyDisplay usd={circle.securityDepositUsd} />
                                     </p>
                                   </div>
                                   <div>
@@ -1319,7 +1543,7 @@ export default function Dashboard() {
                                   <div>
                                     <p className="text-gray-500">Contribution</p>
                                     <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay sui={circle.contributionAmount} />
+                                      <CurrencyDisplay usd={circle.contributionAmountUsd} />
                                     </p>
                                   </div>
                                   <div>
@@ -1329,7 +1553,7 @@ export default function Dashboard() {
                                   <div>
                                     <p className="text-gray-500">Security Deposit</p>
                                     <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay sui={circle.securityDeposit} />
+                                      <CurrencyDisplay usd={circle.securityDepositUsd} />
                                     </p>
                                   </div>
                                   <div>
@@ -1478,7 +1702,7 @@ export default function Dashboard() {
                                   <div>
                                     <p className="text-gray-500">Contribution</p>
                                     <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay sui={circle.contributionAmount} />
+                                      <CurrencyDisplay usd={circle.contributionAmountUsd} />
                                     </p>
                                   </div>
                                   <div>
@@ -1488,7 +1712,7 @@ export default function Dashboard() {
                                   <div>
                                     <p className="text-gray-500">Security Deposit</p>
                                     <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay sui={circle.securityDeposit} />
+                                      <CurrencyDisplay usd={circle.securityDepositUsd} />
                                     </p>
                                   </div>
                                   <div>
@@ -1633,7 +1857,15 @@ export default function Dashboard() {
                 </svg>
                 <h3 className="mt-2 text-sm font-medium text-gray-900">No circles yet</h3>
                 <p className="mt-1 text-sm text-gray-500">Get started by creating a new circle or joining an existing one.</p>
-                <div className="mt-6">
+                <div className="mt-6 flex justify-center space-x-4">
+                  <button
+                    type="button"
+                    onClick={() => setIsJoinDialogOpen(true)}
+                    className="inline-flex items-center justify-center p-3 rounded-full text-blue-600 bg-white border border-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
+                    title="Join Existing Circle"
+                  >
+                    <Users className="w-6 h-6" />
+                  </button>
                   <button
                     type="button"
                     onClick={() => router.push('/create-circle')}
@@ -1661,6 +1893,58 @@ export default function Dashboard() {
           </div>
         </div>
       </main>
+      
+      {/* Join Circle Dialog */}
+      <Dialog.Root open={isJoinDialogOpen} onOpenChange={setIsJoinDialogOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/30" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-lg p-6 w-full max-w-md focus:outline-none">
+            <div className="flex justify-between items-center mb-4">
+              <Dialog.Title className="text-lg font-medium text-gray-900">
+                Join a Circle
+              </Dialog.Title>
+              <Dialog.Close className="text-gray-400 hover:text-gray-500">
+                <X className="w-5 h-5" />
+              </Dialog.Close>
+            </div>
+            
+            <form onSubmit={handleJoinCircle}>
+              <div className="mt-2">
+                <label htmlFor="circleId" className="block text-sm font-medium text-gray-700 mb-1">
+                  Enter Circle ID or Invite Link
+                </label>
+                <input
+                  type="text"
+                  id="circleId"
+                  value={circleIdInput}
+                  onChange={(e) => setCircleIdInput(e.target.value)}
+                  placeholder="0x123... or full invite link"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                />
+                <p className="mt-1 text-sm text-gray-500">
+                  Paste the circle ID or the complete invite link to join
+                </p>
+              </div>
+              
+              <div className="mt-6 flex justify-end space-x-3">
+                <button
+                  type="button"
+                  onClick={() => setIsJoinDialogOpen(false)}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                >
+                  Join Circle
+                </button>
+              </div>
+            </form>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 } 
