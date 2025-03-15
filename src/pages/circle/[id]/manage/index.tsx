@@ -4,9 +4,11 @@ import { useAuth } from '../../../../contexts/AuthContext';
 import Image from 'next/image';
 import { SuiClient } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
-import { ArrowLeft, Copy, Link } from 'lucide-react';
+import { ArrowLeft, Copy, Link, Check, X } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
+import joinRequestService from '../../../../services/join-request-service';
+import { JoinRequest } from '../../../../services/database-service';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -62,6 +64,7 @@ export default function ManageCircle() {
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+  const [pendingRequests, setPendingRequests] = useState<JoinRequest[]>([]);
   const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
   const [copiedId, setCopiedId] = useState(false);
 
@@ -92,6 +95,13 @@ export default function ManageCircle() {
     };
     fetchPrice();
   }, []);
+
+  useEffect(() => {
+    // Fetch pending join requests from database
+    if (id && userAddress) {
+      fetchPendingRequests();
+    }
+  }, [id, userAddress]);
 
   const fetchCircleDetails = async () => {
     if (!id) return;
@@ -134,7 +144,7 @@ export default function ManageCircle() {
         if (fields.usd_amounts) {
           if (typeof fields.usd_amounts === 'object') {
             // It could have a nested 'fields' property or direct properties
-            let usdAmounts: { 
+            const usdAmountsObj = fields.usd_amounts as {
               contribution_amount?: string; 
               security_deposit?: string; 
               target_amount?: string;
@@ -143,7 +153,10 @@ export default function ManageCircle() {
                 security_deposit: string;
                 target_amount?: string;
               }
-            } = fields.usd_amounts as any;
+            };
+            
+            // Create a local variable we can modify
+            let usdAmounts = usdAmountsObj;
             
             // If it has a fields property, use that
             if (usdAmounts.fields) {
@@ -210,6 +223,62 @@ export default function ManageCircle() {
       toast.error('Could not load circle information');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchPendingRequests = async () => {
+    try {
+      // Get pending requests from the service
+      if (!id) return;
+      const requests = await joinRequestService.getPendingRequestsByCircleId(id as string);
+      setPendingRequests(requests);
+    } catch (error: unknown) {
+      console.error('Error fetching pending requests:', error);
+      toast.error('Failed to load join requests');
+    }
+  };
+
+  const handleJoinRequest = async (request: JoinRequest, approve: boolean) => {
+    try {
+      // Update request status using the service
+      const success = await joinRequestService.updateJoinRequestStatus(
+        request.circleId,
+        request.userAddress,
+        approve ? 'approved' : 'rejected'
+      );
+      
+      if (success) {
+        // Update UI to remove the request
+        setPendingRequests(prev => 
+          prev.filter(req => 
+            !(req.circleId === request.circleId && 
+              req.userAddress === request.userAddress)
+          )
+        );
+        
+        // If approved, add to members list
+        if (approve) {
+          // In a real implementation, we would add the user to the circle on the blockchain
+          // For now, we'll just update the UI
+          setMembers(prev => [
+            ...prev,
+            {
+              address: request.userAddress,
+              joinDate: Date.now(),
+              status: 'active'
+            }
+          ]);
+          
+          toast.success(`Approved ${shortenAddress(request.userAddress)} to join the circle`);
+        } else {
+          toast.success(`Rejected join request from ${shortenAddress(request.userAddress)}`);
+        }
+      } else {
+        toast.error('Failed to process join request');
+      }
+    } catch (error: unknown) {
+      console.error('Error handling join request:', error);
+      toast.error('Failed to process join request');
     }
   };
 
@@ -535,6 +604,61 @@ export default function ManageCircle() {
                       </button>
                     </div>
                   </div>
+                  
+                  {/* Pending Join Requests Section */}
+                  {pendingRequests.length > 0 && (
+                    <div className="mt-8">
+                      <h3 className="text-lg font-medium text-gray-900 mb-4">Pending Join Requests</h3>
+                      <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
+                        <table className="min-w-full divide-y divide-gray-300">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">
+                                User
+                              </th>
+                              <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                                Requested On
+                              </th>
+                              <th scope="col" className="relative py-3.5 pl-3 pr-4 sm:pr-6">
+                                <span className="sr-only">Actions</span>
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-200 bg-white">
+                            {pendingRequests.map((request) => (
+                              <tr key={`${request.circleId}-${request.userAddress}`}>
+                                <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm sm:pl-6">
+                                  <div className="font-medium text-gray-900">{request.userName || 'Unknown User'}</div>
+                                  <div className="text-gray-500">{shortenAddress(request.userAddress)}</div>
+                                </td>
+                                <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                                  {formatDate(request.requestDate)}
+                                </td>
+                                <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
+                                  <div className="flex justify-end space-x-3">
+                                    <button
+                                      onClick={() => handleJoinRequest(request, true)}
+                                      className="text-green-600 hover:text-green-800 flex items-center"
+                                    >
+                                      <Check className="w-4 h-4 mr-1" />
+                                      Approve
+                                    </button>
+                                    <button
+                                      onClick={() => handleJoinRequest(request, false)}
+                                      className="text-red-600 hover:text-red-800 flex items-center"
+                                    >
+                                      <X className="w-4 h-4 mr-1" />
+                                      Reject
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
                   
                   {/* Circle Management Actions */}
                   <div className="pt-6 border-t border-gray-200">

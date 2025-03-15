@@ -4,8 +4,9 @@ import { useAuth } from '../../../../contexts/AuthContext';
 import Image from 'next/image';
 import { SuiClient } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, AlertCircle } from 'lucide-react';
 import { priceService } from '../../../../services/price-service';
+import joinRequestService from '../../../../services/join-request-service';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -58,6 +59,7 @@ export default function JoinCircle() {
   const [circle, setCircle] = useState<Circle | null>(null);
   const [isJoining, setIsJoining] = useState(false);
   const [isMember, setIsMember] = useState(false);
+  const [requestSent, setRequestSent] = useState(false);
   const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
 
   useEffect(() => {
@@ -89,6 +91,13 @@ export default function JoinCircle() {
     // Fetch circle details when ID is available
     if (id && userAddress) {
       fetchCircleDetails();
+    }
+  }, [id, userAddress]);
+
+  useEffect(() => {
+    // Check if this user already has a pending request for this circle
+    if (id && userAddress) {
+      checkPendingRequest();
     }
   }, [id, userAddress]);
 
@@ -132,7 +141,7 @@ export default function JoinCircle() {
         if (fields.usd_amounts) {
           if (typeof fields.usd_amounts === 'object') {
             // It could have a nested 'fields' property or direct properties
-            let usdAmounts: { 
+            const usdAmountsObj = fields.usd_amounts as {
               contribution_amount?: string; 
               security_deposit?: string; 
               target_amount?: string;
@@ -141,7 +150,10 @@ export default function JoinCircle() {
                 security_deposit: string;
                 target_amount?: string;
               }
-            } = fields.usd_amounts as any;
+            };
+            
+            // Create a local variable we can modify
+            let usdAmounts = usdAmountsObj;
             
             // If it has a fields property, use that
             if (usdAmounts.fields) {
@@ -201,16 +213,41 @@ export default function JoinCircle() {
     }
   };
 
+  const checkPendingRequest = async () => {
+    if (!id || !userAddress) return;
+    
+    try {
+      // Check if this user has a pending request for this circle using the service
+      const hasRequest = await joinRequestService.checkPendingRequest(id as string, userAddress);
+      setRequestSent(hasRequest);
+    } catch (error: unknown) {
+      console.error('Error checking pending requests:', error);
+    }
+  };
+
   const handleJoinCircle = async () => {
     if (!circle || !userAddress) return;
     
     setIsJoining(true);
     try {
-      toast.success('This page is under construction! Join functionality coming soon.');
-      // Implementation will go here in the future
-    } catch (error) {
-      console.error('Error joining circle:', error);
-      toast.error('Failed to join the circle');
+      // Send join request using the service
+      const result = await joinRequestService.createJoinRequest(
+        circle.id,
+        circle.name,
+        userAddress,
+        account?.name || 'Unknown User'
+      );
+      
+      if (result) {
+        // Update UI to show request was sent
+        setRequestSent(true);
+        toast.success('Your request to join has been sent to the admin!');
+      } else {
+        toast.error('Failed to send join request');
+      }
+    } catch (error: unknown) {
+      console.error('Error sending join request:', error);
+      toast.error('Failed to send join request');
     } finally {
       setIsJoining(false);
     }
@@ -387,13 +424,26 @@ export default function JoinCircle() {
                       </p>
                     </div>
                     
-                    <button
-                      onClick={handleJoinCircle}
-                      disabled={isJoining || isMember}
-                      className={`w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${(isJoining || isMember) ? 'opacity-70 cursor-not-allowed' : ''}`}
-                    >
-                      {isJoining ? 'Processing...' : isMember ? 'Already a Member' : 'Join Circle'}
-                    </button>
+                    {requestSent ? (
+                      <div className="bg-blue-50 p-4 rounded-md mb-6 flex items-start">
+                        <AlertCircle className="w-5 h-5 text-blue-500 mr-2 flex-shrink-0 mt-0.5" />
+                        <div>
+                          <h4 className="text-sm font-medium text-blue-800">Request Sent</h4>
+                          <p className="text-sm text-blue-700 mt-1">
+                            Your request to join this circle has been sent to the admin. 
+                            You&apos;ll be notified when your request is approved.
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={handleJoinCircle}
+                        disabled={isJoining || isMember || requestSent}
+                        className={`w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${(isJoining || isMember || requestSent) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                      >
+                        {isJoining ? 'Sending Request...' : isMember ? 'Already a Member' : 'Request to Join Circle'}
+                      </button>
+                    )}
                   </div>
                 </div>
               ) : (
