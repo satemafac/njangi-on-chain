@@ -270,3 +270,46 @@ This file is required for the zkLogin services to function properly as reference
 
 ## License
 [Specify License]
+
+## Join Request System
+
+The application includes a feature for users to request to join circles. These requests are stored in a SQLite database and managed through a set of API endpoints.
+
+### Database Structure
+
+Join requests are stored in a SQLite database (`join-requests.db`) in the project root. The table structure is:
+
+```sql
+CREATE TABLE IF NOT EXISTS join_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  circleId TEXT NOT NULL,
+  circleName TEXT NOT NULL,
+  userAddress TEXT NOT NULL,
+  userName TEXT NOT NULL,
+  requestDate INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending', 'approved', 'rejected')),
+  UNIQUE(circleId, userAddress)
+)
+```
+
+### API Endpoints
+
+The following API endpoints are available for managing join requests:
+
+- `POST /api/join-requests/create` - Create a new join request
+- `GET /api/join-requests/[circleId]` - Get all pending requests for a circle
+- `PUT /api/join-requests/[circleId]/update` - Update a join request status
+- `GET /api/join-requests/user/[userAddress]` - Get all requests for a user
+
+### Client-Side Integration
+
+The frontend uses the `join-request-service.ts` service to interact with these API endpoints. This service provides methods for creating, fetching, and updating join requests.
+
+### Usage Flow
+
+1. User visits a circle's join page
+2. User clicks "Request to Join Circle"
+3. Request is stored in the SQLite database
+4. Admin views pending requests on the manage circle page
+5. Admin approves or rejects requests
+6. Database is updated with the new status
