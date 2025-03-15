@@ -273,11 +273,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           // Validate monetary values before transaction
           const contribution = BigInt(circleData.contribution_amount);
+          const contributionUsd = BigInt(circleData.contribution_amount_usd || 0);
           const deposit = BigInt(circleData.security_deposit);
+          const depositUsd = BigInt(circleData.security_deposit_usd || 0);
           
           if (contribution <= BigInt(0) || deposit <= BigInt(0)) {
             return res.status(400).json({ 
               error: 'Invalid amount: Contribution and security deposit must be greater than 0'
+            });
+          }
+
+          if (contributionUsd <= BigInt(0) || depositUsd <= BigInt(0)) {
+            return res.status(400).json({ 
+              error: 'Invalid USD amount: Contribution and security deposit USD values must be greater than 0'
             });
           }
 
@@ -317,7 +325,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           console.log('Transaction parameters:', {
             circleType: circleData.circle_type,
             contributionAmount: circleData.contribution_amount.toString(),
+            contributionAmountUsd: circleData.contribution_amount_usd.toString(),
             securityDeposit: circleData.security_deposit.toString(),
+            securityDepositUsd: circleData.security_deposit_usd.toString(),
             maxMembers: circleData.max_members
           });
 
@@ -329,11 +339,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 txb.setSender(session.account!.userAddr);
                 
                 txb.moveCall({
-                  target: `0x1b0b1638cd469c6b92b82e8b7d01a572206cc7ff889c029297aa836bb1e5e363::njangi_circle::create_circle`,
+                  target: `0x564e7ab05c090f329b98b43ab1d7302df1c38c99e38684aac8201c453f9cd0d4::njangi_circle::create_circle`,
                   arguments: [
                     txb.pure.string(circleData.name),
                     txb.pure.u64(contribution),
+                    txb.pure.u64(contributionUsd),
                     txb.pure.u64(deposit),
+                    txb.pure.u64(depositUsd),
                     txb.pure.u64(circleData.cycle_length),
                     txb.pure.u64(circleData.cycle_day),
                     txb.pure.u8(circleData.circle_type),
@@ -342,6 +354,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     txb.pure.vector('bool', circleData.penalty_rules),
                     txb.pure.option('u8', circleData.goal_type?.some),
                     txb.pure.option('u64', circleData.target_amount?.some ? BigInt(circleData.target_amount.some) : null),
+                    txb.pure.option('u64', circleData.target_amount_usd?.some ? BigInt(circleData.target_amount_usd.some) : null),
                     txb.pure.option('u64', circleData.target_date?.some ? BigInt(circleData.target_date.some) : null),
                     txb.pure.bool(circleData.verification_required),
                     txb.object("0x6")  // Clock object
@@ -544,11 +557,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 txb.setSender(session.account!.userAddr);
                 
                 // Log transaction creation details
-                console.log(`Building moveCall with package: 0x1b0b1638cd469c6b92b82e8b7d01a572206cc7ff889c029297aa836bb1e5e363, module: njangi_circle, function: delete_circle`);
+                console.log(`Building moveCall with package: 0x564e7ab05c090f329b98b43ab1d7302df1c38c99e38684aac8201c453f9cd0d4, module: njangi_circle, function: delete_circle`);
                 console.log(`Using circleId: ${circleId} as object argument`);
                 
                 txb.moveCall({
-                  target: `0x1b0b1638cd469c6b92b82e8b7d01a572206cc7ff889c029297aa836bb1e5e363::njangi_circle::delete_circle`,
+                  target: `0x564e7ab05c090f329b98b43ab1d7302df1c38c99e38684aac8201c453f9cd0d4::njangi_circle::delete_circle`,
                   arguments: [
                     txb.object(circleId)
                   ]

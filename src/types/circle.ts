@@ -6,12 +6,14 @@ export type WeekDay = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday'
 export interface CircleFormData {
   name: string;
   contributionAmount: number;
+  contributionAmountUSD: number;
   cycleLength: CycleLength;
   cycleDay: number | WeekDay;
   cycleType: CycleType;
   rotationStyle?: RotationStyle;
   numberOfMembers: number;
   securityDeposit: number;
+  securityDepositUSD: number;
   penaltyRules: {
     latePayment: boolean;
     missedMeeting: boolean;
@@ -19,6 +21,7 @@ export interface CircleFormData {
   smartGoal?: {
     goalType: 'amount' | 'date';
     targetAmount?: number;
+    targetAmountUSD?: number;
     targetDate?: string;
     verificationRequired: boolean;
   };

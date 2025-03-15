@@ -5,6 +5,7 @@ import Image from 'next/image';
 import { SuiClient } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
 import { ArrowLeft } from 'lucide-react';
+import { priceService } from '../../../../services/price-service';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -12,6 +13,7 @@ interface Circle {
   name: string;
   admin: string;
   contributionAmount: number;
+  contributionAmountUsd: number;
 }
 
 // Define a type for the fields from the SUI object
@@ -19,7 +21,19 @@ interface CircleFields {
   name: string;
   admin: string;
   contribution_amount: string;
-  [key: string]: string | number | boolean | object;
+  contribution_amount_usd?: string; // Now optional since it might be in usd_amounts
+  usd_amounts: {
+    fields?: {
+      contribution_amount: string;
+      security_deposit?: string;
+      target_amount?: string;
+    }
+    contribution_amount?: string;
+    security_deposit?: string;
+    target_amount?: string;
+  } | string; // Can be an object with fields or a string reference
+  // Use unknown for index signature as a safer alternative to any
+  [key: string]: string | number | boolean | object | unknown;
 }
 
 export default function ContributeToCircle() {
@@ -28,8 +42,8 @@ export default function ContributeToCircle() {
   const { isAuthenticated, userAddress, account } = useAuth();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
-  const [contributionAmount, setContributionAmount] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -37,6 +51,24 @@ export default function ContributeToCircle() {
       return;
     }
   }, [isAuthenticated, router]);
+
+  useEffect(() => {
+    // Fetch the current SUI price
+    const fetchSuiPrice = async () => {
+      try {
+        const price = await priceService.getSUIPrice();
+        if (price && !isNaN(price) && price > 0) {
+          setSuiPrice(price);
+          console.log('Fetched SUI price:', price);
+        }
+      } catch (error) {
+        console.error('Error fetching SUI price:', error);
+        // Keep using default price
+      }
+    };
+    
+    fetchSuiPrice();
+  }, []);
 
   useEffect(() => {
     // Fetch circle details when ID is available
@@ -60,13 +92,47 @@ export default function ContributeToCircle() {
       
       if (objectData.data?.content && 'fields' in objectData.data.content) {
         const fields = objectData.data.content.fields as CircleFields;
+        
+        console.log('Circle data from blockchain:', fields);
+        
+        // Get the USD contribution amount
+        let contributionAmountUsd = 0;
+        
+        // Check for nested usd_amounts structure (this is the new structure)
+        if (fields.usd_amounts) {
+          if (typeof fields.usd_amounts === 'object') {
+            // It could have a nested 'fields' property or direct properties
+            let usdAmounts = fields.usd_amounts as any;
+            
+            // If it has a fields property, use that
+            if (usdAmounts.fields) {
+              usdAmounts = usdAmounts.fields;
+            }
+            
+            if (usdAmounts.contribution_amount) {
+              contributionAmountUsd = Number(usdAmounts.contribution_amount) / 100;
+              console.log('Using nested contribution amount USD:', contributionAmountUsd);
+            }
+          } else if (typeof fields.usd_amounts === 'string') {
+            // If it's a string reference to another object, we need to handle differently
+            console.log('usd_amounts is a string reference:', fields.usd_amounts);
+          }
+        } 
+        // Fallback to direct fields if nested structure not available or empty
+        else if (fields.contribution_amount_usd) {
+          contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
+          console.log('Using direct contribution amount USD:', contributionAmountUsd);
+        }
+        
+        console.log('Final USD value:', contributionAmountUsd);
+        
         setCircle({
           id: id as string,
           name: fields.name,
           contributionAmount: Number(fields.contribution_amount) / 1e9,
+          contributionAmountUsd: contributionAmountUsd,
           admin: fields.admin,
         });
-        setContributionAmount(Number(fields.contribution_amount) / 1e9);
       }
     } catch (error) {
       console.error('Error fetching circle details:', error);
@@ -89,6 +155,41 @@ export default function ContributeToCircle() {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  // Helper function to format USD amounts
+  const formatUSD = (amount: number): string => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }).format(amount);
+  };
+
+  // Helper component to display both USD and SUI amounts
+  const CurrencyDisplay = ({ usd, sui, className = '' }: { usd?: number, sui?: number, className?: string }) => {
+    // Ensure we have valid numbers
+    const usdValue = usd !== undefined && !isNaN(usd) ? usd : 0;
+    const suiValue = sui !== undefined && !isNaN(sui) ? sui : 0;
+    
+    // Calculate the equivalent value if only one currency is provided
+    let displaySuiValue = suiValue;
+    if (usdValue && !suiValue && suiPrice > 0) {
+      displaySuiValue = usdValue / suiPrice;
+    }
+    
+    // Format the SUI value based on its magnitude
+    const formattedSui = displaySuiValue >= 1000 
+      ? displaySuiValue.toLocaleString('en-US', { maximumFractionDigits: 0 })
+      : displaySuiValue.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    
+    return (
+      <div className={`flex flex-col ${className}`}>
+        <span className="font-medium">{formatUSD(usdValue)}</span>
+        <span className="text-sm text-gray-500">{formattedSui} SUI</span>
+      </div>
+    );
   };
 
   if (!isAuthenticated || !account) {
@@ -148,7 +249,9 @@ export default function ContributeToCircle() {
                   
                   <div>
                     <p className="text-sm text-gray-500">Contribution Amount</p>
-                    <p className="text-lg font-medium">{contributionAmount} SUI</p>
+                    <p className="text-lg font-medium">
+                      <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} />
+                    </p>
                   </div>
                   
                   <div className="pt-4">
@@ -159,6 +262,9 @@ export default function ContributeToCircle() {
                     >
                       {isProcessing ? 'Processing...' : 'Contribute Now'}
                     </button>
+                    <p className="mt-2 text-xs text-center text-gray-500">
+                      By contributing, you agree to the circle&apos;s terms and conditions.
+                    </p>
                   </div>
                 </div>
               ) : (

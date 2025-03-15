@@ -124,10 +124,12 @@ const prepareCircleCreationData = (formData: CircleFormData, suiPrice: number) =
     ? { some: BigInt(Math.round(formData.smartGoal.targetAmount * 1e9)) }
     : { none: null };
 
-  // Store the USD values
-  const contribution_amount_usd = formData.contributionAmountUSD;
-  const security_deposit_usd = formData.securityDepositUSD;
-  const target_amount_usd = formData.smartGoal?.targetAmountUSD || 0;
+  // Store the USD values (converted to cents)
+  const contribution_amount_usd = Math.floor(formData.contributionAmountUSD * 100);
+  const security_deposit_usd = Math.floor(formData.securityDepositUSD * 100);
+  const target_amount_usd = formData.smartGoal?.targetAmountUSD 
+    ? Math.floor(formData.smartGoal.targetAmountUSD * 100) 
+    : 0;
     
   // Convert target date to Option<u64> (Unix timestamp in seconds)
   const target_date = formData.smartGoal?.goalType === 'date' && formData.smartGoal.targetDate
