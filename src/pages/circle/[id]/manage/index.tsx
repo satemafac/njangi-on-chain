@@ -67,6 +67,7 @@ export default function ManageCircle() {
   const [pendingRequests, setPendingRequests] = useState<JoinRequest[]>([]);
   const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
   const [copiedId, setCopiedId] = useState(false);
+  const [isApproving, setIsApproving] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -238,8 +239,80 @@ export default function ManageCircle() {
     }
   };
 
+  // Call the admin_approve_member function on the blockchain
+  const callAdminApproveMember = async (circleId: string, memberAddress: string): Promise<boolean> => {
+    try {
+      setIsApproving(true);
+      
+      // Show a toast notification that we're working on a blockchain transaction
+      toast.loading('Preparing blockchain transaction...', { id: 'blockchain-tx' });
+      
+      if (!account) {
+        toast.error('Not logged in. Please login first', { id: 'blockchain-tx' });
+        return false;
+      }
+      
+      // Call the API directly like in create-circle.tsx
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'adminApproveMember',
+          account,
+          circleId,
+          memberAddress
+        }),
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        if (response.status === 401) {
+          toast.error('Authentication failed. Please login again.', { id: 'blockchain-tx' });
+          return false;
+        }
+        
+        // Display specific error messages from the server
+        const errorMsg = result.error || 'Transaction failed.';
+        console.error('Server error details:', result);
+        toast.error(errorMsg, { id: 'blockchain-tx' });
+        throw new Error(errorMsg);
+      }
+      
+      // Update toast on success
+      toast.success('Successfully approved member on blockchain', { id: 'blockchain-tx' });
+      console.log(`Successfully approved member. Transaction digest: ${result.digest}`);
+      
+      return true;
+    } catch (error: unknown) {
+      console.error('Error approving member on blockchain:', error);
+      
+      // Make sure we don't show duplicate error toasts
+      if (error instanceof Error && !error.message.includes('Transaction failed')) {
+        toast.error(error instanceof Error ? error.message : 'Failed to approve member on blockchain', { id: 'blockchain-tx' });
+      }
+      
+      return false;
+    } finally {
+      setIsApproving(false);
+    }
+  };
+
   const handleJoinRequest = async (request: JoinRequest, approve: boolean) => {
     try {
+      // If approving, first try to approve on blockchain
+      if (approve) {
+        const blockchainSuccess = await callAdminApproveMember(
+          request.circleId,
+          request.userAddress
+        );
+        
+        if (!blockchainSuccess) {
+          toast.error('Failed to approve member on blockchain. Please try again.');
+          return;
+        }
+      }
+      
       // Update request status using the service
       const success = await joinRequestService.updateJoinRequestStatus(
         request.circleId,
@@ -258,8 +331,6 @@ export default function ManageCircle() {
         
         // If approved, add to members list
         if (approve) {
-          // In a real implementation, we would add the user to the circle on the blockchain
-          // For now, we'll just update the UI
           setMembers(prev => [
             ...prev,
             {
@@ -268,6 +339,14 @@ export default function ManageCircle() {
               status: 'active'
             }
           ]);
+          
+          // Also update current members count
+          if (circle) {
+            setCircle({
+              ...circle,
+              currentMembers: circle.currentMembers + 1
+            });
+          }
           
           toast.success(`Approved ${shortenAddress(request.userAddress)} to join the circle`);
         } else {
@@ -638,14 +717,23 @@ export default function ManageCircle() {
                                   <div className="flex justify-end space-x-3">
                                     <button
                                       onClick={() => handleJoinRequest(request, true)}
-                                      className="text-green-600 hover:text-green-800 flex items-center"
+                                      className={`${isApproving ? 'opacity-50 cursor-not-allowed' : ''} text-green-600 hover:text-green-800 flex items-center`}
+                                      disabled={isApproving}
                                     >
-                                      <Check className="w-4 h-4 mr-1" />
+                                      {isApproving ? (
+                                        <svg className="animate-spin h-4 w-4 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                      ) : (
+                                        <Check className="w-4 h-4 mr-1" />
+                                      )}
                                       Approve
                                     </button>
                                     <button
                                       onClick={() => handleJoinRequest(request, false)}
                                       className="text-red-600 hover:text-red-800 flex items-center"
+                                      disabled={isApproving}
                                     >
                                       <X className="w-4 h-4 mr-1" />
                                       Reject

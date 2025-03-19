@@ -339,7 +339,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 txb.setSender(session.account!.userAddr);
                 
                 txb.moveCall({
-                  target: `0x564e7ab05c090f329b98b43ab1d7302df1c38c99e38684aac8201c453f9cd0d4::njangi_circle::create_circle`,
+                  target: `0xaf572e4479bb18e1e501ec18d766909789a636ebee2b27fae2a228355b84512b::njangi_circle::create_circle`,
                   arguments: [
                     txb.pure.string(circleData.name),
                     txb.pure.u64(contribution),
@@ -557,11 +557,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 txb.setSender(session.account!.userAddr);
                 
                 // Log transaction creation details
-                console.log(`Building moveCall with package: 0x564e7ab05c090f329b98b43ab1d7302df1c38c99e38684aac8201c453f9cd0d4, module: njangi_circle, function: delete_circle`);
+                console.log(`Building moveCall with package: 0xaf572e4479bb18e1e501ec18d766909789a636ebee2b27fae2a228355b84512b, module: njangi_circle, function: delete_circle`);
                 console.log(`Using circleId: ${circleId} as object argument`);
                 
                 txb.moveCall({
-                  target: `0x564e7ab05c090f329b98b43ab1d7302df1c38c99e38684aac8201c453f9cd0d4::njangi_circle::delete_circle`,
+                  target: `0xaf572e4479bb18e1e501ec18d766909789a636ebee2b27fae2a228355b84512b::njangi_circle::delete_circle`,
                   arguments: [
                     txb.object(circleId)
                   ]
@@ -660,6 +660,132 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             requireRelogin: false
           });
         }
+
+      case 'adminApproveMember':
+        try {
+          if (!account) {
+            return res.status(400).json({ error: 'Account data is required' });
+          }
+
+          if (!req.body.circleId || !req.body.memberAddress) {
+            return res.status(400).json({ error: 'Circle ID and member address are required' });
+          }
+
+          // Validate the session
+          try {
+            if (!sessionId) {
+              throw new Error('No session ID provided');
+            }
+            // Just validate the session without storing the result
+            validateSession(sessionId, 'sendTransaction');
+          } catch (validationError) {
+            console.error('Session validation failed:', validationError);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: validationError instanceof Error ? validationError.message : 'Session validation failed',
+              requireRelogin: true
+            });
+          }
+
+          try {
+            // Create a transaction for admin_approve_member
+            const txb = new Transaction();
+            
+            // Add the admin_approve_member call
+            txb.moveCall({
+              target: `0xaf572e4479bb18e1e501ec18d766909789a636ebee2b27fae2a228355b84512b::njangi_circle::admin_approve_member`,
+              arguments: [
+                txb.object(req.body.circleId),
+                txb.pure.address(req.body.memberAddress),
+                txb.pure.option('u64', null), // Position option - pass None/null for default position
+                txb.object('0x6'), // Clock object
+              ]
+            });
+
+            // Execute the transaction with zkLogin signature
+            const txResult = await instance.sendTransaction(
+              account,
+              (txBlock) => {
+                console.log(`Building moveCall for admin_approve_member on circle: ${req.body.circleId}, member: ${req.body.memberAddress}`);
+                // Transfer the prepared call to the new transaction block
+                txBlock.moveCall({
+                  target: `0xaf572e4479bb18e1e501ec18d766909789a636ebee2b27fae2a228355b84512b::njangi_circle::admin_approve_member`,
+                  arguments: [
+                    txBlock.object(req.body.circleId),
+                    txBlock.pure.address(req.body.memberAddress),
+                    txBlock.pure.option('u64', null), // Position option - pass None/null for default position
+                    txBlock.object('0x6'), // Clock object
+                  ]
+                });
+              },
+              { gasBudget: 100000000 } // Increase gas budget for approval operation
+            );
+            
+            console.log('Admin approve member transaction successful:', txResult);
+            return res.status(200).json({ 
+              digest: txResult.digest,
+              status: txResult.status,
+              gasUsed: txResult.gasUsed
+            });
+          } catch (txError) {
+            console.error('Admin approve member transaction error:', txError);
+            console.error('Error type:', typeof txError);
+            console.error('Error message:', txError instanceof Error ? txError.message : String(txError));
+            console.error('Error stack:', txError instanceof Error ? txError.stack : 'No stack trace');
+            
+            // Check if the error is related to proof verification
+            if (txError instanceof Error && 
+                (txError.message.includes('proof verify failed') ||
+                 txError.message.includes('Session expired') ||
+                 txError.message.includes('re-authenticate'))) {
+              
+              // Clear the session for authentication errors
+              if (sessionId) {
+                sessions.delete(sessionId);
+              }
+              clearSessionCookie(res);
+              
+              return res.status(401).json({
+                error: 'Your session has expired. Please login again.',
+                requireRelogin: true
+              });
+            }
+            
+            // Check for specific contract errors
+            if (txError instanceof Error) {
+              if (txError.message.includes('ENotCircleAdmin')) {
+                return res.status(400).json({ 
+                  error: 'Cannot approve: Only the circle admin can approve new members',
+                  requireRelogin: false
+                });
+              } else if (txError.message.includes('EMemberAlreadyActive')) {
+                return res.status(400).json({ 
+                  error: 'Member is already active in this circle',
+                  requireRelogin: false
+                });
+              } else if (txError.message.includes('ECircleIsFull')) {
+                return res.status(400).json({ 
+                  error: 'Cannot approve: Circle has reached maximum member capacity',
+                  requireRelogin: false
+                });
+              }
+            }
+            
+            // For other errors, keep the session but return error with more detail
+            return res.status(500).json({ 
+              error: txError instanceof Error ? txError.message : 'Failed to execute transaction',
+              details: txError instanceof Error ? txError.stack : String(txError),
+              requireRelogin: false
+            });
+          }
+        } catch (err) {
+          console.error('Admin approve member error:', err);
+          return res.status(500).json({ 
+            error: err instanceof Error ? err.message : 'Failed to process admin approve member request',
+            requireRelogin: false
+          });
+        }
+        break;
 
       default:
         return res.status(400).json({ error: 'Invalid action' });

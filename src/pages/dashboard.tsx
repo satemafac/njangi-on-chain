@@ -232,7 +232,7 @@ export default function Dashboard() {
       try {
         createdCircles = await client.queryEvents({
           query: {
-            MoveEventType: `0x564e7ab05c090f329b98b43ab1d7302df1c38c99e38684aac8201c453f9cd0d4::njangi_circle::CircleCreated`
+            MoveEventType: `0xaf572e4479bb18e1e501ec18d766909789a636ebee2b27fae2a228355b84512b::njangi_circle::CircleCreated`
           },
           order: 'descending',
           limit: 50, // Limit to 50 most recent circles
@@ -249,7 +249,7 @@ export default function Dashboard() {
       try {
         joinedCircles = await client.queryEvents({
           query: {
-            MoveEventType: `0x564e7ab05c090f329b98b43ab1d7302df1c38c99e38684aac8201c453f9cd0d4::njangi_circle::MemberJoined`
+            MoveEventType: `0xaf572e4479bb18e1e501ec18d766909789a636ebee2b27fae2a228355b84512b::njangi_circle::MemberJoined`
           },
           order: 'descending',
           limit: 100, // Limit to 100 most recent joins
@@ -789,7 +789,7 @@ export default function Dashboard() {
     console.log("Available wallet methods:", Object.keys(wallet));
     
     // Updated package ID to the newly published contract
-    const packageId = "0x564e7ab05c090f329b98b43ab1d7302df1c38c99e38684aac8201c453f9cd0d4";
+    const packageId = "0xaf572e4479bb18e1e501ec18d766909789a636ebee2b27fae2a228355b84512b";
     console.log("Using packageId:", packageId);
     
     setIsDeleting(circleId);
