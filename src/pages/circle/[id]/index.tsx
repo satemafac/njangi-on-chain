@@ -79,7 +79,9 @@ export default function CircleDetails() {
     const fetchPrice = async () => {
       try {
         const price = await priceService.getSUIPrice();
-        setSuiPrice(price);
+        if (price !== null) {
+          setSuiPrice(price);
+        }
       } catch (error) {
         console.error('Error fetching SUI price:', error);
         // Keep using the default price
@@ -114,7 +116,16 @@ export default function CircleDetails() {
         if (fields.usd_amounts) {
           if (typeof fields.usd_amounts === 'object') {
             // It could have a nested 'fields' property or direct properties
-            let usdAmounts = fields.usd_amounts as any;
+            let usdAmounts: {
+              fields?: {
+                contribution_amount: string;
+                security_deposit?: string;
+                target_amount?: string;
+              };
+              contribution_amount?: string;
+              security_deposit?: string;
+              target_amount?: string;
+            } = fields.usd_amounts;
             
             // If it has a fields property, use that
             if (usdAmounts.fields) {
@@ -174,14 +185,13 @@ export default function CircleDetails() {
     }
   };
 
-  const formatDate = (timestamp: number) => {
+  const formatDate = (timestamp: number, useLocalTime = false) => {
     if (!timestamp) return 'Not set';
     return new Date(timestamp).toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
+      timeZone: useLocalTime ? undefined : 'UTC' // Use local timezone when requested
     });
   };
 

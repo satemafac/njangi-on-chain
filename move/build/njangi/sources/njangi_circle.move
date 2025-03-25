@@ -69,12 +69,10 @@ module njangi::njangi_circle {
     const MS_PER_DAY: u64 = 86_400_000;       // 24 * 60 * 60 * 1000
     const MS_PER_WEEK: u64 = 604_800_000;     // 7  * 24 * 60 * 60 * 1000
     const MS_PER_MONTH: u64 = 2_419_200_000;   // 28 * 24 * 60 * 60 * 1000
-    const MS_PER_QUARTER: u64 = 7_776_000_000; // 90 * 24 * 60 * 60 * 1000
 
     // Day constants (as u64 for consistent % operations)
     const DAYS_IN_WEEK: u64 = 7;
     const DAYS_IN_MONTH: u64 = 28;
-    const DAYS_IN_QUARTER: u64 = 90;
 
     // Member status constants
     const MEMBER_STATUS_ACTIVE: u8 = 0;
@@ -1079,56 +1077,161 @@ module njangi::njangi_circle {
     // Calculate next payout time based on cycle
     // ----------------------------------------------------------
     fun calculate_next_payout_time(cycle_length: u64, cycle_day: u64, current_time: u64): u64 {
+        // Extract year, month, day from the timestamp
+        let (year, month, day) = timestamp_to_date(current_time);
         let day_ms = get_day_ms(current_time);
-        let weekday = get_weekday(current_time);
         
         if (cycle_length == 0) {
-            // Weekly
+            // Weekly payouts - handle future tense
+            let weekday = get_weekday(current_time);
             let days_until = if (cycle_day > weekday) {
+                // Selected day is later this week
                 (cycle_day - weekday) as u64
             } else if (cycle_day < weekday || (cycle_day == weekday && day_ms > 0)) {
+                // Selected day is earlier than today, so schedule for next week
                 (DAYS_IN_WEEK - weekday + cycle_day) as u64
             } else {
+                // Selected day is today with no time elapsed
                 0
             };
             
             if (days_until == 0 && day_ms > 0) {
+                // We're on the selected day but with time elapsed, so schedule for next week
                 current_time + (MS_PER_WEEK - day_ms)
             } else {
+                // Schedule for the selected day this week (if it's in the future)
+                // or next week (if it's in the past)
                 current_time + (days_until * MS_PER_DAY) - day_ms
             }
         } else if (cycle_length == 1) {
-            // Monthly
-            let current_day = get_day_of_month(current_time);
-            let days_until = if (cycle_day > current_day) {
-                (cycle_day - current_day) as u64
-            } else if (cycle_day < current_day || (cycle_day == current_day && day_ms > 0)) {
-                (DAYS_IN_MONTH - current_day + cycle_day) as u64
-            } else {
-                0
+            // Monthly payouts - always set future date
+            let mut next_month = month;
+            let mut next_year = year;
+            
+            // If today's date is greater than the selected day, move to next month
+            // This ensures we get the next occurrence of the day
+            if (day > cycle_day || (day == cycle_day && day_ms > 0)) {
+                next_month = month + 1;
+                if (next_month > 12) {
+                    next_month = 1;
+                    next_year = year + 1;
+                };
             };
             
-            if (days_until == 0 && day_ms > 0) {
-                current_time + (MS_PER_MONTH - day_ms)
-            } else {
-                current_time + (days_until * MS_PER_DAY) - day_ms
-            }
+            // We know cycle_day is always ≤ 28 and all months have at least 28 days
+            // So we don't need to check month length anymore
+            
+            // Get timestamp for the target day of next month/current month (always in the future)
+            date_to_timestamp(next_year, next_month, cycle_day)
         } else {
-            // Quarterly
-            let current_day = get_day_of_quarter(current_time);
-            let days_until = if (cycle_day > current_day) {
-                (cycle_day - current_day) as u64
-            } else if (cycle_day < current_day || (cycle_day == current_day && day_ms > 0)) {
-                (DAYS_IN_QUARTER - current_day + cycle_day) as u64
-            } else {
-                0
+            // Quarterly payouts - always set future date
+            let mut next_month = month;
+            let mut next_year = year;
+            
+            // If today's date is greater than the selected day, move to next quarter
+            if (day > cycle_day || (day == cycle_day && day_ms > 0)) {
+                next_month = month + 3;
+                if (next_month > 12) {
+                    next_month = next_month - 12;
+                    next_year = year + 1;
+                };
             };
             
-            if (days_until == 0 && day_ms > 0) {
-                current_time + (MS_PER_QUARTER - day_ms)
+            // We know cycle_day is always ≤ 28 and all months have at least 28 days
+            // So we don't need to check month length anymore
+            
+            // Get timestamp for the target day of next quarter's month (always in the future)
+            date_to_timestamp(next_year, next_month, cycle_day)
+        }
+    }
+
+    // Convert timestamp to (year, month, day) tuple
+    #[allow(unused_assignment)]
+    fun timestamp_to_date(timestamp: u64): (u64, u64, u64) {
+        // Start with Unix epoch: January 1, 1970
+        let mut total_days = timestamp / MS_PER_DAY;
+        
+        // Initial values
+        let mut year = 1970;
+        let mut month = 1;
+        let mut day = 1; // This is used at the end, so keep it
+        
+        // Calculate year
+        while (true) {
+            let days_in_year = if (is_leap_year(year)) { 366 } else { 365 };
+            if (total_days >= days_in_year) {
+                total_days = total_days - days_in_year;
+                year = year + 1;
             } else {
-                current_time + (days_until * MS_PER_DAY) - day_ms
+                break
             }
+        };
+        
+        // Calculate month
+        let mut month_days = vector[31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        if (is_leap_year(year)) {
+            // Update February for leap year
+            let feb_days = vector::borrow_mut(&mut month_days, 1);
+            *feb_days = 29;
+        };
+        
+        while (month <= 12) {
+            let days_in_month = *vector::borrow(&month_days, month - 1);
+            if (total_days >= days_in_month) {
+                total_days = total_days - days_in_month;
+                month = month + 1;
+            } else {
+                break
+            }
+        };
+        
+        // Calculate day (1-based)
+        day = total_days + 1;
+        
+        (year, month, day)
+    }
+
+    // Convert (year, month, day) to timestamp
+    fun date_to_timestamp(year: u64, month: u64, day: u64): u64 {
+        // Calculate days since epoch (Jan 1, 1970)
+        let mut days: u64 = 0;
+        
+        // Add days for years
+        let mut y = 1970;
+        while (y < year) {
+            days = days + if (is_leap_year(y)) { 366 } else { 365 };
+            y = y + 1;
+        };
+        
+        // Add days for months
+        let mut month_days = vector[31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        if (is_leap_year(year)) {
+            // Update February for leap year
+            let feb_days = vector::borrow_mut(&mut month_days, 1);
+            *feb_days = 29;
+        };
+        
+        let mut m = 1;
+        while (m < month) {
+            days = days + *vector::borrow(&month_days, m - 1);
+            m = m + 1;
+        };
+        
+        // Add days of current month
+        days = days + (day - 1);
+        
+        // Convert to milliseconds
+        days * MS_PER_DAY
+    }
+
+    // Check if a year is a leap year
+    fun is_leap_year(year: u64): bool {
+        if (year % 400 == 0) {
+            true
+        } else if (year % 100 == 0) {
+            false
+        } else {
+            year % 4 == 0
         }
     }
 
@@ -1137,16 +1240,43 @@ module njangi::njangi_circle {
     }
 
     fun get_weekday(timestamp: u64): u64 {
-        // Align Monday = 0
+        // Align Monday = 0, Sunday = 6
+        // Jan 1, 1970 was a Thursday (3)
         ((timestamp / MS_PER_DAY + 3) % 7)
     }
 
     fun get_day_of_month(timestamp: u64): u64 {
-        ((timestamp / MS_PER_DAY) % DAYS_IN_MONTH + 1)
+        let (_, _, day) = timestamp_to_date(timestamp);
+        day
     }
 
     fun get_day_of_quarter(timestamp: u64): u64 {
-        ((timestamp / MS_PER_DAY) % DAYS_IN_QUARTER + 1)
+        let (year, month, day) = timestamp_to_date(timestamp);
+        
+        // Calculate first month of the quarter
+        let quarter_start_month = ((month - 1) / 3) * 3 + 1;
+        
+        // Calculate days since start of quarter
+        let mut days_since_quarter_start = 0;
+        
+        // Add days for full months
+        let mut month_days = vector[31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        if (is_leap_year(year)) {
+            // Update February for leap year
+            let feb_days = vector::borrow_mut(&mut month_days, 1);
+            *feb_days = 29;
+        };
+        
+        let mut m = quarter_start_month;
+        while (m < month) {
+            days_since_quarter_start = days_since_quarter_start + *vector::borrow(&month_days, m - 1);
+            m = m + 1;
+        };
+        
+        // Add days in current month
+        days_since_quarter_start = days_since_quarter_start + day;
+        
+        days_since_quarter_start
     }
 
     public fun is_valid_cycle_day(cycle_length: u64, cycle_day: u64): bool {

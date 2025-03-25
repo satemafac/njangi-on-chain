@@ -339,7 +339,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 txb.setSender(session.account!.userAddr);
                 
                 txb.moveCall({
-                  target: `0xaf572e4479bb18e1e501ec18d766909789a636ebee2b27fae2a228355b84512b::njangi_circle::create_circle`,
+                  target: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::create_circle`,
                   arguments: [
                     txb.pure.string(circleData.name),
                     txb.pure.u64(contribution),
@@ -557,11 +557,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 txb.setSender(session.account!.userAddr);
                 
                 // Log transaction creation details
-                console.log(`Building moveCall with package: 0xaf572e4479bb18e1e501ec18d766909789a636ebee2b27fae2a228355b84512b, module: njangi_circle, function: delete_circle`);
+                console.log(`Building moveCall with package: 0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8, module: njangi_circle, function: delete_circle`);
                 console.log(`Using circleId: ${circleId} as object argument`);
                 
                 txb.moveCall({
-                  target: `0xaf572e4479bb18e1e501ec18d766909789a636ebee2b27fae2a228355b84512b::njangi_circle::delete_circle`,
+                  target: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::delete_circle`,
                   arguments: [
                     txb.object(circleId)
                   ]
@@ -693,7 +693,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             
             // Add the admin_approve_member call
             txb.moveCall({
-              target: `0xaf572e4479bb18e1e501ec18d766909789a636ebee2b27fae2a228355b84512b::njangi_circle::admin_approve_member`,
+              target: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::admin_approve_member`,
               arguments: [
                 txb.object(req.body.circleId),
                 txb.pure.address(req.body.memberAddress),
@@ -709,7 +709,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 console.log(`Building moveCall for admin_approve_member on circle: ${req.body.circleId}, member: ${req.body.memberAddress}`);
                 // Transfer the prepared call to the new transaction block
                 txBlock.moveCall({
-                  target: `0xaf572e4479bb18e1e501ec18d766909789a636ebee2b27fae2a228355b84512b::njangi_circle::admin_approve_member`,
+                  target: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::admin_approve_member`,
                   arguments: [
                     txBlock.object(req.body.circleId),
                     txBlock.pure.address(req.body.memberAddress),
