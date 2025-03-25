@@ -88,7 +88,9 @@ export default function ManageCircle() {
     const fetchPrice = async () => {
       try {
         const price = await priceService.getSUIPrice();
-        setSuiPrice(price);
+        if (price !== null) {
+          setSuiPrice(price);
+        }
       } catch (error) {
         console.error('Error fetching SUI price:', error);
         // Keep using the default price
@@ -361,12 +363,13 @@ export default function ManageCircle() {
     }
   };
 
-  const formatDate = (timestamp: number) => {
+  const formatDate = (timestamp: number, useLocalTime = false) => {
     if (!timestamp) return 'Not set';
     return new Date(timestamp).toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
+      timeZone: useLocalTime ? undefined : 'UTC' // Use local timezone when requested
     });
   };
 
@@ -640,7 +643,7 @@ export default function ManageCircle() {
                                 </span>
                               </td>
                               <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                                {member.joinDate ? formatDate(member.joinDate) : 'Unknown'}
+                                {member.joinDate ? formatDate(member.joinDate, true) : 'Unknown'}
                               </td>
                               <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
                                 {/* No actions for admin */}
@@ -711,7 +714,7 @@ export default function ManageCircle() {
                                   <div className="text-gray-500">{shortenAddress(request.userAddress)}</div>
                                 </td>
                                 <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                                  {formatDate(request.requestDate)}
+                                  {formatDate(request.requestDate, true)}
                                 </td>
                                 <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
                                   <div className="flex justify-end space-x-3">

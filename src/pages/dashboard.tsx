@@ -8,7 +8,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import * as Dialog from '@radix-ui/react-dialog';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
-import { Eye, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link } from 'lucide-react';
+import { Eye, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle } from 'lucide-react';
 import { ZkLoginError } from '../services/zkLoginClient';
 
 // Circle type definition
@@ -137,7 +137,8 @@ export default function Dashboard() {
   const [circles, setCircles] = useState<Circle[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
+  const [suiPrice, setSuiPrice] = useState<number | null>(null); // Changed to null as default
+  const [isPriceLoading, setIsPriceLoading] = useState(true);
   const [deleteableCircles, setDeleteableCircles] = useState<Set<string>>(new Set());
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [isJoinDialogOpen, setIsJoinDialogOpen] = useState(false);
@@ -170,14 +171,16 @@ export default function Dashboard() {
   // Fetch SUI price - only on page load, no interval
   useEffect(() => {
     const fetchPrice = async () => {
+      setIsPriceLoading(true);
       try {
-        const price = await priceService.getSUIPrice();
+        // Force a refresh of the price to get the latest data
+        const price = await priceService.forceRefreshPrice();
         setSuiPrice(price);
         
-        // Show error toast if price fetching failed but we're using cached data
+        // Show error toast if price fetching failed
         if (priceService.getFetchStatus() === 'error') {
           toast.error(
-            'Unable to fetch latest SUI price. Using last known price.',
+            'Unable to fetch latest SUI price. Some values may not be displayed accurately.',
             {
               duration: 4000,
               position: 'bottom-center',
@@ -192,12 +195,13 @@ export default function Dashboard() {
         }
       } catch (error) {
         console.error('Error in price fetch flow:', error);
-        // Keep using the default price
+        setSuiPrice(null);
+      } finally {
+        setIsPriceLoading(false);
       }
     };
 
     fetchPrice();
-    // Removed interval to avoid excessive API calls
   }, []);
 
   // Use useCallback to memoize the fetchUserCircles function
@@ -232,7 +236,7 @@ export default function Dashboard() {
       try {
         createdCircles = await client.queryEvents({
           query: {
-            MoveEventType: `0xaf572e4479bb18e1e501ec18d766909789a636ebee2b27fae2a228355b84512b::njangi_circle::CircleCreated`
+            MoveEventType: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::CircleCreated`
           },
           order: 'descending',
           limit: 50, // Limit to 50 most recent circles
@@ -249,7 +253,7 @@ export default function Dashboard() {
       try {
         joinedCircles = await client.queryEvents({
           query: {
-            MoveEventType: `0xaf572e4479bb18e1e501ec18d766909789a636ebee2b27fae2a228355b84512b::njangi_circle::MemberJoined`
+            MoveEventType: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::MemberJoined`
           },
           order: 'descending',
           limit: 100, // Limit to 100 most recent joins
@@ -789,7 +793,7 @@ export default function Dashboard() {
     console.log("Available wallet methods:", Object.keys(wallet));
     
     // Updated package ID to the newly published contract
-    const packageId = "0xaf572e4479bb18e1e501ec18d766909789a636ebee2b27fae2a228355b84512b";
+    const packageId = "0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8";
     console.log("Using packageId:", packageId);
     
     setIsDeleting(circleId);
@@ -998,19 +1002,26 @@ export default function Dashboard() {
   const getOrdinalSuffix = (day: number) => {
     const suffixes = ['th', 'st', 'nd', 'rd'];
     const relevantDigits = (day % 100);
-    const suffix = (relevantDigits >= 11 && relevantDigits <= 13) ? 'th' : suffixes[Math.min(relevantDigits % 10, 3)];
+    
+    // Special case for 11, 12, 13
+    if (relevantDigits >= 11 && relevantDigits <= 13) {
+      return `${day}th day`;
+    }
+    
+    // For other numbers, use last digit
+    const lastDigit = day % 10;
+    const suffix = lastDigit >= 1 && lastDigit <= 3 ? suffixes[lastDigit] : suffixes[0];
     return `${day}${suffix} day`;
   };
 
   // Format timestamp to readable date
-  const formatDate = (timestamp: number) => {
+  const formatDate = (timestamp: number, useLocalTime = false) => {
     if (!timestamp) return 'Not set';
     return new Date(timestamp).toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
+      timeZone: useLocalTime ? undefined : 'UTC' // Use local timezone when requested
     });
   };
 
@@ -1024,9 +1035,9 @@ export default function Dashboard() {
 
   // Currency display component
   const CurrencyDisplay = ({ usd, sui, className = "" }: { usd?: number; sui?: number; className?: string }) => {
-    const isPriceStale = priceService.getFetchStatus() === 'error';
+    const isPriceUnavailable = suiPrice === null;
     
-    console.log('CurrencyDisplay inputs:', { usd, sui, suiPrice });
+    console.log('CurrencyDisplay inputs:', { usd, sui, suiPrice, isPriceUnavailable });
     
     // Check for invalid inputs and provide defaults
     if ((usd === undefined || isNaN(usd)) && (sui === undefined || isNaN(sui))) {
@@ -1036,13 +1047,13 @@ export default function Dashboard() {
     }
     
     // Calculate values based on which parameter is provided
-    let calculatedSui: number;
-    let calculatedUsd: number;
+    let calculatedSui: number | null = null;
+    let calculatedUsd: number | null = null;
     
     if (usd !== undefined && !isNaN(usd)) {
       // If USD is provided and valid, calculate SUI based on current price
       calculatedUsd = usd;
-      calculatedSui = suiPrice > 0 ? usd / suiPrice : 0;
+      calculatedSui = suiPrice !== null && suiPrice > 0 ? usd / suiPrice : null;
       console.log('CurrencyDisplay: using USD value to calculate SUI:', { 
         usd: calculatedUsd, 
         sui: calculatedSui,
@@ -1051,8 +1062,8 @@ export default function Dashboard() {
     } else if (sui !== undefined && !isNaN(sui)) {
       // If SUI is provided and valid, calculate USD
       calculatedSui = sui;
-      calculatedUsd = sui * suiPrice;
-      console.log('CurrencyDisplay: using SUI value to calculate USD:', { 
+      calculatedUsd = suiPrice !== null ? sui * suiPrice : null;
+      console.log('CurrencyDisplay: using SUI value to calculate SUI:', { 
         sui: calculatedSui, 
         usd: calculatedUsd,
         suiPrice 
@@ -1067,20 +1078,24 @@ export default function Dashboard() {
       });
     }
     
-    // Format SUI with appropriate precision
-    const formattedSui = calculatedSui >= 1000 
-      ? calculatedSui.toLocaleString(undefined, { maximumFractionDigits: 0 }) 
-      : calculatedSui >= 100 
-        ? calculatedSui.toFixed(1) 
-        : calculatedSui.toFixed(2);
+    // Format SUI with appropriate precision if available
+    const formattedSui = calculatedSui !== null ? (
+      calculatedSui >= 1000 
+        ? calculatedSui.toLocaleString(undefined, { maximumFractionDigits: 0 }) 
+        : calculatedSui >= 100 
+          ? calculatedSui.toFixed(1) 
+          : calculatedSui.toFixed(2)
+    ) : '—';
     
     return (
       <Tooltip.Provider>
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
             <span className={`cursor-help ${className} flex items-center`}>
-              {formatUSD(calculatedUsd)} <span className="text-gray-500 mr-1">({formattedSui} SUI)</span>
-              {isPriceStale && <span title="Using cached price">⚠️</span>}
+              {calculatedUsd !== null ? formatUSD(calculatedUsd) : '$—.—'} 
+              <span className="text-gray-500 mr-1">({formattedSui} SUI)</span>
+              {isPriceLoading && <RefreshCw size={14} className="animate-spin ml-1 text-blue-500" />}
+              {isPriceUnavailable && !isPriceLoading && <AlertCircle size={14} className="ml-1 text-amber-500" />}
             </span>
           </Tooltip.Trigger>
           <Tooltip.Portal>
@@ -1090,11 +1105,17 @@ export default function Dashboard() {
             >
               <div className="space-y-1">
                 <p>SUI Conversion Rate:</p>
-                <p>1 SUI = {formatUSD(suiPrice)}</p>
+                {suiPrice !== null ? (
+                  <p>1 SUI = {formatUSD(suiPrice)}</p>
+                ) : (
+                  <p className="text-amber-400">SUI price unavailable</p>
+                )}
                 <p className="text-xs text-gray-400">
-                  {isPriceStale 
-                    ? "Using cached price - service temporarily unavailable" 
-                    : "Updated price data from CoinGecko"}
+                  {isPriceLoading
+                    ? "Loading latest price data..."
+                    : isPriceUnavailable
+                      ? "Unable to fetch price data"
+                      : "Using latest price from CoinGecko"}
                 </p>
               </div>
               <Tooltip.Arrow className="fill-gray-900" />

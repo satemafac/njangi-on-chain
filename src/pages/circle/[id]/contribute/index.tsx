@@ -102,7 +102,16 @@ export default function ContributeToCircle() {
         if (fields.usd_amounts) {
           if (typeof fields.usd_amounts === 'object') {
             // It could have a nested 'fields' property or direct properties
-            let usdAmounts = fields.usd_amounts as any;
+            let usdAmounts: {
+              fields?: {
+                contribution_amount: string;
+                security_deposit?: string;
+                target_amount?: string;
+              };
+              contribution_amount?: string;
+              security_deposit?: string;
+              target_amount?: string;
+            } = fields.usd_amounts;
             
             // If it has a fields property, use that
             if (usdAmounts.fields) {
