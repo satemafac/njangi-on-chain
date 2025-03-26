@@ -9,6 +9,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
 import joinRequestService from '../../../../services/join-request-service';
 import { JoinRequest } from '../../../../services/database-service';
+import { PACKAGE_ID } from '../../../../services/circle-service';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -211,15 +212,131 @@ export default function ManageCircle() {
           nextPayoutTime: Number(fields.next_payout_time),
         });
         
-        // This would be a separate call to get members
-        // For now, just create a placeholder with the admin
-        setMembers([
+        // Fetch the circle creation event to get the actual creation timestamp
+        let creationTimestamp = fields.created_at ? Number(fields.created_at) : null;
+        
+        if (!creationTimestamp) {
+          // If created_at is not available in the object, try to find it from events
+          try {
+            // Look for CircleCreated event with this circle ID
+            const events = await client.queryEvents({
+              query: {
+                MoveEventType: `${PACKAGE_ID}::njangi_circle::CircleCreated`
+              },
+              limit: 100
+            });
+            
+            // Find the matching event for this circle
+            const creationEvent = events.data.find(event => {
+              if (event.parsedJson && typeof event.parsedJson === 'object') {
+                const eventJson = event.parsedJson as { circle_id?: string };
+                return eventJson.circle_id === id;
+              }
+              return false;
+            });
+            
+            if (creationEvent && creationEvent.timestampMs) {
+              // Use the event timestamp
+              creationTimestamp = Number(creationEvent.timestampMs);
+              console.log('Found creation timestamp from events:', creationTimestamp);
+            }
+          } catch (error) {
+            console.error('Error fetching circle creation event:', error);
+          }
+        } else {
+          console.log('Using created_at from object:', creationTimestamp);
+        }
+        
+        // If no timestamp was found, use a reasonable fallback
+        if (!creationTimestamp) {
+          // Just use current time as fallback if we couldn't determine the actual timestamp
+          creationTimestamp = Date.now();
+          console.log('Using fallback timestamp (current time):', creationTimestamp);
+        }
+        
+        // Initialize members list with admin
+        const membersList: Member[] = [
           {
             address: fields.admin,
-            joinDate: Date.now(), // This would be fetched from the chain
+            joinDate: creationTimestamp,
             status: 'active'
           }
-        ]);
+        ];
+        
+        // Fetch all MemberJoined and MemberApproved events for this circle
+        try {
+          // Fetch MemberJoined events
+          const joinedEvents = await client.queryEvents({
+            query: {
+              MoveEventType: `${PACKAGE_ID}::njangi_circle::MemberJoined`
+            },
+            limit: 100
+          });
+          
+          // Fetch MemberApproved events
+          const approvedEvents = await client.queryEvents({
+            query: {
+              MoveEventType: `${PACKAGE_ID}::njangi_circle::MemberApproved`
+            },
+            limit: 100
+          });
+          
+          console.log('Found MemberJoined events:', joinedEvents.data.length);
+          console.log('Found MemberApproved events:', approvedEvents.data.length);
+          
+          // Process joined events for this circle
+          const joinedMembersMap = new Map<string, { address: string, timestamp: number }>();
+          
+          // Add members from join events
+          for (const event of joinedEvents.data) {
+            if (event.parsedJson && typeof event.parsedJson === 'object') {
+              const eventJson = event.parsedJson as { circle_id?: string, member?: string };
+              
+              if (eventJson.circle_id === id && eventJson.member && event.timestampMs) {
+                const memberAddress = eventJson.member;
+                // Skip admin, already added
+                if (memberAddress !== fields.admin) {
+                  joinedMembersMap.set(memberAddress, {
+                    address: memberAddress,
+                    timestamp: Number(event.timestampMs)
+                  });
+                }
+              }
+            }
+          }
+          
+          // Add each non-admin member
+          joinedMembersMap.forEach((memberData) => {
+            if (memberData.address !== fields.admin) {
+              membersList.push({
+                address: memberData.address,
+                joinDate: memberData.timestamp,
+                status: 'active'
+              });
+            }
+          });
+          
+          console.log('Total members found:', membersList.length);
+        } catch (error) {
+          console.error('Error fetching member events:', error);
+        }
+        
+        // Update members state
+        setMembers(membersList);
+        
+        // Also update the circle object with the actual member count
+        if (membersList.length !== Number(fields.current_members)) {
+          console.log('Updating circle member count from', Number(fields.current_members), 'to', membersList.length);
+          setCircle(prevCircle => {
+            if (prevCircle) {
+              return {
+                ...prevCircle,
+                currentMembers: membersList.length
+              };
+            }
+            return prevCircle;
+          });
+        }
       }
     } catch (error) {
       console.error('Error fetching circle details:', error);
@@ -333,11 +450,14 @@ export default function ManageCircle() {
         
         // If approved, add to members list
         if (approve) {
+          // Use current timestamp from blockchain transaction for join date
+          const currentTimestamp = Date.now(); // Get the current time as a fallback
+          
           setMembers(prev => [
             ...prev,
             {
               address: request.userAddress,
-              joinDate: Date.now(),
+              joinDate: currentTimestamp, // We would ideally get this from the blockchain event
               status: 'active'
             }
           ]);
@@ -363,13 +483,20 @@ export default function ManageCircle() {
     }
   };
 
-  const formatDate = (timestamp: number, useLocalTime = false) => {
+  const formatDate = (timestamp: number) => {
     if (!timestamp) return 'Not set';
-    return new Date(timestamp).toLocaleDateString('en-US', {
+    
+    const date = new Date(timestamp);
+    
+    // For display purposes, always show in local timezone but format differently
+    return date.toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
-      timeZone: useLocalTime ? undefined : 'UTC' // Use local timezone when requested
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      timeZoneName: 'short'
     });
   };
 
@@ -602,7 +729,7 @@ export default function ManageCircle() {
                       
                       <div>
                         <p className="text-sm text-gray-500">Members</p>
-                        <p className="text-lg font-medium">{circle.currentMembers} / {circle.maxMembers}</p>
+                        <p className="text-lg font-medium">{members.length} / {circle.maxMembers}</p>
                       </div>
                     </div>
                   </div>
@@ -643,7 +770,7 @@ export default function ManageCircle() {
                                 </span>
                               </td>
                               <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                                {member.joinDate ? formatDate(member.joinDate, true) : 'Unknown'}
+                                {member.joinDate ? formatDate(member.joinDate) : 'Unknown'}
                               </td>
                               <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
                                 {/* No actions for admin */}
@@ -714,7 +841,7 @@ export default function ManageCircle() {
                                   <div className="text-gray-500">{shortenAddress(request.userAddress)}</div>
                                 </td>
                                 <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                                  {formatDate(request.requestDate, true)}
+                                  {formatDate(request.requestDate)}
                                 </td>
                                 <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
                                   <div className="flex justify-end space-x-3">

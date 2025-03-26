@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../contexts/AuthContext';
 import Image from 'next/image';
@@ -8,8 +8,10 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import * as Dialog from '@radix-ui/react-dialog';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
-import { Eye, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle } from 'lucide-react';
+import { Eye, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Bell } from 'lucide-react';
 import { ZkLoginError } from '../services/zkLoginClient';
+import joinRequestService from '../services/join-request-service';
+import { JoinRequest } from '../services/database-service';
 
 // Circle type definition
 interface Circle {
@@ -144,6 +146,22 @@ export default function Dashboard() {
   const [isJoinDialogOpen, setIsJoinDialogOpen] = useState(false);
   const [circleIdInput, setCircleIdInput] = useState('');
   const [copiedCircleId, setCopiedCircleId] = useState<string | null>(null);
+  const [pendingRequests, setPendingRequests] = useState<JoinRequest[]>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const notificationsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target as Node)) {
+        setShowNotifications(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -153,6 +171,33 @@ export default function Dashboard() {
       console.log("User is authenticated:", userAddress);
     }
   }, [isAuthenticated, router]);
+
+  // Fetch pending requests for all admin circles
+  const fetchPendingRequests = useCallback(async () => {
+    if (!circles || !userAddress) return;
+    
+    try {
+      // Get pending requests for all circles where user is admin
+      const adminCircles = circles.filter(c => c.isAdmin);
+      const allRequests: JoinRequest[] = [];
+      
+      for (const circle of adminCircles) {
+        const requests = await joinRequestService.getPendingRequestsByCircleId(circle.id);
+        allRequests.push(...requests);
+      }
+      
+      // Sort by request date, newest first
+      allRequests.sort((a, b) => b.requestDate - a.requestDate);
+      setPendingRequests(allRequests);
+    } catch (error) {
+      console.error('Error fetching pending requests:', error);
+    }
+  }, [circles, userAddress]);
+
+  // Fetch pending requests whenever circles change
+  useEffect(() => {
+    fetchPendingRequests();
+  }, [fetchPendingRequests]);
 
   useEffect(() => {
     const fetchBalance = async () => {
@@ -262,6 +307,100 @@ export default function Dashboard() {
         console.error('Error fetching joined circles:', error);
         joinedCircles = { data: [] }; // Provide default empty data
       }
+      
+      // Add a cache and optimize the getCircleMemberCount function
+      // Create a cache for member counts to avoid redundant blockchain queries
+      const memberCountCache = new Map<string, number>();
+      
+      const getCircleMemberCount = async (circleId: string, forceFetch: boolean = false): Promise<number> => {
+        // Check if we already have this count in cache and not forcing refresh
+        if (!forceFetch && memberCountCache.has(circleId)) {
+          console.log(`Using cached member count for circle ${circleId}: ${memberCountCache.get(circleId)}`);
+          return memberCountCache.get(circleId)!;
+        }
+        
+        if (forceFetch) {
+          console.log(`Force fetching fresh member count for circle ${circleId}`);
+        }
+        
+        try {
+          console.log(`Fetching member count for circle ${circleId}`);
+          
+          // Fetch all MemberJoined events and filter in code
+          const memberEvents = await client.queryEvents({
+            query: {
+              MoveEventType: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::MemberJoined`
+            },
+            limit: 1000 // Increased limit to capture more events
+          });
+          
+          console.log(`Found ${memberEvents.data.length} total MemberJoined events, filtering for circle ${circleId}`);
+          
+          // Count unique member addresses for this specific circle
+          const memberAddresses = new Set<string>();
+          
+          // Filter and log events for the specific circle
+          const circleEvents = memberEvents.data.filter(event => {
+            if (event.parsedJson && typeof event.parsedJson === 'object') {
+              const eventJson = event.parsedJson as { circle_id?: string };
+              return eventJson.circle_id === circleId;
+            }
+            return false;
+          });
+          
+          console.log(`Filtered down to ${circleEvents.length} events for circle ${circleId}`);
+          
+          // Process the filtered events
+          for (const event of circleEvents) {
+            if (event.parsedJson && typeof event.parsedJson === 'object') {
+              const eventJson = event.parsedJson as { circle_id?: string, member?: string };
+              
+              if (eventJson.member) {
+                memberAddresses.add(eventJson.member);
+                console.log(`Added member ${eventJson.member} to count`);
+              }
+            }
+          }
+          
+          // Get the circle to find the admin address
+          try {
+            const objectData = await client.getObject({
+              id: circleId,
+              options: { showContent: true }
+            });
+            
+            const content = objectData.data?.content;
+            if (content && 'fields' in content) {
+              const fields = content.fields as { admin?: string, name?: string };
+              if (fields.admin) {
+                // Add admin to the member count as they are a member too
+                memberAddresses.add(fields.admin);
+                console.log(`Added admin ${fields.admin} as member for circle ${circleId} (${fields.name || 'unnamed'})`);
+              }
+            }
+          } catch (err) {
+            console.error(`Error fetching admin for circle ${circleId}:`, err);
+          }
+          
+          // Get the final member list for debugging
+          console.log(`Final member list for circle ${circleId}:`, Array.from(memberAddresses));
+          
+          const count = memberAddresses.size;
+          console.log(`Final count: Found ${count} members for circle ${circleId}`);
+          
+          // Sanity check - ensure count is at least 1 for admin
+          const safeCount = count > 0 ? count : 1;
+          console.log(`Safe count (min 1): ${safeCount} members for circle ${circleId}`);
+          
+          // Cache the result
+          memberCountCache.set(circleId, safeCount);
+          
+          return safeCount;
+        } catch (error) {
+          console.error(`Error fetching member count for circle ${circleId}:`, error);
+          return 1; // Default to 1 (admin only) on error
+        }
+      };
       
       // Process both result sets
       const circleMap = new Map<string, Circle>();
@@ -391,6 +530,9 @@ export default function Dashboard() {
                 securityDepositUSD: securityDepositUsd
               });
               
+              // Get accurate member count from blockchain events
+              const actualMemberCount = await getCircleMemberCount(parsedEvent.circle_id);
+              
               circleMap.set(parsedEvent.circle_id, {
                 id: parsedEvent.circle_id,
                 name: fields.name,
@@ -402,7 +544,7 @@ export default function Dashboard() {
                 cycleLength: Number(fields.cycle_length),
                 cycleDay: Number(fields.cycle_day),
                 maxMembers: Number(fields.max_members),
-                currentMembers: Number(fields.current_members),
+                currentMembers: actualMemberCount, // Use actual member count
                 nextPayoutTime: Number(fields.next_payout_time),
                 memberStatus: 'active',
                 isAdmin: true
@@ -435,6 +577,9 @@ export default function Dashboard() {
               const contributionRaw = Number(parsedEvent.contribution_amount) / 1e9;
               const isUnreasonableAmount = contributionRaw > 1_000_000_000;
               
+              // Get accurate member count from blockchain events
+              const actualMemberCount = await getCircleMemberCount(parsedEvent.circle_id);
+              
               circleMap.set(parsedEvent.circle_id, {
                 id: parsedEvent.circle_id,
                 name: parsedEvent.name,
@@ -446,7 +591,7 @@ export default function Dashboard() {
                 cycleLength: Number(parsedEvent.cycle_length),
                 cycleDay: 0,
                 maxMembers: Number(parsedEvent.max_members),
-                currentMembers: 0,
+                currentMembers: actualMemberCount, // Use actual member count
                 nextPayoutTime: 0,
                 memberStatus: 'active',
                 isAdmin: parsedEvent.admin === userAddress
@@ -548,6 +693,9 @@ export default function Dashboard() {
                   securityDepositUSD: securityDepositUsd
                 });
                 
+                // Get accurate member count from blockchain events
+                const actualMemberCount = await getCircleMemberCount(parsedEvent.circle_id);
+                
                 circleMap.set(parsedEvent.circle_id, {
                   id: parsedEvent.circle_id,
                   name: fields.name,
@@ -559,7 +707,7 @@ export default function Dashboard() {
                   cycleLength: Number(fields.cycle_length),
                   cycleDay: Number(fields.cycle_day),
                   maxMembers: Number(fields.max_members),
-                  currentMembers: Number(fields.current_members),
+                  currentMembers: actualMemberCount, // Use actual member count
                   nextPayoutTime: Number(fields.next_payout_time),
                   memberStatus: 'active', // Default, will update if needed
                   isAdmin: fields.admin === userAddress
@@ -1190,20 +1338,112 @@ export default function Dashboard() {
               <h1 className="text-xl font-semibold text-blue-600">Njangi on-chain</h1>
             </div>
             <div className="flex items-center space-x-4">
-              <button
-                onClick={logout}
-                className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors duration-200"
-              >
-                <svg 
-                  className="w-4 h-4 mr-2" 
-                  fill="none" 
-                  stroke="currentColor" 
-                  viewBox="0 0 24 24"
+              {/* Notifications Panel */}
+              <div className="relative" ref={notificationsRef}>
+                <button
+                  onClick={() => setShowNotifications(!showNotifications)}
+                  className="relative p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors duration-200"
                 >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                Logout
-              </button>
+                  <Bell className="w-6 h-6" />
+                  {pendingRequests.length > 0 && (
+                    <span className="absolute top-0 right-0 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white transform translate-x-1/2 -translate-y-1/2 bg-red-600 rounded-full">
+                      {pendingRequests.length}
+                    </span>
+                  )}
+                </button>
+
+                {/* Notifications Dropdown */}
+                {showNotifications && (
+                  <div className="absolute right-0 mt-2 w-96 bg-white rounded-lg shadow-lg ring-1 ring-black ring-opacity-5 z-50">
+                    <div className="p-4 border-b border-gray-100">
+                      <h3 className="text-lg font-medium text-gray-900">Notifications</h3>
+                      <p className="text-sm text-gray-500">Join requests for your circles</p>
+                    </div>
+                    <div className="max-h-96 overflow-y-auto">
+                      {pendingRequests.length > 0 ? (
+                        <div className="divide-y divide-gray-100">
+                          {pendingRequests.map((request) => (
+                            <div key={`${request.circleId}-${request.userAddress}`} className="p-4 hover:bg-gray-50">
+                              <div className="flex items-start">
+                                <div className="flex-shrink-0">
+                                  <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center">
+                                    <Users className="h-4 w-4 text-blue-600" />
+                                  </div>
+                                </div>
+                                <div className="ml-4 flex-1">
+                                  <p className="text-sm font-medium text-gray-900">
+                                    New Join Request
+                                  </p>
+                                  <p className="text-sm text-gray-500 mt-1">
+                                    {request.userName || 'Unknown User'} wants to join {request.circleName}
+                                  </p>
+                                  <div className="mt-2 text-xs text-gray-500">
+                                    {new Date(request.requestDate).toLocaleDateString('en-US', {
+                                      year: 'numeric',
+                                      month: 'short',
+                                      day: 'numeric',
+                                      hour: '2-digit',
+                                      minute: '2-digit'
+                                    })}
+                                  </div>
+                                  <div className="mt-3 flex space-x-2">
+                                    <button
+                                      onClick={() => router.push(`/circle/${request.circleId}/manage`)}
+                                      className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-full shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                                    >
+                                      Review Request
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="p-4 text-center text-gray-500 text-sm">
+                          No pending join requests
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <Tooltip.Provider>
+                <Tooltip.Root>
+                  <Tooltip.Trigger asChild>
+                    <button
+                      onClick={logout}
+                      className="group relative inline-flex items-center justify-center px-4 py-2 bg-white border border-gray-200 rounded-full shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50 hover:border-red-100 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-all duration-200"
+                    >
+                      <span className="absolute inset-0 rounded-full bg-gradient-to-r from-red-50 to-red-50 opacity-0 group-hover:opacity-100 transition-opacity duration-200"></span>
+                      <svg 
+                        className="w-4 h-4 mr-2 text-gray-400 group-hover:text-red-500 transition-colors duration-200" 
+                        fill="none" 
+                        stroke="currentColor" 
+                        viewBox="0 0 24 24"
+                      >
+                        <path 
+                          strokeLinecap="round" 
+                          strokeLinejoin="round" 
+                          strokeWidth="2" 
+                          d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" 
+                        />
+                      </svg>
+                      <span className="relative">Sign Out</span>
+                    </button>
+                  </Tooltip.Trigger>
+                  <Tooltip.Portal>
+                    <Tooltip.Content
+                      className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                      sideOffset={5}
+                    >
+                      Sign out of your account
+                      <Tooltip.Arrow className="fill-gray-800" />
+                    </Tooltip.Content>
+                  </Tooltip.Portal>
+                </Tooltip.Root>
+              </Tooltip.Provider>
             </div>
           </div>
         </div>
