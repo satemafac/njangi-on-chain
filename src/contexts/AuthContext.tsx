@@ -34,6 +34,7 @@ interface AuthContextType {
   setIsAuthenticated: (value: boolean) => void;
   setError: (error: string) => void;
   resetIdleTimer: () => void;
+  activateCircle: (circleId: string) => Promise<string>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -181,6 +182,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const activateCircle = async (circleId: string): Promise<string> => {
+    if (!zkLogin) {
+      throw new Error('ZkLogin client not initialized');
+    }
+    
+    if (!account) {
+      throw new Error('User not authenticated');
+    }
+
+    try {
+      // Try to use zkLogin to make transaction
+      console.log(`Activating circle ${circleId} with zkLogin`);
+      const zkLoginClient = new ZkLoginClient();
+      const result = await zkLoginClient.activateCircle(account, circleId);
+      return result.digest;
+    } catch (error) {
+      console.error('Error activating circle:', error);
+      throw error;
+    }
+  };
+
   return (
     <AuthContext.Provider value={{ 
       account,
@@ -195,7 +217,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUserAddress,
       setIsAuthenticated,
       setError,
-      resetIdleTimer
+      resetIdleTimer,
+      activateCircle
     }}>
       {children}
     </AuthContext.Provider>

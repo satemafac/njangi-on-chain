@@ -5,6 +5,7 @@ import Image from 'next/image';
 import { SuiClient } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
 import { ArrowLeft } from 'lucide-react';
+import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
 
 // Define a proper Circle type to fix linter errors
@@ -176,28 +177,94 @@ export default function ContributeToCircle() {
     }).format(amount);
   };
 
-  // Helper component to display both USD and SUI amounts
+  // Currency display component
   const CurrencyDisplay = ({ usd, sui, className = '' }: { usd?: number, sui?: number, className?: string }) => {
-    // Ensure we have valid numbers
-    const usdValue = usd !== undefined && !isNaN(usd) ? usd : 0;
-    const suiValue = sui !== undefined && !isNaN(sui) ? sui : 0;
+    const isPriceUnavailable = suiPrice === null;
+    const isPriceStale = priceService.getFetchStatus() === 'error';
     
-    // Calculate the equivalent value if only one currency is provided
-    let displaySuiValue = suiValue;
-    if (usdValue && !suiValue && suiPrice > 0) {
-      displaySuiValue = usdValue / suiPrice;
+    console.log('CurrencyDisplay inputs:', { usd, sui, suiPrice, isPriceUnavailable });
+    
+    // Check for invalid inputs and provide defaults
+    if ((usd === undefined || isNaN(usd)) && (sui === undefined || isNaN(sui))) {
+      console.log('CurrencyDisplay: both usd and sui values are invalid, defaulting to 0');
+      usd = 0;
+      sui = 0;
     }
     
-    // Format the SUI value based on its magnitude
-    const formattedSui = displaySuiValue >= 1000 
-      ? displaySuiValue.toLocaleString('en-US', { maximumFractionDigits: 0 })
-      : displaySuiValue.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    // Calculate values based on which parameter is provided
+    let calculatedSui: number | null = null;
+    let calculatedUsd: number | null = null;
+    
+    if (usd !== undefined && !isNaN(usd)) {
+      // If USD is provided and valid, calculate SUI based on current price
+      calculatedUsd = usd;
+      calculatedSui = suiPrice !== null && suiPrice > 0 ? usd / suiPrice : null;
+      console.log('CurrencyDisplay: using USD value to calculate SUI:', { 
+        usd: calculatedUsd, 
+        sui: calculatedSui,
+        suiPrice 
+      });
+    } else if (sui !== undefined && !isNaN(sui)) {
+      // If SUI is provided and valid, calculate USD
+      calculatedSui = sui;
+      calculatedUsd = suiPrice !== null ? sui * suiPrice : null;
+      console.log('CurrencyDisplay: using SUI value to calculate SUI:', { 
+        sui: calculatedSui, 
+        usd: calculatedUsd,
+        suiPrice 
+      });
+    } else {
+      // Default values if neither is provided or values are invalid
+      calculatedSui = 0;
+      calculatedUsd = 0;
+      console.log('CurrencyDisplay: using default values:', { 
+        sui: calculatedSui, 
+        usd: calculatedUsd 
+      });
+    }
+    
+    // Format SUI with appropriate precision if available
+    const formattedSui = calculatedSui !== null ? (
+      calculatedSui >= 1000 
+        ? calculatedSui.toLocaleString(undefined, { maximumFractionDigits: 0 }) 
+        : calculatedSui >= 100 
+          ? calculatedSui.toFixed(1) 
+          : calculatedSui.toFixed(2)
+    ) : '—';
     
     return (
-      <div className={`flex flex-col ${className}`}>
-        <span className="font-medium">{formatUSD(usdValue)}</span>
-        <span className="text-sm text-gray-500">{formattedSui} SUI</span>
-      </div>
+      <Tooltip.Provider>
+        <Tooltip.Root>
+          <Tooltip.Trigger asChild>
+            <div className={`flex flex-col ${className} cursor-help`}>
+              <span className="font-medium">{calculatedUsd !== null ? formatUSD(calculatedUsd) : '$—.—'}</span>
+              <span className="text-sm text-gray-500">{formattedSui} SUI</span>
+              {isPriceStale && <span title="Using cached price" className="text-xs text-amber-500">⚠️ Cached price</span>}
+            </div>
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content
+              className="bg-gray-900 text-white px-3 py-2 rounded text-sm"
+              sideOffset={5}
+            >
+              <div className="space-y-1">
+                <p>SUI Conversion Rate:</p>
+                {suiPrice !== null ? (
+                  <p>1 SUI = {formatUSD(suiPrice)}</p>
+                ) : (
+                  <p className="text-amber-400">SUI price unavailable</p>
+                )}
+                <p className="text-xs text-gray-400">
+                  {isPriceStale 
+                    ? "Using cached price - service temporarily unavailable" 
+                    : "Updated price data from CoinGecko"}
+                </p>
+              </div>
+              <Tooltip.Arrow className="fill-gray-900" />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+      </Tooltip.Provider>
     );
   };
 
@@ -230,18 +297,19 @@ export default function ContributeToCircle() {
           <div className="mb-6">
             <button
               onClick={() => router.push('/dashboard')}
-              className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm text-sm text-gray-700 font-medium"
             >
-              <ArrowLeft className="w-4 h-4 mr-1" />
+              <ArrowLeft className="w-4 h-4" />
               Back to Dashboard
             </button>
           </div>
 
-          <div className="bg-white shadow rounded-lg overflow-hidden">
-            <div className="p-6 border-b border-gray-200">
-              <h2 className="text-xl font-semibold text-gray-900">
-                Contribute to Circle
+          <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100">
+            <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
+              <h2 className="text-2xl font-bold text-gray-900 mb-6">
+                {!loading && circle ? `Contribute to ${circle.name}` : 'Contribute to Circle'}
               </h2>
+              
               {loading ? (
                 <div className="py-8 flex justify-center">
                   <svg className="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -250,30 +318,48 @@ export default function ContributeToCircle() {
                   </svg>
                 </div>
               ) : circle ? (
-                <div className="py-4 space-y-6">
-                  <div>
-                    <p className="text-sm text-gray-500">Circle Name</p>
-                    <p className="text-lg font-medium">{circle.name}</p>
+                <div className="py-4 space-y-8">
+                  {/* Circle Details */}
+                  <div className="px-2">
+                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Details</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Circle Name</p>
+                        <p className="text-lg font-medium">{circle.name}</p>
+                      </div>
+                      
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
+                        <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} />
+                      </div>
+                    </div>
                   </div>
                   
-                  <div>
-                    <p className="text-sm text-gray-500">Contribution Amount</p>
-                    <p className="text-lg font-medium">
-                      <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} />
-                    </p>
-                  </div>
-                  
-                  <div className="pt-4">
-                    <button
-                      onClick={handleContribute}
-                      disabled={isProcessing}
-                      className={`w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${isProcessing ? 'opacity-70 cursor-not-allowed' : ''}`}
-                    >
-                      {isProcessing ? 'Processing...' : 'Contribute Now'}
-                    </button>
-                    <p className="mt-2 text-xs text-center text-gray-500">
-                      By contributing, you agree to the circle&apos;s terms and conditions.
-                    </p>
+                  {/* Contribution Form */}
+                  <div className="pt-6 border-t border-gray-200 px-2">
+                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Make Contribution</h3>
+                    <div className="bg-gray-50 p-6 rounded-lg shadow-sm">
+                      <div className="mb-6">
+                        <p className="text-sm text-gray-600 mb-2">You are about to contribute:</p>
+                        <div className="flex items-center">
+                          <span className="bg-blue-100 text-blue-800 text-xl font-semibold rounded-lg py-2 px-4">
+                            <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} />
+                          </span>
+                        </div>
+                      </div>
+                    
+                      <button
+                        onClick={handleContribute}
+                        disabled={isProcessing}
+                        className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all ${isProcessing ? 'opacity-70 cursor-not-allowed' : ''}`}
+                      >
+                        {isProcessing ? 'Processing...' : 'Contribute Now'}
+                      </button>
+                      
+                      <p className="mt-3 text-xs text-center text-gray-500">
+                        By contributing, you agree to the circle&apos;s terms and conditions.
+                      </p>
+                    </div>
                   </div>
                 </div>
               ) : (

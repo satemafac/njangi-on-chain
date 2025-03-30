@@ -29,6 +29,7 @@ interface Circle {
   nextPayoutTime: number;
   memberStatus: 'active' | 'suspended' | 'exited';
   isAdmin: boolean;
+  isActive: boolean;
 }
 
 // Type definitions for SUI event payloads
@@ -292,8 +293,6 @@ export default function Dashboard() {
       }
       
       // Step 2: Find circles this user has joined - using the correct filter structure
-      // Instead of trying to filter by sender directly, we'll fetch all MemberJoined events
-      // and filter them in our code
       let joinedCircles;
       try {
         joinedCircles = await client.queryEvents({
@@ -307,6 +306,34 @@ export default function Dashboard() {
         console.error('Error fetching joined circles:', error);
         joinedCircles = { data: [] }; // Provide default empty data
       }
+      
+      // Step 3: Fetch circle activation events
+      let activationEvents;
+      try {
+        activationEvents = await client.queryEvents({
+          query: {
+            MoveEventType: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::CircleActivated`
+          },
+          order: 'descending',
+          limit: 100, // Limit to 100 most recent activations
+        });
+        console.log('Found activation events:', activationEvents.data.length);
+      } catch (error) {
+        console.error('Error fetching activation events:', error);
+        activationEvents = { data: [] }; // Provide default empty data
+      }
+      
+      // Create a set of activated circle IDs for quick lookup
+      const activatedCircleIds = new Set<string>();
+      for (const event of activationEvents.data) {
+        if (event.parsedJson && typeof event.parsedJson === 'object') {
+          const eventJson = event.parsedJson as { circle_id?: string };
+          if (eventJson.circle_id) {
+            activatedCircleIds.add(eventJson.circle_id);
+          }
+        }
+      }
+      console.log('Activated circle IDs:', Array.from(activatedCircleIds));
       
       // Add a cache and optimize the getCircleMemberCount function
       // Create a cache for member counts to avoid redundant blockchain queries
@@ -533,6 +560,9 @@ export default function Dashboard() {
               // Get accurate member count from blockchain events
               const actualMemberCount = await getCircleMemberCount(parsedEvent.circle_id);
               
+              // Check if the circle has been activated
+              const isActive = activatedCircleIds.has(parsedEvent.circle_id);
+              
               circleMap.set(parsedEvent.circle_id, {
                 id: parsedEvent.circle_id,
                 name: fields.name,
@@ -547,7 +577,8 @@ export default function Dashboard() {
                 currentMembers: actualMemberCount, // Use actual member count
                 nextPayoutTime: Number(fields.next_payout_time),
                 memberStatus: 'active',
-                isAdmin: true
+                isAdmin: true,
+                isActive: isActive
               });
             } else {
               // Handle case where we can't get full content but can use event data
@@ -580,6 +611,9 @@ export default function Dashboard() {
               // Get accurate member count from blockchain events
               const actualMemberCount = await getCircleMemberCount(parsedEvent.circle_id);
               
+              // Check if the circle has been activated
+              const isActive = activatedCircleIds.has(parsedEvent.circle_id);
+              
               circleMap.set(parsedEvent.circle_id, {
                 id: parsedEvent.circle_id,
                 name: parsedEvent.name,
@@ -594,7 +628,8 @@ export default function Dashboard() {
                 currentMembers: actualMemberCount, // Use actual member count
                 nextPayoutTime: 0,
                 memberStatus: 'active',
-                isAdmin: parsedEvent.admin === userAddress
+                isAdmin: parsedEvent.admin === userAddress,
+                isActive: isActive
               });
             }
           } catch (error) {
@@ -696,6 +731,9 @@ export default function Dashboard() {
                 // Get accurate member count from blockchain events
                 const actualMemberCount = await getCircleMemberCount(parsedEvent.circle_id);
                 
+                // Check if the circle has been activated
+                const isActive = activatedCircleIds.has(parsedEvent.circle_id);
+                
                 circleMap.set(parsedEvent.circle_id, {
                   id: parsedEvent.circle_id,
                   name: fields.name,
@@ -710,7 +748,8 @@ export default function Dashboard() {
                   currentMembers: actualMemberCount, // Use actual member count
                   nextPayoutTime: Number(fields.next_payout_time),
                   memberStatus: 'active', // Default, will update if needed
-                  isAdmin: fields.admin === userAddress
+                  isAdmin: fields.admin === userAddress,
+                  isActive: isActive
                 });
               }
             } catch (err) {
@@ -1737,7 +1776,9 @@ export default function Dashboard() {
                                   </div>
                                   <div>
                                     <p className="text-gray-500">Next Payout</p>
-                                    <p className="font-medium text-gray-900">{formatDate(circle.nextPayoutTime)}</p>
+                                    <p className="font-medium text-gray-900">
+                                      {circle.isActive ? formatDate(circle.nextPayoutTime) : "Activate Circle to Start"}
+                                    </p>
                                   </div>
                                 </div>
                               </div>
@@ -1946,7 +1987,9 @@ export default function Dashboard() {
                                   </div>
                                   <div>
                                     <p className="text-gray-500">Next Payout</p>
-                                    <p className="font-medium text-gray-900">{formatDate(circle.nextPayoutTime)}</p>
+                                    <p className="font-medium text-gray-900">
+                                      {circle.isActive ? formatDate(circle.nextPayoutTime) : "Activate Circle to Start"}
+                                    </p>
                                   </div>
                                 </div>
                               </div>
@@ -2132,7 +2175,9 @@ export default function Dashboard() {
                                   </div>
                                   <div>
                                     <p className="text-gray-500">Next Payout</p>
-                                    <p className="font-medium text-gray-900">{formatDate(circle.nextPayoutTime)}</p>
+                                    <p className="font-medium text-gray-900">
+                                      {circle.isActive ? formatDate(circle.nextPayoutTime) : "Activate Circle to Start"}
+                                    </p>
                                   </div>
                                 </div>
                               </div>
