@@ -290,4 +290,86 @@ export class ZkLoginClient {
       throw new ZkLoginError(errorMessage, false);
     }
   }
+
+  public async activateCircle(account: AccountData, circleId: string): Promise<{ digest: string; requireRelogin?: boolean }> {
+    try {
+      // Log key information for debugging
+      console.log('ZkLoginClient: Activating circle with account:', {
+        address: account.userAddr,
+        circleId: circleId,
+        hasProofPoints: !!account.zkProofs?.proofPoints,
+        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
+        hasHeaderBase64: !!account.zkProofs?.headerBase64,
+        maxEpoch: account.maxEpoch
+      });
+
+      // Verify the account has valid proof data
+      if (!account.zkProofs?.proofPoints || 
+          !account.zkProofs.issBase64Details || 
+          !account.zkProofs.headerBase64) {
+        throw new ZkLoginError(
+          'Missing required authentication data. Please login again.',
+          true
+        );
+      }
+
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'activateCircle', 
+          account,
+          circleId
+        })
+      });
+      
+      // Try to parse the response even if status is not OK
+      let responseData;
+      try {
+        responseData = await response.json();
+        console.log('ZkLoginClient: Circle activation response:', 
+          response.status, response.statusText, responseData);
+      } catch (parseError) {
+        console.error('Failed to parse response:', parseError);
+        throw new ZkLoginError(`Failed to parse server response: ${response.statusText}`, false);
+      }
+      
+      // Handle authentication errors (401)
+      if (response.status === 401) {
+        console.error('Authentication error:', responseData);
+        throw new ZkLoginError(
+          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
+          true
+        );
+      }
+      
+      // Handle server errors (500)
+      if (!response.ok) {
+        console.error('Activation failed:', responseData);
+        throw new ZkLoginError(
+          responseData.error || 'Activation failed',
+          !!responseData.requireRelogin
+        );
+      }
+      
+      // Even for successful response, check if we have a digest
+      if (!responseData.digest) {
+        throw new ZkLoginError('No transaction digest received from server', false);
+      }
+      
+      console.log('Activation succeeded:', responseData);
+      return {
+        digest: responseData.digest,
+        requireRelogin: responseData.requireRelogin
+      };
+    } catch (error) {
+      console.error('Activation error in client:', error);
+      // Rethrow ZkLoginError as is
+      if (error instanceof ZkLoginError) {
+        throw error;
+      }
+      // Otherwise wrap in a new error
+      throw new ZkLoginError(String(error), false);
+    }
+  }
 } 

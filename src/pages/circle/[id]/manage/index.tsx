@@ -4,7 +4,7 @@ import { useAuth } from '../../../../contexts/AuthContext';
 import Image from 'next/image';
 import { SuiClient } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
-import { ArrowLeft, Copy, Link, Check, X } from 'lucide-react';
+import { ArrowLeft, Copy, Link, Check, X, Pause } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
 import joinRequestService from '../../../../services/join-request-service';
@@ -25,6 +25,7 @@ interface Circle {
   maxMembers: number;
   currentMembers: number;
   nextPayoutTime: number;
+  isActive: boolean;
 }
 
 // Define a type for the fields from the SUI object
@@ -57,6 +58,10 @@ interface Member {
   joinDate?: number;
   status: 'active' | 'suspended' | 'exited';
 }
+
+// Constants for time calculations
+const MS_PER_DAY = 86400000; // 24 * 60 * 60 * 1000
+const DAYS_IN_WEEK = 7;
 
 export default function ManageCircle() {
   const router = useRouter();
@@ -210,6 +215,7 @@ export default function ManageCircle() {
           maxMembers: Number(fields.max_members),
           currentMembers: Number(fields.current_members),
           nextPayoutTime: Number(fields.next_payout_time),
+          isActive: false,
         });
         
         // Fetch the circle creation event to get the actual creation timestamp
@@ -483,6 +489,7 @@ export default function ManageCircle() {
     }
   };
 
+  // Format timestamp to readable date
   const formatDate = (timestamp: number) => {
     if (!timestamp) return 'Not set';
     
@@ -498,6 +505,131 @@ export default function ManageCircle() {
       second: '2-digit',
       timeZoneName: 'short'
     });
+  };
+
+  // Format date more cleanly for next payout (to match dashboard)
+  const formatNextPayoutDate = (timestamp: number) => {
+    if (!timestamp) return 'Not set';
+    
+    const date = new Date(timestamp);
+    
+    return date.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'UTC'
+    });
+  };
+
+  // Calculate potential next payout date for non-activated circles
+  const calculatePotentialNextPayoutDate = (cycleLength: number, cycleDay: number): number => {
+    const currentTime = Date.now();
+    
+    // Extract year, month, day from the current time
+    const currentDate = new Date(currentTime);
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth(); // JS months are 0-indexed (0-11)
+    const day = currentDate.getDate();
+    
+    // Get time of day in ms (since midnight)
+    const dayMs = currentTime % MS_PER_DAY;
+    
+    // Get current weekday (0-6, with 0 being Monday in our system)
+    const weekday = (currentDate.getDay() + 6) % 7; // Convert Sunday=0 to Monday=0
+    
+    console.log('Calculating potential payout date:', {
+      currentDate: currentDate.toISOString(),
+      year, month: month + 1, day,
+      cycleLength, cycleDay,
+      weekday
+    });
+    
+    if (cycleLength === 0) {
+      // Weekly payouts
+      let daysUntil = 0;
+      
+      if (cycleDay > weekday) {
+        // Selected day is later this week
+        daysUntil = cycleDay - weekday;
+      } else if (cycleDay < weekday || (cycleDay === weekday && dayMs > 0)) {
+        // Selected day is earlier than today, or it's today but time has passed
+        daysUntil = DAYS_IN_WEEK - weekday + cycleDay;
+      }
+      
+      console.log('Weekly cycle - days until next payout:', daysUntil);
+      
+      // Calculate timestamp for next payout
+      const nextPayoutTime = currentTime + (daysUntil * MS_PER_DAY);
+      
+      // Reset to midnight UTC
+      const nextPayoutDate = new Date(nextPayoutTime);
+      nextPayoutDate.setUTCHours(0, 0, 0, 0);
+      
+      // Log the result for debugging
+      console.log('Calculated next payout date (weekly):', nextPayoutDate.toISOString());
+      
+      return nextPayoutDate.getTime();
+    } else if (cycleLength === 1) {
+      // Monthly payouts
+      
+      // If today's date is greater than the selected day, move to next month
+      let targetMonth = month;
+      let targetYear = year;
+      
+      if (day > cycleDay || (day === cycleDay && dayMs > 0)) {
+        // Move to next month
+        targetMonth += 1;
+        
+        // Handle year rollover
+        if (targetMonth > 11) { // JS months are 0-11
+          targetMonth = 0;
+          targetYear += 1;
+        }
+      }
+      
+      console.log('Monthly cycle - target date:', {
+        targetYear, targetMonth: targetMonth + 1, cycleDay
+      });
+      
+      // Create date for the target payout day (at midnight UTC)
+      const nextPayoutDate = new Date(Date.UTC(targetYear, targetMonth, cycleDay));
+      
+      // Log the result for debugging
+      console.log('Calculated next payout date:', nextPayoutDate.toISOString());
+      
+      return nextPayoutDate.getTime();
+    } else {
+      // Quarterly payouts (cycle_length = 2)
+      
+      // If today's date is greater than the selected day, move to next quarter
+      let targetMonth = month;
+      let targetYear = year;
+      
+      if (day > cycleDay || (day === cycleDay && dayMs > 0)) {
+        // Move 3 months forward for quarterly
+        targetMonth += 3;
+        
+        // Handle year rollover
+        if (targetMonth > 11) { // JS months are 0-11
+          targetMonth -= 12;
+          targetYear += 1;
+        }
+      }
+      
+      console.log('Quarterly cycle - target date:', {
+        targetYear, targetMonth: targetMonth + 1, cycleDay
+      });
+      
+      // Create date for the target payout day (at midnight UTC)
+      const nextPayoutDate = new Date(Date.UTC(targetYear, targetMonth, cycleDay));
+      
+      // Log the result for debugging
+      console.log('Calculated next payout date (quarterly):', nextPayoutDate.toISOString());
+      
+      return nextPayoutDate.getTime();
+    }
   };
 
   const shortenAddress = (address: string) => {
@@ -637,30 +769,35 @@ export default function ManageCircle() {
           <div className="mb-6">
             <button
               onClick={() => router.push('/dashboard')}
-              className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm text-sm text-gray-700 font-medium"
             >
-              <ArrowLeft className="w-4 h-4 mr-1" />
+              <ArrowLeft className="w-4 h-4" />
               Back to Dashboard
             </button>
           </div>
 
-          <div className="bg-white shadow rounded-lg overflow-hidden">
-            <div className="p-6 border-b border-gray-200">
+          <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100">
+            <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
               <div className="flex justify-between items-center">
-                <h2 className="text-xl font-semibold text-gray-900">
-                  Manage Circle
+                <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                  {!loading && circle ? circle.name : 'Manage Circle'}
+                  {!loading && circle && (
+                    <span className="text-sm font-normal bg-blue-100 text-blue-800 py-0.5 px-2 rounded-full">
+                      {circle.currentMembers}/{circle.maxMembers} Members
+                    </span>
+                  )}
                 </h2>
                 {!loading && circle && (
                   <div className="flex items-center space-x-2 text-sm">
-                    <span className="text-gray-500">ID: {shortenId(id as string)}</span>
+                    <span className="text-gray-500 bg-gray-100 py-1 px-2 rounded-md">{shortenId(id as string)}</span>
                     <Tooltip.Provider>
                       <Tooltip.Root>
                         <Tooltip.Trigger asChild>
                           <button
                             onClick={() => copyToClipboard(id as string, 'id')}
-                            className={`text-gray-400 hover:text-blue-600 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200 ${copiedId ? 'text-green-500' : ''}`}
+                            className={`text-gray-500 hover:text-blue-600 p-1.5 rounded-full hover:bg-blue-50 transition-colors duration-200 ${copiedId ? 'text-green-500 bg-green-50' : ''}`}
                           >
-                            <Copy size={16} />
+                            {copiedId ? <Check size={16} /> : <Copy size={16} />}
                           </button>
                         </Tooltip.Trigger>
                         <Tooltip.Portal>
@@ -680,7 +817,7 @@ export default function ManageCircle() {
                         <Tooltip.Trigger asChild>
                           <button
                             onClick={() => copyToClipboard(id as string, 'link')}
-                            className="text-gray-400 hover:text-blue-600 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200"
+                            className="text-gray-500 hover:text-blue-600 p-1.5 rounded-full hover:bg-blue-50 transition-colors duration-200"
                           >
                             <Link size={16} />
                           </button>
@@ -709,36 +846,47 @@ export default function ManageCircle() {
               ) : circle ? (
                 <div className="py-4 space-y-8">
                   {/* Circle Details */}
-                  <div>
-                    <h3 className="text-lg font-medium text-gray-900 mb-4">Circle Details</h3>
+                  <div className="px-2">
+                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Details</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div>
-                        <p className="text-sm text-gray-500">Circle Name</p>
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Circle Name</p>
                         <p className="text-lg font-medium">{circle.name}</p>
                       </div>
                       
-                      <div>
-                        <p className="text-sm text-gray-500">Contribution Amount</p>
-                        <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} />
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
+                        <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} className="font-medium" />
                       </div>
                       
-                      <div>
-                        <p className="text-sm text-gray-500">Security Deposit</p>
-                        <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} />
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Security Deposit</p>
+                        <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} className="font-medium" />
                       </div>
                       
-                      <div>
-                        <p className="text-sm text-gray-500">Members</p>
-                        <p className="text-lg font-medium">{members.length} / {circle.maxMembers}</p>
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">
+                          {circle.isActive ? 'Next Payout' : 'Potential Next Payout'}
+                        </p>
+                        <p className="text-lg font-medium">
+                          {circle.isActive 
+                            ? formatNextPayoutDate(circle.nextPayoutTime)
+                            : formatNextPayoutDate(calculatePotentialNextPayoutDate(circle.cycleLength, circle.cycleDay))}
+                        </p>
+                        {!circle.isActive && (
+                          <p className="text-xs text-blue-600 mt-1">
+                            <span className="font-bold">Estimate</span> if circle activated now
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
                   
                   {/* Members Management */}
-                  <div>
-                    <h3 className="text-lg font-medium text-gray-900 mb-4">Members</h3>
-                    <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
-                      <table className="min-w-full divide-y divide-gray-300">
+                  <div className="px-2">
+                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Members</h3>
+                    <div className="overflow-hidden shadow-sm rounded-xl border border-gray-200">
+                      <table className="min-w-full divide-y divide-gray-200">
                         <thead className="bg-gray-50">
                           <tr>
                             <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">
@@ -757,9 +905,12 @@ export default function ManageCircle() {
                         </thead>
                         <tbody className="divide-y divide-gray-200 bg-white">
                           {members.map((member) => (
-                            <tr key={member.address}>
+                            <tr key={member.address} className="hover:bg-gray-50 transition-colors">
                               <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 sm:pl-6">
-                                {shortenAddress(member.address)} {member.address === circle.admin && <span className="text-xs text-purple-600 ml-2">(Admin)</span>}
+                                {shortenAddress(member.address)} 
+                                {member.address === circle.admin && 
+                                  <span className="text-xs bg-purple-100 text-purple-700 rounded-full px-2 py-0.5 ml-2">Admin</span>
+                                }
                               </td>
                               <td className="whitespace-nowrap px-3 py-4 text-sm">
                                 <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
@@ -776,7 +927,7 @@ export default function ManageCircle() {
                                 {/* No actions for admin */}
                                 {member.address !== circle.admin && (
                                   <button
-                                    className="text-red-600 hover:text-red-900"
+                                    className="text-red-600 hover:text-red-900 px-2 py-1 rounded hover:bg-red-50"
                                     onClick={() => toast.success('Member removal coming soon')}
                                   >
                                     Remove
@@ -791,11 +942,11 @@ export default function ManageCircle() {
                   </div>
                   
                   {/* Invite Members */}
-                  <div>
-                    <h3 className="text-lg font-medium text-gray-900 mb-4">Invite New Members</h3>
+                  <div className="px-2">
+                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Invite New Members</h3>
                     <p className="mb-4 text-sm text-gray-500">Send the following link to people you&apos;d like to invite to your circle.</p>
                     
-                    <div className="flex items-center space-x-2 bg-gray-50 p-3 rounded-md">
+                    <div className="flex items-center space-x-2 bg-gray-50 p-3 rounded-xl border border-gray-200">
                       <input
                         type="text"
                         readOnly
@@ -807,8 +958,9 @@ export default function ManageCircle() {
                           navigator.clipboard.writeText(`${window.location.origin}/circle/${circle.id}/join`);
                           toast.success('Invite link copied to clipboard');
                         }}
-                        className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm"
+                        className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg text-sm hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm font-medium flex items-center"
                       >
+                        <Copy className="w-4 h-4 mr-2" />
                         Copy
                       </button>
                     </div>
@@ -816,10 +968,15 @@ export default function ManageCircle() {
                   
                   {/* Pending Join Requests Section */}
                   {pendingRequests.length > 0 && (
-                    <div className="mt-8">
-                      <h3 className="text-lg font-medium text-gray-900 mb-4">Pending Join Requests</h3>
-                      <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
-                        <table className="min-w-full divide-y divide-gray-300">
+                    <div className="mt-8 px-2">
+                      <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">
+                        Pending Join Requests 
+                        <span className="ml-2 bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
+                          {pendingRequests.length}
+                        </span>
+                      </h3>
+                      <div className="overflow-hidden shadow-sm rounded-xl border border-gray-200">
+                        <table className="min-w-full divide-y divide-gray-200">
                           <thead className="bg-gray-50">
                             <tr>
                               <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">
@@ -835,7 +992,7 @@ export default function ManageCircle() {
                           </thead>
                           <tbody className="divide-y divide-gray-200 bg-white">
                             {pendingRequests.map((request) => (
-                              <tr key={`${request.circleId}-${request.userAddress}`}>
+                              <tr key={`${request.circleId}-${request.userAddress}`} className="hover:bg-gray-50 transition-colors">
                                 <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm sm:pl-6">
                                   <div className="font-medium text-gray-900">{request.userName || 'Unknown User'}</div>
                                   <div className="text-gray-500">{shortenAddress(request.userAddress)}</div>
@@ -847,25 +1004,25 @@ export default function ManageCircle() {
                                   <div className="flex justify-end space-x-3">
                                     <button
                                       onClick={() => handleJoinRequest(request, true)}
-                                      className={`${isApproving ? 'opacity-50 cursor-not-allowed' : ''} text-green-600 hover:text-green-800 flex items-center`}
+                                      className={`${isApproving ? 'opacity-50 cursor-not-allowed' : ''} text-white bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 transition-all flex items-center px-4 py-2 rounded-lg shadow-sm font-medium`}
                                       disabled={isApproving}
                                     >
                                       {isApproving ? (
-                                        <svg className="animate-spin h-4 w-4 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <svg className="animate-spin h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                         </svg>
                                       ) : (
-                                        <Check className="w-4 h-4 mr-1" />
+                                        <Check className="w-4 h-4 mr-2" />
                                       )}
                                       Approve
                                     </button>
                                     <button
                                       onClick={() => handleJoinRequest(request, false)}
-                                      className="text-red-600 hover:text-red-800 flex items-center"
+                                      className="text-white bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 transition-all flex items-center px-4 py-2 rounded-lg shadow-sm font-medium"
                                       disabled={isApproving}
                                     >
-                                      <X className="w-4 h-4 mr-1" />
+                                      <X className="w-4 h-4 mr-2" />
                                       Reject
                                     </button>
                                   </div>
@@ -879,12 +1036,47 @@ export default function ManageCircle() {
                   )}
                   
                   {/* Circle Management Actions */}
-                  <div className="pt-6 border-t border-gray-200">
+                  <div className="pt-6 border-t border-gray-200 px-2">
+                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Management</h3>
                     <div className="flex flex-col space-y-4 sm:flex-row sm:space-x-4 sm:space-y-0">
+                      <Tooltip.Provider>
+                        <Tooltip.Root>
+                          <Tooltip.Trigger asChild>
+                            <div>
+                              <button
+                                onClick={() => toast.success('This feature is coming soon')}
+                                className={`px-5 py-3 text-white rounded-lg text-sm transition-all flex items-center justify-center shadow-md font-medium ${
+                                  circle && circle.currentMembers < circle.maxMembers 
+                                    ? 'bg-gray-400 opacity-60 cursor-not-allowed'
+                                    : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
+                                }`}
+                                disabled={circle && circle.currentMembers < circle.maxMembers}
+                              >
+                                <Check className="w-4 h-4 mr-2" />
+                                Activate Circle
+                              </button>
+                            </div>
+                          </Tooltip.Trigger>
+                          {circle && circle.currentMembers < circle.maxMembers && (
+                            <Tooltip.Portal>
+                              <Tooltip.Content
+                                className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
+                                sideOffset={5}
+                              >
+                                <p>You need {circle.maxMembers - circle.currentMembers} more member(s) to activate the circle.</p>
+                                <p className="mt-1 text-gray-300">Current: {circle.currentMembers}/{circle.maxMembers} members</p>
+                                <Tooltip.Arrow className="fill-gray-800" />
+                              </Tooltip.Content>
+                            </Tooltip.Portal>
+                          )}
+                        </Tooltip.Root>
+                      </Tooltip.Provider>
+                      
                       <button
                         onClick={() => toast.success('This feature is coming soon')}
-                        className="px-4 py-2 bg-yellow-500 text-white rounded-md text-sm hover:bg-yellow-600"
+                        className="px-5 py-3 bg-gradient-to-r from-amber-500 to-yellow-600 text-white rounded-lg text-sm hover:from-amber-600 hover:to-yellow-700 transition-all flex items-center justify-center shadow-md font-medium"
                       >
+                        <Pause className="w-4 h-4 mr-2" />
                         Pause Contributions
                       </button>
                       
@@ -893,8 +1085,9 @@ export default function ManageCircle() {
                           // Handle delete circle
                           toast.success('This feature is coming soon');
                         }}
-                        className="px-4 py-2 bg-red-600 text-white rounded-md text-sm hover:bg-red-700"
+                        className="px-5 py-3 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg text-sm hover:from-red-600 hover:to-red-700 transition-all flex items-center justify-center shadow-md font-medium"
                       >
+                        <X className="w-4 h-4 mr-2" />
                         Delete Circle
                       </button>
                     </div>

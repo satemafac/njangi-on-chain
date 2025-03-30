@@ -190,6 +190,58 @@ export default function JoinCircle() {
           securityDepositUsd
         });
         
+        // Get accurate member count from MemberJoined events
+        let memberCount = 1; // Start with 1 for admin
+        try {
+          // Fetch all MemberJoined events and filter for this circle
+          const memberEvents = await client.queryEvents({
+            query: {
+              MoveEventType: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::MemberJoined`
+            },
+            limit: 1000
+          });
+          
+          console.log(`Found ${memberEvents.data.length} total MemberJoined events, filtering for circle ${id}`);
+          
+          // Count unique member addresses for this specific circle
+          const memberAddresses = new Set<string>();
+          
+          // Filter events for the specific circle
+          const circleEvents = memberEvents.data.filter(event => {
+            if (event.parsedJson && typeof event.parsedJson === 'object') {
+              const eventJson = event.parsedJson as { circle_id?: string };
+              return eventJson.circle_id === id;
+            }
+            return false;
+          });
+          
+          console.log(`Filtered down to ${circleEvents.length} events for circle ${id}`);
+          
+          // Process the filtered events
+          for (const event of circleEvents) {
+            if (event.parsedJson && typeof event.parsedJson === 'object') {
+              const eventJson = event.parsedJson as { circle_id?: string, member?: string };
+              
+              if (eventJson.member) {
+                memberAddresses.add(eventJson.member);
+                console.log(`Added member ${eventJson.member} to count`);
+              }
+            }
+          }
+          
+          // Add admin to the set
+          memberAddresses.add(fields.admin);
+          console.log(`Added admin ${fields.admin} as member for circle ${id} (${fields.name || 'unnamed'})`);
+          
+          memberCount = memberAddresses.size;
+          console.log(`Final count: Found ${memberCount} members for circle ${id}`);
+        } catch (error) {
+          console.error(`Error fetching member count for circle ${id}:`, error);
+          // Fall back to contract stored count if event fetch fails
+          memberCount = Number(fields.current_members);
+          console.log(`Falling back to contract-stored count: ${memberCount}`);
+        }
+        
         setCircle({
           id: id as string,
           name: fields.name,
@@ -201,7 +253,7 @@ export default function JoinCircle() {
           cycleLength: Number(fields.cycle_length),
           cycleDay: Number(fields.cycle_day),
           maxMembers: Number(fields.max_members),
-          currentMembers: Number(fields.current_members),
+          currentMembers: memberCount,
           nextPayoutTime: Number(fields.next_payout_time),
         });
       }
@@ -369,16 +421,16 @@ export default function JoinCircle() {
           <div className="mb-6">
             <button
               onClick={() => router.push('/dashboard')}
-              className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm text-sm text-gray-700 font-medium"
             >
-              <ArrowLeft className="w-4 h-4 mr-1" />
+              <ArrowLeft className="w-4 h-4" />
               Back to Dashboard
             </button>
           </div>
 
-          <div className="bg-white shadow rounded-lg overflow-hidden">
-            <div className="p-6 border-b border-gray-200">
-              <h2 className="text-xl font-semibold text-gray-900">
+          <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100">
+            <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
+              <h2 className="text-2xl font-bold text-gray-900">
                 Join Circle
               </h2>
               {loading ? (
@@ -389,35 +441,39 @@ export default function JoinCircle() {
                   </svg>
                 </div>
               ) : circle ? (
-                <div className="py-4 space-y-6">
-                  <div>
-                    <p className="text-sm text-gray-500">Circle Name</p>
-                    <p className="text-lg font-medium">{circle.name}</p>
+                <div className="py-4 space-y-8">
+                  <div className="px-2">
+                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Details</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Circle Name</p>
+                        <p className="text-lg font-medium">{circle.name}</p>
+                      </div>
+                      
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
+                        <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} />
+                      </div>
+                      
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Security Deposit</p>
+                        <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} />
+                      </div>
+                      
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Contribution Schedule</p>
+                        <p className="text-lg font-medium">{formatCycleInfo(circle.cycleLength, circle.cycleDay)}</p>
+                      </div>
+                      
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Members</p>
+                        <p className="text-lg font-medium">{circle.currentMembers} / {circle.maxMembers}</p>
+                      </div>
+                    </div>
                   </div>
                   
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div>
-                      <p className="text-sm text-gray-500">Contribution Amount</p>
-                      <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} />
-                    </div>
-                    
-                    <div>
-                      <p className="text-sm text-gray-500">Security Deposit</p>
-                      <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} />
-                    </div>
-                    
-                    <div>
-                      <p className="text-sm text-gray-500">Contribution Schedule</p>
-                      <p className="text-lg font-medium">{formatCycleInfo(circle.cycleLength, circle.cycleDay)}</p>
-                    </div>
-                    
-                    <div>
-                      <p className="text-sm text-gray-500">Members</p>
-                      <p className="text-lg font-medium">{circle.currentMembers} / {circle.maxMembers}</p>
-                    </div>
-                  </div>
-                  
-                  <div className="border-t border-gray-200 pt-6 mt-6">
+                  <div className="pt-6 border-t border-gray-200 px-2">
+                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Join Request</h3>
                     <div className="bg-yellow-50 p-4 rounded-md mb-6">
                       <p className="text-sm text-yellow-800">
                         By joining this circle, you agree to contribute {formatUSD(circle.contributionAmountUsd)} ({calculateSuiAmount(circle.contributionAmountUsd).toLocaleString()} SUI) {formatCycleInfo(circle.cycleLength, circle.cycleDay).toLowerCase()}. You will also need to pay a security deposit of {formatUSD(circle.securityDepositUsd)} ({calculateSuiAmount(circle.securityDepositUsd).toLocaleString()} SUI).
@@ -439,7 +495,7 @@ export default function JoinCircle() {
                       <button
                         onClick={handleJoinCircle}
                         disabled={isJoining || isMember || requestSent}
-                        className={`w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${(isJoining || isMember || requestSent) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                        className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all ${(isJoining || isMember || requestSent) ? 'opacity-70 cursor-not-allowed' : ''}`}
                       >
                         {isJoining ? 'Sending Request...' : isMember ? 'Already a Member' : 'Request to Join Circle'}
                       </button>

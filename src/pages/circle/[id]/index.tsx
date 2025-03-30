@@ -22,33 +22,7 @@ interface Circle {
   maxMembers: number;
   currentMembers: number;
   nextPayoutTime: number;
-}
-
-// Define a type for the fields from the SUI object
-interface CircleFields {
-  name: string;
-  admin: string;
-  contribution_amount: string;
-  contribution_amount_usd?: string; // Now optional since it might be in usd_amounts
-  security_deposit: string;
-  security_deposit_usd?: string; // Now optional since it might be in usd_amounts
-  cycle_length: string;
-  cycle_day: string;
-  max_members: string;
-  current_members: string;
-  next_payout_time: string;
-  usd_amounts: {
-    fields?: {
-      contribution_amount: string;
-      security_deposit: string;
-      target_amount?: string;
-    }
-    contribution_amount?: string;
-    security_deposit?: string;
-    target_amount?: string;
-  } | string; // Can be an object with fields or a string reference
-  // Use unknown for index signature as a safer alternative to any
-  [key: string]: string | number | boolean | object | unknown;
+  isActive: boolean;
 }
 
 export default function CircleDetails() {
@@ -91,76 +65,117 @@ export default function CircleDetails() {
   }, []);
 
   const fetchCircleDetails = async () => {
-    if (!id) return;
+    console.log('Fetching circle details:', id);
+    const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
     
-    setLoading(true);
     try {
-      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
-      
-      // Get circle object
       const objectData = await client.getObject({
         id: id as string,
         options: { showContent: true }
       });
       
+      console.log('Circle data:', objectData);
+      
       if (objectData.data?.content && 'fields' in objectData.data.content) {
-        const fields = objectData.data.content.fields as CircleFields;
+        const fields = objectData.data.content.fields as {
+          name: string;
+          admin: string;
+          contribution_amount: string;
+          security_deposit: string;
+          cycle_length: string;
+          cycle_day: string;
+          max_members: string;
+          current_members: string;
+          next_payout_time: string;
+          usd_amounts?: {
+            contribution_amount?: string;
+            security_deposit?: string;
+          };
+        };
         
-        console.log('Circle data from blockchain:', fields);
+        // Check for circle activation events
+        let isActive = false;
+        try {
+          const activationEvents = await client.queryEvents({
+            query: {
+              MoveEventType: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::CircleActivated`
+            },
+            limit: 50
+          });
+          
+          // Check if any activation event matches this circle
+          isActive = activationEvents.data.some(event => {
+            if (event.parsedJson && typeof event.parsedJson === 'object') {
+              const eventJson = event.parsedJson as { circle_id?: string };
+              return eventJson.circle_id === id;
+            }
+            return false;
+          });
+          
+          console.log('Circle activation status:', isActive);
+        } catch (error) {
+          console.error('Error checking circle activation:', error);
+        }
         
-        // Get the USD amounts, checking both direct fields and potentially nested usd_amounts
+        // Get the USD amounts
         let contributionAmountUsd = 0;
         let securityDepositUsd = 0;
         
-        // Check for nested usd_amounts structure (this is the new structure)
         if (fields.usd_amounts) {
-          if (typeof fields.usd_amounts === 'object') {
-            // It could have a nested 'fields' property or direct properties
-            let usdAmounts: {
-              fields?: {
-                contribution_amount: string;
-                security_deposit?: string;
-                target_amount?: string;
-              };
-              contribution_amount?: string;
-              security_deposit?: string;
-              target_amount?: string;
-            } = fields.usd_amounts;
-            
-            // If it has a fields property, use that
-            if (usdAmounts.fields) {
-              usdAmounts = usdAmounts.fields;
+          contributionAmountUsd = Number(fields.usd_amounts.contribution_amount || 0) / 100;
+          securityDepositUsd = Number(fields.usd_amounts.security_deposit || 0) / 100;
+        }
+        
+        // Accurately calculate member count from events
+        let actualMemberCount = 1; // Default to 1 (admin)
+        try {
+          // Fetch all MemberJoined events and filter for this circle
+          const memberEvents = await client.queryEvents({
+            query: {
+              MoveEventType: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::MemberJoined`
+            },
+            limit: 1000 // Increased limit to capture more events
+          });
+          
+          console.log(`Found ${memberEvents.data.length} total MemberJoined events, filtering for circle ${id}`);
+          
+          // Count unique member addresses for this specific circle
+          const memberAddresses = new Set<string>();
+          
+          // Filter events for the specific circle
+          const circleEvents = memberEvents.data.filter(event => {
+            if (event.parsedJson && typeof event.parsedJson === 'object') {
+              const eventJson = event.parsedJson as { circle_id?: string };
+              return eventJson.circle_id === id;
             }
-            
-            if (usdAmounts.contribution_amount) {
-              contributionAmountUsd = Number(usdAmounts.contribution_amount) / 100;
-              console.log('Using nested contribution amount USD:', contributionAmountUsd);
+            return false;
+          });
+          
+          console.log(`Filtered down to ${circleEvents.length} events for circle ${id}`);
+          
+          // Process the filtered events
+          for (const event of circleEvents) {
+            if (event.parsedJson && typeof event.parsedJson === 'object') {
+              const eventJson = event.parsedJson as { circle_id?: string, member?: string };
+              
+              if (eventJson.member) {
+                memberAddresses.add(eventJson.member);
+              }
             }
-            
-            if (usdAmounts.security_deposit) {
-              securityDepositUsd = Number(usdAmounts.security_deposit) / 100;
-              console.log('Using nested security deposit USD:', securityDepositUsd);
-            }
-          } else if (typeof fields.usd_amounts === 'string') {
-            // If it's a string reference to another object, we need to handle differently
-            console.log('usd_amounts is a string reference:', fields.usd_amounts);
           }
-        } 
-        // Fallback to direct fields if nested structure not available or empty
-        else if (fields.contribution_amount_usd) {
-          contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
-          console.log('Using direct contribution amount USD:', contributionAmountUsd);
+          
+          // Add admin to the member count
+          if (fields.admin) {
+            memberAddresses.add(fields.admin);
+          }
+          
+          actualMemberCount = memberAddresses.size;
+          console.log(`Found ${actualMemberCount} members for circle ${id}`);
+        } catch (error) {
+          console.error('Error calculating member count:', error);
+          // Use fallback member count from the object
+          actualMemberCount = Number(fields.current_members);
         }
-        
-        if (!fields.usd_amounts && fields.security_deposit_usd) {
-          securityDepositUsd = Number(fields.security_deposit_usd) / 100;
-          console.log('Using direct security deposit USD:', securityDepositUsd);
-        }
-        
-        console.log('Final USD values:', {
-          contributionAmountUsd,
-          securityDepositUsd
-        });
         
         setCircle({
           id: id as string,
@@ -173,13 +188,14 @@ export default function CircleDetails() {
           cycleLength: Number(fields.cycle_length),
           cycleDay: Number(fields.cycle_day),
           maxMembers: Number(fields.max_members),
-          currentMembers: Number(fields.current_members),
+          currentMembers: actualMemberCount,
           nextPayoutTime: Number(fields.next_payout_time),
+          isActive: isActive,
         });
       }
     } catch (error) {
       console.error('Error fetching circle details:', error);
-      toast.error('Could not load circle information');
+      toast.error('Error loading circle details');
     } finally {
       setLoading(false);
     }
@@ -214,36 +230,39 @@ export default function CircleDetails() {
     }
     
     // Calculate values based on which parameter is provided
-    let calculatedSui: number;
-    let calculatedUsd: number;
+    let calculatedSui: number | null = null;
+    let calculatedUsd: number | null = null;
     
     if (usd !== undefined && !isNaN(usd)) {
       // If USD is provided and valid, calculate SUI based on current price
       calculatedUsd = usd;
-      calculatedSui = suiPrice > 0 ? usd / suiPrice : 0;
+      calculatedSui = suiPrice !== null && suiPrice > 0 ? usd / suiPrice : null;
     } else if (sui !== undefined && !isNaN(sui)) {
       // If SUI is provided and valid, calculate USD
       calculatedSui = sui;
-      calculatedUsd = sui * suiPrice;
+      calculatedUsd = suiPrice !== null ? sui * suiPrice : null;
     } else {
       // Default values if neither is provided or values are invalid
       calculatedSui = 0;
       calculatedUsd = 0;
     }
     
-    // Format SUI with appropriate precision
-    const formattedSui = calculatedSui >= 1000 
-      ? calculatedSui.toLocaleString(undefined, { maximumFractionDigits: 0 }) 
-      : calculatedSui >= 100 
-        ? calculatedSui.toFixed(1) 
-        : calculatedSui.toFixed(2);
+    // Format SUI with appropriate precision if available
+    const formattedSui = calculatedSui !== null ? (
+      calculatedSui >= 1000 
+        ? calculatedSui.toLocaleString(undefined, { maximumFractionDigits: 0 }) 
+        : calculatedSui >= 100 
+          ? calculatedSui.toFixed(1) 
+          : calculatedSui.toFixed(2)
+    ) : '—';
     
     return (
       <Tooltip.Provider>
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
             <span className={`cursor-help ${className} flex items-center`}>
-              {formatUSD(calculatedUsd)} <span className="text-gray-500 mr-1">({formattedSui} SUI)</span>
+              {calculatedUsd !== null ? formatUSD(calculatedUsd) : '$—.—'} 
+              <span className="text-gray-500 mr-1">({formattedSui} SUI)</span>
               {isPriceStale && <span title="Using cached price">⚠️</span>}
             </span>
           </Tooltip.Trigger>
@@ -321,28 +340,28 @@ export default function CircleDetails() {
           <div className="mb-6">
             <button
               onClick={() => router.push('/dashboard')}
-              className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm text-sm text-gray-700 font-medium"
             >
-              <ArrowLeft className="w-4 h-4 mr-1" />
+              <ArrowLeft className="w-4 h-4" />
               Back to Dashboard
             </button>
           </div>
 
-          <div className="bg-white shadow rounded-lg overflow-hidden">
-            <div className="p-6 border-b border-gray-200">
+          <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100">
+            <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
               <div className="flex justify-between items-center">
-                <h2 className="text-xl font-semibold text-gray-900">
-                  Circle Details
+                <h2 className="text-2xl font-bold text-gray-900">
+                  {!loading && circle ? circle.name : 'Circle Details'}
                 </h2>
                 {!loading && circle && (
                   <div className="flex items-center space-x-2 text-sm">
-                    <span className="text-gray-500">ID: {shortenId(id as string)}</span>
+                    <span className="text-gray-500 bg-gray-100 py-1 px-2 rounded-md">{shortenId(id as string)}</span>
                     <Tooltip.Provider>
                       <Tooltip.Root>
                         <Tooltip.Trigger asChild>
                           <button
                             onClick={() => copyToClipboard(id as string, 'id')}
-                            className={`text-gray-400 hover:text-blue-600 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200 ${copiedId ? 'text-green-500' : ''}`}
+                            className={`text-gray-500 hover:text-blue-600 p-1.5 rounded-full hover:bg-blue-50 transition-colors duration-200 ${copiedId ? 'text-green-500 bg-green-50' : ''}`}
                           >
                             <Copy size={16} />
                           </button>
@@ -365,7 +384,7 @@ export default function CircleDetails() {
                           <Tooltip.Trigger asChild>
                             <button
                               onClick={() => copyToClipboard(id as string, 'link')}
-                              className="text-gray-400 hover:text-blue-600 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200"
+                              className="text-gray-500 hover:text-blue-600 p-1.5 rounded-full hover:bg-blue-50 transition-colors duration-200"
                             >
                               <Link size={16} />
                             </button>
@@ -393,46 +412,54 @@ export default function CircleDetails() {
                   </svg>
                 </div>
               ) : circle ? (
-                <div className="py-4 grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <p className="text-sm text-gray-500">Circle Name</p>
-                    <p className="text-lg font-medium">{circle.name}</p>
+                <div className="py-4 space-y-8">
+                  {/* Circle Details */}
+                  <div className="px-2">
+                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Details</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Circle Name</p>
+                        <p className="text-lg font-medium">{circle.name}</p>
+                      </div>
+                      
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Admin</p>
+                        <p className="text-sm font-medium text-gray-700 truncate">{circle.admin}</p>
+                      </div>
+                      
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
+                        <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} className="font-medium" />
+                      </div>
+                      
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Security Deposit</p>
+                        <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} className="font-medium" />
+                      </div>
+                      
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Members</p>
+                        <p className="text-lg font-medium">{circle.currentMembers} / {circle.maxMembers}</p>
+                      </div>
+                      
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">
+                          {circle.isActive ? 'Next Payout' : 'Potential Next Payout'}
+                        </p>
+                        <p className="text-lg font-medium">
+                          {circle.isActive ? formatDate(circle.nextPayoutTime) : "Activate Circle to Start"}
+                        </p>
+                      </div>
+                    </div>
                   </div>
                   
-                  <div>
-                    <p className="text-sm text-gray-500">Admin</p>
-                    <p className="text-sm font-medium text-gray-700 truncate">{circle.admin}</p>
-                  </div>
-                  
-                  <div>
-                    <p className="text-sm text-gray-500">Contribution Amount</p>
-                    <p className="text-lg font-medium">
-                      <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} />
-                    </p>
-                  </div>
-                  
-                  <div>
-                    <p className="text-sm text-gray-500">Security Deposit</p>
-                    <p className="text-lg font-medium">
-                      <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} />
-                    </p>
-                  </div>
-                  
-                  <div>
-                    <p className="text-sm text-gray-500">Members</p>
-                    <p className="text-lg font-medium">{circle.currentMembers} / {circle.maxMembers}</p>
-                  </div>
-                  
-                  <div>
-                    <p className="text-sm text-gray-500">Next Payout</p>
-                    <p className="text-lg font-medium">{formatDate(circle.nextPayoutTime)}</p>
-                  </div>
-                  
-                  <div className="md:col-span-2 pt-4">
-                    <div className="flex space-x-4">
+                  {/* Actions */}
+                  <div className="pt-6 border-t border-gray-200 px-2">
+                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Actions</h3>
+                    <div className="flex flex-col space-y-4 sm:flex-row sm:space-x-4 sm:space-y-0">
                       <button
                         onClick={() => router.push(`/circle/${circle.id}/contribute`)}
-                        className="flex-1 py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                        className="px-5 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg text-sm hover:from-blue-700 hover:to-blue-800 transition-all shadow-md font-medium flex items-center justify-center"
                       >
                         Contribute
                       </button>
@@ -440,7 +467,7 @@ export default function CircleDetails() {
                       {circle.admin === userAddress && (
                         <button
                           onClick={() => router.push(`/circle/${circle.id}/manage`)}
-                          className="flex-1 py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"
+                          className="px-5 py-3 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg text-sm hover:from-purple-700 hover:to-purple-800 transition-all shadow-md font-medium flex items-center justify-center"
                         >
                           Manage Circle
                         </button>
