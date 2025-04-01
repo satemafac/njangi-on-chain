@@ -15,6 +15,9 @@ interface Circle {
   admin: string;
   contributionAmount: number;
   contributionAmountUsd: number;
+  securityDeposit: number;
+  securityDepositUsd: number;
+  walletId: string; // Custody wallet ID
 }
 
 // Define a type for the fields from the SUI object
@@ -22,17 +25,19 @@ interface CircleFields {
   name: string;
   admin: string;
   contribution_amount: string;
-  contribution_amount_usd?: string; // Now optional since it might be in usd_amounts
+  security_deposit: string;
+  contribution_amount_usd?: string;
+  security_deposit_usd?: string;
   usd_amounts: {
     fields?: {
       contribution_amount: string;
-      security_deposit?: string;
+      security_deposit: string;
       target_amount?: string;
     }
     contribution_amount?: string;
     security_deposit?: string;
     target_amount?: string;
-  } | string; // Can be an object with fields or a string reference
+  } | string;
   // Use unknown for index signature as a safer alternative to any
   [key: string]: string | number | boolean | object | unknown;
 }
@@ -44,7 +49,13 @@ export default function ContributeToCircle() {
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
+  const [suiPrice, setSuiPrice] = useState(1.25);
+  
+  // New state variables
+  const [userBalance, setUserBalance] = useState<number | null>(null);
+  const [userDepositPaid, setUserDepositPaid] = useState(false);
+  const [fetchingBalance, setFetchingBalance] = useState(false);
+  const [isPayingDeposit, setIsPayingDeposit] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -78,6 +89,37 @@ export default function ContributeToCircle() {
     }
   }, [id, userAddress]);
 
+  // Add effect to fetch user balance and deposit status when circle data is loaded
+  useEffect(() => {
+    if (circle && userAddress) {
+      fetchUserWalletInfo();
+    }
+  }, [circle, userAddress]);
+
+  // First add console logs to debug the conditions for showing the button
+  useEffect(() => {
+    if (circle && userDepositPaid !== null) {
+      console.log('Security deposit button conditions:', {
+        userDepositPaid,
+        hasCircle: !!circle,
+        securityDepositAmount: circle.securityDeposit,
+        shouldShowButton: !userDepositPaid && !!circle && circle.securityDeposit > 0
+      });
+    }
+  }, [circle, userDepositPaid]);
+
+  // Add a debug log to check the security deposit value when showing the warning
+  useEffect(() => {
+    if (circle) {
+      console.log('Security deposit values:', {
+        rawValue: circle.securityDeposit,
+        usdValue: circle.securityDepositUsd,
+        formattedSUI: `${circle.securityDeposit} SUI`,
+        formattedUSD: `$${circle.securityDepositUsd}`
+      });
+    }
+  }, [circle]);
+
   const fetchCircleDetails = async () => {
     if (!id) return;
     
@@ -96,17 +138,17 @@ export default function ContributeToCircle() {
         
         console.log('Circle data from blockchain:', fields);
         
-        // Get the USD contribution amount
+        // Get the USD amounts (contribution and security deposit)
         let contributionAmountUsd = 0;
+        let securityDepositUsd = 0;
         
-        // Check for nested usd_amounts structure (this is the new structure)
+        // Check for nested usd_amounts structure
         if (fields.usd_amounts) {
           if (typeof fields.usd_amounts === 'object') {
-            // It could have a nested 'fields' property or direct properties
             let usdAmounts: {
               fields?: {
                 contribution_amount: string;
-                security_deposit?: string;
+                security_deposit: string;
                 target_amount?: string;
               };
               contribution_amount?: string;
@@ -121,27 +163,81 @@ export default function ContributeToCircle() {
             
             if (usdAmounts.contribution_amount) {
               contributionAmountUsd = Number(usdAmounts.contribution_amount) / 100;
-              console.log('Using nested contribution amount USD:', contributionAmountUsd);
             }
-          } else if (typeof fields.usd_amounts === 'string') {
-            // If it's a string reference to another object, we need to handle differently
-            console.log('usd_amounts is a string reference:', fields.usd_amounts);
+            
+            if (usdAmounts.security_deposit) {
+              securityDepositUsd = Number(usdAmounts.security_deposit) / 100;
+            }
           }
         } 
-        // Fallback to direct fields if nested structure not available or empty
+        // Fallback to direct fields
         else if (fields.contribution_amount_usd) {
           contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
-          console.log('Using direct contribution amount USD:', contributionAmountUsd);
         }
         
-        console.log('Final USD value:', contributionAmountUsd);
+        if (fields.security_deposit_usd) {
+          securityDepositUsd = Number(fields.security_deposit_usd) / 100;
+        }
+        
+        // Now we need to find the circle's custody wallet ID
+        const walletCreatedEvents = await client.queryEvents({
+          query: {
+            MoveEventType: '0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::CustodyWalletCreated'
+          },
+          limit: 50
+        });
+        
+        let walletId = null;
+        
+        // Look for events related to this circle
+        for (const event of walletCreatedEvents.data) {
+          if (event.parsedJson && 
+              typeof event.parsedJson === 'object' &&
+              'circle_id' in event.parsedJson &&
+              'wallet_id' in event.parsedJson &&
+              event.parsedJson.circle_id === id) {
+            walletId = event.parsedJson.wallet_id as string;
+            console.log('Found wallet ID from events:', walletId);
+            break;
+          }
+        }
+
+        // Parse and validate the security deposit value
+        // First try directly from the blockchain value
+        let securityDepositAmount = Number(fields.security_deposit) / 1e9;
+        
+        // Check if the security deposit is unreasonably large or zero
+        if (securityDepositAmount > 1000000 || securityDepositAmount === 0) {
+          console.log('Invalid security deposit from blockchain, calculating from USD value');
+          
+          // If the blockchain value is invalid, calculate from USD value and price
+          // Using non-nullable price with fallback
+          const effectiveSuiPrice = suiPrice || 1.25; // Fallback to default price if suiPrice is 0
+          securityDepositAmount = securityDepositUsd / effectiveSuiPrice;
+          
+          console.log('Calculated security deposit amount:', {
+            securityDepositUsd,
+            suiPrice: effectiveSuiPrice,
+            calculatedSUI: securityDepositAmount
+          });
+        }
+        
+        // Ensure we have a reasonable value
+        if (isNaN(securityDepositAmount) || securityDepositAmount <= 0) {
+          console.warn('Still have invalid security deposit amount, using fallback');
+          // If we still have an invalid amount, calculate from USD with a default conversion
+          securityDepositAmount = securityDepositUsd / 2.3; // Fallback using a common SUI price
+        }
         
         setCircle({
           id: id as string,
           name: fields.name,
           contributionAmount: Number(fields.contribution_amount) / 1e9,
           contributionAmountUsd: contributionAmountUsd,
+          securityDeposit: securityDepositAmount,
+          securityDepositUsd: securityDepositUsd,
           admin: fields.admin,
+          walletId: walletId || '',
         });
       }
     } catch (error) {
@@ -149,6 +245,83 @@ export default function ContributeToCircle() {
       toast.error('Could not load circle information');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchUserWalletInfo = async () => {
+    if (!userAddress || !circle) return;
+    
+    setFetchingBalance(true);
+    try {
+      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      
+      // 1. Get user's SUI coins to calculate balance
+      const coins = await client.getCoins({
+        owner: userAddress,
+        coinType: '0x2::sui::SUI'
+      });
+      
+      // Calculate total balance
+      const totalBalance = coins.data.reduce((sum, coin) => sum + Number(coin.balance), 0) / 1e9;
+      setUserBalance(totalBalance);
+      
+      // 2. Check if the user has already paid their security deposit
+      // We need to query the circle to see if the user is a member and check their deposit status
+      if (circle.id) {
+        const circleData = await client.getObject({
+          id: circle.id,
+          options: { showContent: true, showDisplay: true }
+        });
+        
+        if (circleData.data?.content && 'fields' in circleData.data.content) {
+          // Use a more specific type instead of any
+          const fields = circleData.data.content.fields as {
+            members?: {
+              fields?: {
+                table?: {
+                  fields?: {
+                    contents?: Array<{
+                      fields?: {
+                        key: string;
+                        value: {
+                          fields: {
+                            deposit_balance: string;
+                            [key: string]: unknown;
+                          }
+                        }
+                      }
+                    }>
+                  }
+                }
+              }
+            }
+          };
+          
+          // Check if members table exists and has the user
+          if (fields.members?.fields?.table?.fields?.contents) {
+            // Try to find the user in the members table
+            const memberEntries = fields.members.fields.table.fields.contents;
+            
+            // Check if the user is in the members list
+            for (const entry of memberEntries) {
+              if (entry.fields && entry.fields.key === userAddress) {
+                // Found the user in the members table, check their deposit status
+                const memberData = entry.fields.value.fields;
+                
+                // If deposit_balance is greater than 0, they've paid their deposit
+                const depositPaid = Number(memberData.deposit_balance) > 0;
+                setUserDepositPaid(depositPaid);
+                console.log('User deposit status:', depositPaid ? 'Paid' : 'Not Paid');
+                break;
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching user wallet info:', error);
+    } finally {
+      setFetchingBalance(false);
     }
   };
 
@@ -164,6 +337,53 @@ export default function ContributeToCircle() {
       toast.error('Failed to process contribution');
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const handlePaySecurityDeposit = async () => {
+    if (!circle || !userAddress || !circle.walletId) {
+      toast.error('Circle information incomplete. Cannot process deposit.');
+      return;
+    }
+    
+    // Check if wallet balance is sufficient
+    if (userBalance !== null && userBalance < circle.securityDeposit) {
+      toast.error('Insufficient wallet balance to pay security deposit.');
+      return;
+    }
+    
+    setIsPayingDeposit(true);
+    
+    try {
+      console.log('Preparing to pay security deposit of', circle.securityDeposit, 'SUI to circle:', circle.id);
+      
+      // In a real implementation, we would:
+      // 1. Prepare a transaction to call the join_circle function
+      // 2. Send the security deposit to the circle
+      // 3. Handle the result and refresh the UI
+      
+      // For now, we'll use a placeholder and simply show a mock success
+      // This helps avoid wallet integration issues while the UI is being developed
+      setTimeout(() => {
+        toast.success('This is a UI demo. In production, this will connect to your wallet to pay the security deposit.');
+        setIsPayingDeposit(false);
+      }, 2000);
+      
+      // Commented code below is a starting point for the real implementation
+      /*
+      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      
+      // Format a transaction to join the circle with the security deposit
+      // The exact implementation depends on the wallet integration approach used
+      // in the application, which may vary based on the wallet provider
+      
+      // After transaction success:
+      fetchUserWalletInfo();
+      */
+    } catch (error) {
+      console.error('Error paying security deposit:', error);
+      toast.error('Failed to process security deposit payment');
+      setIsPayingDeposit(false);
     }
   };
 
@@ -319,6 +539,35 @@ export default function ContributeToCircle() {
                 </div>
               ) : circle ? (
                 <div className="py-4 space-y-8">
+                  {/* User Wallet Information */}
+                  <div className="px-2">
+                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-green-500 pl-3">Your Wallet</h3>
+                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg shadow-sm border border-blue-100">
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <p className="text-sm text-gray-600 mb-1">Available Balance:</p>
+                          {fetchingBalance ? (
+                            <div className="animate-pulse h-6 w-32 bg-gray-200 rounded"></div>
+                          ) : (
+                            <p className="text-lg font-semibold text-blue-700">
+                              {userBalance !== null ? (
+                                <CurrencyDisplay sui={userBalance} />
+                              ) : (
+                                'Unable to fetch balance'
+                              )}
+                            </p>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm text-gray-600 mb-1">Wallet Address:</p>
+                          <p className="text-sm font-mono bg-white px-2 py-1 rounded border border-gray-200">
+                            {userAddress ? `${userAddress.substring(0, 6)}...${userAddress.substring(userAddress.length - 4)}` : ''}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Circle Details */}
                   <div className="px-2">
                     <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Details</h3>
@@ -331,6 +580,32 @@ export default function ContributeToCircle() {
                       <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
                         <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
                         <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} />
+                      </div>
+
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Security Deposit Required</p>
+                        <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} />
+                      </div>
+
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Security Deposit Status</p>
+                        {fetchingBalance ? (
+                          <div className="animate-pulse h-6 w-32 bg-gray-200 rounded"></div>
+                        ) : (
+                          <div className="flex items-center">
+                            {userDepositPaid ? (
+                              <>
+                                <span className="h-4 w-4 rounded-full bg-green-500 mr-2"></span>
+                                <span className="text-green-700 font-medium">Paid</span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="h-4 w-4 rounded-full bg-amber-500 mr-2"></span>
+                                <span className="text-amber-700 font-medium">Not Paid</span>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -347,11 +622,70 @@ export default function ContributeToCircle() {
                           </span>
                         </div>
                       </div>
+
+                      {/* Show warning if balance is insufficient */}
+                      {userBalance !== null && userBalance < circle.contributionAmount && (
+                        <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg border border-red-200">
+                          <p className="text-sm font-medium">
+                            ⚠️ Your wallet balance is insufficient for this contribution.
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Show warning if security deposit is not paid and add button to pay it */}
+                      {!userDepositPaid && (
+                        <div className="mb-4 p-4 bg-amber-50 rounded-lg border-2 border-amber-300">
+                          <div className="flex flex-col gap-4">
+                            <div>
+                              <p className="text-base font-medium text-amber-700 mb-1">
+                                ⚠️ Security deposit required
+                              </p>
+                              <p className="text-sm text-amber-600">
+                                You need to pay a security deposit of{' '}
+                                {(!circle || isNaN(circle.securityDeposit) || circle.securityDeposit <= 0) ? (
+                                  'amount unavailable'
+                                ) : (
+                                  <span className="font-semibold">
+                                    ${circle.securityDepositUsd.toFixed(2)}
+                                    <br />
+                                    {circle.securityDeposit.toFixed(2)} SUI
+                                  </span>
+                                )}{' '}
+                                before contributing.
+                              </p>
+                            </div>
+                            
+                            <button
+                              onClick={handlePaySecurityDeposit}
+                              disabled={isPayingDeposit || !circle || circle.securityDeposit <= 0 || (userBalance !== null && userBalance < circle.securityDeposit)}
+                              className="w-full py-3 px-4 rounded-lg shadow-sm text-sm font-bold text-white bg-amber-500 hover:bg-amber-600 transition-all disabled:opacity-70 disabled:cursor-not-allowed"
+                            >
+                              {isPayingDeposit ? (
+                                <span className="flex items-center justify-center">
+                                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                  </svg>
+                                  Processing...
+                                </span>
+                              ) : (
+                                'Pay Security Deposit'
+                              )}
+                            </button>
+                            
+                            {userBalance !== null && circle && userBalance < circle.securityDeposit && (
+                              <p className="text-xs text-red-600">
+                                Your wallet balance is insufficient to pay the security deposit.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     
                       <button
                         onClick={handleContribute}
-                        disabled={isProcessing}
-                        className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all ${isProcessing ? 'opacity-70 cursor-not-allowed' : ''}`}
+                        disabled={isProcessing || (userBalance !== null && userBalance < circle.contributionAmount) || !userDepositPaid}
+                        className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all ${(isProcessing || (userBalance !== null && userBalance < circle.contributionAmount) || !userDepositPaid) ? 'opacity-70 cursor-not-allowed' : ''}`}
                       >
                         {isProcessing ? 'Processing...' : 'Contribute Now'}
                       </button>
