@@ -58,6 +58,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     idleTime: 15 * 60 * 1000, // 15 minutes in milliseconds
   });
 
+  // Wrap the resetIdleTimer function to add logging
+  const resetIdleTimerWithLogging = () => {
+    console.log('Resetting idle timer...');
+    resetIdleTimer();
+    console.log('Idle timer reset successfully');
+  };
+
   // Load saved authentication state on mount
   useEffect(() => {
     const savedAccount = localStorage.getItem('account');
@@ -121,14 +128,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUserAddress(accountData.userAddr);
     setIsAuthenticated(true);
     // Reset idle timer after successful login
-    resetIdleTimer();
+    resetIdleTimerWithLogging();
     return accountData;
   };
 
   const sendTransaction = async (circleData: CircleData) => {
     if (!account) throw new Error('Not logged in');
     // Reset idle timer on transaction
-    resetIdleTimer();
+    resetIdleTimerWithLogging();
     const { digest } = await zkLogin.sendTransaction(account, circleData);
     return digest;
   };
@@ -136,7 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const deleteCircle = async (circleId: string) => {
     if (!account) throw new Error('Not logged in');
     // Reset idle timer on transaction
-    resetIdleTimer();
+    resetIdleTimerWithLogging();
     
     console.log(`AuthContext: Sending delete request for circle ${circleId}`);
     
@@ -217,7 +224,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUserAddress,
       setIsAuthenticated,
       setError,
-      resetIdleTimer,
+      resetIdleTimer: resetIdleTimerWithLogging,
       activateCircle
     }}>
       {children}
