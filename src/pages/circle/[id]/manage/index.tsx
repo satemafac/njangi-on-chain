@@ -1072,24 +1072,71 @@ export default function ManageCircle() {
                         </Tooltip.Root>
                       </Tooltip.Provider>
                       
-                      <button
-                        onClick={() => toast.success('This feature is coming soon')}
-                        className="px-5 py-3 bg-gradient-to-r from-amber-500 to-yellow-600 text-white rounded-lg text-sm hover:from-amber-600 hover:to-yellow-700 transition-all flex items-center justify-center shadow-md font-medium"
-                      >
-                        <Pause className="w-4 h-4 mr-2" />
-                        Pause Contributions
-                      </button>
+                      <Tooltip.Provider>
+                        <Tooltip.Root>
+                          <Tooltip.Trigger asChild>
+                            <div>
+                              <button
+                                onClick={() => toast.success('This feature is coming soon')}
+                                className={`px-5 py-3 text-white rounded-lg text-sm transition-all flex items-center justify-center shadow-md font-medium ${
+                                  !circle || !circle.isActive
+                                    ? 'bg-gray-400 opacity-60 cursor-not-allowed'
+                                    : 'bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-600 hover:to-yellow-700'
+                                }`}
+                                disabled={!circle || !circle.isActive}
+                              >
+                                <Pause className="w-4 h-4 mr-2" />
+                                Pause Contributions
+                              </button>
+                            </div>
+                          </Tooltip.Trigger>
+                          {circle && !circle.isActive && (
+                            <Tooltip.Portal>
+                              <Tooltip.Content
+                                className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
+                                sideOffset={5}
+                              >
+                                <p>Cannot pause contributions: The circle is not active yet.</p>
+                                <p className="mt-1 text-gray-300">Activate the circle first before pausing contributions.</p>
+                                <Tooltip.Arrow className="fill-gray-800" />
+                              </Tooltip.Content>
+                            </Tooltip.Portal>
+                          )}
+                        </Tooltip.Root>
+                      </Tooltip.Provider>
                       
-                      <button
-                        onClick={() => {
-                          // Handle delete circle
-                          toast.success('This feature is coming soon');
-                        }}
-                        className="px-5 py-3 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg text-sm hover:from-red-600 hover:to-red-700 transition-all flex items-center justify-center shadow-md font-medium"
-                      >
-                        <X className="w-4 h-4 mr-2" />
-                        Delete Circle
-                      </button>
+                      <Tooltip.Provider>
+                        <Tooltip.Root>
+                          <Tooltip.Trigger asChild>
+                            <div>
+                              <button
+                                onClick={() => toast.success('This feature is coming soon')}
+                                className={`px-5 py-3 text-white rounded-lg text-sm transition-all flex items-center justify-center shadow-md font-medium ${
+                                  circle && circle.currentMembers > 1 
+                                    ? 'bg-gray-400 opacity-60 cursor-not-allowed'
+                                    : 'bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700'
+                                }`}
+                                disabled={circle && circle.currentMembers > 1}
+                              >
+                                <X className="w-4 h-4 mr-2" />
+                                Delete Circle
+                              </button>
+                            </div>
+                          </Tooltip.Trigger>
+                          {circle && circle.currentMembers > 1 && (
+                            <Tooltip.Portal>
+                              <Tooltip.Content
+                                className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
+                                sideOffset={5}
+                              >
+                                <p>Cannot delete: The circle has {circle.currentMembers - 1} member(s) besides the admin.</p>
+                                <p className="mt-1 text-gray-300">Remove all members first before deleting.</p>
+                                <Tooltip.Arrow className="fill-gray-800" />
+                              </Tooltip.Content>
+                            </Tooltip.Portal>
+                          )}
+                        </Tooltip.Root>
+                      </Tooltip.Provider>
                     </div>
                   </div>
                 </div>
