@@ -123,6 +123,16 @@ module njangi::njangi_circle {
         target_amount: option::Option<u64>, // USD amount * 100 (cents)
     }
     
+    // Add a new struct for stablecoin configuration
+    public struct StablecoinConfig has store, drop {
+        enabled: bool,
+        target_coin_type: string::String,    // Type of stablecoin to swap to
+        dex_address: address,                // Address of the DEX to use
+        slippage_tolerance: u64,             // Slippage tolerance in basis points (e.g., 50 = 0.5%)
+        last_swap_time: u64,                 // Timestamp of last swap
+        minimum_swap_amount: u64,            // Minimum amount to swap (to avoid dust)
+    }
+    
     // Custody wallet linked to a circle for secure fund storage
     public struct CustodyWallet has key, store {
         id: object::UID,
@@ -135,6 +145,8 @@ module njangi::njangi_circle {
         daily_withdrawal_limit: u64,  // Maximum withdrawal per day
         last_withdrawal_time: u64,    // Timestamp of last withdrawal
         daily_withdrawal_total: u64,  // Running total of withdrawals for the day
+        stablecoin_config: StablecoinConfig,  // Added stablecoin configuration
+        stablecoin_balance: u64,              // Balance of stablecoins (in smallest unit)
     }
     
     // Transaction record for custody wallet operations
@@ -382,6 +394,16 @@ module njangi::njangi_circle {
         operation_type: u8,
     }
 
+    // Add a new event for swap operations
+    public struct StablecoinSwapExecuted has copy, drop {
+        circle_id: object::ID,
+        wallet_id: object::ID,
+        sui_amount: u64,
+        stablecoin_amount: u64,
+        stablecoin_type: string::String,
+        timestamp: u64,
+    }
+
     // ----------------------------------------------------------
     // Create Circle
     // ----------------------------------------------------------
@@ -496,7 +518,17 @@ module njangi::njangi_circle {
     ) {
         let admin = tx_context::sender(ctx);
         
-        // Create custody wallet
+        // Create default stablecoin configuration
+        let stablecoin_config = StablecoinConfig {
+            enabled: false,                                // Disabled by default
+            target_coin_type: string::utf8(b"USDC"),       // Default to USDC
+            dex_address: @0x0,                             // Empty DEX address
+            slippage_tolerance: 50,                        // 0.5% slippage tolerance
+            last_swap_time: 0,
+            minimum_swap_amount: to_decimals(1),           // 1 SUI minimum
+        };
+        
+        // Create custody wallet with stablecoin config
         let wallet = CustodyWallet {
             id: object::new(ctx),
             circle_id,
@@ -508,6 +540,8 @@ module njangi::njangi_circle {
             daily_withdrawal_limit: to_decimals(10000),  // Default 10,000 SUI daily limit
             last_withdrawal_time: 0,
             daily_withdrawal_total: 0,
+            stablecoin_config,
+            stablecoin_balance: 0,
         };
         
         // Get the wallet ID before sharing
@@ -541,7 +575,83 @@ module njangi::njangi_circle {
     }
     
     // ----------------------------------------------------------
-    // Deposit to circle custody wallet
+    // Configure stablecoin auto-swap settings
+    // ----------------------------------------------------------
+    public fun configure_stablecoin_swap(
+        wallet: &mut CustodyWallet,
+        enabled: bool,
+        target_coin_type: vector<u8>,
+        dex_address: address,
+        slippage_tolerance: u64,
+        minimum_swap_amount: u64,
+        ctx: &mut tx_context::TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        
+        // Only admin can configure swap settings
+        assert!(sender == wallet.admin, ENotAdmin);
+        
+        // Update configuration
+        wallet.stablecoin_config.enabled = enabled;
+        wallet.stablecoin_config.target_coin_type = string::utf8(target_coin_type);
+        wallet.stablecoin_config.dex_address = dex_address;
+        wallet.stablecoin_config.slippage_tolerance = slippage_tolerance;
+        wallet.stablecoin_config.minimum_swap_amount = minimum_swap_amount;
+    }
+    
+    // ----------------------------------------------------------
+    // Execute stablecoin swap (simulated)
+    // ----------------------------------------------------------
+    fun execute_stablecoin_swap(
+        wallet: &mut CustodyWallet,
+        amount: u64,
+        clock: &clock::Clock,
+        ctx: &mut tx_context::TxContext
+    ) {
+        // Check if auto-swap is enabled and minimum amount is met
+        if (!wallet.stablecoin_config.enabled || amount < wallet.stablecoin_config.minimum_swap_amount) {
+            return
+        };
+        
+        // In a real implementation, this function would:
+        // 1. Connect to the specified DEX
+        // 2. Get the current exchange rate
+        // 3. Calculate the slippage-adjusted minimum output
+        // 4. Execute the swap transaction
+        // 5. Update the stablecoin balance
+        
+        // For now, we'll simulate the swap with a fixed rate
+        // In production, this would call the DEX's swap function
+        let estimated_stablecoin_amount = simulate_swap_rate(amount);
+        
+        // Update the stablecoin balance
+        wallet.stablecoin_balance = wallet.stablecoin_balance + estimated_stablecoin_amount;
+        wallet.stablecoin_config.last_swap_time = clock::timestamp_ms(clock);
+        
+        // Emit swap event
+        event::emit(StablecoinSwapExecuted {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            sui_amount: amount,
+            stablecoin_amount: estimated_stablecoin_amount,
+            stablecoin_type: wallet.stablecoin_config.target_coin_type,
+            timestamp: clock::timestamp_ms(clock),
+        });
+    }
+    
+    // ----------------------------------------------------------
+    // Helper function to simulate swap rate (for demo purposes)
+    // ----------------------------------------------------------
+    fun simulate_swap_rate(sui_amount: u64): u64 {
+        // Simulate a swap rate of 1 SUI = $2.50 USDC
+        // In a real implementation, this would query the DEX for the current rate
+        // This is just a placeholder
+        let usdc_per_sui = 250_000_000; // $2.50 with 8 decimals
+        (sui_amount * usdc_per_sui) / DECIMAL_SCALING
+    }
+    
+    // ----------------------------------------------------------
+    // Modified deposit_to_custody to include auto-swap
     // ----------------------------------------------------------
     public fun deposit_to_custody(
         wallet: &mut CustodyWallet,
@@ -577,6 +687,18 @@ module njangi::njangi_circle {
             amount,
             operation_type: CUSTODY_OP_DEPOSIT,
         });
+        
+        // If auto-swap is enabled, execute the swap
+        if (wallet.stablecoin_config.enabled) {
+            // For safety, we'll split the amount to swap from the wallet balance
+            // instead of passing the new deposit directly
+            let swap_amount = balance::value(&wallet.balance);
+            
+            // Only swap if we have enough to meet the minimum
+            if (swap_amount >= wallet.stablecoin_config.minimum_swap_amount) {
+                execute_stablecoin_swap(wallet, swap_amount, clock, ctx);
+            };
+        };
     }
     
     // Helper function to check if sender is authorized to deposit to the wallet

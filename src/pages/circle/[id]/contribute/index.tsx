@@ -266,7 +266,9 @@ export default function ContributeToCircle() {
       setUserBalance(totalBalance);
       
       // 2. Check if the user has already paid their security deposit
-      // We need to query the circle to see if the user is a member and check their deposit status
+      let depositPaid = false;
+      
+      // First method: check if the user is in the members table with a deposit
       if (circle.id) {
         const circleData = await client.getObject({
           id: circle.id,
@@ -274,7 +276,7 @@ export default function ContributeToCircle() {
         });
         
         if (circleData.data?.content && 'fields' in circleData.data.content) {
-          // Use a more specific type instead of any
+          // Check members table in circle
           const fields = circleData.data.content.fields as {
             members?: {
               fields?: {
@@ -297,27 +299,72 @@ export default function ContributeToCircle() {
             }
           };
           
-          // Check if members table exists and has the user
+          // Look for the user in the members table
           if (fields.members?.fields?.table?.fields?.contents) {
-            // Try to find the user in the members table
             const memberEntries = fields.members.fields.table.fields.contents;
             
-            // Check if the user is in the members list
             for (const entry of memberEntries) {
               if (entry.fields && entry.fields.key === userAddress) {
                 // Found the user in the members table, check their deposit status
                 const memberData = entry.fields.value.fields;
                 
                 // If deposit_balance is greater than 0, they've paid their deposit
-                const depositPaid = Number(memberData.deposit_balance) > 0;
-                setUserDepositPaid(depositPaid);
-                console.log('User deposit status:', depositPaid ? 'Paid' : 'Not Paid');
+                const depositFromMember = Number(memberData.deposit_balance) > 0;
+                if (depositFromMember) {
+                  depositPaid = true;
+                  console.log('User deposit found in member table:', depositFromMember ? 'Paid' : 'Not Paid');
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      // Second method: Check for custody wallet deposits if we haven't found a deposit yet
+      if (!depositPaid && circle.walletId) {
+        console.log('Checking custody wallet for deposits...');
+        
+        // Query events for deposits made by this user to the custody wallet
+        const custodyDepositEvents = await client.queryEvents({
+          query: {
+            MoveEventType: '0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::CustodyDeposited'
+          },
+          limit: 50
+        });
+        
+        // Process events to find deposits by this user for this circle
+        for (const event of custodyDepositEvents.data) {
+          if (event.parsedJson && typeof event.parsedJson === 'object') {
+            const eventData = event.parsedJson as {
+              circle_id?: string;
+              wallet_id?: string;
+              member?: string;
+              amount?: string;
+            };
+            
+            console.log('Found custody deposit event:', eventData);
+            
+            // Check if this deposit was made by our user to our circle's wallet
+            if (eventData.circle_id === circle.id && 
+                eventData.wallet_id === circle.walletId && 
+                eventData.member === userAddress && 
+                eventData.amount) {
+              // Check if the amount is at least the required security deposit (with some margin for gas)
+              const depositAmount = Number(eventData.amount) / 1e9;
+              if (depositAmount >= circle.securityDeposit * 0.95) { // 5% margin for gas
+                depositPaid = true;
+                console.log('User deposit found in custody events:', depositAmount, 'SUI');
                 break;
               }
             }
           }
         }
       }
+      
+      // Set final deposit status
+      setUserDepositPaid(depositPaid);
+      console.log('Final user deposit status:', depositPaid ? 'Paid' : 'Not Paid');
     } catch (error) {
       console.error('Error fetching user wallet info:', error);
     } finally {
@@ -330,8 +377,50 @@ export default function ContributeToCircle() {
     
     setIsProcessing(true);
     try {
-      toast.success('This page is under construction! Contribution functionality coming soon.');
-      // Implementation will go here in the future
+      if (!userDepositPaid) {
+        toast.error('Security deposit required before contributing');
+        return;
+      }
+      
+      if (!account) {
+        toast.error('User account not available. Please log in again.');
+        return;
+      }
+      
+      toast.loading('Processing contribution...', { id: 'contribute-tx' });
+      
+      // Check if we can contribute directly through the custody wallet
+      if (circle.walletId) {
+        // Execute contribution through the custody wallet
+        const result = await fetch('/api/zkLogin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'contributeFromCustody',
+            account,
+            circleId: circle.id,
+            walletId: circle.walletId
+          }),
+        });
+        
+        const responseData = await result.json();
+        
+        if (!result.ok) {
+          console.error('Contribution failed:', responseData);
+          toast.error(responseData.error || 'Failed to process contribution', { id: 'contribute-tx' });
+          return;
+        }
+        
+        toast.success('Contribution successful!', { id: 'contribute-tx' });
+        console.log('Contribution transaction digest:', responseData.digest);
+        
+        // Refresh user wallet info and circle data
+        fetchUserWalletInfo();
+        fetchCircleDetails();
+      } else {
+        // If no custody wallet ID (fallback to old method)
+        toast.error('Custody wallet not found for this circle', { id: 'contribute-tx' });
+      }
     } catch (error) {
       console.error('Error contributing:', error);
       toast.error('Failed to process contribution');
@@ -357,32 +446,41 @@ export default function ContributeToCircle() {
     try {
       console.log('Preparing to pay security deposit of', circle.securityDeposit, 'SUI to circle:', circle.id);
       
-      // In a real implementation, we would:
-      // 1. Prepare a transaction to call the join_circle function
-      // 2. Send the security deposit to the circle
-      // 3. Handle the result and refresh the UI
-      
-      // For now, we'll use a placeholder and simply show a mock success
-      // This helps avoid wallet integration issues while the UI is being developed
-      setTimeout(() => {
-        toast.success('This is a UI demo. In production, this will connect to your wallet to pay the security deposit.');
+      if (!account) {
+        toast.error('User account not available. Please log in again.');
         setIsPayingDeposit(false);
-      }, 2000);
+        return;
+      }
       
-      // Commented code below is a starting point for the real implementation
-      /*
-      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      toast.loading('Processing security deposit payment...', { id: 'pay-security-deposit' });
       
-      // Format a transaction to join the circle with the security deposit
-      // The exact implementation depends on the wallet integration approach used
-      // in the application, which may vary based on the wallet provider
+      // Execute the transaction through the API
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'paySecurityDeposit',
+          account,
+          walletId: circle.walletId,
+          depositAmount: Math.floor(circle.securityDeposit * 1e9)
+        }),
+      });
       
-      // After transaction success:
-      fetchUserWalletInfo();
-      */
+      const responseData = await response.json();
+      
+      if (!response.ok) {
+        console.error('Security deposit payment failed:', responseData);
+        toast.error(responseData.error || 'Failed to process security deposit payment', { id: 'pay-security-deposit' });
+      } else {
+        toast.success('Security deposit paid successfully!', { id: 'pay-security-deposit' });
+        // Refresh user's wallet info and circle data
+        fetchUserWalletInfo();
+        fetchCircleDetails();
+      }
     } catch (error) {
       console.error('Error paying security deposit:', error);
       toast.error('Failed to process security deposit payment');
+    } finally {
       setIsPayingDeposit(false);
     }
   };
@@ -395,6 +493,23 @@ export default function ContributeToCircle() {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2
     }).format(amount);
+  };
+
+  // Helper function to get valid contribution amount
+  const getValidContributionAmount = () => {
+    // Make sure we have a valid, reasonable number
+    const contributionAmount = typeof circle?.contributionAmount === 'number' 
+      ? circle.contributionAmount : 0;
+    
+    // Validate the amount is reasonable (not millions)
+    const isValidAmount = contributionAmount > 0 && contributionAmount < 1000;
+    
+    // If amount seems incorrect but we have USD value, calculate from USD
+    if (!isValidAmount && circle?.contributionAmountUsd && suiPrice) {
+      return circle.contributionAmountUsd / suiPrice;
+    }
+    
+    return contributionAmount;
   };
 
   // Currency display component
@@ -618,21 +733,53 @@ export default function ContributeToCircle() {
                         <p className="text-sm text-gray-600 mb-2">You are about to contribute:</p>
                         <div className="flex items-center">
                           <span className="bg-blue-100 text-blue-800 text-xl font-semibold rounded-lg py-2 px-4">
-                            <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} />
+                            ${circle.contributionAmountUsd?.toFixed(2) || '0.00'} ({getValidContributionAmount().toFixed(4)} SUI)
                           </span>
                         </div>
                       </div>
 
-                      {/* Show warning if balance is insufficient */}
-                      {userBalance !== null && userBalance < circle.contributionAmount && (
-                        <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg border border-red-200">
-                          <p className="text-sm font-medium">
-                            ⚠️ Your wallet balance is insufficient for this contribution.
-                          </p>
-                        </div>
+                      {/* Debug the balance comparison by logging values */}
+                      {userDepositPaid && userBalance !== null && (
+                        <script dangerouslySetInnerHTML={{
+                          __html: `
+                            console.log("Balance check:", {
+                              userBalance: ${userBalance},
+                              contributionAmount: ${circle.contributionAmount},
+                              hasEnough: ${userBalance >= circle.contributionAmount},
+                              difference: ${userBalance - circle.contributionAmount}
+                            });
+                          `
+                        }} />
                       )}
 
-                      {/* Show warning if security deposit is not paid and add button to pay it */}
+                      {/* Show warning if balance is insufficient - only when deposit is already paid */}
+                      {(() => {
+                        // Skip if deposit not paid or balance not loaded
+                        if (!userDepositPaid || userBalance === null) return null;
+                        
+                        // Get valid contribution amount
+                        const validContributionAmount = getValidContributionAmount();
+                        
+                        // Add small buffer for transaction fees
+                        const requiredWithBuffer = validContributionAmount + 0.01;
+                        
+                        // Only show warning if balance is insufficient
+                        if (userBalance >= requiredWithBuffer) return null;
+                        
+                        return (
+                          <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg border border-red-200">
+                            <p className="text-sm font-medium">
+                              ⚠️ Your wallet balance is insufficient for this contribution.
+                            </p>
+                            <p className="text-xs mt-1">
+                              Required: {validContributionAmount.toFixed(4)} SUI (plus a small amount for transaction fees)<br/>
+                              Available: {userBalance.toFixed(4)} SUI
+                            </p>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Show warning if security deposit is not paid */}
                       {!userDepositPaid && (
                         <div className="mb-4 p-4 bg-amber-50 rounded-lg border-2 border-amber-300">
                           <div className="flex flex-col gap-4">
@@ -655,6 +802,16 @@ export default function ContributeToCircle() {
                               </p>
                             </div>
                             
+                            {/* Show combined insufficient balance warning for both security deposit and contribution */}
+                            {userBalance !== null && circle && userBalance < circle.securityDeposit && (
+                              <div className="p-2 bg-red-50 text-red-700 rounded border border-red-200 text-sm">
+                                <p className="font-medium">Insufficient funds for security deposit</p>
+                                <p className="text-xs mt-1">
+                                  You need {circle.securityDeposit.toFixed(2)} SUI for the security deposit, but your balance is only {userBalance.toFixed(2)} SUI.
+                                </p>
+                              </div>
+                            )}
+                            
                             <button
                               onClick={handlePaySecurityDeposit}
                               disabled={isPayingDeposit || !circle || circle.securityDeposit <= 0 || (userBalance !== null && userBalance < circle.securityDeposit)}
@@ -673,19 +830,19 @@ export default function ContributeToCircle() {
                               )}
                             </button>
                             
-                            {userBalance !== null && circle && userBalance < circle.securityDeposit && (
-                              <p className="text-xs text-red-600">
-                                Your wallet balance is insufficient to pay the security deposit.
-                              </p>
-                            )}
+                            {/* Add note about payment sequence */}
+                            <p className="text-xs text-gray-600">
+                              Note: You must pay the security deposit before you can make contributions.
+                              The deposit is refundable if you decide to leave the circle later.
+                            </p>
                           </div>
                         </div>
                       )}
                     
                       <button
                         onClick={handleContribute}
-                        disabled={isProcessing || (userBalance !== null && userBalance < circle.contributionAmount) || !userDepositPaid}
-                        className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all ${(isProcessing || (userBalance !== null && userBalance < circle.contributionAmount) || !userDepositPaid) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                        disabled={isProcessing || (userBalance !== null && userBalance < getValidContributionAmount() + 0.01) || !userDepositPaid}
+                        className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all ${(isProcessing || (userBalance !== null && userBalance < getValidContributionAmount() + 0.01) || !userDepositPaid) ? 'opacity-70 cursor-not-allowed' : ''}`}
                       >
                         {isProcessing ? 'Processing...' : 'Contribute Now'}
                       </button>
