@@ -787,11 +787,292 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         break;
 
+      case 'activateCircle':
+        // ... existing code for activateCircle ...
+
+      case 'paySecurityDeposit':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!sessionId) {
+          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+        }
+
+        if (!req.body.walletId) {
+          return res.status(400).json({ error: 'Wallet ID is required' });
+        }
+
+        if (!req.body.depositAmount || typeof req.body.depositAmount !== 'number' || req.body.depositAmount <= 0) {
+          return res.status(400).json({ error: 'Valid deposit amount is required' });
+        }
+
+        try {
+          // Log the transaction attempt
+          console.log('Attempting security deposit payment:', {
+            sessionId,
+            address: account.userAddr,
+            walletId: req.body.walletId,
+            depositAmount: req.body.depositAmount,
+            hasSession: sessions.has(sessionId)
+          });
+
+          // Validate session with action context
+          const session = validateSession(sessionId, 'paySecurityDeposit');
+          
+          if (!session.account) {
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Invalid session: No account data found. Please authenticate first.'
+            });
+          }
+
+          // Verify session matches account data
+          if (session.account.userAddr !== account.userAddr || 
+              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Session mismatch: Please refresh your authentication'
+            });
+          }
+
+          // Execute the transaction
+          try {
+            const txResult = await instance.sendTransaction(
+              session.account,
+              (txb: Transaction) => {
+                console.log(`Building moveCall for deposit_to_custody to wallet: ${req.body.walletId}, amount: ${req.body.depositAmount}`);
+                
+                // Create a coin with the exact security deposit amount
+                const [coin] = txb.splitCoins(txb.gas, [txb.pure.u64(BigInt(req.body.depositAmount))]);
+                
+                // Call the deposit_to_custody function
+                txb.moveCall({
+                  target: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::deposit_to_custody`,
+                  arguments: [
+                    txb.object(req.body.walletId),  // custody wallet
+                    coin,                           // payment
+                    txb.object('0x6'),              // clock object
+                  ]
+                });
+              },
+              { gasBudget: 100000000 } // Increase gas budget for deposit operation
+            );
+            
+            console.log('Security deposit payment transaction successful:', txResult);
+            return res.status(200).json({ 
+              digest: txResult.digest,
+              status: txResult.status,
+              gasUsed: txResult.gasUsed
+            });
+          } catch (txError) {
+            console.error('Security deposit transaction error:', txError);
+            return res.status(500).json({ 
+              error: txError instanceof Error ? txError.message : 'Failed to execute security deposit transaction',
+              requireRelogin: txError instanceof Error && 
+                (txError.message.includes('expired') || txError.message.includes('proof')) 
+            });
+          }
+        } catch (err) {
+          console.error('Security deposit error:', err);
+          return res.status(500).json({ 
+            error: err instanceof Error ? err.message : 'Failed to process security deposit',
+            requireRelogin: err instanceof Error && 
+              (err.message.includes('session') || err.message.includes('expired') || err.message.includes('proof'))
+          });
+        }
+
+      case 'configureStablecoinSwap':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!sessionId) {
+          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+        }
+
+        if (!req.body.walletId) {
+          return res.status(400).json({ error: 'Wallet ID is required' });
+        }
+
+        try {
+          // Log the transaction attempt
+          console.log('Configuring stablecoin swap:', {
+            sessionId,
+            address: account.userAddr,
+            walletId: req.body.walletId,
+            enabled: req.body.enabled,
+            targetCoinType: req.body.targetCoinType,
+            slippageTolerance: req.body.slippageTolerance,
+            minimumSwapAmount: req.body.minimumSwapAmount,
+            dexAddress: req.body.dexAddress,
+            hasSession: sessions.has(sessionId)
+          });
+
+          // Validate session with action context
+          const session = validateSession(sessionId, 'configureStablecoinSwap');
+          
+          if (!session.account) {
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Invalid session: No account data found. Please authenticate first.'
+            });
+          }
+
+          // Verify session matches account data
+          if (session.account.userAddr !== account.userAddr || 
+              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Session mismatch: Please refresh your authentication'
+            });
+          }
+
+          // Execute the transaction
+          try {
+            const txResult = await instance.sendTransaction(
+              session.account,
+              (txb: Transaction) => {
+                console.log(`Building moveCall for configure_stablecoin_swap`);
+                
+                // Call the configure_stablecoin_swap function
+                txb.moveCall({
+                  target: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::configure_stablecoin_swap`,
+                  arguments: [
+                    txb.object(req.body.walletId),         // custody wallet
+                    txb.pure.bool(req.body.enabled),       // enabled flag
+                    txb.pure.string(req.body.targetCoinType), // target coin type
+                    txb.pure.address(req.body.dexAddress), // DEX address
+                    txb.pure.u64(BigInt(req.body.slippageTolerance)), // slippage tolerance in basis points
+                    txb.pure.u64(BigInt(req.body.minimumSwapAmount)),  // minimum swap amount
+                  ]
+                });
+              },
+              { gasBudget: 100000000 } // Increase gas budget
+            );
+            
+            console.log('Stablecoin configuration successful:', txResult);
+            return res.status(200).json({ 
+              digest: txResult.digest,
+              status: txResult.status,
+              gasUsed: txResult.gasUsed
+            });
+          } catch (txError) {
+            console.error('Stablecoin configuration error:', txError);
+            return res.status(500).json({ 
+              error: txError instanceof Error ? txError.message : 'Failed to configure stablecoin swap',
+              requireRelogin: txError instanceof Error && 
+                (txError.message.includes('expired') || txError.message.includes('proof')) 
+            });
+          }
+        } catch (err) {
+          console.error('Stablecoin config error:', err);
+          return res.status(500).json({ 
+            error: err instanceof Error ? err.message : 'Failed to process stablecoin configuration',
+            requireRelogin: err instanceof Error && 
+              (err.message.includes('session') || err.message.includes('expired') || err.message.includes('proof'))
+          });
+        }
+
+      case 'contributeFromCustody':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!sessionId) {
+          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+        }
+
+        if (!req.body.circleId || !req.body.walletId) {
+          return res.status(400).json({ error: 'Circle ID and wallet ID are required' });
+        }
+
+        try {
+          // Log the transaction attempt
+          console.log('Processing contribution from custody wallet:', {
+            sessionId,
+            address: account.userAddr,
+            circleId: req.body.circleId,
+            walletId: req.body.walletId,
+            hasSession: sessions.has(sessionId)
+          });
+
+          // Validate session with action context
+          const session = validateSession(sessionId, 'contributeFromCustody');
+          
+          if (!session.account) {
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Invalid session: No account data found. Please authenticate first.'
+            });
+          }
+
+          // Verify session matches account data
+          if (session.account.userAddr !== account.userAddr || 
+              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Session mismatch: Please refresh your authentication'
+            });
+          }
+
+          // Execute the transaction
+          try {
+            const txResult = await instance.sendTransaction(
+              session.account,
+              (txb: Transaction) => {
+                console.log(`Building moveCall for contribute_from_custody`);
+                
+                // Call the contribute_from_custody function
+                txb.moveCall({
+                  target: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::contribute_from_custody`,
+                  arguments: [
+                    txb.object(req.body.circleId),   // circle object
+                    txb.object(req.body.walletId),   // custody wallet
+                    txb.pure.address(account.userAddr), // member address
+                    txb.object('0x6'),               // clock object
+                  ]
+                });
+              },
+              { gasBudget: 100000000 } // Increase gas budget
+            );
+            
+            console.log('Contribution transaction successful:', txResult);
+            return res.status(200).json({ 
+              digest: txResult.digest,
+              status: txResult.status,
+              gasUsed: txResult.gasUsed
+            });
+          } catch (txError) {
+            console.error('Contribution transaction error:', txError);
+            return res.status(500).json({ 
+              error: txError instanceof Error ? txError.message : 'Failed to execute contribution transaction',
+              requireRelogin: txError instanceof Error && 
+                (txError.message.includes('expired') || txError.message.includes('proof')) 
+            });
+          }
+        } catch (err) {
+          console.error('Contribution error:', err);
+          return res.status(500).json({ 
+            error: err instanceof Error ? err.message : 'Failed to process contribution',
+            requireRelogin: err instanceof Error && 
+              (err.message.includes('session') || err.message.includes('expired') || err.message.includes('proof'))
+          });
+        }
+
       default:
-        return res.status(400).json({ error: 'Invalid action' });
+        return res.status(400).json({ error: `Unknown action: ${action}` });
     }
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: (err as Error).message });
+  } catch (error) {
+    console.error('API error:', error);
+    return res.status(500).json({ 
+      error: error instanceof Error ? error.message : 'An internal server error occurred' 
+    });
   }
 } 

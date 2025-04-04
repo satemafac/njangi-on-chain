@@ -139,7 +139,13 @@ const prepareCircleCreationData = (formData: CircleFormData, suiPrice: number) =
   // Convert amounts to MIST (1 SUI = 1e9 MIST)
   // Use real-time conversion of USD to SUI at transaction time
   const contribution_amount = BigInt(Math.round(formData.contributionAmountUSD / suiPrice * 1e9));
-  const security_deposit = BigInt(Math.round(formData.securityDepositUSD / suiPrice * 1e9));
+  
+  // Ensure security deposit is at least 50% of contribution amount as required by the contract
+  const min_security_deposit = contribution_amount / BigInt(2);
+  const calculated_security_deposit = BigInt(Math.round(formData.securityDepositUSD / suiPrice * 1e9));
+  const security_deposit = calculated_security_deposit >= min_security_deposit 
+    ? calculated_security_deposit 
+    : min_security_deposit;
 
   // Convert penalty rules to array of booleans
   const penalty_rules = [
@@ -195,7 +201,8 @@ export default function CreateCircle() {
       missedMeeting: false,
     },
   });
-  const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
+  const [suiPrice, setSuiPrice] = useState<number | null>(null); // Changed to allow null
+  const [isPriceAvailable, setIsPriceAvailable] = useState(false);
   const [inviteMembers, setInviteMembers] = useState<InviteMember[]>([]);
   const [inviteInput, setInviteInput] = useState('');
   const [inviteType, setInviteType] = useState<'email' | 'phone'>('email');
@@ -208,6 +215,7 @@ export default function CreateCircle() {
     const fetchPrice = async () => {
       const price = await priceService.getSUIPrice();
       setSuiPrice(price);
+      setIsPriceAvailable(price !== null);
     };
 
     fetchPrice();
@@ -217,12 +225,16 @@ export default function CreateCircle() {
     return () => clearInterval(interval);
   }, []);
 
-  // Update conversion helpers to use $20 increments
-  const snapToTwentyDollars = (usdAmount: number) => {
-    return Math.round(usdAmount / 20) * 20; // Snap to nearest $20
+  // Update conversion helpers to allow precise values for testnet
+  const snapToTwentyDollars = (usdAmount: number, forceSnap: boolean = false) => {
+    if (forceSnap) {
+      return Math.round(usdAmount / 20) * 20; // Snap to nearest $20
+    }
+    return usdAmount; // Allow any value for testnet testing
   };
 
   const convertUSDtoSUI = (usdAmount: number) => {
+    if (!isPriceAvailable || suiPrice === null) return 0;
     return Number((usdAmount / suiPrice).toFixed(6));
   };
 
@@ -233,7 +245,9 @@ export default function CreateCircle() {
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
             <span className={`cursor-help ${className}`}>
-              {formatUSD(usd)} <span className="text-gray-500">({sui.toFixed(2)} SUI)</span>
+              {formatUSD(usd)} {isPriceAvailable ? 
+                <span className="text-gray-500">({sui.toFixed(2)} SUI)</span> : 
+                <span className="text-yellow-500">(SUI price unavailable)</span>}
             </span>
           </Tooltip.Trigger>
           <Tooltip.Portal>
@@ -242,9 +256,18 @@ export default function CreateCircle() {
               sideOffset={5}
             >
               <div className="space-y-1">
-                <p>Live Conversion Rate:</p>
-                <p>1 SUI = {formatUSD(suiPrice)}</p>
-                <p className="text-xs text-gray-400">Updates every minute</p>
+                {isPriceAvailable ? (
+                  <>
+                    <p>Live Conversion Rate:</p>
+                    <p>1 SUI = {formatUSD(suiPrice!)}</p>
+                    <p className="text-xs text-gray-400">Updates every minute</p>
+                  </>
+                ) : (
+                  <>
+                    <p>SUI price currently unavailable</p>
+                    <p className="text-xs text-gray-400">SUI conversion will be applied at transaction time</p>
+                  </>
+                )}
               </div>
               <Tooltip.Arrow className="fill-gray-900" />
             </Tooltip.Content>
@@ -311,9 +334,15 @@ export default function CreateCircle() {
       return;
     }
     
+    // Check if SUI price is available
+    if (!isPriceAvailable) {
+      setValidationErrors(["SUI price is currently unavailable. Please try again later."]);
+      return;
+    }
+    
     try {
       // Prepare data for contract with current SUI price
-      const contractData = prepareCircleCreationData(formData, suiPrice);
+      const contractData = prepareCircleCreationData(formData, suiPrice!);
       
       // Convert BigInt values to strings for JSON serialization
       const serializedData = {
@@ -580,7 +609,7 @@ export default function CreateCircle() {
                       placeholder="Enter amount in USD"
                       className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                       min="0"
-                      step="20"
+                      step="0.01"
                     />
                     <span className="text-gray-500">USD</span>
                   </div>
@@ -873,7 +902,7 @@ export default function CreateCircle() {
                       placeholder="Enter amount in USD"
                       className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                       min="0"
-                      step="20"
+                      step="0.01"
                     />
                     <span className="text-gray-500">USD</span>
                   </div>

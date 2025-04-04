@@ -26,6 +26,13 @@ interface Circle {
   currentMembers: number;
   nextPayoutTime: number;
   isActive: boolean;
+  custody?: {
+    walletId: string;
+    stablecoinEnabled: boolean;
+    stablecoinType: string;
+    stablecoinBalance: number;
+    suiBalance: number;
+  };
 }
 
 // Define a type for the fields from the SUI object
@@ -342,6 +349,71 @@ export default function ManageCircle() {
             }
             return prevCircle;
           });
+        }
+
+        // Look for custody wallet for this circle
+        try {
+          const custodyEvents = await client.queryEvents({
+            query: {
+              MoveEventType: `${PACKAGE_ID}::njangi_circle::CustodyWalletCreated`
+            },
+            limit: 50
+          });
+          
+          // Find custody wallet for this circle
+          let walletId = null;
+          for (const event of custodyEvents.data) {
+            if (event.parsedJson && typeof event.parsedJson === 'object') {
+              const eventJson = event.parsedJson as { circle_id?: string, wallet_id?: string };
+              if (eventJson.circle_id === id && eventJson.wallet_id) {
+                walletId = eventJson.wallet_id;
+                break;
+              }
+            }
+          }
+          
+          if (walletId) {
+            // Get custody wallet details
+            const walletData = await client.getObject({
+              id: walletId,
+              options: { showContent: true }
+            });
+            
+            if (walletData.data?.content && 'fields' in walletData.data.content) {
+              const walletFields = walletData.data.content.fields as {
+                balance: { fields: { value: string } };
+                stablecoin_config?: {
+                  fields: {
+                    enabled: boolean;
+                    target_coin_type: string;
+                    slippage_tolerance: string;
+                    minimum_swap_amount: string;
+                    last_swap_time: string;
+                  }
+                };
+                stablecoin_balance?: string;
+              };
+              
+              // Update circle with custody wallet info
+              setCircle(prevCircle => {
+                if (prevCircle) {
+                  return {
+                    ...prevCircle,
+                    custody: {
+                      walletId,
+                      stablecoinEnabled: walletFields.stablecoin_config?.fields.enabled || false,
+                      stablecoinType: walletFields.stablecoin_config?.fields.target_coin_type || 'USDC',
+                      stablecoinBalance: walletFields.stablecoin_balance ? Number(walletFields.stablecoin_balance) / 1e8 : 0,
+                      suiBalance: walletFields.balance?.fields?.value ? Number(walletFields.balance.fields.value) / 1e9 : 0
+                    }
+                  };
+                }
+                return prevCircle;
+              });
+            }
+          }
+        } catch (error) {
+          console.error('Error fetching custody wallet info:', error);
         }
       }
     } catch (error) {
@@ -738,6 +810,204 @@ export default function ManageCircle() {
   const shortenId = (id: string) => {
     if (!id) return '';
     return `${id.slice(0, 10)}...${id.slice(-8)}`;
+  };
+
+  // Add this new handler function before the return statement
+  const handleStablecoinConfigUpdate = async (enabled: boolean, coinType: string, slippage: number, minAmount: number) => {
+    if (!circle || !circle.custody?.walletId) {
+      toast.error('Custody wallet information not available');
+      return;
+    }
+    
+    try {
+      toast.loading('Updating stablecoin configuration...', { id: 'stablecoin-config' });
+      
+      if (!account) {
+        toast.error('Not logged in. Please login first', { id: 'stablecoin-config' });
+        return;
+      }
+      
+      // Convert minimum amount to SUI with 9 decimals
+      const minAmountInSui = Math.floor(minAmount * 1e9);
+      
+      // Call the API directly
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'configureStablecoinSwap',
+          account,
+          walletId: circle.custody.walletId,
+          enabled,
+          targetCoinType: coinType,
+          slippageTolerance: Math.floor(slippage * 100), // Convert percent to basis points
+          minimumSwapAmount: minAmountInSui,
+          dexAddress: '0x9083c89c2735b4167bd0ed7decdb7ae0a04f35cd3bf10b17a96719b1be62bde6' // Example DEX address
+        }),
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        if (response.status === 401) {
+          toast.error('Authentication failed. Please login again.', { id: 'stablecoin-config' });
+          return;
+        }
+        
+        // Display specific error messages from the server
+        const errorMsg = result.error || 'Transaction failed.';
+        console.error('Server error details:', result);
+        toast.error(errorMsg, { id: 'stablecoin-config' });
+        throw new Error(errorMsg);
+      }
+      
+      // Update toast on success
+      toast.success('Successfully updated stablecoin configuration', { id: 'stablecoin-config' });
+      console.log(`Successfully updated config. Transaction digest: ${result.digest}`);
+      
+      // Update local state
+      setCircle(prevCircle => {
+        if (prevCircle && prevCircle.custody) {
+          return {
+            ...prevCircle,
+            custody: {
+              ...prevCircle.custody,
+              stablecoinEnabled: enabled,
+              stablecoinType: coinType
+            }
+          };
+        }
+        return prevCircle;
+      });
+      
+    } catch (error) {
+      console.error('Error updating stablecoin config:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to update configuration', { id: 'stablecoin-config' });
+    }
+  };
+
+  // Add this new component before the return statement
+  const StablecoinSettings = ({ circle }: { circle: Circle }) => {
+    const [isEnabled, setIsEnabled] = useState(circle.custody?.stablecoinEnabled || false);
+    const [coinType, setCoinType] = useState(circle.custody?.stablecoinType || 'USDC');
+    const [slippage, setSlippage] = useState(0.5); // Default 0.5%
+    const [minAmount, setMinAmount] = useState(1); // Default 1 SUI
+    const [isConfiguring, setIsConfiguring] = useState(false);
+    
+    const handleSubmit = async (e: React.FormEvent) => {
+      e.preventDefault();
+      setIsConfiguring(true);
+      
+      try {
+        await handleStablecoinConfigUpdate(isEnabled, coinType, slippage, minAmount);
+      } finally {
+        setIsConfiguring(false);
+      }
+    };
+    
+    return (
+      <div className="bg-white rounded-lg shadow-md overflow-hidden">
+        <div className="bg-blue-50 px-4 py-3 border-b border-blue-100">
+          <h3 className="text-lg font-semibold text-blue-800">Stablecoin Auto-Swap Settings</h3>
+          <p className="text-sm text-blue-600">Configure automatic conversion of SUI to stablecoins to protect from market volatility</p>
+        </div>
+        
+        <div className="p-4">
+          {!circle.custody?.walletId ? (
+            <div className="text-center p-4 text-gray-500">
+              <p>Custody wallet information not available</p>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="font-medium text-gray-800">Auto-Swap Funds</h4>
+                  <p className="text-sm text-gray-500">Automatically convert SUI to stablecoins when received</p>
+                </div>
+                <div className="flex items-center">
+                  <button
+                    type="button"
+                    onClick={() => setIsEnabled(!isEnabled)}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full ${isEnabled ? 'bg-blue-600' : 'bg-gray-200'}`}
+                  >
+                    <span className="sr-only">Enable auto-swap</span>
+                    <span 
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${isEnabled ? 'translate-x-6' : 'translate-x-1'}`} 
+                    />
+                  </button>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="stablecoin-type" className="block text-sm font-medium text-gray-700">Stablecoin Type</label>
+                  <select 
+                    id="stablecoin-type"
+                    value={coinType}
+                    onChange={(e) => setCoinType(e.target.value)}
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    disabled={!isEnabled}
+                  >
+                    <option value="USDC">USDC</option>
+                    <option value="USDT">USDT</option>
+                    <option value="DAI">DAI</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label htmlFor="slippage" className="block text-sm font-medium text-gray-700">Slippage Tolerance (%)</label>
+                  <input 
+                    type="number" 
+                    id="slippage"
+                    value={slippage}
+                    onChange={(e) => setSlippage(Number(e.target.value))}
+                    min="0.1"
+                    max="5"
+                    step="0.1"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    disabled={!isEnabled}
+                  />
+                </div>
+                
+                <div>
+                  <label htmlFor="min-amount" className="block text-sm font-medium text-gray-700">Minimum Swap Amount (SUI)</label>
+                  <input 
+                    type="number" 
+                    id="min-amount"
+                    value={minAmount}
+                    onChange={(e) => setMinAmount(Number(e.target.value))}
+                    min="0.1"
+                    step="0.1"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    disabled={!isEnabled}
+                  />
+                </div>
+                
+                {circle.custody && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Wallet Balances</label>
+                    <div className="mt-1 text-sm">
+                      <p><span className="font-medium">SUI:</span> {circle.custody.suiBalance.toFixed(2)} SUI</p>
+                      <p><span className="font-medium">{circle.custody.stablecoinType}:</span> {formatUSD(circle.custody.stablecoinBalance)}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+              
+              <div className="pt-3">
+                <button
+                  type="submit"
+                  className={`w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${isConfiguring ? 'opacity-75 cursor-not-allowed' : ''}`}
+                  disabled={isConfiguring}
+                >
+                  {isConfiguring ? 'Updating...' : 'Update Configuration'}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
+    );
   };
 
   if (!isAuthenticated || !account) {
@@ -1138,6 +1408,11 @@ export default function ManageCircle() {
                         </Tooltip.Root>
                       </Tooltip.Provider>
                     </div>
+                  </div>
+                  
+                  {/* Stablecoin Auto-Swap Configuration */}
+                  <div className="pt-6 border-t border-gray-200 px-2 mt-6">
+                    {circle && <StablecoinSettings circle={circle} />}
                   </div>
                 </div>
               ) : (

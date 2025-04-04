@@ -646,112 +646,279 @@ export default function Dashboard() {
           if (!circleMap.has(parsedEvent.circle_id)) {
             // Need to fetch more details about this circle
             try {
+              // First try to get the specific circle details
+              console.log(`Fetching member circle details for ${parsedEvent.circle_id}`);
+              
+              // Use same approach as admin circles to get complete data
+              const creationEvents = await client.queryEvents({
+                query: {
+                  MoveEventType: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::CircleCreated`
+                },
+                limit: 100
+              });
+              
+              // Find the creation event for this specific circle
+              const creationEvent = creationEvents.data.find(event => {
+                if (event.parsedJson && typeof event.parsedJson === 'object') {
+                  const eventJson = event.parsedJson as { circle_id?: string };
+                  return eventJson.circle_id === parsedEvent.circle_id;
+                }
+                return false;
+              });
+              
+              console.log('Found creation event for member circle:', creationEvent);
+              
+              // Get detailed object data
               const objectData = await client.getObject({
                 id: parsedEvent.circle_id,
                 options: { showContent: true }
               });
               
-              // Log the entire object to better understand its structure
-              console.log('Member circle object data:', JSON.stringify(objectData.data, null, 2));
-              
               const content = objectData.data?.content;
-              if (content && 'fields' in content) {
-                // Log the entire fields object to see what properties are available
-                console.log('Member circle fields:', JSON.stringify(content.fields, null, 2));
+              let addedToMap = false;
+              
+              // Process creation event data first if available
+              if (creationEvent && creationEvent.parsedJson) {
+                const creationData = creationEvent.parsedJson as CircleCreatedEvent;
+                console.log('Circle creation data:', creationData);
                 
-                const fields = content.fields as {
-                  name: string;
-                  admin: string;
-                  contribution_amount: string;
-                  contribution_amount_usd: string;
-                  security_deposit: string;
-                  security_deposit_usd: string;
-                  cycle_length: string;
-                  cycle_day: string;
-                  max_members: string;
-                  current_members: string;
-                  next_payout_time: string;
-                  // Try to look for nested USD amounts
-                  usd_amounts?: {
-                    contribution_amount?: string;
-                    security_deposit?: string;
-                    target_amount?: string;
-                  };
-                };
-                
-                // Get the USD amounts, checking both direct fields and potentially nested usd_amounts
+                // Get USD values from creation event
                 let contributionAmountUsd = 0;
                 let securityDepositUsd = 0;
                 
-                // Check for direct fields first
-                if (fields.contribution_amount_usd) {
-                  contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
-                } 
-                // Then check for nested usd_amounts structure
-                else if (fields.usd_amounts && fields.usd_amounts.contribution_amount) {
-                  contributionAmountUsd = Number(fields.usd_amounts.contribution_amount) / 100;
+                if (creationData.contribution_amount_usd) {
+                  contributionAmountUsd = Number(creationData.contribution_amount_usd) / 100;
+                  console.log('Using contribution_amount_usd from creation event:', contributionAmountUsd);
                 }
                 
-                // Same for security deposit
-                if (fields.security_deposit_usd) {
-                  securityDepositUsd = Number(fields.security_deposit_usd) / 100;
-                  console.log('Found direct security_deposit_usd:', fields.security_deposit_usd);
-                }
-                else if (fields.usd_amounts && fields.usd_amounts.security_deposit) {
-                  securityDepositUsd = Number(fields.usd_amounts.security_deposit) / 100;
-                  console.log('Found usd_amounts.security_deposit:', fields.usd_amounts.security_deposit);
-                }
-                else if (parsedEvent.security_deposit_usd) {
-                  securityDepositUsd = Number(parsedEvent.security_deposit_usd) / 100;
-                  console.log('Using event security_deposit_usd:', parsedEvent.security_deposit_usd);
+                if (creationData.security_deposit_usd) {
+                  securityDepositUsd = Number(creationData.security_deposit_usd) / 100;
+                  console.log('Using security_deposit_usd from creation event:', securityDepositUsd);
                 }
                 
-                // Log data for debugging
-                console.log('Member circle USD values after processing:', {
-                  circleId: parsedEvent.circle_id,
-                  contributionUSD: contributionAmountUsd,
-                  securityDepositUSD: securityDepositUsd,
-                  directFieldsPresent: {
-                    contribution_amount_usd: !!fields.contribution_amount_usd,
-                    security_deposit_usd: !!fields.security_deposit_usd
-                  },
-                  usdAmountsPresent: !!fields.usd_amounts
-                });
-                
-                // We'll use the SUI amounts directly from the contract
-                const contributionAmountSui = Number(fields.contribution_amount) / 1e9;
-                const securityDepositSui = Number(fields.security_deposit) / 1e9;
-                
-                // Debug log the final values we'll use
-                console.log('Final USD values for member circle:', {
-                  contributionUSD: contributionAmountUsd,
-                  securityDepositUSD: securityDepositUsd
-                });
-                
-                // Get accurate member count from blockchain events
-                const actualMemberCount = await getCircleMemberCount(parsedEvent.circle_id);
-                
-                // Check if the circle has been activated
-                const isActive = activatedCircleIds.has(parsedEvent.circle_id);
-                
-                circleMap.set(parsedEvent.circle_id, {
-                  id: parsedEvent.circle_id,
-                  name: fields.name,
-                  admin: fields.admin,
-                  contributionAmount: contributionAmountSui,
-                  contributionAmountUsd: contributionAmountUsd || 0, 
-                  securityDeposit: securityDepositSui,
-                  securityDepositUsd: securityDepositUsd || 0,
-                  cycleLength: Number(fields.cycle_length),
-                  cycleDay: Number(fields.cycle_day),
-                  maxMembers: Number(fields.max_members),
-                  currentMembers: actualMemberCount, // Use actual member count
-                  nextPayoutTime: Number(fields.next_payout_time),
-                  memberStatus: 'active', // Default, will update if needed
-                  isAdmin: fields.admin === userAddress,
-                  isActive: isActive
-                });
+                // Handle the case when fields from the object are available
+                if (content && 'fields' in content) {
+                  console.log('Got object fields for member circle');
+                  const fields = content.fields as {
+                    name: string;
+                    admin: string;
+                    contribution_amount: string;
+                    contribution_amount_usd: string;
+                    security_deposit: string;
+                    security_deposit_usd: string;
+                    cycle_length: string;
+                    cycle_day: string;
+                    max_members: string;
+                    current_members: string;
+                    next_payout_time: string;
+                    usd_amounts?: {
+                      contribution_amount?: string;
+                      security_deposit?: string;
+                      target_amount?: string;
+                    };
+                  };
+                  
+                  // Try to get USD values from object first
+                  if (fields.contribution_amount_usd) {
+                    contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
+                    console.log('Overriding with direct contribution_amount_usd:', contributionAmountUsd);
+                  } else if (fields.usd_amounts && fields.usd_amounts.contribution_amount) {
+                    contributionAmountUsd = Number(fields.usd_amounts.contribution_amount) / 100;
+                    console.log('Overriding with usd_amounts.contribution_amount:', contributionAmountUsd);
+                  }
+                  
+                  if (fields.security_deposit_usd) {
+                    securityDepositUsd = Number(fields.security_deposit_usd) / 100;
+                    console.log('Overriding with direct security_deposit_usd:', securityDepositUsd);
+                  } else if (fields.usd_amounts && fields.usd_amounts.security_deposit) {
+                    securityDepositUsd = Number(fields.usd_amounts.security_deposit) / 100;
+                    console.log('Overriding with usd_amounts.security_deposit:', securityDepositUsd);
+                  }
+                  
+                  // Also try values from the member join event if needed
+                  if (contributionAmountUsd === 0 && parsedEvent.contribution_amount_usd) {
+                    contributionAmountUsd = Number(parsedEvent.contribution_amount_usd) / 100;
+                    console.log('Fallback to event contribution_amount_usd:', contributionAmountUsd);
+                  }
+                  
+                  if (securityDepositUsd === 0 && parsedEvent.security_deposit_usd) {
+                    securityDepositUsd = Number(parsedEvent.security_deposit_usd) / 100;
+                    console.log('Fallback to event security_deposit_usd:', securityDepositUsd);
+                  }
+                  
+                  // Calculate SUI values
+                  const contributionAmountSui = Number(fields.contribution_amount) / 1e9;
+                  const securityDepositSui = Number(fields.security_deposit) / 1e9;
+                  
+                  console.log('Final member circle values:', {
+                    name: fields.name,
+                    contributionAmountSui,
+                    contributionAmountUsd,
+                    securityDepositSui,
+                    securityDepositUsd
+                  });
+                  
+                  // Get accurate member count and check if circle is active
+                  const actualMemberCount = await getCircleMemberCount(parsedEvent.circle_id);
+                  const isActive = activatedCircleIds.has(parsedEvent.circle_id);
+                  
+                  // Add to map with all available data
+                  circleMap.set(parsedEvent.circle_id, {
+                    id: parsedEvent.circle_id,
+                    name: fields.name,
+                    admin: fields.admin,
+                    contributionAmount: contributionAmountSui,
+                    contributionAmountUsd: contributionAmountUsd,
+                    securityDeposit: securityDepositSui,
+                    securityDepositUsd: securityDepositUsd,
+                    cycleLength: Number(fields.cycle_length),
+                    cycleDay: Number(fields.cycle_day),
+                    maxMembers: Number(fields.max_members),
+                    currentMembers: actualMemberCount,
+                    nextPayoutTime: Number(fields.next_payout_time),
+                    memberStatus: 'active',
+                    isAdmin: fields.admin === userAddress,
+                    isActive: isActive
+                  });
+                  
+                  addedToMap = true;
+                } else if (creationData) {
+                  // If we can't get object fields but have creation data
+                  console.log('Using only creation event data for member circle');
+                  
+                  // Get accurate member count and check if circle is active
+                  const actualMemberCount = await getCircleMemberCount(parsedEvent.circle_id);
+                  const isActive = activatedCircleIds.has(parsedEvent.circle_id);
+                  
+                  // Calculate SUI amount from USD if we have it
+                  let contributionAmountSui = 0;
+                  if (contributionAmountUsd > 0 && suiPrice && suiPrice > 0) {
+                    contributionAmountSui = contributionAmountUsd / suiPrice;
+                    console.log('Calculated SUI amount from USD:', contributionAmountSui);
+                  }
+                  
+                  circleMap.set(parsedEvent.circle_id, {
+                    id: parsedEvent.circle_id,
+                    name: creationData.name,
+                    admin: creationData.admin,
+                    contributionAmount: contributionAmountSui,
+                    contributionAmountUsd: contributionAmountUsd,
+                    securityDeposit: 0, // No reliable way to get this
+                    securityDepositUsd: securityDepositUsd,
+                    cycleLength: Number(creationData.cycle_length),
+                    cycleDay: 0, // We don't have this from creation event
+                    maxMembers: Number(creationData.max_members),
+                    currentMembers: actualMemberCount,
+                    nextPayoutTime: 0, // We don't have this
+                    memberStatus: 'active',
+                    isAdmin: creationData.admin === userAddress,
+                    isActive: isActive
+                  });
+                  
+                  addedToMap = true;
+                }
               }
+              
+              // Fallback to old method if we couldn't add it to the map yet
+              if (!addedToMap) {
+                console.log('Falling back to original method for member circle');
+                
+                if (content && 'fields' in content) {
+                  // Log the entire fields object to see what properties are available
+                  console.log('Member circle fields:', JSON.stringify(content.fields, null, 2));
+                  
+                  const fields = content.fields as {
+                    name: string;
+                    admin: string;
+                    contribution_amount: string;
+                    contribution_amount_usd: string;
+                    security_deposit: string;
+                    security_deposit_usd: string;
+                    cycle_length: string;
+                    cycle_day: string;
+                    max_members: string;
+                    current_members: string;
+                    next_payout_time: string;
+                    // Try to look for nested USD amounts
+                    usd_amounts?: {
+                      contribution_amount?: string;
+                      security_deposit?: string;
+                      target_amount?: string;
+                    };
+                  };
+                  
+                  // Get the USD amounts, checking both direct fields and potentially nested usd_amounts
+                  let contributionAmountUsd = 0;
+                  let securityDepositUsd = 0;
+                  
+                  // Check for direct fields first
+                  if (fields.contribution_amount_usd) {
+                    contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
+                    console.log('Found direct contribution_amount_usd for member:', fields.contribution_amount_usd);
+                  } 
+                  // Then check for nested usd_amounts structure
+                  else if (fields.usd_amounts && fields.usd_amounts.contribution_amount) {
+                    contributionAmountUsd = Number(fields.usd_amounts.contribution_amount) / 100;
+                    console.log('Found usd_amounts.contribution_amount for member:', fields.usd_amounts.contribution_amount);
+                  }
+                  // Finally, check if it's in the parsedEvent directly
+                  else if (parsedEvent.contribution_amount_usd) {
+                    contributionAmountUsd = Number(parsedEvent.contribution_amount_usd) / 100;
+                    console.log('Using event contribution_amount_usd for member:', parsedEvent.contribution_amount_usd);
+                  }
+                  
+                  // Same for security deposit
+                  if (fields.security_deposit_usd) {
+                    securityDepositUsd = Number(fields.security_deposit_usd) / 100;
+                    console.log('Found direct security_deposit_usd for member:', fields.security_deposit_usd);
+                  }
+                  else if (fields.usd_amounts && fields.usd_amounts.security_deposit) {
+                    securityDepositUsd = Number(fields.usd_amounts.security_deposit) / 100;
+                    console.log('Found usd_amounts.security_deposit for member:', fields.usd_amounts.security_deposit);
+                  }
+                  else if (parsedEvent.security_deposit_usd) {
+                    securityDepositUsd = Number(parsedEvent.security_deposit_usd) / 100;
+                    console.log('Using event security_deposit_usd for member:', parsedEvent.security_deposit_usd);
+                  }
+                  
+                  // We'll use the SUI amounts directly from the contract
+                  const contributionAmountSui = Number(fields.contribution_amount) / 1e9;
+                  const securityDepositSui = Number(fields.security_deposit) / 1e9;
+                  
+                  // Debug log the final values we'll use
+                  console.log('Final USD values for fallback member circle:', {
+                    contributionUSD: contributionAmountUsd,
+                    securityDepositUSD: securityDepositUsd,
+                    contributionSUI: contributionAmountSui,
+                    securityDepositSUI: securityDepositSui
+                  });
+                  
+                  // Get accurate member count from blockchain events
+                  const actualMemberCount = await getCircleMemberCount(parsedEvent.circle_id);
+                  
+                  // Check if the circle has been activated
+                  const isActive = activatedCircleIds.has(parsedEvent.circle_id);
+                  
+                  circleMap.set(parsedEvent.circle_id, {
+                    id: parsedEvent.circle_id,
+                    name: fields.name,
+                    admin: fields.admin,
+                    contributionAmount: contributionAmountSui,
+                    contributionAmountUsd: contributionAmountUsd || 0, 
+                    securityDeposit: securityDepositSui,
+                    securityDepositUsd: securityDepositUsd || 0,
+                    cycleLength: Number(fields.cycle_length),
+                    cycleDay: Number(fields.cycle_day),
+                    maxMembers: Number(fields.max_members),
+                    currentMembers: actualMemberCount, // Use actual member count
+                    nextPayoutTime: Number(fields.next_payout_time),
+                    memberStatus: 'active', // Default, will update if needed
+                    isAdmin: fields.admin === userAddress,
+                    isActive: isActive
+                  });
+                }
+              }
+              
             } catch (err) {
               console.error(`Error fetching circle details for ${parsedEvent.circle_id}:`, err);
             }
@@ -1226,6 +1393,11 @@ export default function Dashboard() {
     
     console.log('CurrencyDisplay inputs:', { usd, sui, suiPrice, isPriceUnavailable });
     
+    // Debug logging
+    if (usd === 0 || sui === 0) {
+      console.log('Zero values detected in CurrencyDisplay:', { usd, sui });
+    }
+    
     // Check for invalid inputs and provide defaults
     if ((usd === undefined || isNaN(usd)) && (sui === undefined || isNaN(sui))) {
       console.log('CurrencyDisplay: both usd and sui values are invalid, defaulting to 0');
@@ -1250,7 +1422,7 @@ export default function Dashboard() {
       // If SUI is provided and valid, calculate USD
       calculatedSui = sui;
       calculatedUsd = suiPrice !== null ? sui * suiPrice : null;
-      console.log('CurrencyDisplay: using SUI value to calculate SUI:', { 
+      console.log('CurrencyDisplay: using SUI value to calculate USD:', { 
         sui: calculatedSui, 
         usd: calculatedUsd,
         suiPrice 
@@ -1263,6 +1435,16 @@ export default function Dashboard() {
         sui: calculatedSui, 
         usd: calculatedUsd 
       });
+    }
+    
+    // Special case for zero values - check if this is intentional or missing data
+    if (calculatedUsd === 0 && calculatedSui === 0) {
+      // Just display as "N/A" or "$0" to be clearer in UI
+      return (
+        <span className={`${className}`}>
+          {isPriceUnavailable ? "Data unavailable" : "$0.00 (0 SUI)"}
+        </span>
+      );
     }
     
     // Format SUI with appropriate precision if available
