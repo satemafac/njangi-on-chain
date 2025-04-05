@@ -282,7 +282,7 @@ export default function Dashboard() {
       try {
         createdCircles = await client.queryEvents({
           query: {
-            MoveEventType: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::CircleCreated`
+            MoveEventType: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::CircleCreated`
           },
           order: 'descending',
           limit: 50, // Limit to 50 most recent circles
@@ -297,7 +297,7 @@ export default function Dashboard() {
       try {
         joinedCircles = await client.queryEvents({
           query: {
-            MoveEventType: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::MemberJoined`
+            MoveEventType: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::MemberJoined`
           },
           order: 'descending',
           limit: 100, // Limit to 100 most recent joins
@@ -312,7 +312,7 @@ export default function Dashboard() {
       try {
         activationEvents = await client.queryEvents({
           query: {
-            MoveEventType: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::CircleActivated`
+            MoveEventType: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::CircleActivated`
           },
           order: 'descending',
           limit: 100, // Limit to 100 most recent activations
@@ -356,7 +356,7 @@ export default function Dashboard() {
           // Fetch all MemberJoined events and filter in code
           const memberEvents = await client.queryEvents({
             query: {
-              MoveEventType: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::MemberJoined`
+              MoveEventType: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::MemberJoined`
             },
             limit: 1000 // Increased limit to capture more events
           });
@@ -652,7 +652,7 @@ export default function Dashboard() {
               // Use same approach as admin circles to get complete data
               const creationEvents = await client.queryEvents({
                 query: {
-                  MoveEventType: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::CircleCreated`
+                  MoveEventType: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::CircleCreated`
                 },
                 limit: 100
               });
@@ -1147,7 +1147,7 @@ export default function Dashboard() {
     console.log("Available wallet methods:", Object.keys(wallet));
     
     // Updated package ID to the newly published contract
-    const packageId = "0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8";
+    const packageId = "0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c";
     console.log("Using packageId:", packageId);
     
     setIsDeleting(circleId);

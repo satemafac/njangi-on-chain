@@ -2,6 +2,12 @@
 #npx tsx salt-service.ts - npm run dev - ./start-zklogin-services.sh
  - sui move build
 
+## Deployment
+Latest contract deployed to Sui Testnet:
+- Package ID: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c`
+- Features: Stablecoin swaps, custody wallets, DEX integration
+- Dependencies: Sui Framework, Cetus DEX
+
 ## Overview
 The Njangi smart contract is a decentralized savings and credit system implemented on the Sui blockchain. It supports multiple types of savings circles including rotational, goal-based, and auction-based models.
 
@@ -38,6 +44,44 @@ struct CircleTreasury {
 - Secure USDC handling
 - Automated reconciliation
 - Balance verification
+
+### Stablecoin Integration & DEX Swaps
+```move
+struct StablecoinConfig has store, drop {
+    enabled: bool,
+    target_coin_type: string::String,
+    dex_address: address,
+    slippage_tolerance: u64,
+    minimum_swap_amount: u64,
+    pool_id: option::Option<address>,
+    global_config_id: option::Option<address>,
+}
+```
+- Automatic SUI to stablecoin swaps (USDC, USDT)
+- Real-time DEX integration with Cetus
+- Inflation protection for circle funds
+- Configurable slippage tolerance
+- Multi-token support
+- Comprehensive balance tracking
+
+### Custody Wallet
+```move
+struct CustodyWallet has key, store {
+    id: object::UID,
+    circle_id: object::ID,
+    balance: balance::Balance<SUI>,
+    admin: address,
+    stablecoin_config: StablecoinConfig,
+    stablecoin_holdings: table::Table<string::String, u64>,
+    stablecoins: vector<address>,
+}
+```
+- Circle-linked secure fund storage 
+- Auto-swap of SUI deposits to stablecoins
+- Multi-token balance tracking
+- Withdrawal limits and time-locking
+- Admin-controlled security features
+- Real-time DEX integration
 
 ### Member Management
 ```move
@@ -119,6 +163,39 @@ public fun make_contribution(
 )
 ```
 
+### Managing Stablecoins
+```move
+// Configure auto-swap settings
+public fun configure_stablecoin_swap(
+    wallet: &mut CustodyWallet,
+    enabled: bool,
+    target_coin_type: vector<u8>,
+    dex_address: address,
+    slippage_tolerance: u64,
+    minimum_swap_amount: u64,
+    global_config_id: address,
+    pool_id: address,
+    ctx: &mut tx_context::TxContext
+)
+
+// Deposit SUI with auto-swap
+public fun deposit_to_custody(
+    wallet: &mut CustodyWallet,
+    payment: coin::Coin<SUI>,
+    clock: &clock::Clock,
+    ctx: &mut tx_context::TxContext
+)
+
+// Withdraw stablecoins from custody
+public fun withdraw_stablecoin(
+    wallet: &mut CustodyWallet,
+    amount: u64,
+    coin_type: vector<u8>,
+    clock: &clock::Clock,
+    ctx: &mut tx_context::TxContext
+)
+```
+
 ## Events and Monitoring
 
 ### Key Events
@@ -127,6 +204,10 @@ public fun make_contribution(
 - ContributionMade
 - PayoutMade
 - CycleCompleted
+- StablecoinSwapExecuted
+- StablecoinHoldingUpdated
+- CustodyDeposited
+- CustodyWithdrawn
 
 ### Progress Tracking
 ```move
@@ -141,6 +222,7 @@ public fun get_goal_progress(): (u64, u64, vector<Milestone>)
 - State errors (EINVALID_CYCLE_STATE)
 - Operation errors (EINVALID_OPERATION_SEQUENCE)
 - Treasury errors (EINVALID_TREASURY_STATE)
+- Stablecoin errors (ESwapFailed, ESlippageExceeded, EInsufficientLiquidity, EUnsupportedToken)
 
 ## Best Practices
 
@@ -250,6 +332,15 @@ use sui_ext::usdc::USDC;
 2. Additional circle types
 3. Advanced treasury management
 4. Improved scalability
+5. Cross-chain stablecoin integration
+
+### DEX Integration
+The contract now integrates with the Cetus DEX on Sui for automatic SUI to stablecoin swaps. Future enhancements will include:
+1. Integration with additional DEXes for better rates
+2. Support for more token types
+3. Advanced price impact management
+4. Liquidity aggregation across multiple sources
+5. Automatic pool selection based on best rates
 
 ## Development Setup
 

@@ -12,7 +12,8 @@ module njangi::njangi_circle {
     use std::string;
     use std::vector;
     use std::option;
-
+    use std::type_name;
+    
     // ----------------------------------------------------------
     // Constants and Error codes
     // ----------------------------------------------------------
@@ -64,7 +65,12 @@ module njangi::njangi_circle {
     const EFundsTimeLocked: u64 = 44;
     const EExceedsWithdrawalLimit: u64 = 45;
     const EWalletCircleMismatch: u64 = 46;
-
+    const ESwapFailed: u64 = 47;
+    const ESlippageExceeded: u64 = 48;
+    const EInsufficientLiquidity: u64 = 49;
+    const EUnsupportedToken: u64 = 50;
+    const ESwapModuleNotAvailable: u64 = 51;
+    
     // Time constants (all in milliseconds)
     const MS_PER_DAY: u64 = 86_400_000;       // 24 * 60 * 60 * 1000
     const MS_PER_WEEK: u64 = 604_800_000;     // 7  * 24 * 60 * 60 * 1000
@@ -73,7 +79,7 @@ module njangi::njangi_circle {
     // Day constants (as u64 for consistent % operations)
     const DAYS_IN_WEEK: u64 = 7;
     const DAYS_IN_MONTH: u64 = 28;
-
+    
     // Member status constants
     const MEMBER_STATUS_ACTIVE: u8 = 0;
     const MEMBER_STATUS_PENDING: u8 = 1;  // New status for members who joined without deposit
@@ -88,7 +94,14 @@ module njangi::njangi_circle {
     const CUSTODY_OP_DEPOSIT: u8 = 0;
     const CUSTODY_OP_WITHDRAWAL: u8 = 1;
     const CUSTODY_OP_PAYOUT: u8 = 2;
-
+    
+    // Testnet addresses for stablecoins
+    const USDC_TYPE: vector<u8> = b"0x9e89965f542887a8f0383451ba553fedf62c04e4dc68f60dec5b8d7ad1436bd6::usdc::USDC";
+    const USDT_TYPE: vector<u8> = b"0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08::usdt::USDT";
+    
+    // Cetus testnet addresses
+    const CETUS_PACKAGE: address = @0x0868b71c0cba55bf0faf6c40df8c179c67a4d0ba0e79965b68b3d72d7dfbf666;
+    
     // ----------------------------------------------------------
     // Helper functions to handle SUI decimal scaling
     // ----------------------------------------------------------
@@ -123,6 +136,18 @@ module njangi::njangi_circle {
         target_amount: option::Option<u64>, // USD amount * 100 (cents)
     }
     
+    // Add a new struct for stablecoin configuration
+    public struct StablecoinConfig has store, drop {
+        enabled: bool,
+        target_coin_type: string::String,    // Type of stablecoin to swap to
+        dex_address: address,                // Address of the DEX to use
+        slippage_tolerance: u64,             // Slippage tolerance in basis points (e.g., 50 = 0.5%)
+        last_swap_time: u64,                 // Timestamp of last swap
+        minimum_swap_amount: u64,            // Minimum amount to swap (to avoid dust)
+        pool_id: option::Option<address>,    // Pool ID for the SUI-Stablecoin pair
+        global_config_id: option::Option<address>, // ID of the Cetus global config
+    }
+    
     // Custody wallet linked to a circle for secure fund storage
     public struct CustodyWallet has key, store {
         id: object::UID,
@@ -135,6 +160,10 @@ module njangi::njangi_circle {
         daily_withdrawal_limit: u64,  // Maximum withdrawal per day
         last_withdrawal_time: u64,    // Timestamp of last withdrawal
         daily_withdrawal_total: u64,  // Running total of withdrawals for the day
+        stablecoin_config: StablecoinConfig,  // Added stablecoin configuration
+        stablecoin_balance: u64,              // Balance of stablecoins (in smallest unit)
+        stablecoin_holdings: table::Table<string::String, u64>,  // type_name -> balance
+        stablecoins: vector<address>,         // Object IDs of stablecoin objects we own
     }
     
     // Transaction record for custody wallet operations
@@ -382,6 +411,29 @@ module njangi::njangi_circle {
         operation_type: u8,
     }
 
+    // Add a new event for swap operations
+    public struct StablecoinSwapExecuted has copy, drop {
+        circle_id: object::ID,
+        wallet_id: object::ID,
+        sui_amount: u64,
+        stablecoin_amount: u64,
+        stablecoin_type: string::String,
+        timestamp: u64,
+        pool_id: address,
+        success: bool,
+        error_message: option::Option<string::String>,
+    }
+
+    // New event for stablecoin holding updates
+    public struct StablecoinHoldingUpdated has copy, drop {
+        circle_id: object::ID,
+        wallet_id: object::ID, 
+        coin_type: string::String,
+        previous_balance: u64,
+        new_balance: u64,
+        timestamp: u64,
+    }
+
     // ----------------------------------------------------------
     // Create Circle
     // ----------------------------------------------------------
@@ -487,7 +539,7 @@ module njangi::njangi_circle {
     }
     
     // ----------------------------------------------------------
-    // Create a custody wallet for a circle
+    // Create a new custody wallet for storing circle funds
     // ----------------------------------------------------------
     fun create_custody_wallet(
         circle_id: object::ID,
@@ -495,6 +547,18 @@ module njangi::njangi_circle {
         ctx: &mut tx_context::TxContext
     ) {
         let admin = tx_context::sender(ctx);
+        
+        // Create default stablecoin configuration targeting USDC on testnet
+        let stablecoin_config = StablecoinConfig {
+            enabled: false,
+            target_coin_type: string::utf8(USDC_TYPE),
+            dex_address: CETUS_PACKAGE,  // Cetus DEX address on testnet
+            slippage_tolerance: 50,      // 0.5% slippage tolerance
+            last_swap_time: 0,
+            minimum_swap_amount: to_decimals(1), // 1 SUI minimum for swap
+            pool_id: option::none(),      // Will be set during configuration
+            global_config_id: option::none(), // Will be set during configuration
+        };
         
         // Create custody wallet
         let wallet = CustodyWallet {
@@ -505,15 +569,19 @@ module njangi::njangi_circle {
             created_at: timestamp,
             locked_until: option::none(),
             is_active: true,
-            daily_withdrawal_limit: to_decimals(10000),  // Default 10,000 SUI daily limit
+            daily_withdrawal_limit: to_decimals(10000),
             last_withdrawal_time: 0,
             daily_withdrawal_total: 0,
+            stablecoin_config,
+            stablecoin_balance: 0,
+            stablecoin_holdings: table::new(ctx),
+            stablecoins: vector::empty(),
         };
         
         // Get the wallet ID before sharing
         let wallet_id = object::uid_to_inner(&wallet.id);
         
-        // Share the wallet object - must be done in the same module
+        // Share the wallet object
         transfer::share_object(wallet);
         
         event::emit(CustodyWalletCreated {
@@ -541,7 +609,168 @@ module njangi::njangi_circle {
     }
     
     // ----------------------------------------------------------
-    // Deposit to circle custody wallet
+    // Configure stablecoin auto-swap settings
+    // ----------------------------------------------------------
+    public fun configure_stablecoin_swap(
+        wallet: &mut CustodyWallet,
+        enabled: bool,
+        target_coin_type: vector<u8>,
+        dex_address: address,
+        slippage_tolerance: u64,
+        minimum_swap_amount: u64,
+        global_config_id: address,
+        pool_id: address,
+        ctx: &mut tx_context::TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        
+        // Only admin can configure swap settings
+        assert!(sender == wallet.admin, ENotAdmin);
+        
+        // Validate target coin type (currently only support USDC and USDT)
+        let coin_type_str = string::utf8(target_coin_type);
+        let is_supported = 
+            string::utf8(USDC_TYPE) == coin_type_str || 
+            string::utf8(USDT_TYPE) == coin_type_str;
+        
+        assert!(is_supported, EUnsupportedToken);
+        
+        // Update configuration
+        wallet.stablecoin_config.enabled = enabled;
+        wallet.stablecoin_config.target_coin_type = coin_type_str;
+        wallet.stablecoin_config.dex_address = dex_address;
+        wallet.stablecoin_config.slippage_tolerance = slippage_tolerance;
+        wallet.stablecoin_config.minimum_swap_amount = minimum_swap_amount;
+        wallet.stablecoin_config.global_config_id = option::some(global_config_id);
+        wallet.stablecoin_config.pool_id = option::some(pool_id);
+        
+        // Add entry for target stablecoin in holdings table if not already there
+        if (!table::contains(&wallet.stablecoin_holdings, coin_type_str)) {
+            table::add(&mut wallet.stablecoin_holdings, coin_type_str, 0);
+        }
+    }
+    
+    // ----------------------------------------------------------
+    // Execute stablecoin swap (simulated)
+    // ----------------------------------------------------------
+    fun execute_stablecoin_swap(
+        wallet: &mut CustodyWallet,
+        amount: u64,
+        clock: &clock::Clock,
+        ctx: &mut tx_context::TxContext
+    ) {
+        // Check if auto-swap is enabled and minimum amount is met
+        if (!wallet.stablecoin_config.enabled || amount < wallet.stablecoin_config.minimum_swap_amount) {
+            return
+        };
+        
+        // In a real implementation, this function would:
+        // 1. Connect to the specified DEX
+        // 2. Get the current exchange rate
+        // 3. Calculate the slippage-adjusted minimum output
+        // 4. Execute the swap transaction
+        // 5. Update the stablecoin balance
+        
+        // For now, we'll simulate the swap with a fixed rate
+        // In production, this would call the DEX's swap function
+        let estimated_stablecoin_amount = simulate_swap_rate(amount);
+        
+        // Simulate possible DEX failure conditions
+        let current_time = clock::timestamp_ms(clock);
+        let mut success = true;
+        let mut error_message = option::none();
+        
+        // Check for sufficient liquidity (simulated)
+        // In production, this would be determined by the DEX
+        if (amount > to_decimals(1000)) {
+            // Simulate a liquidity constraint for large orders
+            success = false;
+            error_message = option::some(string::utf8(b"Insufficient liquidity in pool"));
+            abort EInsufficientLiquidity
+        };
+        
+        // Check for slippage (simulated)
+        // In production, this would compare expected vs actual rate
+        if (success && estimated_stablecoin_amount < (amount * 200_000_000) / DECIMAL_SCALING) {
+            // If the estimated amount is less than $2.00 per SUI (below our min acceptable price)
+            success = false;
+            error_message = option::some(string::utf8(b"Slippage tolerance exceeded"));
+            abort ESlippageExceeded
+        };
+        
+        // Get the pool ID if available or default to zero address
+        let pool_id = if (option::is_some(&wallet.stablecoin_config.pool_id)) {
+            *option::borrow(&wallet.stablecoin_config.pool_id)
+        } else {
+            @0x0 // Default to zero address if no pool ID
+        };
+        
+        // Only update balances if swap succeeded
+        if (success) {
+            // Get the target stablecoin type
+            let coin_type_str = wallet.stablecoin_config.target_coin_type;
+            
+            // Track previous balance for event
+            let previous_balance = if (table::contains(&wallet.stablecoin_holdings, coin_type_str)) {
+                *table::borrow(&wallet.stablecoin_holdings, coin_type_str)
+            } else {
+                // Initialize if it doesn't exist
+                table::add(&mut wallet.stablecoin_holdings, coin_type_str, 0);
+                0
+            };
+            
+            // Update stablecoin holdings in table
+            let new_balance = previous_balance + estimated_stablecoin_amount;
+            *table::borrow_mut(&mut wallet.stablecoin_holdings, coin_type_str) = new_balance;
+            
+            // Also update the total balance field for backward compatibility
+            wallet.stablecoin_balance = wallet.stablecoin_balance + estimated_stablecoin_amount;
+            
+            // Update last swap time
+            wallet.stablecoin_config.last_swap_time = current_time;
+            
+            // Emit holdings updated event
+            event::emit(StablecoinHoldingUpdated {
+                circle_id: wallet.circle_id,
+                wallet_id: object::uid_to_inner(&wallet.id),
+                coin_type: coin_type_str,
+                previous_balance,
+                new_balance,
+                timestamp: current_time,
+            });
+        } else {
+            // If we get here, it means we hit a non-aborting failure case
+            // This shouldn't happen with the current implementation, but we keep it for future extensions
+            abort ESwapFailed
+        };
+        
+        // Emit swap event
+        event::emit(StablecoinSwapExecuted {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            sui_amount: amount,
+            stablecoin_amount: if (success) { estimated_stablecoin_amount } else { 0 },
+            stablecoin_type: wallet.stablecoin_config.target_coin_type,
+            timestamp: current_time,
+            pool_id,
+            success,
+            error_message,
+        });
+    }
+    
+    // ----------------------------------------------------------
+    // Helper function to simulate swap rate (for demo purposes)
+    // ----------------------------------------------------------
+    fun simulate_swap_rate(sui_amount: u64): u64 {
+        // Simulate a swap rate of 1 SUI = $2.50 USDC
+        // In a real implementation, this would query the DEX for the current rate
+        // This is just a placeholder
+        let usdc_per_sui = 250_000_000; // $2.50 with 8 decimals
+        (sui_amount * usdc_per_sui) / DECIMAL_SCALING
+    }
+    
+    // ----------------------------------------------------------
+    // Modified deposit_to_custody to include auto-swap
     // ----------------------------------------------------------
     public fun deposit_to_custody(
         wallet: &mut CustodyWallet,
@@ -577,6 +806,17 @@ module njangi::njangi_circle {
             amount,
             operation_type: CUSTODY_OP_DEPOSIT,
         });
+        
+        // If auto-swap is enabled, execute the swap
+        if (wallet.stablecoin_config.enabled) {
+            // For safety, we'll use the amount of the deposit for the swap amount
+            // instead of the entire wallet balance, which is a more conservative approach
+            
+            // Only swap if we have enough to meet the minimum
+            if (amount >= wallet.stablecoin_config.minimum_swap_amount) {
+                execute_stablecoin_swap(wallet, amount, clock, ctx);
+            };
+        };
     }
     
     // Helper function to check if sender is authorized to deposit to the wallet
@@ -2310,5 +2550,102 @@ module njangi::njangi_circle {
         vector::push_back(&mut addrs, @0x1);
         
         addrs
+    }
+
+    // ----------------------------------------------------------
+    // Stablecoin holdings helper functions
+    // ----------------------------------------------------------
+    
+    // Get stablecoin balance by type
+    public fun get_stablecoin_balance(
+        wallet: &CustodyWallet,
+        coin_type: vector<u8>
+    ): u64 {
+        let type_str = string::utf8(coin_type);
+        if (table::contains(&wallet.stablecoin_holdings, type_str)) {
+            *table::borrow(&wallet.stablecoin_holdings, type_str)
+        } else {
+            0
+        }
+    }
+    
+    // Check if a specific stablecoin type is supported
+    public fun is_stablecoin_supported(
+        wallet: &CustodyWallet,
+        coin_type: vector<u8>
+    ): bool {
+        let type_str = string::utf8(coin_type);
+        table::contains(&wallet.stablecoin_holdings, type_str)
+    }
+
+    // ----------------------------------------------------------
+    // Withdraw stablecoins from custody wallet
+    // ----------------------------------------------------------
+    public fun withdraw_stablecoin(
+        wallet: &mut CustodyWallet,
+        amount: u64,
+        coin_type: vector<u8>,
+        clock: &clock::Clock,
+        ctx: &mut tx_context::TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        let current_time = clock::timestamp_ms(clock);
+        
+        // Only admin can withdraw stablecoins
+        assert!(sender == wallet.admin, ENotAdmin);
+        
+        // Wallet must be active
+        assert!(wallet.is_active, EWalletNotActive);
+        
+        // Check if wallet is time-locked
+        if (option::is_some(&wallet.locked_until)) {
+            let lock_time = *option::borrow(&wallet.locked_until);
+            assert!(current_time >= lock_time, EFundsTimeLocked);
+        };
+        
+        // Convert coin type to string for lookup
+        let coin_type_str = string::utf8(coin_type);
+        
+        // Verify token type is supported
+        assert!(table::contains(&wallet.stablecoin_holdings, coin_type_str), EUnsupportedToken);
+        
+        // Get current balance
+        let current_balance = *table::borrow(&wallet.stablecoin_holdings, coin_type_str);
+        
+        // Verify sufficient balance
+        assert!(current_balance >= amount, EInsufficientBalance);
+        
+        // In a production implementation, this would:
+        // 1. Locate the stablecoin object from the stablecoins vector
+        // 2. Extract the requested amount
+        // 3. Create a new coin and transfer it to the recipient
+        
+        // For now, we'll just update the balance
+        let new_balance = current_balance - amount;
+        *table::borrow_mut(&mut wallet.stablecoin_holdings, coin_type_str) = new_balance;
+        
+        // If the token is USDC, also update legacy field
+        if (coin_type_str == string::utf8(USDC_TYPE)) {
+            wallet.stablecoin_balance = wallet.stablecoin_balance - amount;
+        };
+        
+        // Emit holdings updated event
+        event::emit(StablecoinHoldingUpdated {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            coin_type: coin_type_str,
+            previous_balance: current_balance,
+            new_balance,
+            timestamp: current_time,
+        });
+        
+        // Emit withdrawal event for tracking
+        event::emit(CustodyWithdrawn {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            recipient: sender,
+            amount,
+            operation_type: CUSTODY_OP_WITHDRAWAL,
+        });
     }
 }

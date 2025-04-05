@@ -339,7 +339,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 txb.setSender(session.account!.userAddr);
                 
                 txb.moveCall({
-                  target: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::create_circle`,
+                  target: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::create_circle`,
                   arguments: [
                     txb.pure.string(circleData.name),
                     txb.pure.u64(contribution),
@@ -557,11 +557,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 txb.setSender(session.account!.userAddr);
                 
                 // Log transaction creation details
-                console.log(`Building moveCall with package: 0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8, module: njangi_circle, function: delete_circle`);
+                console.log(`Building moveCall with package: 0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c, module: njangi_circle, function: delete_circle`);
                 console.log(`Using circleId: ${circleId} as object argument`);
                 
                 txb.moveCall({
-                  target: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::delete_circle`,
+                  target: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::delete_circle`,
                   arguments: [
                     txb.object(circleId)
                   ]
@@ -693,7 +693,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             
             // Add the admin_approve_member call
             txb.moveCall({
-              target: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::admin_approve_member`,
+              target: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::admin_approve_member`,
               arguments: [
                 txb.object(req.body.circleId),
                 txb.pure.address(req.body.memberAddress),
@@ -709,7 +709,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 console.log(`Building moveCall for admin_approve_member on circle: ${req.body.circleId}, member: ${req.body.memberAddress}`);
                 // Transfer the prepared call to the new transaction block
                 txBlock.moveCall({
-                  target: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::admin_approve_member`,
+                  target: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::admin_approve_member`,
                   arguments: [
                     txBlock.object(req.body.circleId),
                     txBlock.pure.address(req.body.memberAddress),
@@ -850,7 +850,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 
                 // Call the deposit_to_custody function
                 txb.moveCall({
-                  target: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::deposit_to_custody`,
+                  target: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::deposit_to_custody`,
                   arguments: [
                     txb.object(req.body.walletId),  // custody wallet
                     coin,                           // payment
@@ -885,96 +885,121 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
       case 'configureStablecoinSwap':
-        if (!account) {
-          return res.status(400).json({ error: 'Account data is required' });
-        }
-
-        if (!sessionId) {
-          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
-        }
-
-        if (!req.body.walletId) {
-          return res.status(400).json({ error: 'Wallet ID is required' });
-        }
-
         try {
-          // Log the transaction attempt
-          console.log('Configuring stablecoin swap:', {
-            sessionId,
-            address: account.userAddr,
-            walletId: req.body.walletId,
-            enabled: req.body.enabled,
-            targetCoinType: req.body.targetCoinType,
-            slippageTolerance: req.body.slippageTolerance,
-            minimumSwapAmount: req.body.minimumSwapAmount,
-            dexAddress: req.body.dexAddress,
-            hasSession: sessions.has(sessionId)
-          });
+          if (!account) {
+            return res.status(400).json({ error: 'Account data is required' });
+          }
 
-          // Validate session with action context
-          const session = validateSession(sessionId, 'configureStablecoinSwap');
-          
-          if (!session.account) {
-            sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              error: 'Invalid session: No account data found. Please authenticate first.'
+          if (!req.body.walletId) {
+            return res.status(400).json({ error: 'Custody wallet ID is required' });
+          }
+
+          const { 
+            walletId, 
+            enabled, 
+            targetCoinType, 
+            slippageTolerance, 
+            minimumSwapAmount, 
+            dexAddress,
+            globalConfigId,  // New parameter
+            poolId          // New parameter
+          } = req.body;
+
+          // Validate required parameters
+          if (enabled && (!targetCoinType || !slippageTolerance || !minimumSwapAmount || !dexAddress || !globalConfigId || !poolId)) {
+            return res.status(400).json({ 
+              error: 'When enabling stablecoin swaps, all configuration parameters are required: targetCoinType, slippageTolerance, minimumSwapAmount, dexAddress, globalConfigId, and poolId'
             });
           }
 
-          // Verify session matches account data
-          if (session.account.userAddr !== account.userAddr || 
-              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
-            sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              error: 'Session mismatch: Please refresh your authentication'
-            });
-          }
-
-          // Execute the transaction
+          // Validate the session
           try {
+            if (!sessionId) {
+              throw new Error('No session ID provided');
+            }
+            // Validate the session
+            const session = validateSession(sessionId, 'configureStablecoinSwap');
+            
+            // Check if account matches session
+            if (session.account?.userAddr !== account.userAddr) {
+              throw new Error('Session account mismatch');
+            }
+          } catch (validationError) {
+            console.error('Session validation failed:', validationError);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: validationError instanceof Error ? validationError.message : 'Session validation failed',
+              requireRelogin: true
+            });
+          }
+
+          try {
+            console.log('Building configureStablecoinSwap transaction with params:', {
+              walletId,
+              enabled,
+              targetCoinType,
+              slippageTolerance,
+              minimumSwapAmount,
+              dexAddress,
+              globalConfigId,
+              poolId
+            });
+
+            // Execute the transaction with zkLogin signature
             const txResult = await instance.sendTransaction(
-              session.account,
-              (txb: Transaction) => {
-                console.log(`Building moveCall for configure_stablecoin_swap`);
-                
-                // Call the configure_stablecoin_swap function
+              account,
+              (txb) => {
                 txb.moveCall({
-                  target: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::configure_stablecoin_swap`,
+                  target: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::configure_stablecoin_swap`,
                   arguments: [
-                    txb.object(req.body.walletId),         // custody wallet
-                    txb.pure.bool(req.body.enabled),       // enabled flag
-                    txb.pure.string(req.body.targetCoinType), // target coin type
-                    txb.pure.address(req.body.dexAddress), // DEX address
-                    txb.pure.u64(BigInt(req.body.slippageTolerance)), // slippage tolerance in basis points
-                    txb.pure.u64(BigInt(req.body.minimumSwapAmount)),  // minimum swap amount
+                    txb.object(walletId),
+                    txb.pure.bool(enabled),
+                    txb.pure.vector('u8', Array.from(new TextEncoder().encode(targetCoinType))),
+                    txb.pure.address(dexAddress),
+                    txb.pure.u64(BigInt(slippageTolerance)),
+                    txb.pure.u64(BigInt(minimumSwapAmount)),
+                    txb.pure.address(globalConfigId),  // New argument
+                    txb.pure.address(poolId)          // New argument
                   ]
                 });
               },
-              { gasBudget: 100000000 } // Increase gas budget
+              { gasBudget: 100000000 }
             );
             
-            console.log('Stablecoin configuration successful:', txResult);
-            return res.status(200).json({ 
+            console.log('Stablecoin config transaction successful:', txResult);
+            return res.status(200).json({
               digest: txResult.digest,
               status: txResult.status,
               gasUsed: txResult.gasUsed
             });
           } catch (txError) {
-            console.error('Stablecoin configuration error:', txError);
+            console.error('Stablecoin config transaction error:', txError);
+            
+            // Handle specific errors
+            if (txError instanceof Error) {
+              if (txError.message.includes('EUnsupportedToken')) {
+                return res.status(400).json({ 
+                  error: 'Unsupported token type. Only USDC and USDT are supported.',
+                  requireRelogin: false
+                });
+              } else if (txError.message.includes('ESwapModuleNotAvailable')) {
+                return res.status(400).json({ 
+                  error: 'DEX swap module not available.',
+                  requireRelogin: false
+                });
+              }
+            }
+            
             return res.status(500).json({ 
               error: txError instanceof Error ? txError.message : 'Failed to configure stablecoin swap',
-              requireRelogin: txError instanceof Error && 
-                (txError.message.includes('expired') || txError.message.includes('proof')) 
+              requireRelogin: false
             });
           }
-        } catch (err) {
-          console.error('Stablecoin config error:', err);
+        } catch (error) {
+          console.error('Error in configureStablecoinSwap:', error);
           return res.status(500).json({ 
-            error: err instanceof Error ? err.message : 'Failed to process stablecoin configuration',
-            requireRelogin: err instanceof Error && 
-              (err.message.includes('session') || err.message.includes('expired') || err.message.includes('proof'))
+            error: 'Failed to execute transaction. Please try again.',
+            details: error instanceof Error ? error.message : 'Unknown error'
           });
         }
 
@@ -1031,7 +1056,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 
                 // Call the contribute_from_custody function
                 txb.moveCall({
-                  target: `0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::contribute_from_custody`,
+                  target: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::contribute_from_custody`,
                   arguments: [
                     txb.object(req.body.circleId),   // circle object
                     txb.object(req.body.walletId),   // custody wallet

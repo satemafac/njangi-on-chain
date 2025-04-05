@@ -182,7 +182,7 @@ export default function ContributeToCircle() {
         // Now we need to find the circle's custody wallet ID
         const walletCreatedEvents = await client.queryEvents({
           query: {
-            MoveEventType: '0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::CustodyWalletCreated'
+            MoveEventType: '0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::CustodyWalletCreated'
           },
           limit: 50
         });
@@ -328,7 +328,7 @@ export default function ContributeToCircle() {
         // Query events for deposits made by this user to the custody wallet
         const custodyDepositEvents = await client.queryEvents({
           query: {
-            MoveEventType: '0x3b99f14240784d346918641aebe91c97dc305badcf7fbacaffbc207e6dfad8c8::njangi_circle::CustodyDeposited'
+            MoveEventType: '0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::CustodyDeposited'
           },
           limit: 50
         });

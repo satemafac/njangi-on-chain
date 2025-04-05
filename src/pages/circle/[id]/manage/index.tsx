@@ -830,6 +830,27 @@ export default function ManageCircle() {
       // Convert minimum amount to SUI with 9 decimals
       const minAmountInSui = Math.floor(minAmount * 1e9);
       
+      // Map the simple coin names to their full module paths
+      const coinTypeMap: Record<string, string> = {
+        'USDC': '0x9e89965f542887a8f0383451ba553fedf62c04e4dc68f60dec5b8d7ad1436bd6::usdc::USDC',
+        'USDT': '0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08::usdt::USDT',
+        'DAI': '0x9e89965f542887a8f0383451ba553fedf62c04e4dc68f60dec5b8d7ad1436bd6::usdc::USDC' // Fallback to USDC if DAI not available
+      };
+      
+      // Testnet Cetus configuration 
+      const CETUS_PACKAGE = '0x0868b71c0cba55bf0faf6c40df8c179c67a4d0ba0e79965b68b3d72d7dfbf666';
+      const CETUS_GLOBAL_CONFIG = '0x6f4149091a5aea0e818e7243a13adcfb403842d670b9a2089de058512620687a';
+      
+      // Default pool IDs for the supported coins on testnet
+      const poolIds: Record<string, string> = {
+        'USDC': '0x2e041f3fd93646dcc877f783c1f2b7fa62d30271bdef1f21ef002cebf857bded',
+        'USDT': '0x2cc7129e25401b5eccfdc678d402e2cc22f688f1c8e5db58c06c3c4e71242eb2',
+        'DAI': '0x2e041f3fd93646dcc877f783c1f2b7fa62d30271bdef1f21ef002cebf857bded' // Fallback to USDC pool
+      };
+      
+      // Get the appropriate pool ID for the selected coin type
+      const poolId = poolIds[coinType] || poolIds['USDC'];
+      
       // Call the API directly
       const response = await fetch('/api/zkLogin', {
         method: 'POST',
@@ -839,10 +860,12 @@ export default function ManageCircle() {
           account,
           walletId: circle.custody.walletId,
           enabled,
-          targetCoinType: coinType,
+          targetCoinType: coinTypeMap[coinType] || coinTypeMap['USDC'],
           slippageTolerance: Math.floor(slippage * 100), // Convert percent to basis points
           minimumSwapAmount: minAmountInSui,
-          dexAddress: '0x9083c89c2735b4167bd0ed7decdb7ae0a04f35cd3bf10b17a96719b1be62bde6' // Example DEX address
+          dexAddress: CETUS_PACKAGE,
+          globalConfigId: CETUS_GLOBAL_CONFIG,
+          poolId: poolId
         }),
       });
       
