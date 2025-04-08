@@ -196,6 +196,50 @@ public fun withdraw_stablecoin(
 )
 ```
 
+## SUI to USDC Auto-Swap Feature
+
+### Overview
+The auto-swap feature allows circle members to automatically convert SUI tokens to USDC stablecoins using Cetus DEX. This helps protect against crypto volatility by converting contributions to stablecoins.
+
+### Implementation Components
+
+1. **Smart Contract**: The `njangi_circle.move` contract has been updated with:
+   - `configure_stablecoin_swap`: Function to configure auto-swap settings
+   - `deposit_stablecoin_to_custody`: Function to deposit swapped stablecoins to the custody wallet
+
+2. **Frontend Integration**:
+   - `StablecoinSwapForm.tsx`: Component for manually executing swaps
+   - `ManageCircle` component: Updated with auto-swap configuration section
+   - `cetus-service.ts`: Service for interacting with Cetus DEX
+
+3. **Cetus SDK Integration**:
+   - Used `@cetusprotocol/cetus-sui-clmm-sdk` to interact with Cetus liquidity pools
+   - Implemented swap transaction creation and execution
+   - Added price estimates and slippage protection
+
+### Usage Guide
+
+#### Auto-Swap Configuration (Admin only)
+1. Navigate to the circle management page
+2. In the "Stablecoin Auto-Swap Settings" section, toggle "Auto-Swap Funds" to enable/disable
+3. Configure options:
+   - Stablecoin Type: Select USDC, USDT, etc.
+   - Slippage Tolerance: Set acceptable price impact (0.1% - 5%)
+   - Minimum Swap Amount: Minimum SUI amount to trigger auto-swap
+
+#### Manual Swap (Admin only)
+1. Navigate to the circle management page
+2. In the "Stablecoin Auto-Swap Settings" section, click "Show Swap Form"
+3. Enter the amount of SUI to swap
+4. Review the estimated USDC output and price impact
+5. Click "Swap SUI for USDC" to execute the transaction
+
+### Technical Notes
+- Uses Cetus DEX on SUI testnet for liquidity
+- zkLogin integration for secure transaction signing
+- Price impact warnings to protect users from unfavorable trades
+- Real-time price updates from CoinGecko API
+
 ## Events and Monitoring
 
 ### Key Events

@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
-import { useAuth } from '../../../../contexts/AuthContext';
-import Image from 'next/image';
+import { useAuth } from '@/contexts/AuthContext';
 import { SuiClient } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
 import { ArrowLeft, Copy, Link, Check, X, Pause } from 'lucide-react';
@@ -10,6 +9,7 @@ import { priceService } from '../../../../services/price-service';
 import joinRequestService from '../../../../services/join-request-service';
 import { JoinRequest } from '../../../../services/database-service';
 import { PACKAGE_ID } from '../../../../services/circle-service';
+import StablecoinSwapForm from '../../../../components/StablecoinSwapForm';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -26,6 +26,7 @@ interface Circle {
   currentMembers: number;
   nextPayoutTime: number;
   isActive: boolean;
+  autoSwapEnabled: boolean;
   custody?: {
     walletId: string;
     stablecoinEnabled: boolean;
@@ -55,6 +56,7 @@ interface CircleFields {
       target_amount?: string;
     }
   } | string; // Can be an object with fields or a string reference
+  auto_swap_enabled: string;
   // Use unknown for index signature as a safer alternative to any
   [key: string]: string | number | boolean | object | unknown;
 }
@@ -209,6 +211,16 @@ export default function ManageCircle() {
           securityDepositUsd
         });
         
+        // Read the auto_swap_enabled field (defaulting to false if not present)
+        let autoSwapEnabled = false;
+        if (fields.auto_swap_enabled !== undefined) {
+          if (typeof fields.auto_swap_enabled === 'boolean') {
+            autoSwapEnabled = fields.auto_swap_enabled;
+          } else if (typeof fields.auto_swap_enabled === 'string') {
+            autoSwapEnabled = fields.auto_swap_enabled === 'true';
+          }
+        }
+        
         setCircle({
           id: id as string,
           name: fields.name,
@@ -223,6 +235,7 @@ export default function ManageCircle() {
           currentMembers: Number(fields.current_members),
           nextPayoutTime: Number(fields.next_payout_time),
           isActive: false,
+          autoSwapEnabled: autoSwapEnabled,
         });
         
         // Fetch the circle creation event to get the actual creation timestamp
@@ -812,120 +825,73 @@ export default function ManageCircle() {
     return `${id.slice(0, 10)}...${id.slice(-8)}`;
   };
 
-  // Add this new handler function before the return statement
-  const handleStablecoinConfigUpdate = async (enabled: boolean, coinType: string, slippage: number, minAmount: number) => {
-    if (!circle || !circle.custody?.walletId) {
-      toast.error('Custody wallet information not available');
-      return;
-    }
-    
+  // Add this new function to toggle the auto swap setting on the blockchain
+  const toggleAutoSwap = async (enabled: boolean) => {
     try {
-      toast.loading('Updating stablecoin configuration...', { id: 'stablecoin-config' });
-      
-      if (!account) {
-        toast.error('Not logged in. Please login first', { id: 'stablecoin-config' });
-        return;
+      if (!account || !circle) {
+        toast.error('Account or circle information not available');
+        return false;
       }
       
-      // Convert minimum amount to SUI with 9 decimals
-      const minAmountInSui = Math.floor(minAmount * 1e9);
+      toast.loading('Updating auto-swap configuration...', { id: 'toggle-auto-swap' });
       
-      // Map the simple coin names to their full module paths
-      const coinTypeMap: Record<string, string> = {
-        'USDC': '0x9e89965f542887a8f0383451ba553fedf62c04e4dc68f60dec5b8d7ad1436bd6::usdc::USDC',
-        'USDT': '0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08::usdt::USDT',
-        'DAI': '0x9e89965f542887a8f0383451ba553fedf62c04e4dc68f60dec5b8d7ad1436bd6::usdc::USDC' // Fallback to USDC if DAI not available
-      };
-      
-      // Testnet Cetus configuration 
-      const CETUS_PACKAGE = '0x0868b71c0cba55bf0faf6c40df8c179c67a4d0ba0e79965b68b3d72d7dfbf666';
-      const CETUS_GLOBAL_CONFIG = '0x6f4149091a5aea0e818e7243a13adcfb403842d670b9a2089de058512620687a';
-      
-      // Default pool IDs for the supported coins on testnet
-      const poolIds: Record<string, string> = {
-        'USDC': '0x2e041f3fd93646dcc877f783c1f2b7fa62d30271bdef1f21ef002cebf857bded',
-        'USDT': '0x2cc7129e25401b5eccfdc678d402e2cc22f688f1c8e5db58c06c3c4e71242eb2',
-        'DAI': '0x2e041f3fd93646dcc877f783c1f2b7fa62d30271bdef1f21ef002cebf857bded' // Fallback to USDC pool
-      };
-      
-      // Get the appropriate pool ID for the selected coin type
-      const poolId = poolIds[coinType] || poolIds['USDC'];
-      
-      // Call the API directly
+      // Call the API to toggle auto-swap setting on blockchain
       const response = await fetch('/api/zkLogin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'configureStablecoinSwap',
+          action: 'toggleAutoSwap',
           account,
-          walletId: circle.custody.walletId,
-          enabled,
-          targetCoinType: coinTypeMap[coinType] || coinTypeMap['USDC'],
-          slippageTolerance: Math.floor(slippage * 100), // Convert percent to basis points
-          minimumSwapAmount: minAmountInSui,
-          dexAddress: CETUS_PACKAGE,
-          globalConfigId: CETUS_GLOBAL_CONFIG,
-          poolId: poolId
+          circleId: circle.id,
+          enabled
         }),
       });
       
       const result = await response.json();
       
       if (!response.ok) {
-        if (response.status === 401) {
-          toast.error('Authentication failed. Please login again.', { id: 'stablecoin-config' });
-          return;
-        }
-        
-        // Display specific error messages from the server
-        const errorMsg = result.error || 'Transaction failed.';
-        console.error('Server error details:', result);
-        toast.error(errorMsg, { id: 'stablecoin-config' });
-        throw new Error(errorMsg);
+        console.error('Failed to toggle auto-swap:', result);
+        toast.error(result.error || 'Failed to update auto-swap configuration', { id: 'toggle-auto-swap' });
+        return false;
       }
       
       // Update toast on success
-      toast.success('Successfully updated stablecoin configuration', { id: 'stablecoin-config' });
-      console.log(`Successfully updated config. Transaction digest: ${result.digest}`);
+      toast.success('Successfully updated auto-swap setting', { id: 'toggle-auto-swap' });
       
       // Update local state
-      setCircle(prevCircle => {
-        if (prevCircle && prevCircle.custody) {
-          return {
-            ...prevCircle,
-            custody: {
-              ...prevCircle.custody,
-              stablecoinEnabled: enabled,
-              stablecoinType: coinType
-            }
-          };
-        }
-        return prevCircle;
-      });
+      setCircle(prevCircle => prevCircle ? { ...prevCircle, autoSwapEnabled: enabled } : null);
       
+      return true;
     } catch (error) {
-      console.error('Error updating stablecoin config:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to update configuration', { id: 'stablecoin-config' });
+      console.error('Error toggling auto-swap:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to update configuration', { id: 'toggle-auto-swap' });
+      return false;
     }
   };
 
   // Add this new component before the return statement
   const StablecoinSettings = ({ circle }: { circle: Circle }) => {
-    const [isEnabled, setIsEnabled] = useState(circle.custody?.stablecoinEnabled || false);
-    const [coinType, setCoinType] = useState(circle.custody?.stablecoinType || 'USDC');
-    const [slippage, setSlippage] = useState(0.5); // Default 0.5%
-    const [minAmount, setMinAmount] = useState(1); // Default 1 SUI
+    const [isEnabled, setIsEnabled] = useState(circle.autoSwapEnabled);
+    const [showSwapForm, setShowSwapForm] = useState(false);
     const [isConfiguring, setIsConfiguring] = useState(false);
     
-    const handleSubmit = async (e: React.FormEvent) => {
-      e.preventDefault();
+    // Function to handle toggle directly on blockchain
+    const handleToggleAutoSwap = async () => {
       setIsConfiguring(true);
-      
       try {
-        await handleStablecoinConfigUpdate(isEnabled, coinType, slippage, minAmount);
+        const newState = !isEnabled;
+        const success = await toggleAutoSwap(newState);
+        if (success) {
+          setIsEnabled(newState);
+        }
       } finally {
         setIsConfiguring(false);
       }
+    };
+
+    const handleSwapComplete = () => {
+      // Refresh wallet info
+      fetchCircleDetails();
     };
     
     return (
@@ -941,92 +907,78 @@ export default function ManageCircle() {
               <p>Custody wallet information not available</p>
             </div>
           ) : (
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="font-medium text-gray-800">Auto-Swap Funds</h4>
-                  <p className="text-sm text-gray-500">Automatically convert SUI to stablecoins when received</p>
-                </div>
-                <div className="flex items-center">
-                  <button
-                    type="button"
-                    onClick={() => setIsEnabled(!isEnabled)}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full ${isEnabled ? 'bg-blue-600' : 'bg-gray-200'}`}
-                  >
-                    <span className="sr-only">Enable auto-swap</span>
-                    <span 
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${isEnabled ? 'translate-x-6' : 'translate-x-1'}`} 
-                    />
-                  </button>
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label htmlFor="stablecoin-type" className="block text-sm font-medium text-gray-700">Stablecoin Type</label>
-                  <select 
-                    id="stablecoin-type"
-                    value={coinType}
-                    onChange={(e) => setCoinType(e.target.value)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                    disabled={!isEnabled}
-                  >
-                    <option value="USDC">USDC</option>
-                    <option value="USDT">USDT</option>
-                    <option value="DAI">DAI</option>
-                  </select>
+            <div className="space-y-6">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-medium text-gray-800">Auto-Swap Funds</h4>
+                    <p className="text-sm text-gray-500">Automatically convert SUI to stablecoins when received</p>
+                  </div>
+                  <div className="flex items-center">
+                    <button
+                      type="button"
+                      onClick={handleToggleAutoSwap}
+                      disabled={isConfiguring}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full ${isEnabled ? 'bg-blue-600' : 'bg-gray-200'} ${isConfiguring ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      <span className="sr-only">Enable auto-swap</span>
+                      <span 
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${isEnabled ? 'translate-x-6' : 'translate-x-1'}`} 
+                      />
+                    </button>
+                  </div>
                 </div>
                 
-                <div>
-                  <label htmlFor="slippage" className="block text-sm font-medium text-gray-700">Slippage Tolerance (%)</label>
-                  <input 
-                    type="number" 
-                    id="slippage"
-                    value={slippage}
-                    onChange={(e) => setSlippage(Number(e.target.value))}
-                    min="0.1"
-                    max="5"
-                    step="0.1"
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                    disabled={!isEnabled}
-                  />
-                </div>
-                
-                <div>
-                  <label htmlFor="min-amount" className="block text-sm font-medium text-gray-700">Minimum Swap Amount (SUI)</label>
-                  <input 
-                    type="number" 
-                    id="min-amount"
-                    value={minAmount}
-                    onChange={(e) => setMinAmount(Number(e.target.value))}
-                    min="0.1"
-                    step="0.1"
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                    disabled={!isEnabled}
-                  />
+                <div className="bg-yellow-50 p-3 rounded-lg border border-yellow-200">
+                  <p className="text-sm text-yellow-700">
+                    <strong>Note:</strong> When auto-swap is enabled, all members contributing to this circle will 
+                    have the option to use DEX swaps for their contributions. Additional DEX settings (coin type, 
+                    slippage, etc.) are configured by each member individually.
+                  </p>
                 </div>
                 
                 {circle.custody && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Wallet Balances</label>
-                    <div className="mt-1 text-sm">
-                      <p><span className="font-medium">SUI:</span> {circle.custody.suiBalance.toFixed(2)} SUI</p>
-                      <p><span className="font-medium">{circle.custody.stablecoinType}:</span> {formatUSD(circle.custody.stablecoinBalance)}</p>
+                  <div className="mt-4 border-t border-gray-100 pt-4">
+                    <h5 className="font-medium text-gray-700 mb-2">Wallet Balances</h5>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="p-3 bg-gray-50 rounded-lg">
+                        <p className="text-xs text-gray-500">SUI</p>
+                        <p className="font-medium">{circle.custody.suiBalance.toFixed(4)} SUI</p>
+                      </div>
+                      
+                      <div className="p-3 bg-gray-50 rounded-lg">
+                        <p className="text-xs text-gray-500">
+                          {circle.custody.stablecoinType || 'USDC'}
+                        </p>
+                        <p className="font-medium">{formatUSD(circle.custody.stablecoinBalance || 0)}</p>
+                      </div>
                     </div>
                   </div>
                 )}
               </div>
-              
-              <div className="pt-3">
-                <button
-                  type="submit"
-                  className={`w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${isConfiguring ? 'opacity-75 cursor-not-allowed' : ''}`}
-                  disabled={isConfiguring}
-                >
-                  {isConfiguring ? 'Updating...' : 'Update Configuration'}
-                </button>
+
+              <div className="border-t border-gray-200 pt-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h4 className="font-medium text-gray-800">Manual Swap</h4>
+                  <button
+                    type="button"
+                    onClick={() => setShowSwapForm(!showSwapForm)}
+                    className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-100 rounded-md hover:bg-blue-200"
+                  >
+                    {showSwapForm ? 'Hide Swap Form' : 'Show Swap Form'}
+                  </button>
+                </div>
+                
+                {showSwapForm && circle.custody?.walletId && (
+                  <StablecoinSwapForm 
+                    walletId={circle.custody.walletId} 
+                    circleId={circle.id}
+                    contributionAmount={circle.contributionAmount}
+                    onSwapComplete={handleSwapComplete}
+                  />
+                )}
               </div>
-            </form>
+            </div>
           )}
         </div>
       </div>
@@ -1039,27 +991,9 @@ export default function ManageCircle() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
-              <Image
-                src="/njangi-on-chain-logo.png"
-                alt="Njangi on-chain"
-                width={48}
-                height={48}
-                className="mr-3"
-                priority
-              />
-              <h1 className="text-xl font-semibold text-blue-600">Njangi on-chain</h1>
-            </div>
-          </div>
-        </div>
-      </nav>
-
       <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         <div className="px-4 py-6 sm:px-0">
-          <div className="mb-6">
+          <div className="flex justify-between items-center mb-6">
             <button
               onClick={() => router.push('/dashboard')}
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm text-sm text-gray-700 font-medium"
@@ -1067,6 +1001,7 @@ export default function ManageCircle() {
               <ArrowLeft className="w-4 h-4" />
               Back to Dashboard
             </button>
+            <h1 className="text-xl font-semibold text-blue-600">Manage Circle</h1>
           </div>
 
           <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100">
@@ -1436,6 +1371,19 @@ export default function ManageCircle() {
                   {/* Stablecoin Auto-Swap Configuration */}
                   <div className="pt-6 border-t border-gray-200 px-2 mt-6">
                     {circle && <StablecoinSettings circle={circle} />}
+                  </div>
+
+                  {/* Add this after the existing admin action buttons */}
+                  <div className="mt-4">
+                    <button
+                      onClick={() => router.push(`/circle/${id}/manage/swap-settings`)}
+                      className="w-full py-2 px-4 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors flex items-center justify-center gap-2 shadow-sm border border-indigo-200"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                      </svg>
+                      Configure Stablecoin Auto-Swap
+                    </button>
                   </div>
                 </div>
               ) : (

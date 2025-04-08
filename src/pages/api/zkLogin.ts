@@ -2,6 +2,8 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { ZkLoginService, SetupData, AccountData, OAuthProvider } from '@/services/zkLoginService';
 import { Transaction } from '@mysten/sui/transactions';
 import { SuiClient } from '@mysten/sui/client';
+import { PACKAGE_ID } from '../../services/circle-service';
+import { priceService } from '../../services/price-service';
 
 // Add at the top with other imports
 interface RPCError extends Error {
@@ -16,7 +18,7 @@ const PROCESSING_COOLDOWN = 30000; // 30 seconds between processing attempts for
 const sessions = new Map<string, SetupData & { account?: AccountData }>();
 
 // Add session validation helper with better error handling
-function validateSession(sessionId: string, action: string): SetupData & { account?: AccountData } {
+function validateSession(sessionId: string | undefined, action: string): SetupData & { account?: AccountData } {
   if (!sessionId) {
     throw new Error('No session ID provided');
   }
@@ -41,7 +43,7 @@ function validateSession(sessionId: string, action: string): SetupData & { accou
       const maxEpoch = Number(session.maxEpoch);
       
       if (currentEpoch >= maxEpoch) {
-        sessions.delete(sessionId);
+        if (sessionId) sessions.delete(sessionId);
         throw new Error('Session has expired. Please login again.');
       }
     }
@@ -93,6 +95,18 @@ function cleanupUserSessions(userAddr: string, currentSessionId: string) {
 
 // Add after MAX_EPOCH constant
 const PROCESSING_SESSIONS = new Map<string, { startTime: number, promise: Promise<AccountData> }>();
+
+// Comment out unused function
+// For testing, you can use a temporary keypair
+// In production, this would be securely managed with proper key management
+/*
+const getAdminKeypair = () => {
+  // WARNING: This is just for development - never hardcode keys in production code
+  // You would fetch this from a secure environment variable or key management system
+  const DEV_ADMIN_SECRET = process.env.DEV_ADMIN_SECRET || '';
+  return Ed25519Keypair.fromSecretKey(Buffer.from(DEV_ADMIN_SECRET, 'hex'));
+};
+*/
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -339,7 +353,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 txb.setSender(session.account!.userAddr);
                 
                 txb.moveCall({
-                  target: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::create_circle`,
+                  target: `${PACKAGE_ID}::njangi_circle::create_circle`,
                   arguments: [
                     txb.pure.string(circleData.name),
                     txb.pure.u64(contribution),
@@ -557,11 +571,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 txb.setSender(session.account!.userAddr);
                 
                 // Log transaction creation details
-                console.log(`Building moveCall with package: 0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c, module: njangi_circle, function: delete_circle`);
+                console.log(`Building moveCall with package: ${PACKAGE_ID}, module: njangi_circle, function: delete_circle`);
                 console.log(`Using circleId: ${circleId} as object argument`);
                 
                 txb.moveCall({
-                  target: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::delete_circle`,
+                  target: `${PACKAGE_ID}::njangi_circle::delete_circle`,
                   arguments: [
                     txb.object(circleId)
                   ]
@@ -693,7 +707,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             
             // Add the admin_approve_member call
             txb.moveCall({
-              target: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::admin_approve_member`,
+              target: `${PACKAGE_ID}::njangi_circle::admin_approve_member`,
               arguments: [
                 txb.object(req.body.circleId),
                 txb.pure.address(req.body.memberAddress),
@@ -709,7 +723,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 console.log(`Building moveCall for admin_approve_member on circle: ${req.body.circleId}, member: ${req.body.memberAddress}`);
                 // Transfer the prepared call to the new transaction block
                 txBlock.moveCall({
-                  target: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::admin_approve_member`,
+                  target: `${PACKAGE_ID}::njangi_circle::admin_approve_member`,
                   arguments: [
                     txBlock.object(req.body.circleId),
                     txBlock.pure.address(req.body.memberAddress),
@@ -740,9 +754,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                  txError.message.includes('re-authenticate'))) {
               
               // Clear the session for authentication errors
-              if (sessionId) {
                 sessions.delete(sessionId);
-              }
               clearSessionCookie(res);
               
               return res.status(401).json({
@@ -778,152 +790,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               requireRelogin: false
             });
           }
-        } catch (err) {
-          console.error('Admin approve member error:', err);
+        } catch (error) {
+          console.error('Admin approve member error:', error);
           return res.status(500).json({ 
-            error: err instanceof Error ? err.message : 'Failed to process admin approve member request',
+            error: error instanceof Error ? error.message : 'Failed to process admin approve member request',
             requireRelogin: false
           });
         }
-        break;
 
-      case 'activateCircle':
-        // ... existing code for activateCircle ...
-
-      case 'paySecurityDeposit':
+      case 'swapAndContribute':
+        try {
         if (!account) {
           return res.status(400).json({ error: 'Account data is required' });
         }
 
-        if (!sessionId) {
-          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
-        }
-
-        if (!req.body.walletId) {
-          return res.status(400).json({ error: 'Wallet ID is required' });
-        }
-
-        if (!req.body.depositAmount || typeof req.body.depositAmount !== 'number' || req.body.depositAmount <= 0) {
-          return res.status(400).json({ error: 'Valid deposit amount is required' });
-        }
-
-        try {
-          // Log the transaction attempt
-          console.log('Attempting security deposit payment:', {
-            sessionId,
-            address: account.userAddr,
-            walletId: req.body.walletId,
-            depositAmount: req.body.depositAmount,
-            hasSession: sessions.has(sessionId)
-          });
-
-          // Validate session with action context
-          const session = validateSession(sessionId, 'paySecurityDeposit');
-          
-          if (!session.account) {
-            sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              error: 'Invalid session: No account data found. Please authenticate first.'
-            });
-          }
-
-          // Verify session matches account data
-          if (session.account.userAddr !== account.userAddr || 
-              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
-            sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              error: 'Session mismatch: Please refresh your authentication'
-            });
-          }
-
-          // Execute the transaction
-          try {
-            const txResult = await instance.sendTransaction(
-              session.account,
-              (txb: Transaction) => {
-                console.log(`Building moveCall for deposit_to_custody to wallet: ${req.body.walletId}, amount: ${req.body.depositAmount}`);
-                
-                // Create a coin with the exact security deposit amount
-                const [coin] = txb.splitCoins(txb.gas, [txb.pure.u64(BigInt(req.body.depositAmount))]);
-                
-                // Call the deposit_to_custody function
-                txb.moveCall({
-                  target: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::deposit_to_custody`,
-                  arguments: [
-                    txb.object(req.body.walletId),  // custody wallet
-                    coin,                           // payment
-                    txb.object('0x6'),              // clock object
-                  ]
-                });
-              },
-              { gasBudget: 100000000 } // Increase gas budget for deposit operation
-            );
-            
-            console.log('Security deposit payment transaction successful:', txResult);
-            return res.status(200).json({ 
-              digest: txResult.digest,
-              status: txResult.status,
-              gasUsed: txResult.gasUsed
-            });
-          } catch (txError) {
-            console.error('Security deposit transaction error:', txError);
-            return res.status(500).json({ 
-              error: txError instanceof Error ? txError.message : 'Failed to execute security deposit transaction',
-              requireRelogin: txError instanceof Error && 
-                (txError.message.includes('expired') || txError.message.includes('proof')) 
-            });
-          }
-        } catch (err) {
-          console.error('Security deposit error:', err);
-          return res.status(500).json({ 
-            error: err instanceof Error ? err.message : 'Failed to process security deposit',
-            requireRelogin: err instanceof Error && 
-              (err.message.includes('session') || err.message.includes('expired') || err.message.includes('proof'))
-          });
-        }
-
-      case 'configureStablecoinSwap':
-        try {
-          if (!account) {
-            return res.status(400).json({ error: 'Account data is required' });
-          }
-
-          if (!req.body.walletId) {
-            return res.status(400).json({ error: 'Custody wallet ID is required' });
-          }
-
-          const { 
-            walletId, 
-            enabled, 
-            targetCoinType, 
-            slippageTolerance, 
-            minimumSwapAmount, 
-            dexAddress,
-            globalConfigId,  // New parameter
-            poolId          // New parameter
-          } = req.body;
-
-          // Validate required parameters
-          if (enabled && (!targetCoinType || !slippageTolerance || !minimumSwapAmount || !dexAddress || !globalConfigId || !poolId)) {
-            return res.status(400).json({ 
-              error: 'When enabling stablecoin swaps, all configuration parameters are required: targetCoinType, slippageTolerance, minimumSwapAmount, dexAddress, globalConfigId, and poolId'
-            });
+          if (!req.body.circleId || !req.body.walletId || !req.body.swapPayload) {
+            return res.status(400).json({ error: 'Circle ID, wallet ID, and swap payload are required' });
           }
 
           // Validate the session
           try {
-            if (!sessionId) {
+        if (!sessionId) {
               throw new Error('No session ID provided');
             }
-            // Validate the session
-            const session = validateSession(sessionId, 'configureStablecoinSwap');
-            
-            // Check if account matches session
-            if (session.account?.userAddr !== account.userAddr) {
-              throw new Error('Session account mismatch');
-            }
+            // Just validate the session without storing the result
+            validateSession(sessionId, 'sendTransaction');
           } catch (validationError) {
             console.error('Session validation failed:', validationError);
             clearSessionCookie(res);
@@ -934,72 +825,122 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           try {
-            console.log('Building configureStablecoinSwap transaction with params:', {
-              walletId,
-              enabled,
-              targetCoinType,
-              slippageTolerance,
-              minimumSwapAmount,
-              dexAddress,
-              globalConfigId,
-              poolId
-            });
-
-            // Execute the transaction with zkLogin signature
-            const txResult = await instance.sendTransaction(
+            console.log('Preparing swap and contribute transaction');
+            
+            // First execute the swap transaction using the provided payload
+            console.log('Executing swap transaction...');
+            const swapTxResult = await instance.sendTransaction(
               account,
-              (txb) => {
-                txb.moveCall({
-                  target: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::configure_stablecoin_swap`,
+              (txBlock) => {
+                // Use the prepared swap payload
+                const swapPayload = req.body.swapPayload;
+                
+                // Add all transactions from the swap payload to our transaction block
+                // In an actual implementation, you would need to parse the payload properly
+                // This is a simplified approach
+                if (swapPayload.transactions) {
+                  try {
+                    for (const tx of swapPayload.transactions) {
+                      if (tx.MoveCall) {
+                        // Extract the MoveCall parts
+                        const target = `${tx.MoveCall.package}::${tx.MoveCall.module}::${tx.MoveCall.function}`;
+                        
+                        // Create valid arguments
+                        const args = [];
+                        if (Array.isArray(tx.MoveCall.arguments)) {
+                          for (const arg of tx.MoveCall.arguments) {
+                            try {
+                              if (arg && typeof arg === 'object') {
+                                if ('Object' in arg && arg.Object?.objectId) {
+                                  args.push(txBlock.object(arg.Object.objectId));
+                                } else if ('Pure' in arg) {
+                                  args.push(txBlock.pure(arg.Pure));
+                                }
+                                // Skip arguments we can't convert
+                              }
+                            } catch (argError) {
+                              console.error('Error processing argument:', argError);
+                              // Continue with next argument
+                            }
+                          }
+                        }
+                        
+                        // Add the move call with valid arguments
+                        txBlock.moveCall({
+                          target,
+                          arguments: args,
+                          typeArguments: tx.MoveCall.typeArguments || []
+                        });
+                      }
+                    }
+                  } catch (txError) {
+                    console.error('Error processing swap payload:', txError);
+                    throw new Error('Invalid swap transaction payload');
+                  }
+                }
+              },
+              { gasBudget: 150000000 } // Higher gas budget for complex swap operation
+            );
+            
+            console.log('Swap transaction successful:', swapTxResult);
+
+            // Now execute the contribution transaction
+            console.log('Executing contribution transaction...');
+            const contributeTxResult = await instance.sendTransaction(
+              account,
+              (txBlock) => {
+                txBlock.moveCall({
+                  target: `${PACKAGE_ID}::njangi_circle::contribute_from_custody`,
                   arguments: [
-                    txb.object(walletId),
-                    txb.pure.bool(enabled),
-                    txb.pure.vector('u8', Array.from(new TextEncoder().encode(targetCoinType))),
-                    txb.pure.address(dexAddress),
-                    txb.pure.u64(BigInt(slippageTolerance)),
-                    txb.pure.u64(BigInt(minimumSwapAmount)),
-                    txb.pure.address(globalConfigId),  // New argument
-                    txb.pure.address(poolId)          // New argument
+                    txBlock.object(req.body.circleId),
+                    txBlock.object(req.body.walletId),
+                    txBlock.object('0x6'), // Clock object
                   ]
                 });
               },
               { gasBudget: 100000000 }
             );
             
-            console.log('Stablecoin config transaction successful:', txResult);
-            return res.status(200).json({
-              digest: txResult.digest,
-              status: txResult.status,
-              gasUsed: txResult.gasUsed
+            console.log('Contribution transaction successful:', contributeTxResult);
+            
+            return res.status(200).json({ 
+              swapDigest: swapTxResult.digest,
+              contributeDigest: contributeTxResult.digest,
+              success: true
             });
           } catch (txError) {
-            console.error('Stablecoin config transaction error:', txError);
+            console.error('Swap and contribute transaction error:', txError);
+            console.error('Error type:', typeof txError);
+            console.error('Error message:', txError instanceof Error ? txError.message : String(txError));
             
-            // Handle specific errors
-            if (txError instanceof Error) {
-              if (txError.message.includes('EUnsupportedToken')) {
-                return res.status(400).json({ 
-                  error: 'Unsupported token type. Only USDC and USDT are supported.',
-                  requireRelogin: false
-                });
-              } else if (txError.message.includes('ESwapModuleNotAvailable')) {
-                return res.status(400).json({ 
-                  error: 'DEX swap module not available.',
-                  requireRelogin: false
-                });
-              }
+            // Check if the error is related to proof verification
+            if (txError instanceof Error && 
+                (txError.message.includes('proof verify failed') ||
+                 txError.message.includes('Session expired') ||
+                 txError.message.includes('re-authenticate'))) {
+              
+              // Clear the session for authentication errors
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+              
+              return res.status(401).json({
+                error: 'Your session has expired. Please login again.',
+                requireRelogin: true
+              });
             }
             
+            // For other errors, keep the session but return error with more detail
             return res.status(500).json({ 
-              error: txError instanceof Error ? txError.message : 'Failed to configure stablecoin swap',
+              error: txError instanceof Error ? txError.message : 'Failed to swap and contribute',
+              details: txError instanceof Error ? txError.stack : String(txError),
               requireRelogin: false
             });
           }
         } catch (error) {
-          console.error('Error in configureStablecoinSwap:', error);
+          console.error('Error in swapAndContribute:', error);
           return res.status(500).json({ 
-            error: 'Failed to execute transaction. Please try again.',
-            details: error instanceof Error ? error.message : 'Unknown error'
+            error: 'Failed to swap and contribute',
+            details: error instanceof Error ? error.message : String(error)
           });
         }
 
@@ -1056,7 +997,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 
                 // Call the contribute_from_custody function
                 txb.moveCall({
-                  target: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::contribute_from_custody`,
+                  target: `${PACKAGE_ID}::njangi_circle::contribute_from_custody`,
                   arguments: [
                     txb.object(req.body.circleId),   // circle object
                     txb.object(req.body.walletId),   // custody wallet
@@ -1090,6 +1031,621 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               (err.message.includes('session') || err.message.includes('expired') || err.message.includes('proof'))
           });
         }
+
+      case 'executeStablecoinSwap':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!req.body.circleId || !req.body.walletId || !req.body.suiAmount) {
+          return res.status(400).json({ error: 'Missing required parameters: circleId, walletId, suiAmount' });
+        }
+
+        try {
+          // Ensure parameters are of the correct type
+          const walletId = String(req.body.walletId);
+          const suiAmount = Number(req.body.suiAmount);
+
+          // Validate session with action context
+          const session = validateSession(sessionId, 'sendTransaction');
+          
+          if (!session.account) {
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Authentication error: Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+
+          // Verify session matches account data
+          if (session.account.userAddr !== account.userAddr || 
+              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Session mismatch: Please refresh your authentication',
+              requireRelogin: true
+            });
+          }
+          
+          // Get the live SUI price
+          const suiPrice = await priceService.getSUIPrice();
+          if (!suiPrice || suiPrice <= 0) {
+            return res.status(500).json({ 
+              error: 'Failed to fetch current SUI price. Please try again.',
+            });
+          }
+          
+          console.log('Live SUI price for swap:', suiPrice);
+          
+          // Calculate stablecoin amount based on live SUI price
+          // For USDC, multiply by 1e6 for correct decimals (USDC has 6 decimal places)
+          const suiAmountInMoj = suiAmount * 1e9; // Convert SUI to Mist (9 decimals)
+          const stablecoinAmount = Math.floor(suiAmount * suiPrice * 1e6); // USDC has 6 decimals
+          
+          // Execute the transaction through zkLogin
+          const txResult = await instance.sendTransaction(
+            session.account,
+            (txb: Transaction) => {
+              txb.setSender(session.account!.userAddr);
+              
+              // Call our new deposit_with_live_rate function
+              txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_circle::deposit_with_live_rate`,
+                arguments: [
+                  txb.object(walletId), // Custody wallet ID
+                  txb.splitCoins(txb.gas, [txb.pure.u64(suiAmountInMoj.toString())]), // SUI payment
+                  txb.pure.u64(stablecoinAmount.toString()), // Calculated stablecoin amount based on live price
+                  txb.object("0x6"), // Clock object
+                ]
+              });
+            }
+          );
+          
+          return res.status(200).json({ 
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed,
+            suiPrice: suiPrice,
+            stablecoinAmount: stablecoinAmount / 1e6 // Return human-readable amount
+          });
+        } catch (error) {
+          console.error('Error executing stablecoin swap:', error);
+          
+          if (error instanceof Error && 
+              (error.message.includes('proof verify failed') ||
+               error.message.includes('Session expired') ||
+               error.message.includes('re-authenticate'))) {
+            
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            
+            return res.status(401).json({
+              error: 'Authentication error: Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+          
+          return res.status(500).json({ 
+            error: error instanceof Error ? error.message : 'Failed to execute stablecoin swap'
+          });
+        }
+        break;
+
+      case 'configureStablecoinSwap':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!req.body.walletId || !req.body.config) {
+          return res.status(400).json({ error: 'Missing required parameters: walletId, config' });
+        }
+
+        try {
+          // Validate configuration params
+          const { walletId, config } = req.body;
+          
+          // Ensure walletId is a string
+          if (typeof walletId !== 'string') {
+            return res.status(400).json({ error: 'walletId must be a string' });
+          }
+          
+          if (typeof config.enabled !== 'boolean' || 
+              !['USDC', 'USDT'].includes(config.targetCoinType) ||
+              typeof config.slippageTolerance !== 'number' ||
+              typeof config.minimumSwapAmount !== 'number') {
+            return res.status(400).json({ 
+              error: 'Invalid config parameters. Check types and allowed values.' 
+            });
+          }
+
+          // Validate session with action context
+          const session = validateSession(sessionId, 'sendTransaction');
+          
+          if (!session.account) {
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Invalid session: No account data found. Please authenticate first.',
+              requireRelogin: true
+            });
+          }
+
+          // Verify session matches account data
+          if (session.account.userAddr !== account.userAddr || 
+              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Session mismatch: Please refresh your authentication',
+              requireRelogin: true
+            });
+          }
+
+          // Map the simple coin names to their full module paths
+          const coinTypeMap: Record<string, string> = {
+            'USDC': '0x9e89965f542887a8f0383451ba553fedf62c04e4dc68f60dec5b8d7ad1436bd6::usdc::USDC',
+            'USDT': '0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08::usdt::USDT'
+          };
+          
+          // Testnet Cetus configuration 
+          const CETUS_PACKAGE = '0x0868b71c0cba55bf0faf6c40df8c179c67a4d0ba0e79965b68b3d72d7dfbf666';
+          const CETUS_GLOBAL_CONFIG = '0x6f4149091a5aea0e818e7243a13adcfb403842d670b9a2089de058512620687a';
+          
+          // Default pool IDs for the supported coins on testnet
+          const poolIds: Record<string, string> = {
+            'USDC': '0x2e041f3fd93646dcc877f783c1f2b7fa62d30271bdef1f21ef002cebf857bded',
+            'USDT': '0x2cc7129e25401b5eccfdc678d402e2cc22f688f1c8e5db58c06c3c4e71242eb2'
+          };
+          
+          // Get the appropriate pool ID for the selected coin type
+          const poolId = poolIds[config.targetCoinType] || poolIds['USDC'];
+          
+          // Convert minimum amount to MIST (1 SUI = 1e9 MIST)
+          const minimumSwapAmount = Math.floor(config.minimumSwapAmount * 1e9);
+          
+          // Execute the transaction with zkLogin - using direct moveCall approach
+            const txResult = await instance.sendTransaction(
+            session.account,
+              (txb) => {
+              // Add a simple moveCall directly
+                txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_circle::configure_stablecoin_swap`,
+                  arguments: [
+                    txb.object(walletId),
+                  txb.pure.bool(config.enabled),
+                  txb.pure.string(coinTypeMap[config.targetCoinType] || coinTypeMap['USDC']),
+                  txb.pure.address(CETUS_PACKAGE),
+                  txb.pure.u64(BigInt(config.slippageTolerance)),
+                    txb.pure.u64(BigInt(minimumSwapAmount)),
+                  txb.pure.address(CETUS_GLOBAL_CONFIG),
+                  txb.pure.address(poolId),
+                ],
+              });
+            }
+          );
+          
+          console.log('Stablecoin configuration result:', txResult);
+            return res.status(200).json({
+              digest: txResult.digest,
+              status: txResult.status,
+              gasUsed: txResult.gasUsed
+            });
+        } catch (error) {
+          console.error('Error configuring stablecoin swap:', error);
+          
+          // Handle specific error types
+          if (error instanceof Error) {
+            if (error.message.includes('proof verify failed') ||
+                error.message.includes('Session expired') ||
+                error.message.includes('re-authenticate')) {
+              // Clear the session for authentication errors
+              if (sessionId) sessions.delete(sessionId);
+              clearSessionCookie(res);
+              
+              return res.status(401).json({
+                error: 'Your session has expired. Please login again.',
+                requireRelogin: true
+              });
+            }
+            
+            // Handle transaction-specific errors
+            if (error.message.includes('ENotAdmin')) {
+              return res.status(403).json({
+                error: 'Only the admin can configure stablecoin settings'
+              });
+            }
+            
+            if (error.message.includes('EUnsupportedToken')) {
+                return res.status(400).json({ 
+                error: 'Unsupported stablecoin token type'
+                });
+              }
+            }
+            
+          // Generic error handling
+            return res.status(500).json({ 
+            error: error instanceof Error ? error.message : 'Unknown error during stablecoin configuration'
+          });
+        }
+        break;
+
+      case 'paySecurityDeposit':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!req.body.walletId || !req.body.depositAmount) {
+          return res.status(400).json({ error: 'Missing required parameters: walletId, depositAmount' });
+        }
+
+        try {
+          // Ensure parameters are of the correct type
+          const walletId = String(req.body.walletId);
+          const depositAmount = typeof req.body.depositAmount === 'number' ? 
+            BigInt(Math.floor(req.body.depositAmount)) : 
+            BigInt(req.body.depositAmount);
+
+          // Validate session with action context
+          const session = validateSession(sessionId, 'sendTransaction');
+          
+          if (!session.account) {
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Invalid session: No account data found. Please authenticate first.',
+              requireRelogin: true
+            });
+          }
+
+          // Verify session matches account data
+          if (session.account.userAddr !== account.userAddr || 
+              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Session mismatch: Please refresh your authentication',
+              requireRelogin: true
+            });
+          }
+
+          console.log(`Processing security deposit payment of ${depositAmount} to wallet ${walletId}`);
+
+          // Execute the transaction with zkLogin
+            const txResult = await instance.sendTransaction(
+              session.account,
+            (txb) => {
+              // First, split the required coins from gas
+              const [coin] = txb.splitCoins(txb.gas, [txb.pure.u64(depositAmount)]);
+                
+              // Then deposit to the custody wallet
+                txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_circle::deposit_to_custody`,
+                  arguments: [
+                  txb.object(walletId),
+                  coin,
+                  txb.object('0x6'), // Clock object
+                ],
+              });
+            }
+          );
+          
+          console.log('Security deposit payment result:', txResult);
+            return res.status(200).json({ 
+              digest: txResult.digest,
+              status: txResult.status,
+              gasUsed: txResult.gasUsed
+            });
+        } catch (error) {
+          console.error('Error paying security deposit:', error);
+          
+          // Handle specific error types
+          if (error instanceof Error) {
+            if (error.message.includes('proof verify failed') ||
+                error.message.includes('Session expired') ||
+                error.message.includes('re-authenticate')) {
+              // Clear the session for authentication errors
+              if (sessionId) sessions.delete(sessionId);
+              clearSessionCookie(res);
+              
+              return res.status(401).json({
+                error: 'Your session has expired. Please login again.',
+                requireRelogin: true
+              });
+            }
+            
+            // Handle transaction-specific errors
+            if (error.message.includes('EWalletNotActive')) {
+              return res.status(400).json({
+                error: 'The custody wallet is not active'
+              });
+            }
+            
+            if (error.message.includes('ENotWalletOwner')) {
+              return res.status(403).json({
+                error: 'You are not authorized to deposit to this wallet'
+              });
+            }
+            
+            if (error.message.includes('InsufficientBalance')) {
+              return res.status(400).json({
+                error: 'Insufficient balance to make this deposit'
+              });
+            }
+          }
+          
+          // Generic error handling
+          return res.status(500).json({ 
+            error: error instanceof Error ? error.message : 'Unknown error during security deposit payment'
+          });
+        }
+        break;
+
+      case 'depositStablecoin':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!req.body.walletId || !req.body.coinObjectId || !req.body.stablecoinType) {
+          return res.status(400).json({ 
+            error: 'Missing required parameters: walletId, coinObjectId, stablecoinType' 
+          });
+        }
+
+        try {
+          const walletId = String(req.body.walletId);
+          const coinObjectId = String(req.body.coinObjectId);
+          const stablecoinType = String(req.body.stablecoinType);
+          
+          // Validate session
+          const session = validateSession(sessionId, 'sendTransaction');
+          
+          if (!session.account) {
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Authentication error: Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+          
+          // Execute the stablecoin deposit transaction
+          const txResult = await instance.sendTransaction(
+            session.account,
+            (txb: Transaction) => {
+              txb.setSender(session.account!.userAddr);
+              
+              txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_circle::deposit_stablecoin_to_custody`,
+                arguments: [
+                  txb.object(walletId),
+                  txb.object(coinObjectId),
+                  txb.object("0x6") // Clock object
+                ],
+                typeArguments: [stablecoinType]
+              });
+            }
+          );
+          
+          return res.status(200).json({ 
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+        } catch (error) {
+          console.error('Error depositing stablecoin:', error);
+          
+          // Handle authentication errors
+          if (error instanceof Error && 
+              (error.message.includes('proof verify failed') ||
+               error.message.includes('Session expired'))) {
+            
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            
+            return res.status(401).json({
+              error: 'Authentication error: Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+          
+          return res.status(500).json({ 
+            error: error instanceof Error ? error.message : 'Failed to deposit stablecoin'
+          });
+        }
+
+      case 'executeSwap':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!req.body.txb) {
+          return res.status(400).json({ error: 'Missing required parameter: txb (serialized transaction)' });
+        }
+
+        try {
+          // Validate session with action context
+          const session = validateSession(sessionId, 'sendTransaction');
+          
+          if (!session.account) {
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Authentication error: Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+
+          // Verify session matches account data
+          if (session.account.userAddr !== account.userAddr || 
+              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Session mismatch: Please refresh your authentication',
+              requireRelogin: true
+            });
+          }
+          
+          // Deserialize the transaction
+          const tx = Transaction.from(req.body.txb);
+          tx.setSender(session.account.userAddr);
+          
+          // Execute the transaction
+          const txResult = await instance.sendTransaction(
+            session.account,
+            () => tx
+          );
+          
+          return res.status(200).json({ 
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+        } catch (error) {
+          console.error('Error executing DEX swap:', error);
+          
+          if (error instanceof Error && 
+              (error.message.includes('proof verify failed') ||
+               error.message.includes('Session expired') ||
+               error.message.includes('re-authenticate'))) {
+            
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            
+            return res.status(401).json({
+              error: 'Authentication error: Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+          
+          // Check for common DEX errors
+          if (error instanceof Error) {
+            if (error.message.includes('insufficient liquidity')) {
+              return res.status(400).json({ 
+                error: 'Insufficient liquidity in DEX pool. Try a smaller amount.'
+              });
+            }
+            
+            if (error.message.includes('slippage')) {
+              return res.status(400).json({ 
+                error: 'Price movement exceeded slippage tolerance. Try increasing slippage or try again.'
+              });
+            }
+          }
+          
+          return res.status(500).json({ 
+            error: error instanceof Error ? error.message : 'Failed to execute swap'
+          });
+        }
+
+      case 'toggleAutoSwap': {
+        try {
+          // Get circle ID and enabled state from the request body
+          const { circleId, enabled, account } = req.body;
+          
+          if (!circleId) {
+            return res.status(400).json({
+              error: 'Missing circle ID'
+            });
+          }
+          
+          if (!account) {
+            return res.status(400).json({
+              error: 'Account data is required'
+            });
+          }
+          
+          // Validate the session
+          try {
+            if (!sessionId) {
+              throw new Error('No session ID provided');
+            }
+            // Just validate the session without storing the result
+            validateSession(sessionId, 'sendTransaction');
+          } catch (validationError) {
+            console.error('Session validation failed:', validationError);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: validationError instanceof Error ? validationError.message : 'Session validation failed',
+              requireRelogin: true
+            });
+          }
+          
+          console.log(`Toggling auto-swap to ${enabled ? 'enabled' : 'disabled'} for circle: ${circleId}`);
+          
+          try {
+            // Execute the transaction with zkLogin
+            const txResult = await instance.sendTransaction(
+              account,
+              (txb: Transaction) => {
+                console.log(`Building moveCall for toggle_auto_swap on circle: ${circleId}, enabled: ${enabled}`);
+                
+                // Toggle auto-swap call
+                txb.moveCall({
+                  target: `${PACKAGE_ID}::njangi_circle::toggle_auto_swap`,
+                  arguments: [
+                    txb.object(circleId),
+                    txb.pure.bool(enabled)
+                  ]
+                });
+              }
+            );
+            
+            console.log('Auto-swap toggle transaction successful:', txResult);
+            return res.status(200).json({ 
+              success: true,
+              digest: txResult.digest,
+              status: txResult.status,
+              gasUsed: txResult.gasUsed
+            });
+          } catch (txError) {
+            console.error('Auto-swap toggle transaction error:', txError);
+            
+            // Check if the error is related to proof verification
+            if (txError instanceof Error && 
+                (txError.message.includes('proof verify failed') ||
+                 txError.message.includes('Session expired') ||
+                 txError.message.includes('re-authenticate'))) {
+              
+              // Clear the session for authentication errors
+              if (sessionId) {
+                sessions.delete(sessionId);
+                clearSessionCookie(res);
+              }
+              
+              return res.status(401).json({
+                error: 'Your session has expired. Please login again.',
+                requireRelogin: true
+              });
+            }
+            
+            // Check for specific contract errors
+            if (txError instanceof Error) {
+              if (txError.message.includes('ENotAdmin')) {
+                return res.status(400).json({ 
+                  error: 'Cannot toggle auto-swap: Only the circle admin can modify this setting',
+                  requireRelogin: false
+                });
+              }
+            }
+            
+            // For other errors, keep the session but return error
+            return res.status(500).json({ 
+              error: txError instanceof Error ? txError.message : 'Failed to toggle auto-swap',
+              details: txError instanceof Error ? txError.stack : String(txError),
+              requireRelogin: false
+            });
+          }
+        } catch (error) {
+          console.error('Auto-swap toggle error:', error);
+          return res.status(500).json({ 
+            error: error instanceof Error ? error.message : 'Failed to toggle auto-swap setting',
+            requireRelogin: false
+          });
+        }
+      }
 
       default:
         return res.status(400).json({ error: `Unknown action: ${action}` });

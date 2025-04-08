@@ -5,13 +5,19 @@ import { AuthProvider } from '../contexts/AuthContext';
 import { ActivityDetector } from '@/components/ActivityDetector';
 import { IdleWarningModal } from '@/components/IdleWarningModal';
 import { useAuth } from '@/contexts/AuthContext';
+import { Navbar } from '@/components/ui/Navbar';
 
 function AppContent({ Component, pageProps }: AppProps) {
   const { isAuthenticated } = useAuth();
 
   return (
     <ActivityDetector>
-      {isAuthenticated && <IdleWarningModal />}
+      {isAuthenticated && (
+        <>
+          <Navbar />
+          <IdleWarningModal />
+        </>
+      )}
       <Component {...pageProps} />
     </ActivityDetector>
   );

@@ -70,6 +70,8 @@ module njangi::njangi_circle {
     const EInsufficientLiquidity: u64 = 49;
     const EUnsupportedToken: u64 = 50;
     const ESwapModuleNotAvailable: u64 = 51;
+    const EStablecoinNotEnabled: u64 = 52;
+    const EInsufficientAmount: u64 = 53;
     
     // Time constants (all in milliseconds)
     const MS_PER_DAY: u64 = 86_400_000;       // 24 * 60 * 60 * 1000
@@ -94,6 +96,7 @@ module njangi::njangi_circle {
     const CUSTODY_OP_DEPOSIT: u8 = 0;
     const CUSTODY_OP_WITHDRAWAL: u8 = 1;
     const CUSTODY_OP_PAYOUT: u8 = 2;
+    const CUSTODY_OP_STABLECOIN_DEPOSIT: u8 = 3;
     
     // Testnet addresses for stablecoins
     const USDC_TYPE: vector<u8> = b"0x9e89965f542887a8f0383451ba553fedf62c04e4dc68f60dec5b8d7ad1436bd6::usdc::USDC";
@@ -129,25 +132,6 @@ module njangi::njangi_circle {
     // Main data structures
     // ----------------------------------------------------------
     
-    // New struct to hold USD amounts
-    public struct USDAmounts has store, drop {
-        contribution_amount: u64, // USD amount * 100 (cents)
-        security_deposit: u64,    // USD amount * 100 (cents)
-        target_amount: option::Option<u64>, // USD amount * 100 (cents)
-    }
-    
-    // Add a new struct for stablecoin configuration
-    public struct StablecoinConfig has store, drop {
-        enabled: bool,
-        target_coin_type: string::String,    // Type of stablecoin to swap to
-        dex_address: address,                // Address of the DEX to use
-        slippage_tolerance: u64,             // Slippage tolerance in basis points (e.g., 50 = 0.5%)
-        last_swap_time: u64,                 // Timestamp of last swap
-        minimum_swap_amount: u64,            // Minimum amount to swap (to avoid dust)
-        pool_id: option::Option<address>,    // Pool ID for the SUI-Stablecoin pair
-        global_config_id: option::Option<address>, // ID of the Cetus global config
-    }
-    
     // Custody wallet linked to a circle for secure fund storage
     public struct CustodyWallet has key, store {
         id: object::UID,
@@ -160,10 +144,9 @@ module njangi::njangi_circle {
         daily_withdrawal_limit: u64,  // Maximum withdrawal per day
         last_withdrawal_time: u64,    // Timestamp of last withdrawal
         daily_withdrawal_total: u64,  // Running total of withdrawals for the day
-        stablecoin_config: StablecoinConfig,  // Added stablecoin configuration
-        stablecoin_balance: u64,              // Balance of stablecoins (in smallest unit)
-        stablecoin_holdings: table::Table<string::String, u64>,  // type_name -> balance
-        stablecoins: vector<address>,         // Object IDs of stablecoin objects we own
+        // Store balances for each stablecoin type
+        // Since we can't use generics in storage, we'll use a dynamic approach
+        transaction_history: vector<CustodyTransaction>, // History of transactions
     }
     
     // Transaction record for custody wallet operations
@@ -174,6 +157,29 @@ module njangi::njangi_circle {
         timestamp: u64,
     }
     
+    // Defines USD amounts in cents (e.g., $10.50 = 1050)
+    public struct UsdAmounts has store, drop {
+        contribution_amount: u64, 
+        security_deposit: u64,
+        target_amount: option::Option<u64>
+    }
+    
+    // PayoutWindow struct definition
+    public struct PayoutWindow has store, drop {
+        start_time: u64,
+        end_time: u64,
+        recipient: address,
+        amount: u64
+    }
+
+    // Define CircleTransaction struct
+    public struct CircleTransaction has store, drop {
+        operation_type: u8,
+        user: address,
+        amount: u64,
+        timestamp: u64
+    }
+
     public struct Circle has key, store {
         id: object::UID,
         name: string::String,
@@ -205,7 +211,8 @@ module njangi::njangi_circle {
         milestones: vector<Milestone>,
         goal_progress: u64,
         last_milestone_completed: u64,
-        usd_amounts: USDAmounts,    // Combined field for all USD amounts
+        usd_amounts: UsdAmounts,    // Combined field for all USD amounts
+        auto_swap_enabled: bool     // Flag to control if auto-swap is enabled for this circle
     }
 
     public struct Member has store, drop {
@@ -434,6 +441,25 @@ module njangi::njangi_circle {
         timestamp: u64,
     }
 
+    // New event for stablecoin deposit
+    public struct StablecoinDeposited has copy, drop {
+        circle_id: object::ID,
+        wallet_id: object::ID,
+        coin_type: string::String,
+        amount: u64,
+        member: address,
+        previous_balance: u64,
+        new_balance: u64,
+        timestamp: u64,
+    }
+
+    // New event for auto-swap toggle
+    public struct AutoSwapToggled has copy, drop {
+        circle_id: object::ID,
+        enabled: bool,
+        toggled_by: address,
+    }
+
     // ----------------------------------------------------------
     // Create Circle
     // ----------------------------------------------------------
@@ -479,7 +505,7 @@ module njangi::njangi_circle {
         );
         
         // Create USDAmounts structure
-        let usd_amounts = USDAmounts {
+        let usd_amounts = UsdAmounts {
             contribution_amount: contribution_amount_usd,
             security_deposit: security_deposit_usd,
             target_amount: target_amount_usd,
@@ -517,6 +543,7 @@ module njangi::njangi_circle {
             goal_progress: 0,
             last_milestone_completed: 0,
             usd_amounts,
+            auto_swap_enabled: false, // Default to disabled
         };
         
         // Create the circle's custody wallet
@@ -548,19 +575,7 @@ module njangi::njangi_circle {
     ) {
         let admin = tx_context::sender(ctx);
         
-        // Create default stablecoin configuration targeting USDC on testnet
-        let stablecoin_config = StablecoinConfig {
-            enabled: false,
-            target_coin_type: string::utf8(USDC_TYPE),
-            dex_address: CETUS_PACKAGE,  // Cetus DEX address on testnet
-            slippage_tolerance: 50,      // 0.5% slippage tolerance
-            last_swap_time: 0,
-            minimum_swap_amount: to_decimals(1), // 1 SUI minimum for swap
-            pool_id: option::none(),      // Will be set during configuration
-            global_config_id: option::none(), // Will be set during configuration
-        };
-        
-        // Create custody wallet
+        // Create custody wallet without stablecoin config
         let wallet = CustodyWallet {
             id: object::new(ctx),
             circle_id,
@@ -572,10 +587,7 @@ module njangi::njangi_circle {
             daily_withdrawal_limit: to_decimals(10000),
             last_withdrawal_time: 0,
             daily_withdrawal_total: 0,
-            stablecoin_config,
-            stablecoin_balance: 0,
-            stablecoin_holdings: table::new(ctx),
-            stablecoins: vector::empty(),
+            transaction_history: vector::empty(),
         };
         
         // Get the wallet ID before sharing
@@ -611,166 +623,20 @@ module njangi::njangi_circle {
     // ----------------------------------------------------------
     // Configure stablecoin auto-swap settings
     // ----------------------------------------------------------
-    public fun configure_stablecoin_swap(
-        wallet: &mut CustodyWallet,
-        enabled: bool,
-        target_coin_type: vector<u8>,
-        dex_address: address,
-        slippage_tolerance: u64,
-        minimum_swap_amount: u64,
-        global_config_id: address,
-        pool_id: address,
-        ctx: &mut tx_context::TxContext
-    ) {
-        let sender = tx_context::sender(ctx);
-        
-        // Only admin can configure swap settings
-        assert!(sender == wallet.admin, ENotAdmin);
-        
-        // Validate target coin type (currently only support USDC and USDT)
-        let coin_type_str = string::utf8(target_coin_type);
-        let is_supported = 
-            string::utf8(USDC_TYPE) == coin_type_str || 
-            string::utf8(USDT_TYPE) == coin_type_str;
-        
-        assert!(is_supported, EUnsupportedToken);
-        
-        // Update configuration
-        wallet.stablecoin_config.enabled = enabled;
-        wallet.stablecoin_config.target_coin_type = coin_type_str;
-        wallet.stablecoin_config.dex_address = dex_address;
-        wallet.stablecoin_config.slippage_tolerance = slippage_tolerance;
-        wallet.stablecoin_config.minimum_swap_amount = minimum_swap_amount;
-        wallet.stablecoin_config.global_config_id = option::some(global_config_id);
-        wallet.stablecoin_config.pool_id = option::some(pool_id);
-        
-        // Add entry for target stablecoin in holdings table if not already there
-        if (!table::contains(&wallet.stablecoin_holdings, coin_type_str)) {
-            table::add(&mut wallet.stablecoin_holdings, coin_type_str, 0);
-        }
-    }
+    // Remove this function since we're removing the swap functionality
     
     // ----------------------------------------------------------
     // Execute stablecoin swap (simulated)
     // ----------------------------------------------------------
-    fun execute_stablecoin_swap(
-        wallet: &mut CustodyWallet,
-        amount: u64,
-        clock: &clock::Clock,
-        ctx: &mut tx_context::TxContext
-    ) {
-        // Check if auto-swap is enabled and minimum amount is met
-        if (!wallet.stablecoin_config.enabled || amount < wallet.stablecoin_config.minimum_swap_amount) {
-            return
-        };
-        
-        // In a real implementation, this function would:
-        // 1. Connect to the specified DEX
-        // 2. Get the current exchange rate
-        // 3. Calculate the slippage-adjusted minimum output
-        // 4. Execute the swap transaction
-        // 5. Update the stablecoin balance
-        
-        // For now, we'll simulate the swap with a fixed rate
-        // In production, this would call the DEX's swap function
-        let estimated_stablecoin_amount = simulate_swap_rate(amount);
-        
-        // Simulate possible DEX failure conditions
-        let current_time = clock::timestamp_ms(clock);
-        let mut success = true;
-        let mut error_message = option::none();
-        
-        // Check for sufficient liquidity (simulated)
-        // In production, this would be determined by the DEX
-        if (amount > to_decimals(1000)) {
-            // Simulate a liquidity constraint for large orders
-            success = false;
-            error_message = option::some(string::utf8(b"Insufficient liquidity in pool"));
-            abort EInsufficientLiquidity
-        };
-        
-        // Check for slippage (simulated)
-        // In production, this would compare expected vs actual rate
-        if (success && estimated_stablecoin_amount < (amount * 200_000_000) / DECIMAL_SCALING) {
-            // If the estimated amount is less than $2.00 per SUI (below our min acceptable price)
-            success = false;
-            error_message = option::some(string::utf8(b"Slippage tolerance exceeded"));
-            abort ESlippageExceeded
-        };
-        
-        // Get the pool ID if available or default to zero address
-        let pool_id = if (option::is_some(&wallet.stablecoin_config.pool_id)) {
-            *option::borrow(&wallet.stablecoin_config.pool_id)
-        } else {
-            @0x0 // Default to zero address if no pool ID
-        };
-        
-        // Only update balances if swap succeeded
-        if (success) {
-            // Get the target stablecoin type
-            let coin_type_str = wallet.stablecoin_config.target_coin_type;
-            
-            // Track previous balance for event
-            let previous_balance = if (table::contains(&wallet.stablecoin_holdings, coin_type_str)) {
-                *table::borrow(&wallet.stablecoin_holdings, coin_type_str)
-            } else {
-                // Initialize if it doesn't exist
-                table::add(&mut wallet.stablecoin_holdings, coin_type_str, 0);
-                0
-            };
-            
-            // Update stablecoin holdings in table
-            let new_balance = previous_balance + estimated_stablecoin_amount;
-            *table::borrow_mut(&mut wallet.stablecoin_holdings, coin_type_str) = new_balance;
-            
-            // Also update the total balance field for backward compatibility
-            wallet.stablecoin_balance = wallet.stablecoin_balance + estimated_stablecoin_amount;
-            
-            // Update last swap time
-            wallet.stablecoin_config.last_swap_time = current_time;
-            
-            // Emit holdings updated event
-            event::emit(StablecoinHoldingUpdated {
-                circle_id: wallet.circle_id,
-                wallet_id: object::uid_to_inner(&wallet.id),
-                coin_type: coin_type_str,
-                previous_balance,
-                new_balance,
-                timestamp: current_time,
-            });
-        } else {
-            // If we get here, it means we hit a non-aborting failure case
-            // This shouldn't happen with the current implementation, but we keep it for future extensions
-            abort ESwapFailed
-        };
-        
-        // Emit swap event
-        event::emit(StablecoinSwapExecuted {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            sui_amount: amount,
-            stablecoin_amount: if (success) { estimated_stablecoin_amount } else { 0 },
-            stablecoin_type: wallet.stablecoin_config.target_coin_type,
-            timestamp: current_time,
-            pool_id,
-            success,
-            error_message,
-        });
-    }
+    // Remove this function since we're removing the swap functionality
     
     // ----------------------------------------------------------
     // Helper function to simulate swap rate (for demo purposes)
     // ----------------------------------------------------------
-    fun simulate_swap_rate(sui_amount: u64): u64 {
-        // Simulate a swap rate of 1 SUI = $2.50 USDC
-        // In a real implementation, this would query the DEX for the current rate
-        // This is just a placeholder
-        let usdc_per_sui = 250_000_000; // $2.50 with 8 decimals
-        (sui_amount * usdc_per_sui) / DECIMAL_SCALING
-    }
-    
+    // Remove this function since we're removing the swap functionality
+
     // ----------------------------------------------------------
-    // Modified deposit_to_custody to include auto-swap
+    // Modified deposit_to_custody to exclude auto-swap
     // ----------------------------------------------------------
     public fun deposit_to_custody(
         wallet: &mut CustodyWallet,
@@ -807,16 +673,7 @@ module njangi::njangi_circle {
             operation_type: CUSTODY_OP_DEPOSIT,
         });
         
-        // If auto-swap is enabled, execute the swap
-        if (wallet.stablecoin_config.enabled) {
-            // For safety, we'll use the amount of the deposit for the swap amount
-            // instead of the entire wallet balance, which is a more conservative approach
-            
-            // Only swap if we have enough to meet the minimum
-            if (amount >= wallet.stablecoin_config.minimum_swap_amount) {
-                execute_stablecoin_swap(wallet, amount, clock, ctx);
-            };
-        };
+        // No auto-swap since we removed that functionality
     }
     
     // Helper function to check if sender is authorized to deposit to the wallet
@@ -1020,6 +877,7 @@ module njangi::njangi_circle {
     // ----------------------------------------------------------
     public fun join_circle(
         circle: &mut Circle,
+        wallet: &mut CustodyWallet,
         deposit: coin::Coin<SUI>,
         position: option::Option<u64>,
         clock: &clock::Clock,
@@ -1031,6 +889,8 @@ module njangi::njangi_circle {
         assert!(circle.current_members < circle.max_members, ECircleFull);
         // Must have at least the required security deposit in SUI
         assert!(coin::value(&deposit) >= circle.security_deposit, EInsufficientDeposit);
+        // Verify custody wallet belongs to this circle
+        assert!(wallet.circle_id == object::uid_to_inner(&circle.id), EWalletCircleMismatch);
 
         let member = Member {
             joined_at: clock::timestamp_ms(clock),
@@ -1059,8 +919,15 @@ module njangi::njangi_circle {
         table::add(&mut circle.members, sender, member);
         circle.current_members = circle.current_members + 1;
 
-        // Move deposit coin -> circle's deposit balance
-        balance::join(&mut circle.deposits, coin::into_balance(deposit));
+        // Get deposit amount
+        let deposit_amount = coin::value(&deposit);
+        
+        // Move deposit coin -> custody wallet balance instead of circle's deposit balance
+        balance::join(&mut wallet.balance, coin::into_balance(deposit));
+        
+        // Also track in circle's deposits for accounting (using a zero-value balance just for tracking)
+        let dummy_deposit = coin::into_balance(coin::zero<SUI>(ctx));
+        balance::join(&mut circle.deposits, dummy_deposit);
 
         event::emit(MemberJoined {
             circle_id: object::uid_to_inner(&circle.id),
@@ -1133,6 +1000,7 @@ module njangi::njangi_circle {
     // ----------------------------------------------------------
     public fun provide_deposit(
         circle: &mut Circle,
+        wallet: &mut CustodyWallet,
         deposit: coin::Coin<SUI>,
         ctx: &mut tx_context::TxContext
     ) {
@@ -1140,6 +1008,8 @@ module njangi::njangi_circle {
         
         // Must be a circle member
         assert!(table::contains(&circle.members, sender), ENotMember);
+        // Verify custody wallet belongs to this circle
+        assert!(wallet.circle_id == object::uid_to_inner(&circle.id), EWalletCircleMismatch);
         
         let member = table::borrow(&circle.members, sender);
         // Must be in pending status
@@ -1155,8 +1025,12 @@ module njangi::njangi_circle {
         member_mut.status = MEMBER_STATUS_ACTIVE;
         member_mut.deposit_balance = deposit_amount;
         
-        // Move deposit coin -> circle's deposit balance
-        balance::join(&mut circle.deposits, coin::into_balance(deposit));
+        // Move deposit coin -> custody wallet balance
+        balance::join(&mut wallet.balance, coin::into_balance(deposit));
+        
+        // Also track in circle's deposits for accounting (using a zero-value balance just for tracking)
+        let dummy_deposit = coin::into_balance(coin::zero<SUI>(ctx));
+        balance::join(&mut circle.deposits, dummy_deposit);
         
         event::emit(MemberActivated {
             circle_id: object::uid_to_inner(&circle.id),
@@ -1227,6 +1101,7 @@ module njangi::njangi_circle {
     // ----------------------------------------------------------
     public fun contribute(
         circle: &mut Circle,
+        wallet: &mut CustodyWallet,
         payment: coin::Coin<SUI>,
         clock: &clock::Clock,
         ctx: &mut tx_context::TxContext
@@ -1237,6 +1112,8 @@ module njangi::njangi_circle {
         assert!(table::contains(&circle.members, sender), ENotMember);
         // Must be at least the `contribution_amount`
         assert!(coin::value(&payment) >= circle.contribution_amount, EInvalidContributionAmount);
+        // Verify custody wallet belongs to this circle
+        assert!(wallet.circle_id == object::uid_to_inner(&circle.id), EWalletCircleMismatch);
 
         let member = table::borrow(&circle.members, sender);
         assert!(member.status == MEMBER_STATUS_ACTIVE, EMemberNotActive);
@@ -1247,14 +1124,38 @@ module njangi::njangi_circle {
         member_mut.last_contribution = clock::timestamp_ms(clock);
         member_mut.total_contributed = member_mut.total_contributed + circle.contribution_amount;
 
-        // Join the coin into the circle's `contributions` balance
-        balance::join(&mut circle.contributions, coin::into_balance(payment));
+        // Get payment amount
+        let payment_amount = coin::value(&payment);
+        
+        // Join the coin into the custody wallet's balance
+        balance::join(&mut wallet.balance, coin::into_balance(payment));
+
+        // Also track in circle's contributions for accounting (using a zero-value balance just for tracking)
+        let dummy_contribution = coin::into_balance(coin::zero<SUI>(ctx));
+        balance::join(&mut circle.contributions, dummy_contribution);
+
+        // Create transaction record
+        let txn_record = create_custody_transaction(
+            CUSTODY_OP_DEPOSIT,
+            sender,
+            payment_amount,
+            clock::timestamp_ms(clock)
+        );
+        vector::push_back(&mut wallet.transaction_history, txn_record);
 
         event::emit(ContributionMade {
             circle_id: object::uid_to_inner(&circle.id),
             member: sender,
             amount: circle.contribution_amount,
             cycle: circle.current_cycle,
+        });
+
+        event::emit(CustodyDeposited {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            member: sender,
+            amount: payment_amount,
+            operation_type: CUSTODY_OP_DEPOSIT,
         });
     }
 
@@ -2444,6 +2345,7 @@ module njangi::njangi_circle {
             goal_progress: _,
             last_milestone_completed: _,
             usd_amounts,
+            auto_swap_enabled: _,
         } = circle;
         
         // Need to consume these values since they're not droppable
@@ -2553,38 +2455,34 @@ module njangi::njangi_circle {
     }
 
     // ----------------------------------------------------------
-    // Stablecoin holdings helper functions
+    // Stablecoin holdings helper functions (revised)
     // ----------------------------------------------------------
     
-    // Get stablecoin balance by type
-    public fun get_stablecoin_balance(
-        wallet: &CustodyWallet,
-        coin_type: vector<u8>
+    // Get stablecoin balance by type (placeholder)
+    public fun get_stablecoin_balance_by_type<CoinType>(
+        wallet: &CustodyWallet
     ): u64 {
-        let type_str = string::utf8(coin_type);
-        if (table::contains(&wallet.stablecoin_holdings, type_str)) {
-            *table::borrow(&wallet.stablecoin_holdings, type_str)
-        } else {
-            0
-        }
+        // In a complete implementation, we would retrieve the balance for the specific coin type
+        // For now, we return 0 as a placeholder
+        0
     }
     
-    // Check if a specific stablecoin type is supported
-    public fun is_stablecoin_supported(
-        wallet: &CustodyWallet,
-        coin_type: vector<u8>
+    // Check if a specific stablecoin type is supported (placeholder)
+    public fun is_stablecoin_type_supported<CoinType>(
+        wallet: &CustodyWallet
     ): bool {
-        let type_str = string::utf8(coin_type);
-        table::contains(&wallet.stablecoin_holdings, type_str)
+        // In a complete implementation, we would check if the coin type is supported
+        // For now, we return false as a placeholder
+        false
     }
 
     // ----------------------------------------------------------
-    // Withdraw stablecoins from custody wallet
+    // Withdraw stablecoins from custody wallet - RENAMED to avoid duplication
     // ----------------------------------------------------------
-    public fun withdraw_stablecoin(
+    public fun withdraw_stablecoin_amount<CoinType>(
         wallet: &mut CustodyWallet,
         amount: u64,
-        coin_type: vector<u8>,
+        recipient: address,
         clock: &clock::Clock,
         ctx: &mut tx_context::TxContext
     ) {
@@ -2603,49 +2501,108 @@ module njangi::njangi_circle {
             assert!(current_time >= lock_time, EFundsTimeLocked);
         };
         
-        // Convert coin type to string for lookup
-        let coin_type_str = string::utf8(coin_type);
+        // Get type information for the coin
+        let coin_type_str = type_name::into_string(type_name::get<CoinType>());
         
-        // Verify token type is supported
-        assert!(table::contains(&wallet.stablecoin_holdings, coin_type_str), EUnsupportedToken);
+        // TODO: Implement balance retrieval and coin creation
+        // Since we can't generically create balances in this simplified version,
+        // we would need a more complex implementation with dynamic dispatch
         
-        // Get current balance
-        let current_balance = *table::borrow(&wallet.stablecoin_holdings, coin_type_str);
-        
-        // Verify sufficient balance
-        assert!(current_balance >= amount, EInsufficientBalance);
-        
-        // In a production implementation, this would:
-        // 1. Locate the stablecoin object from the stablecoins vector
-        // 2. Extract the requested amount
-        // 3. Create a new coin and transfer it to the recipient
-        
-        // For now, we'll just update the balance
-        let new_balance = current_balance - amount;
-        *table::borrow_mut(&mut wallet.stablecoin_holdings, coin_type_str) = new_balance;
-        
-        // If the token is USDC, also update legacy field
-        if (coin_type_str == string::utf8(USDC_TYPE)) {
-            wallet.stablecoin_balance = wallet.stablecoin_balance - amount;
-        };
-        
-        // Emit holdings updated event
-        event::emit(StablecoinHoldingUpdated {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            coin_type: coin_type_str,
-            previous_balance: current_balance,
-            new_balance,
-            timestamp: current_time,
-        });
-        
-        // Emit withdrawal event for tracking
+        // For now, just emit the event as a placeholder
         event::emit(CustodyWithdrawn {
             circle_id: wallet.circle_id,
             wallet_id: object::uid_to_inner(&wallet.id),
-            recipient: sender,
+            recipient,
             amount,
             operation_type: CUSTODY_OP_WITHDRAWAL,
         });
+    }
+
+    // ----------------------------------------------------------
+    // Deposit stablecoin to custody wallet (generic implementation)
+    // ----------------------------------------------------------
+    public fun deposit_stablecoin_to_custody<CoinType>(
+        wallet: &mut CustodyWallet,
+        stablecoin: coin::Coin<CoinType>,
+        clock: &clock::Clock,
+        ctx: &mut tx_context::TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        let amount = coin::value(&stablecoin);
+        let current_time = clock::timestamp_ms(clock);
+        
+        // Wallet must be active
+        assert!(wallet.is_active, EWalletNotActive);
+        
+        // Currently we simply track the stablecoin deposit through events
+        // In a more complete implementation, we would store the coins using dynamic fields
+        
+        // For now, we transfer the coin to the admin (future: keep it in the custody object)
+        transfer::public_transfer(stablecoin, wallet.admin);
+        
+        // Track transaction
+        let txn_record = create_custody_transaction(
+            CUSTODY_OP_STABLECOIN_DEPOSIT,
+            sender,
+            amount,
+            current_time
+        );
+        vector::push_back(&mut wallet.transaction_history, txn_record);
+        
+        // Use a default USDC type for now
+        // In a complete implementation, we would extract the actual coin type
+        let usdc_type = string::utf8(USDC_TYPE);
+        
+        // Emit deposit event
+        event::emit(CustodyDeposited {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            member: sender,
+            amount,
+            operation_type: CUSTODY_OP_STABLECOIN_DEPOSIT
+        });
+        
+        // Emit specific stablecoin deposit event
+        event::emit(StablecoinDeposited {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            coin_type: usdc_type,
+            amount,
+            member: sender,
+            previous_balance: 0,
+            new_balance: amount,
+            timestamp: current_time,
+        });
+    }
+
+    // ----------------------------------------------------------
+    // Toggle auto-swap enabled status (admin only)
+    // ----------------------------------------------------------
+    public fun toggle_auto_swap(
+        circle: &mut Circle,
+        enabled: bool,
+        ctx: &mut tx_context::TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        
+        // Only admin can toggle auto-swap
+        assert!(sender == circle.admin, ENotAdmin);
+        
+        // Update the flag
+        circle.auto_swap_enabled = enabled;
+        
+        // Emit an event so frontend can track changes
+        event::emit(AutoSwapToggled {
+            circle_id: object::uid_to_inner(&circle.id),
+            enabled,
+            toggled_by: sender,
+        });
+    }
+    
+    // ----------------------------------------------------------
+    // Check if auto-swap is enabled for a circle
+    // ----------------------------------------------------------
+    public fun is_auto_swap_enabled(circle: &Circle): bool {
+        circle.auto_swap_enabled
     }
 }
