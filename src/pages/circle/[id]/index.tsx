@@ -7,6 +7,7 @@ import { toast } from 'react-hot-toast';
 import { ArrowLeft, Copy, Link } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../services/price-service';
+import { PACKAGE_ID } from '../../../services/circle-service';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -98,7 +99,7 @@ export default function CircleDetails() {
         try {
           const activationEvents = await client.queryEvents({
             query: {
-              MoveEventType: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::CircleActivated`
+              MoveEventType: `${PACKAGE_ID}::njangi_circle::CircleActivated`
             },
             limit: 50
           });
@@ -132,7 +133,7 @@ export default function CircleDetails() {
           // Fetch all MemberJoined events and filter for this circle
           const memberEvents = await client.queryEvents({
             query: {
-              MoveEventType: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::MemberJoined`
+              MoveEventType: `${PACKAGE_ID}::njangi_circle::MemberJoined`
             },
             limit: 1000 // Increased limit to capture more events
           });

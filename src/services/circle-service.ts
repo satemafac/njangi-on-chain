@@ -3,8 +3,13 @@ import { SuiClient } from '@mysten/sui/client';
 import { bcs } from '@mysten/sui/bcs';
 import type { CircleFormData, CycleLength, WeekDay } from '../types/circle';
 
-// Package ID from published contract
-export const PACKAGE_ID = "0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c";
+// Check if we're on the client side
+const isClient = typeof window !== 'undefined';
+
+// Get package ID from environment variable, or fall back to a default value
+export const PACKAGE_ID = isClient 
+  ? process.env.NEXT_PUBLIC_PACKAGE_ID || "0xeac7874017ce913fc3d9e0eac94416ea5841ccf56b18620d4670cd50c469a335"
+  : process.env.NEXT_PUBLIC_PACKAGE_ID || "0xeac7874017ce913fc3d9e0eac94416ea5841ccf56b18620d4670cd50c469a335";
 
 // Constants from Move contract
 const CIRCLE_TYPE_ROTATIONAL = 0;

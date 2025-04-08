@@ -7,6 +7,8 @@ import { toast } from 'react-hot-toast';
 import { ArrowLeft } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
+import { PACKAGE_ID } from '../../../../services/circle-service';
+import SimplifiedSwapUI from '../../../../components/SimplifiedSwapUI';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -18,6 +20,7 @@ interface Circle {
   securityDeposit: number;
   securityDepositUsd: number;
   walletId: string; // Custody wallet ID
+  autoSwapEnabled?: boolean; // Add this field
 }
 
 // Define a type for the fields from the SUI object
@@ -182,7 +185,7 @@ export default function ContributeToCircle() {
         // Now we need to find the circle's custody wallet ID
         const walletCreatedEvents = await client.queryEvents({
           query: {
-            MoveEventType: '0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::CustodyWalletCreated'
+            MoveEventType: `${PACKAGE_ID}::njangi_circle::CustodyWalletCreated`
           },
           limit: 50
         });
@@ -229,6 +232,11 @@ export default function ContributeToCircle() {
           securityDepositAmount = securityDepositUsd / 2.3; // Fallback using a common SUI price
         }
         
+        // Read the auto_swap_enabled field (defaulting to false if not present)
+        const autoSwapEnabled = fields.auto_swap_enabled === true || 
+                             (typeof fields.auto_swap_enabled === 'string' && fields.auto_swap_enabled === 'true') || 
+                             false;
+        
         setCircle({
           id: id as string,
           name: fields.name,
@@ -238,6 +246,7 @@ export default function ContributeToCircle() {
           securityDepositUsd: securityDepositUsd,
           admin: fields.admin,
           walletId: walletId || '',
+          autoSwapEnabled: autoSwapEnabled,
         });
       }
     } catch (error) {
@@ -328,7 +337,7 @@ export default function ContributeToCircle() {
         // Query events for deposits made by this user to the custody wallet
         const custodyDepositEvents = await client.queryEvents({
           query: {
-            MoveEventType: '0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::CustodyDeposited'
+            MoveEventType: `${PACKAGE_ID}::njangi_circle::CustodyDeposited`
           },
           limit: 50
         });
@@ -429,14 +438,27 @@ export default function ContributeToCircle() {
     }
   };
 
+  // Add a helper function to calculate live security deposit amount in SUI
+  const getSecurityDepositInSui = (): number => {
+    if (!circle || !circle.securityDepositUsd || typeof suiPrice !== 'number' || suiPrice <= 0) {
+      return circle?.securityDeposit || 0;
+    }
+    
+    // Calculate based on the latest SUI price
+    return circle.securityDepositUsd / suiPrice;
+  };
+
   const handlePaySecurityDeposit = async () => {
     if (!circle || !userAddress || !circle.walletId) {
       toast.error('Circle information incomplete. Cannot process deposit.');
       return;
     }
     
+    // Use the live calculation for security deposit amount
+    const securityDepositAmount = getSecurityDepositInSui();
+    
     // Check if wallet balance is sufficient
-    if (userBalance !== null && userBalance < circle.securityDeposit) {
+    if (userBalance !== null && userBalance < securityDepositAmount) {
       toast.error('Insufficient wallet balance to pay security deposit.');
       return;
     }
@@ -444,7 +466,7 @@ export default function ContributeToCircle() {
     setIsPayingDeposit(true);
     
     try {
-      console.log('Preparing to pay security deposit of', circle.securityDeposit, 'SUI to circle:', circle.id);
+      console.log('Preparing to pay security deposit of', securityDepositAmount, 'SUI to circle:', circle.id);
       
       if (!account) {
         toast.error('User account not available. Please log in again.');
@@ -462,7 +484,7 @@ export default function ContributeToCircle() {
           action: 'paySecurityDeposit',
           account,
           walletId: circle.walletId,
-          depositAmount: Math.floor(circle.securityDeposit * 1e9)
+          depositAmount: Math.floor(securityDepositAmount * 1e9)
         }),
       });
       
@@ -496,20 +518,25 @@ export default function ContributeToCircle() {
   };
 
   // Helper function to get valid contribution amount
-  const getValidContributionAmount = () => {
+  const getValidContributionAmount = (): number => {
     // Make sure we have a valid, reasonable number
-    const contributionAmount = typeof circle?.contributionAmount === 'number' 
+    const contributionAmount = typeof circle?.contributionAmount === 'number' && !isNaN(circle.contributionAmount)
       ? circle.contributionAmount : 0;
     
     // Validate the amount is reasonable (not millions)
     const isValidAmount = contributionAmount > 0 && contributionAmount < 1000;
     
     // If amount seems incorrect but we have USD value, calculate from USD
-    if (!isValidAmount && circle?.contributionAmountUsd && suiPrice) {
+    if (!isValidAmount && circle?.contributionAmountUsd && 
+        typeof circle.contributionAmountUsd === 'number' && 
+        !isNaN(circle.contributionAmountUsd) && 
+        typeof suiPrice === 'number' && 
+        suiPrice > 0) {
       return circle.contributionAmountUsd / suiPrice;
     }
     
-    return contributionAmount;
+    // Return the original amount if it's valid, or 0 as a safe default
+    return isValidAmount ? contributionAmount : 0;
   };
 
   // Currency display component
@@ -567,6 +594,18 @@ export default function ContributeToCircle() {
           : calculatedSui.toFixed(2)
     ) : '—';
     
+    // Check if the component is being used inline
+    const isInline = className.includes('inline');
+    
+    if (isInline) {
+      return (
+        <span className={className}>
+          {calculatedUsd !== null ? formatUSD(calculatedUsd) : '$—.—'} ({formattedSui} SUI)
+          {isPriceStale && <span title="Using cached price" className="text-xs text-amber-500 ml-1">⚠️</span>}
+        </span>
+      );
+    }
+    
     return (
       <Tooltip.Provider>
         <Tooltip.Root>
@@ -603,30 +642,167 @@ export default function ContributeToCircle() {
     );
   };
 
+  // Modify the renderContributionOptions function
+  const renderContributionOptions = () => {
+    return (
+      <div className="pt-6 border-t border-gray-200 px-2">
+        <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Make Contribution</h3>
+        
+        {/* Show auto swap enabled notice if applicable */}
+        {circle?.autoSwapEnabled && (
+          <div className="mb-4 p-3 bg-blue-50 rounded border border-blue-200">
+            <p className="text-sm text-blue-700">
+              <strong>Auto-swap enabled:</strong> Your SUI contribution will automatically be swapped to USDC.
+            </p>
+          </div>
+        )}
+
+        {/* Show the appropriate form based on auto-swap setting */}
+        {circle?.autoSwapEnabled ? (
+          <SimplifiedSwapUI
+            walletId={circle?.walletId || ''}
+            circleId={circle?.id || ''}
+            contributionAmount={getValidContributionAmount()}
+            securityDepositPaid={userDepositPaid}
+            securityDepositAmount={circle.securityDeposit}
+            onComplete={() => {
+              fetchUserWalletInfo();
+              fetchCircleDetails();
+            }}
+          />
+        ) : (
+          <div className="bg-gray-50 p-6 rounded-lg shadow-sm">
+            <div className="mb-6">
+              <p className="text-sm text-gray-600 mb-2">You are about to contribute:</p>
+              <div className="flex items-center">
+                <span className="bg-blue-100 text-blue-800 text-xl font-semibold rounded-lg py-2 px-4">
+                  ${circle?.contributionAmountUsd?.toFixed(2) || '0.00'} ({getValidContributionAmount().toFixed(4)} SUI)
+                </span>
+              </div>
+            </div>
+
+            {/* Debug the balance comparison by logging values */}
+            {userDepositPaid && userBalance !== null && (
+              <script dangerouslySetInnerHTML={{
+                __html: `
+                  console.log("Balance check:", {
+                    userBalance: ${userBalance},
+                    contributionAmount: ${circle?.contributionAmount},
+                    hasEnough: ${userBalance >= (circle?.contributionAmount || 0)},
+                    difference: ${userBalance - (circle?.contributionAmount || 0)}
+                  });
+                `
+              }} />
+            )}
+
+            {/* Show warning if balance is insufficient - only when deposit is already paid */}
+            {(() => {
+              // Skip if deposit not paid or balance not loaded
+              if (!userDepositPaid || userBalance === null) return null;
+              
+              // Get valid contribution amount
+              const validContributionAmount = getValidContributionAmount();
+              
+              // Add small buffer for transaction fees
+              const requiredWithBuffer = validContributionAmount + 0.01;
+              
+              // Only show warning if balance is insufficient
+              if (userBalance >= requiredWithBuffer) return null;
+              
+              return (
+                <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg border border-red-200">
+                  <p className="text-sm font-medium">
+                    ⚠️ Your wallet balance is insufficient for this contribution.
+                  </p>
+                  <p className="text-xs mt-1">
+                    Required: {validContributionAmount.toFixed(4)} SUI (plus a small amount for transaction fees)<br/>
+                    Available: {userBalance.toFixed(4)} SUI
+                  </p>
+                </div>
+              );
+            })()}
+
+            {/* Show warning if security deposit is not paid */}
+            {!userDepositPaid && (
+              <div className="mb-4 p-4 bg-amber-50 rounded-lg border-2 border-amber-300">
+                <div className="flex flex-col gap-4">
+                  <div>
+                    <p className="text-base font-medium text-amber-700 mb-1">
+                      ⚠️ Security deposit required
+                    </p>
+                    <p className="text-sm text-amber-600">
+                      You need to pay a security deposit of{' '}
+                      {(!circle || isNaN(circle.securityDeposit) || circle.securityDeposit <= 0) ? (
+                        'amount unavailable'
+                      ) : (
+                        <span className="font-semibold">
+                          <CurrencyDisplay usd={circle.securityDepositUsd} />
+                        </span>
+                      )}{' '}
+                      before contributing.
+                    </p>
+                  </div>
+                  
+                  {/* Show combined insufficient balance warning for both security deposit and contribution */}
+                  {userBalance !== null && circle && userBalance < getSecurityDepositInSui() && (
+                    <div className="p-2 bg-red-50 text-red-700 rounded border border-red-200 text-sm">
+                      <p className="font-medium">Insufficient funds for security deposit</p>
+                      <p className="text-xs mt-1">
+                        You need <CurrencyDisplay usd={circle.securityDepositUsd} className="inline" /> for the security deposit, but your balance is only {userBalance.toFixed(2)} SUI.
+                      </p>
+                    </div>
+                  )}
+                  
+                  <button
+                    onClick={handlePaySecurityDeposit}
+                    disabled={isPayingDeposit || !circle || circle.securityDepositUsd <= 0 || (userBalance !== null && userBalance < getSecurityDepositInSui())}
+                    className="w-full py-3 px-4 rounded-lg shadow-sm text-sm font-bold text-white bg-amber-500 hover:bg-amber-600 transition-all disabled:opacity-70 disabled:cursor-not-allowed"
+                  >
+                    {isPayingDeposit ? (
+                      <span className="flex items-center justify-center">
+                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Processing...
+                      </span>
+                    ) : (
+                      'Pay Security Deposit'
+                    )}
+                  </button>
+                  
+                  {/* Add note about payment sequence */}
+                  <p className="text-xs text-gray-600">
+                    Note: You must pay the security deposit before you can make contributions.
+                    The deposit is refundable if you decide to leave the circle later.
+                  </p>
+                </div>
+              </div>
+            )}
+          
+            <button
+              onClick={handleContribute}
+              disabled={isProcessing || (userBalance !== null && userBalance < getValidContributionAmount() + 0.01) || !userDepositPaid}
+              className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all ${(isProcessing || (userBalance !== null && userBalance < getValidContributionAmount() + 0.01) || !userDepositPaid) ? 'opacity-70 cursor-not-allowed' : ''}`}
+            >
+              {isProcessing ? 'Processing...' : 'Contribute Now'}
+            </button>
+            
+            <p className="mt-3 text-xs text-center text-gray-500">
+              By contributing, you agree to the circle&apos;s terms and conditions.
+            </p>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   if (!isAuthenticated || !account) {
     return null;
   }
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
-              <Image
-                src="/njangi-on-chain-logo.png"
-                alt="Njangi on-chain"
-                width={48}
-                height={48}
-                className="mr-3"
-                priority
-              />
-              <h1 className="text-xl font-semibold text-blue-600">Njangi on-chain</h1>
-            </div>
-          </div>
-        </div>
-      </nav>
-
       <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         <div className="px-4 py-6 sm:px-0">
           <div className="mb-6">
@@ -725,133 +901,7 @@ export default function ContributeToCircle() {
                     </div>
                   </div>
                   
-                  {/* Contribution Form */}
-                  <div className="pt-6 border-t border-gray-200 px-2">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Make Contribution</h3>
-                    <div className="bg-gray-50 p-6 rounded-lg shadow-sm">
-                      <div className="mb-6">
-                        <p className="text-sm text-gray-600 mb-2">You are about to contribute:</p>
-                        <div className="flex items-center">
-                          <span className="bg-blue-100 text-blue-800 text-xl font-semibold rounded-lg py-2 px-4">
-                            ${circle.contributionAmountUsd?.toFixed(2) || '0.00'} ({getValidContributionAmount().toFixed(4)} SUI)
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Debug the balance comparison by logging values */}
-                      {userDepositPaid && userBalance !== null && (
-                        <script dangerouslySetInnerHTML={{
-                          __html: `
-                            console.log("Balance check:", {
-                              userBalance: ${userBalance},
-                              contributionAmount: ${circle.contributionAmount},
-                              hasEnough: ${userBalance >= circle.contributionAmount},
-                              difference: ${userBalance - circle.contributionAmount}
-                            });
-                          `
-                        }} />
-                      )}
-
-                      {/* Show warning if balance is insufficient - only when deposit is already paid */}
-                      {(() => {
-                        // Skip if deposit not paid or balance not loaded
-                        if (!userDepositPaid || userBalance === null) return null;
-                        
-                        // Get valid contribution amount
-                        const validContributionAmount = getValidContributionAmount();
-                        
-                        // Add small buffer for transaction fees
-                        const requiredWithBuffer = validContributionAmount + 0.01;
-                        
-                        // Only show warning if balance is insufficient
-                        if (userBalance >= requiredWithBuffer) return null;
-                        
-                        return (
-                          <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg border border-red-200">
-                            <p className="text-sm font-medium">
-                              ⚠️ Your wallet balance is insufficient for this contribution.
-                            </p>
-                            <p className="text-xs mt-1">
-                              Required: {validContributionAmount.toFixed(4)} SUI (plus a small amount for transaction fees)<br/>
-                              Available: {userBalance.toFixed(4)} SUI
-                            </p>
-                          </div>
-                        );
-                      })()}
-
-                      {/* Show warning if security deposit is not paid */}
-                      {!userDepositPaid && (
-                        <div className="mb-4 p-4 bg-amber-50 rounded-lg border-2 border-amber-300">
-                          <div className="flex flex-col gap-4">
-                            <div>
-                              <p className="text-base font-medium text-amber-700 mb-1">
-                                ⚠️ Security deposit required
-                              </p>
-                              <p className="text-sm text-amber-600">
-                                You need to pay a security deposit of{' '}
-                                {(!circle || isNaN(circle.securityDeposit) || circle.securityDeposit <= 0) ? (
-                                  'amount unavailable'
-                                ) : (
-                                  <span className="font-semibold">
-                                    ${circle.securityDepositUsd.toFixed(2)}
-                                    <br />
-                                    {circle.securityDeposit.toFixed(2)} SUI
-                                  </span>
-                                )}{' '}
-                                before contributing.
-                              </p>
-                            </div>
-                            
-                            {/* Show combined insufficient balance warning for both security deposit and contribution */}
-                            {userBalance !== null && circle && userBalance < circle.securityDeposit && (
-                              <div className="p-2 bg-red-50 text-red-700 rounded border border-red-200 text-sm">
-                                <p className="font-medium">Insufficient funds for security deposit</p>
-                                <p className="text-xs mt-1">
-                                  You need {circle.securityDeposit.toFixed(2)} SUI for the security deposit, but your balance is only {userBalance.toFixed(2)} SUI.
-                                </p>
-                              </div>
-                            )}
-                            
-                            <button
-                              onClick={handlePaySecurityDeposit}
-                              disabled={isPayingDeposit || !circle || circle.securityDeposit <= 0 || (userBalance !== null && userBalance < circle.securityDeposit)}
-                              className="w-full py-3 px-4 rounded-lg shadow-sm text-sm font-bold text-white bg-amber-500 hover:bg-amber-600 transition-all disabled:opacity-70 disabled:cursor-not-allowed"
-                            >
-                              {isPayingDeposit ? (
-                                <span className="flex items-center justify-center">
-                                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                  </svg>
-                                  Processing...
-                                </span>
-                              ) : (
-                                'Pay Security Deposit'
-                              )}
-                            </button>
-                            
-                            {/* Add note about payment sequence */}
-                            <p className="text-xs text-gray-600">
-                              Note: You must pay the security deposit before you can make contributions.
-                              The deposit is refundable if you decide to leave the circle later.
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                    
-                      <button
-                        onClick={handleContribute}
-                        disabled={isProcessing || (userBalance !== null && userBalance < getValidContributionAmount() + 0.01) || !userDepositPaid}
-                        className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all ${(isProcessing || (userBalance !== null && userBalance < getValidContributionAmount() + 0.01) || !userDepositPaid) ? 'opacity-70 cursor-not-allowed' : ''}`}
-                      >
-                        {isProcessing ? 'Processing...' : 'Contribute Now'}
-                      </button>
-                      
-                      <p className="mt-3 text-xs text-center text-gray-500">
-                        By contributing, you agree to the circle&apos;s terms and conditions.
-                      </p>
-                    </div>
-                  </div>
+                  {renderContributionOptions()}
                 </div>
               ) : (
                 <div className="py-8 text-center">

@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@cetusprotocol/cetus-sui-clmm-sdk": "^5.3.4",
     "@headlessui/react": "^2.2.0",
     "@heroicons/react": "^2.2.0",
     "@mysten/dapp-kit": "^0.14.48",

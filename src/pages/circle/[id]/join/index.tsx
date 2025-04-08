@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
-import { useAuth } from '../../../../contexts/AuthContext';
-import Image from 'next/image';
-import { SuiClient } from '@mysten/sui/client';
-import { toast } from 'react-hot-toast';
+import { useAuth } from '@/contexts/AuthContext';
 import { ArrowLeft, AlertCircle } from 'lucide-react';
+import { toast } from 'react-hot-toast';
+import { SuiClient } from '@mysten/sui/client';
 import { priceService } from '../../../../services/price-service';
 import joinRequestService from '../../../../services/join-request-service';
+import { PACKAGE_ID } from '../../../../services/circle-service';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -100,6 +100,29 @@ export default function JoinCircle() {
       checkPendingRequest();
     }
   }, [id, userAddress]);
+
+  useEffect(() => {
+    if (id) {
+      fetchCircleDetails();
+      
+      // Store this circle ID in localStorage for notifications
+      try {
+        const existingCircleIds = localStorage.getItem('viewedCircles');
+        let circleIds: string[] = [];
+        
+        if (existingCircleIds) {
+          circleIds = JSON.parse(existingCircleIds);
+        }
+        
+        if (!circleIds.includes(id as string)) {
+          circleIds.push(id as string);
+          localStorage.setItem('viewedCircles', JSON.stringify(circleIds));
+        }
+      } catch (error) {
+        console.error('Error storing circle ID in localStorage:', error);
+      }
+    }
+  }, [id, userAddress, fetchCircleDetails]);
 
   const fetchCircleDetails = async () => {
     if (!id) return;
@@ -196,7 +219,7 @@ export default function JoinCircle() {
           // Fetch all MemberJoined events and filter for this circle
           const memberEvents = await client.queryEvents({
             query: {
-              MoveEventType: `0x6b6dabded31921f627c3571197e31433e2b312700ff07ef394daa5cdcb3abd1c::njangi_circle::MemberJoined`
+              MoveEventType: `${PACKAGE_ID}::njangi_circle::MemberJoined`
             },
             limit: 1000
           });
@@ -398,24 +421,6 @@ export default function JoinCircle() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
-              <Image
-                src="/njangi-on-chain-logo.png"
-                alt="Njangi on-chain"
-                width={48}
-                height={48}
-                className="mr-3"
-                priority
-              />
-              <h1 className="text-xl font-semibold text-blue-600">Njangi on-chain</h1>
-            </div>
-          </div>
-        </div>
-      </nav>
-
       <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         <div className="px-4 py-6 sm:px-0">
           <div className="mb-6">

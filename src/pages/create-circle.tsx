@@ -1,9 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../contexts/AuthContext';
-import Image from 'next/image';
 import * as Slider from '@radix-ui/react-slider';
 import * as Switch from '@radix-ui/react-switch';
+import { toast } from 'react-hot-toast';
+import { SuiClient } from '@mysten/sui/client';
+import { PACKAGE_ID } from '../services/circle-service';
+import * as Dialog from '@radix-ui/react-dialog';
+import { ChevronRight, ChevronLeft, Check, AlertTriangle, BarChart3, CalendarIcon, DollarSign, LucideIcon, Users, HelpCircle, Coins } from 'lucide-react';
 import * as Select from '@radix-ui/react-select';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../services/price-service';
@@ -409,25 +413,8 @@ export default function CreateCircle() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
-              <Image
-                src="/njangi-on-chain-logo.png"
-                alt="Njangi on-chain"
-                width={48}
-                height={48}
-                className="mr-3"
-                priority
-              />
-              <h1 className="text-xl font-semibold text-blue-600">Create New Njangi Circle</h1>
-            </div>
-          </div>
-        </div>
-      </nav>
-
       <main className="max-w-3xl mx-auto py-6 sm:px-6 lg:px-8">
+        <h1 className="text-2xl font-semibold text-blue-600 mb-4 px-4">Create New Njangi Circle</h1>
         <div className="bg-white shadow rounded-lg p-6">
           {currentStep === 0 ? (
             <div className="space-y-6">
