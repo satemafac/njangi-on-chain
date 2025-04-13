@@ -132,7 +132,7 @@ declare global {
 
 export default function Dashboard() {
   const router = useRouter();
-  const { isAuthenticated, userAddress, account, logout, deleteCircle: authDeleteCircle } = useAuth();
+  const { isAuthenticated, userAddress, account, deleteCircle: authDeleteCircle } = useAuth();
   const [balance, setBalance] = useState<string>('0');
   const [showFullAddress, setShowFullAddress] = useState(false);
   const [showToast, setShowToast] = useState(false);

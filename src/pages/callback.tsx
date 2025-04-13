@@ -24,10 +24,41 @@ export default function AuthCallback() {
   useEffect(() => {
     const processCallback = async () => {
       try {
-        // Get the ID token from the URL hash
+        console.log('Processing authentication callback');
+        
+        // Try to get the ID token from different places
+        let idToken = null;
+        
+        // 1. Try URL hash (fragment)
         const hash = window.location.hash.substring(1);
-        const params = new URLSearchParams(hash);
-        const idToken = params.get('id_token');
+        const hashParams = new URLSearchParams(hash);
+        idToken = hashParams.get('id_token');
+        
+        // 2. If not in hash, try search params (query string)
+        if (!idToken) {
+          console.log('ID token not found in URL hash, checking search params');
+          const searchParams = new URLSearchParams(window.location.search);
+          idToken = searchParams.get('id_token');
+        }
+        
+        // 3. Try extracting from full URL if token format is recognizable
+        if (!idToken) {
+          console.log('Attempting to extract token from full URL');
+          const fullUrl = window.location.href;
+          const tokenMatch = fullUrl.match(/id_token=([^&]+)/);
+          if (tokenMatch && tokenMatch[1]) {
+            idToken = tokenMatch[1];
+            console.log('Found token in URL pattern match');
+          }
+        }
+        
+        console.log('URL information:', {
+          fullUrl: window.location.href,
+          hash: window.location.hash,
+          search: window.location.search,
+          hashLength: hash.length,
+          idTokenFound: !!idToken
+        });
 
         if (!idToken) {
           throw new Error('No ID token found in callback URL');

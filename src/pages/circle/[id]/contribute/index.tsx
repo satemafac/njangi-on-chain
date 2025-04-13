@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../../../../contexts/AuthContext';
-import Image from 'next/image';
 import { SuiClient } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
 import { ArrowLeft } from 'lucide-react';
@@ -736,7 +735,7 @@ export default function ContributeToCircle() {
                         'amount unavailable'
                       ) : (
                         <span className="font-semibold">
-                          <CurrencyDisplay usd={circle.securityDepositUsd} />
+                          <CurrencyDisplay usd={circle.securityDepositUsd} className="inline" />
                         </span>
                       )}{' '}
                       before contributing.
@@ -748,7 +747,7 @@ export default function ContributeToCircle() {
                     <div className="p-2 bg-red-50 text-red-700 rounded border border-red-200 text-sm">
                       <p className="font-medium">Insufficient funds for security deposit</p>
                       <p className="text-xs mt-1">
-                        You need <CurrencyDisplay usd={circle.securityDepositUsd} className="inline" /> for the security deposit, but your balance is only {userBalance.toFixed(2)} SUI.
+                        You need <span><CurrencyDisplay usd={circle.securityDepositUsd} className="inline" /></span> for the security deposit, but your balance is only {userBalance.toFixed(2)} SUI.
                       </p>
                     </div>
                   )}
@@ -840,13 +839,13 @@ export default function ContributeToCircle() {
                           {fetchingBalance ? (
                             <div className="animate-pulse h-6 w-32 bg-gray-200 rounded"></div>
                           ) : (
-                            <p className="text-lg font-semibold text-blue-700">
+                            <div className="text-lg font-semibold text-blue-700">
                               {userBalance !== null ? (
                                 <CurrencyDisplay sui={userBalance} />
                               ) : (
                                 'Unable to fetch balance'
                               )}
-                            </p>
+                            </div>
                           )}
                         </div>
                         <div className="text-right">

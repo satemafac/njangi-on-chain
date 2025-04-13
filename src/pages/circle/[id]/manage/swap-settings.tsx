@@ -33,7 +33,7 @@ export default function SwapSettings() {
     targetCoinType: '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN', // Default to USDC
     slippageTolerance: 50, // 0.5%
     minimumSwapAmount: 1, // 1 SUI
-    dexAddress: '0x0868b71c0cba55bf0faf6c40df8c179c67a4d0ba0e79965b68b3d72d7dfbf666', // Cetus package ID
+    dexAddress: '0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12', // Cetus package ID v1.26.0
     globalConfigId: '',
     poolId: '',
   });

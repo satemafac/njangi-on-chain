@@ -40,7 +40,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
 
   // Constants for this form
   const SUI_COIN_TYPE = '0x2::sui::SUI';
-  const USDC_COIN_TYPE = '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN';
+  const USDC_COIN_TYPE = '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC';
   const ESTIMATED_GAS_FEE = 0.00021; // Estimated gas fee in SUI (adjust based on network conditions)
 
   // Fetch SUI price when component mounts
@@ -350,25 +350,87 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
     setProcessing(true);
     
     try {
-      toast.loading('Processing swap and deposit...', { id: 'swap-deposit' });
+      // Clear any existing toasts first
+      toast.dismiss('swap-deposit');
+      toast.loading('Processing swap using Cetus...', { id: 'swap-deposit' });
       
       // Calculate minimum amount out based on slippage
-      const minAmountOut = Math.floor(swapQuote.amountOut * (1 - slippage / 100));
-      
-      // Execute swap
-      const swapResult = await swapService.executeSwap(
-        SUI_COIN_TYPE,
-        USDC_COIN_TYPE,
-        parseFloat(amount),
-        minAmountOut,
-        circleId
+      const minAmountOut = Math.max(
+        1, // Ensure minAmountOut is at least 1 (never zero)
+        Math.floor(swapQuote.amountOut * (1 - slippage / 100))
       );
       
-      if (!swapResult.success) {
-        throw new Error(swapResult.error || 'Swap failed');
+      console.log('Sending swap request with parameters:', {
+        circleId,
+        walletId,
+        suiAmount: parseFloat(amount),
+        minAmountOut,
+        isSecurityDeposit: !securityDepositPaid,
+        swapMethod: 'Cetus'
+      });
+      
+      // Use zkLogin API to execute the swap and deposit through Cetus
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'swapAndDepositCetus', // Using Cetus pool under the hood
+          account,
+          circleId,
+          walletId,
+          suiAmount: parseFloat(amount),
+          minAmountOut,
+          isSecurityDeposit: !securityDepositPaid,
+        }),
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        console.error('Swap failed:', result);
+        
+        // Check if we need to reauthenticate
+        if (result.requireRelogin) {
+          toast.error('Your session has expired. Please login again.', { id: 'swap-deposit' });
+          
+          // Redirect to login page after a short delay
+          setTimeout(() => {
+            window.location.href = '/';
+          }, 2000);
+          return;
+        }
+        
+        // Check for detailed error information
+        let errorMessage = result.error || 'Swap failed';
+        if (result.details) {
+          console.error('Error details:', result.details);
+          
+          // Extract specific error patterns
+          if (typeof result.details === 'string') {
+            if (result.details.includes('insufficient gas')) {
+              errorMessage = 'Insufficient SUI for gas fees. Please add more SUI to your wallet.';
+            } else if (result.details.includes('coin balance too low')) {
+              errorMessage = 'Your wallet balance is too low for this swap.';
+            } else if (result.details.includes('function not found')) {
+              errorMessage = 'Swap failed: Cetus pool module not found. Please contact support.';
+            } else if (result.details.includes('Pool does not exist')) {
+              errorMessage = 'The SUI/USDC liquidity pool is not available. Please try again later.';
+            } else if (result.details.includes('Slippage tolerance exceeded')) {
+              errorMessage = `Price movement exceeded your slippage tolerance of ${slippage}%. Try increasing slippage or try again.`;
+            }
+          }
+        }
+        
+        throw new Error(errorMessage);
       }
       
-      toast.success('Swap and deposit successful!', { id: 'swap-deposit' });
+      toast.success(
+        !securityDepositPaid 
+          ? 'Security deposit paid using Cetus swap!' 
+          : 'Contribution made using Cetus swap!', 
+        { id: 'swap-deposit' }
+      );
+      console.log('Transaction executed with digest:', result.digest);
       
       // Reset form
       setAmount('');
@@ -377,10 +439,13 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
       
       // Notify parent component
       if (onComplete) {
-        onComplete();
+        setTimeout(() => {
+          onComplete();
+        }, 500);
       }
     } catch (error) {
       console.error('Error in swap and deposit:', error);
+      
       toast.error(
         error instanceof Error 
           ? `Swap failed: ${error.message}` 
@@ -616,6 +681,10 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
           <div className="flex justify-between items-center text-sm text-gray-400 mt-1">
             <span>Network Fee</span>
             <span>~{ESTIMATED_GAS_FEE.toFixed(6)} SUI</span>
+          </div>
+          <div className="flex justify-between items-center text-sm text-gray-400 mt-1">
+            <span>Swap Provider</span>
+            <span className="text-blue-400">Cetus</span>
           </div>
         </div>
       )}

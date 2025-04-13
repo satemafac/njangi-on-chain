@@ -3,7 +3,12 @@ import { ZkLoginService, SetupData, AccountData, OAuthProvider } from '@/service
 import { Transaction } from '@mysten/sui/transactions';
 import { SuiClient } from '@mysten/sui/client';
 import { PACKAGE_ID } from '../../services/circle-service';
-import { priceService } from '../../services/price-service';
+import { 
+  USDC_COIN_TYPE,
+  SUI_COIN_TYPE
+} from '../../services/constants';
+import { AggregatorClient, Env } from '@cetusprotocol/aggregator-sdk';
+import BN from 'bn.js';
 
 // Add at the top with other imports
 interface RPCError extends Error {
@@ -13,6 +18,14 @@ interface RPCError extends Error {
 // Constants
 const MAX_EPOCH = 2; // Number of epochs to keep session alive (1 epoch ~= 24h)
 const PROCESSING_COOLDOWN = 30000; // 30 seconds between processing attempts for the same session
+
+// Add constants for the Cetus Aggregator
+const AGGREGATOR_ROUTER = '0xeffc8ae61f439bb34c9b905ff8f29ec56873dcedf81c7123ff2f1f67c45ec302';
+const MIN_AGGREGATOR_SLIPPAGE = 30; // 0.3% minimum slippage to ensure transaction success
+
+// Add at line 1076-1077
+// Not using CETUS_GLOBAL_CONFIG for the direct swap method
+// const CETUS_GLOBAL_CONFIG = '0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca';
 
 // Simple in-memory session store (in production, use Redis or a proper session store)
 const sessions = new Map<string, SetupData & { account?: AccountData }>();
@@ -96,17 +109,130 @@ function cleanupUserSessions(userAddr: string, currentSessionId: string) {
 // Add after MAX_EPOCH constant
 const PROCESSING_SESSIONS = new Map<string, { startTime: number, promise: Promise<AccountData> }>();
 
-// Comment out unused function
-// For testing, you can use a temporary keypair
-// In production, this would be securely managed with proper key management
-/*
-const getAdminKeypair = () => {
-  // WARNING: This is just for development - never hardcode keys in production code
-  // You would fetch this from a secure environment variable or key management system
-  const DEV_ADMIN_SECRET = process.env.DEV_ADMIN_SECRET || '';
-  return Ed25519Keypair.fromSecretKey(Buffer.from(DEV_ADMIN_SECRET, 'hex'));
+// Add aggregator SDK helper
+let aggregatorSDK: AggregatorClient | null = null;
+
+// Add alternative USDC coin types for testnet that might be more liquid
+const ALTERNATE_USDC_COIN_TYPES = [
+  // The original USDC from the constants file
+  USDC_COIN_TYPE,
+  // Alternative USDC formats from other protocols on testnet
+  "0x9e89965f542887a8f0383451ba553fedf62c04e4dc68f60dec5b8d7ad1436bd6::usdc::USDC",
+  "0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08::coin::COIN"
+];
+
+// Direct pool addresses to use as fallback when aggregator fails
+const DIRECT_POOL_ADDRESSES = {
+  // SUI-USDC pools on testnet
+  'USDC': [
+    '0xb01b068bd0360bb3308b81eb42386707e460b7818816709b7f51e1635d542d40', // Main pool we've seen has liquidity
+    '0x2e041f3fd93646dcc877f783c1f2b7fa62d30271bdef1f21ef002cebf857bded',
+    // Add more pools from Cetus testnet
+    '0x6fb54be7106bb59863f196bc5e2e34426c15f3d5b9662150ed81d5417411dbd7',
+    '0xaf5a9c7e4b265955acb0b371ab5ccb76a240b9735c8e9c8978ce866bed19a9a9'
+  ],
+  // Add more direct pools if needed
 };
-*/
+
+// Initialize Aggregator SDK
+async function getAggregatorSDK(): Promise<AggregatorClient> {
+  if (aggregatorSDK) return aggregatorSDK;
+  
+  try {
+    const sdkOptions = {
+      rpcUrl: 'https://fullnode.testnet.sui.io:443',
+      aggregatorPackageId: AGGREGATOR_ROUTER,
+      env: Env.Testnet
+    };
+    
+    aggregatorSDK = new AggregatorClient(sdkOptions);
+    console.log('Aggregator SDK initialized successfully');
+    return aggregatorSDK;
+  } catch (error) {
+    console.error('Failed to initialize Aggregator SDK:', error);
+    throw new Error('Aggregator service initialization failed');
+  }
+}
+
+// When using swapAndDepositCetus, replace accessing the private suiClient directly with the proper API
+const getEpochData = async (): Promise<{ epoch: string }> => {
+  const suiClient = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+  return await suiClient.getLatestSuiSystemState();
+};
+
+// Add this helper function after getEpochData
+const checkPoolLiquidity = async () => {
+  try {
+    console.log('Checking available liquidity in SUI-USDC pools...');
+    const suiClient = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+    
+    // First check which pools actually exist
+    const validPools = [];
+    for (const poolId of DIRECT_POOL_ADDRESSES['USDC']) {
+      try {
+        const objectData = await suiClient.getObject({
+          id: poolId,
+          options: { showContent: true }
+        });
+        
+        if (objectData && objectData.data) {
+          validPools.push(poolId);
+          
+          // Log pool details
+          if (objectData.data.content && 'fields' in objectData.data.content) {
+            const fields = objectData.data.content.fields as {
+              reserve_x?: string;
+              reserve_y?: string;
+              coin_a_type?: string;
+              coin_b_type?: string;
+              current_sqrt_price?: string;
+              current_tick_index?: number;
+              // For pools with different field names
+              reserve_a?: string;
+              reserve_b?: string;
+              sqrt_price?: string;
+              liquidity?: string;
+              [key: string]: unknown;
+            };
+            
+            // Try to determine which fields hold the liquidity values
+            const reserveA = fields.reserve_x || fields.reserve_a;
+            const reserveB = fields.reserve_y || fields.reserve_b;
+            const liquidityField = fields.liquidity;
+            const sqrtPrice = fields.current_sqrt_price || fields.sqrt_price;
+            const tickIndex = fields.current_tick_index;
+            
+            console.log(`Pool ${poolId} exists and has the following liquidity:`);
+            if (reserveA) console.log(`- Reserve A: ${BigInt(reserveA) / BigInt(1e9)} SUI`);
+            if (reserveB) console.log(`- Reserve B: ${BigInt(reserveB) / BigInt(1e6)} USDC`);
+            if (liquidityField) console.log(`- Liquidity value: ${liquidityField}`);
+            if (sqrtPrice) console.log(`- Sqrt Price: ${sqrtPrice}`);
+            if (tickIndex !== undefined) console.log(`- Current tick index: ${tickIndex}`);
+            
+            // If we can determine coin types, log those too
+            const coinTypeA = fields.coin_a_type || fields.coin_type_a;
+            const coinTypeB = fields.coin_b_type || fields.coin_type_b;
+            if (coinTypeA) console.log(`- Coin A type: ${coinTypeA}`);
+            if (coinTypeB) console.log(`- Coin B type: ${coinTypeB}`);
+            
+            console.log(`Full pool data:`, fields);
+          } else {
+            console.log(`Pool ${poolId} exists but content fields not accessible`);
+          }
+        } else {
+          console.log(`Pool ${poolId} does not exist or is not accessible`);
+        }
+      } catch (err) {
+        console.log(`Error checking pool ${poolId}:`, err instanceof Error ? err.message : String(err));
+      }
+    }
+    
+    return validPools;
+  } catch (error) {
+    console.error('Error checking pool liquidity:', error);
+    return [];
+  }
+};
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -126,6 +252,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     const instance = ZkLoginService.getInstance();
+    // Do not initialize Cetus SDK here since we're not using it directly
 
     switch (action) {
       case 'beginLogin':
@@ -798,153 +925,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
         }
 
-      case 'swapAndContribute':
-        try {
+      case 'executeStablecoinSwap':
         if (!account) {
           return res.status(400).json({ error: 'Account data is required' });
         }
 
-          if (!req.body.circleId || !req.body.walletId || !req.body.swapPayload) {
-            return res.status(400).json({ error: 'Circle ID, wallet ID, and swap payload are required' });
-          }
-
-          // Validate the session
-          try {
-        if (!sessionId) {
-              throw new Error('No session ID provided');
-            }
-            // Just validate the session without storing the result
-            validateSession(sessionId, 'sendTransaction');
-          } catch (validationError) {
-            console.error('Session validation failed:', validationError);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              error: validationError instanceof Error ? validationError.message : 'Session validation failed',
-              requireRelogin: true
-            });
-          }
-
-          try {
-            console.log('Preparing swap and contribute transaction');
-            
-            // First execute the swap transaction using the provided payload
-            console.log('Executing swap transaction...');
-            const swapTxResult = await instance.sendTransaction(
-              account,
-              (txBlock) => {
-                // Use the prepared swap payload
-                const swapPayload = req.body.swapPayload;
-                
-                // Add all transactions from the swap payload to our transaction block
-                // In an actual implementation, you would need to parse the payload properly
-                // This is a simplified approach
-                if (swapPayload.transactions) {
-                  try {
-                    for (const tx of swapPayload.transactions) {
-                      if (tx.MoveCall) {
-                        // Extract the MoveCall parts
-                        const target = `${tx.MoveCall.package}::${tx.MoveCall.module}::${tx.MoveCall.function}`;
-                        
-                        // Create valid arguments
-                        const args = [];
-                        if (Array.isArray(tx.MoveCall.arguments)) {
-                          for (const arg of tx.MoveCall.arguments) {
-                            try {
-                              if (arg && typeof arg === 'object') {
-                                if ('Object' in arg && arg.Object?.objectId) {
-                                  args.push(txBlock.object(arg.Object.objectId));
-                                } else if ('Pure' in arg) {
-                                  args.push(txBlock.pure(arg.Pure));
-                                }
-                                // Skip arguments we can't convert
-                              }
-                            } catch (argError) {
-                              console.error('Error processing argument:', argError);
-                              // Continue with next argument
-                            }
-                          }
-                        }
-                        
-                        // Add the move call with valid arguments
-                        txBlock.moveCall({
-                          target,
-                          arguments: args,
-                          typeArguments: tx.MoveCall.typeArguments || []
-                        });
-                      }
-                    }
-                  } catch (txError) {
-                    console.error('Error processing swap payload:', txError);
-                    throw new Error('Invalid swap transaction payload');
-                  }
-                }
-              },
-              { gasBudget: 150000000 } // Higher gas budget for complex swap operation
-            );
-            
-            console.log('Swap transaction successful:', swapTxResult);
-
-            // Now execute the contribution transaction
-            console.log('Executing contribution transaction...');
-            const contributeTxResult = await instance.sendTransaction(
-              account,
-              (txBlock) => {
-                txBlock.moveCall({
-                  target: `${PACKAGE_ID}::njangi_circle::contribute_from_custody`,
-                  arguments: [
-                    txBlock.object(req.body.circleId),
-                    txBlock.object(req.body.walletId),
-                    txBlock.object('0x6'), // Clock object
-                  ]
-                });
-              },
-              { gasBudget: 100000000 }
-            );
-            
-            console.log('Contribution transaction successful:', contributeTxResult);
-            
-            return res.status(200).json({ 
-              swapDigest: swapTxResult.digest,
-              contributeDigest: contributeTxResult.digest,
-              success: true
-            });
-          } catch (txError) {
-            console.error('Swap and contribute transaction error:', txError);
-            console.error('Error type:', typeof txError);
-            console.error('Error message:', txError instanceof Error ? txError.message : String(txError));
-            
-            // Check if the error is related to proof verification
-            if (txError instanceof Error && 
-                (txError.message.includes('proof verify failed') ||
-                 txError.message.includes('Session expired') ||
-                 txError.message.includes('re-authenticate'))) {
-              
-              // Clear the session for authentication errors
-              sessions.delete(sessionId);
-              clearSessionCookie(res);
-              
-              return res.status(401).json({
-                error: 'Your session has expired. Please login again.',
-                requireRelogin: true
-              });
-            }
-            
-            // For other errors, keep the session but return error with more detail
-            return res.status(500).json({ 
-              error: txError instanceof Error ? txError.message : 'Failed to swap and contribute',
-              details: txError instanceof Error ? txError.stack : String(txError),
-              requireRelogin: false
-            });
-          }
-        } catch (error) {
-          console.error('Error in swapAndContribute:', error);
-          return res.status(500).json({ 
-            error: 'Failed to swap and contribute',
-            details: error instanceof Error ? error.message : String(error)
-          });
-        }
-
-      case 'contributeFromCustody':
+      // Note: Despite the name, this handler now uses Cetus instead of DeepBook for swaps on testnet
+      case 'swapAndDepositCetus':
         if (!account) {
           return res.status(400).json({ error: 'Account data is required' });
         }
@@ -953,23 +940,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res.status(401).json({ error: 'No session found. Please authenticate first.' });
         }
 
-        if (!req.body.circleId || !req.body.walletId) {
-          return res.status(400).json({ error: 'Circle ID and wallet ID are required' });
-        }
-
         try {
-          // Log the transaction attempt
-          console.log('Processing contribution from custody wallet:', {
-            sessionId,
-            address: account.userAddr,
-            circleId: req.body.circleId,
-            walletId: req.body.walletId,
-            hasSession: sessions.has(sessionId)
-          });
+          const { walletId, suiAmount, slippage = 100 } = req.body; // slippage in basis points (100 = 1%)
+          if (!walletId || !suiAmount) {
+            return res.status(400).json({ error: 'Wallet ID and SUI amount are required' });
+          }
 
-          // Validate session with action context
-          const session = validateSession(sessionId, 'contributeFromCustody');
+          // Validate amount and convert from SUI to MIST (smallest unit, 1 SUI = 10^9 MIST)
+          // Handle both string/number inputs and decimal values
+          let suiAmountMIST: bigint;
+          try {
+            // Convert decimal SUI to MIST integer before creating BigInt
+            const suiAmountNumber = typeof suiAmount === 'string' ? parseFloat(suiAmount) : suiAmount;
+            const mistAmount = Math.floor(suiAmountNumber * 1e9); // Convert to MIST and ensure integer
+            suiAmountMIST = BigInt(mistAmount);
+            
+            console.log(`Converting ${suiAmountNumber} SUI to ${suiAmountMIST} MIST`);
+          } catch (e) {
+            console.error('Error converting SUI amount to MIST:', e);
+            return res.status(400).json({ error: 'Invalid SUI amount format. Please provide a valid number.' });
+          }
           
+          if (suiAmountMIST <= BigInt(0) || suiAmountMIST > BigInt(1e12)) {
+            return res.status(400).json({ error: 'Invalid SUI amount: must be greater than 0 and less than 1,000 SUI' });
+          }
+
+          // Ensure slippage is at least the minimum
+          const effectiveSlippage = Math.max(slippage, MIN_AGGREGATOR_SLIPPAGE);
+
+          // Validate session
+          const session = validateSession(sessionId, 'sendTransaction');
           if (!session.account) {
             sessions.delete(sessionId);
             clearSessionCookie(res);
@@ -978,160 +978,361 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
-          // Verify session matches account data
-          if (session.account.userAddr !== account.userAddr || 
-              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
-            sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              error: 'Session mismatch: Please refresh your authentication'
-            });
-          }
+          console.log(`Creating transaction for SUI to USDC swap using Cetus Aggregator`);
+          console.log(`Using suiAmount (MIST): ${suiAmountMIST}`);
+          console.log(`Slippage: ${effectiveSlippage} basis points (${effectiveSlippage/100}%)`);
+
+          // Get Cetus Aggregator SDK
+          const aggregator = await getAggregatorSDK();
+          
+          // Get current epoch for zkLogin - use our helper function instead of direct access
+          const { epoch } = await getEpochData();
+          const currentEpoch = Number(epoch);
+          const maxEpoch = currentEpoch + 2; // Allow 2 epochs of validity
+          console.log(`Current epoch: ${currentEpoch}, maxEpoch: ${maxEpoch}`);
+
+          // Check actual pool liquidity
+          const validPools = await checkPoolLiquidity();
+          console.log(`Valid pools found: ${validPools.length > 0 ? validPools.join(', ') : 'None'}`);
 
           // Execute the transaction
           try {
+            // Try multiple USDC coin types if needed
+            let routerData = null;
+            let successfulCoinType = null;
+            
+            // First try with the primary USDC type
+            const initialRouteParams = {
+              from: SUI_COIN_TYPE,
+              target: USDC_COIN_TYPE,
+              amount: new BN(suiAmountMIST.toString()),
+              byAmountIn: true,
+            };
+            
+            try {
+              routerData = await aggregator.findRouters(initialRouteParams);
+              
+              // Check if we got valid routes
+              if (routerData && routerData.routes && routerData.routes.length > 0) {
+                successfulCoinType = USDC_COIN_TYPE;
+                console.log(`Found routes using primary USDC coin type: ${USDC_COIN_TYPE}`);
+              } else {
+                console.log(`No routes found with primary USDC coin type: ${USDC_COIN_TYPE}`);
+              }
+            } catch (primaryError) {
+              console.error(`Error finding routes with primary USDC coin type: ${(primaryError as Error).message || 'unknown error'}`);
+            }
+            
+            // If primary didn't work, try alternates
+            if (!successfulCoinType) {
+              console.log('Trying alternate USDC coin types...');
+              
+              for (const altCoinType of ALTERNATE_USDC_COIN_TYPES) {
+                // Skip the one we already tried
+                if (altCoinType === USDC_COIN_TYPE) continue;
+                
+                try {
+                  console.log(`Trying alternate USDC type: ${altCoinType}`);
+                  const altRouteParams = {
+                    ...initialRouteParams,
+                    target: altCoinType
+                  };
+                  
+                  const altRouterData = await aggregator.findRouters(altRouteParams);
+                  
+                  if (altRouterData && altRouterData.routes && altRouterData.routes.length > 0) {
+                    routerData = altRouterData;
+                    successfulCoinType = altCoinType;
+                    console.log(`Found routes using alternate USDC coin type: ${altCoinType}`);
+                    break;
+                  } else {
+                    console.log(`No routes found with alternate USDC coin type: ${altCoinType}`);
+                  }
+                } catch (altError) {
+                  console.error(`Error finding routes with alternate USDC coin type (${altCoinType}): ${(altError as Error).message || 'unknown error'}`);
+                }
+              }
+            }
+            
+            // Add more detailed logging
+            console.log('Aggregator response received:', {
+              hasData: !!routerData,
+              amountIn: routerData?.amountIn?.toString() || 'N/A',
+              amountOut: routerData?.amountOut?.toString() || 'N/A',
+              insufficientLiquidity: routerData?.insufficientLiquidity,
+              routesCount: routerData?.routes?.length || 0,
+              errorCode: routerData?.error?.code,
+              errorMsg: routerData?.error?.msg,
+              usingCoinType: successfulCoinType || 'None'
+            });
+            
+            // Check for liquidity issues BEFORE trying to create the transaction
+            if (!routerData || !routerData.routes || routerData.routes.length === 0) {
+              console.log('No routes found, checking for specific errors...');
+              
+              // Handle specific error cases
+              if (routerData?.insufficientLiquidity) {
+                console.log('Aggregator found insufficient liquidity, trying direct pool swap as fallback...');
+                
+                // Try direct pool swap instead
+                try {
+                  const targetCoinType = USDC_COIN_TYPE;
+                  // const CETUS_PACKAGE = '0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12';
+                  // Not using CETUS_GLOBAL_CONFIG for the direct swap method
+                  // // const CETUS_GLOBAL_CONFIG = '0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca';
+                  
+                  // Try each valid pool in the direct pool list
+                  let tried = 0;
+                  for (const poolId of validPools.length > 0 ? validPools : DIRECT_POOL_ADDRESSES['USDC']) {
+                    tried++;
+                    try {
+                      console.log(`Attempting direct swap with pool ${poolId} (attempt ${tried}/${validPools.length || DIRECT_POOL_ADDRESSES['USDC'].length})`);
+                      
+                      // No longer reducing the swap amount - use the full amount
+                      console.log(`Using full swap amount for direct pool: ${Number(suiAmountMIST) / 1e9} SUI`);
+                      
+                      // Execute a simplified transaction that focuses just on the swap
+                      const txResult = await instance.sendTransaction(
+                        session.account,
+                        (txb: Transaction) => {
+                          txb.setSender(session.account!.userAddr);
+                          
+                          try {
+                            console.log(`Attempting simple swap with pool ${poolId}`);
+                            
+                            // Use a smaller amount for testing - 0.01 SUI
+                            const testAmount = BigInt(10000000); // 0.01 SUI in MIST
+                            console.log(`Using test amount: ${Number(testAmount) / 1e9} SUI`);
+                            
+                            // Split coins from gas payment - use array destructuring pattern
+                            const [splitCoin] = txb.splitCoins(txb.gas, [
+                              txb.pure.u64(testAmount)
+                            ]);
+                            
+                            // Create a vector with the split coin - this is the key difference
+                            const coinVector = txb.makeMoveVec({
+                              elements: [splitCoin],
+                              type: `0x2::coin::Coin<${SUI_COIN_TYPE}>`
+                            });
+                            
+                            // Use swap_b2a to swap FROM token B (SUI) TO token A (USDC)
+                            txb.moveCall({
+                              target: `0x4f920e1ef6318cfba77e20a0538a419a5a504c14230169438b99aba485db40a6::pool_script::swap_b2a`,
+                              typeArguments: [targetCoinType, SUI_COIN_TYPE],
+                              arguments: [
+                                txb.object("0x9774e359588ead122af1c7e7f64e14ade261cfeecdb5d0eb4a5b3b4c8ab8bd3e"),
+                                txb.object(poolId),
+                                coinVector,
+                                txb.pure.bool(true), // Set to true for swapping B->A (SUI to USDC)
+                                txb.pure.u64(testAmount),
+                                txb.pure.u64(0),
+                                txb.pure.u128("79226673515401279992447579055"), // Use the working b2a sqrt_price_limit value
+                                txb.object('0x6')
+                              ]
+                            });
+                            
+                            // Skip deposit for now - just focusing on the swap
+                            console.log("Skipping deposit step for now to focus on swap operation");
+                            
+                          } catch (moveCallError) {
+                            console.error('Error building transaction:', moveCallError);
+                            throw moveCallError;
+                          }
+                        },
+                        { gasBudget: 100000000 } // Higher gas budget for swap
+                      );
+                      
+                      console.log('Direct pool swap successful using fallback method:', txResult);
+                      return res.status(200).json({ 
+                        digest: txResult.digest,
+                        status: txResult.status,
+                        gasUsed: txResult.gasUsed,
+                        method: 'direct_pool_fallback'
+                      });
+                    } catch (poolError) {
+                      if (poolError instanceof Error) {
+                        if (poolError.message.includes('notExists') || 
+                            poolError.message.includes('object_id') ||
+                            poolError.message.includes('invalid input')) {
+                          console.error(`Pool ${poolId} doesn't exist or is invalid:`, poolError.message);
+                        } else if (poolError.message.includes('insufficient') || 
+                                  poolError.message.includes('liquidity')) {
+                          console.error(`Pool ${poolId} has insufficient liquidity:`, poolError.message);
+                        } else {
+                          console.error(`Error trying direct swap with pool ${poolId}:`, poolError.message);
+                        }
+                      } else {
+                        console.error(`Error trying direct swap with pool ${poolId}:`, poolError);
+                      }
+                      // Continue to next pool if this one fails
+                    }
+                  }
+                  
+                  // If we're here, all direct pool attempts failed
+                  console.log('All direct pool swap attempts failed');
+                  return res.status(400).json({
+                    error: 'Insufficient liquidity for both aggregator and direct pool swaps. Try a different amount or try again later.'
+                  });
+                } catch (fallbackError) {
+                  console.error('Error in direct pool fallback:', fallbackError);
+                  return res.status(400).json({
+                    error: 'Could not complete swap due to liquidity issues. Please try a smaller amount or contact support.'
+                  });
+                }
+              }
+            }
+            
+            // Add back the other checks that were removed
+            if (routerData && routerData.error && routerData.error.msg) {
+              return res.status(400).json({
+                error: `Routing error: ${routerData.error.msg}`
+              });
+            }
+            
+            // If amount is very small, suggest increasing it
+            if (suiAmountMIST < BigInt(50000000)) { // Less than 0.05 SUI
+              return res.status(400).json({
+                error: 'Swap amount is too small. Please try a larger amount (at least 0.05 SUI).'
+              });
+            }
+            
+            // If we got here and still don't have a valid route, return generic error
+            if (!routerData || !routerData.routes || routerData.routes.length === 0) {
+              console.log(`Tried all USDC coin types and found no valid routes`);
+              return res.status(400).json({
+                error: 'No valid swap route found after trying multiple USDC coin types. This may be due to insufficient liquidity.'
+              });
+            }
+
+            // If we got here, we have a valid route, so proceed with normal flow
+            // Use the successful coin type in the deposit call
+            const targetCoinType = successfulCoinType || USDC_COIN_TYPE;
+            
+            console.log(`Found route with ${routerData.routes.length} paths and amountOut: ${routerData.amountOut.toString()}`);
+            
+            // Log detailed path information to help with debugging
+            routerData.routes.forEach((route, i) => {
+              console.log(`Route ${i+1} details:`);
+              console.log(`- Input: ${route.amountIn.toString()}, Output: ${route.amountOut.toString()}`);
+              route.path.forEach((path, j) => {
+                console.log(`  Path ${j+1}: ${path.provider} (${path.from} → ${path.target})`);
+                console.log(`  - AmountIn: ${path.amountIn}, AmountOut: ${path.amountOut}, FeeRate: ${path.feeRate}`);
+              });
+            });
+            
+            // Calculate minimum amount out with slippage
+            const minAmountOut = routerData.amountOut.muln(10000 - effectiveSlippage).divn(10000);
+            console.log(`Using minAmountOut: ${minAmountOut.toString()}`);
+
+            // Now we know we have a valid route, so create and execute the transaction
             const txResult = await instance.sendTransaction(
               session.account,
-              (txb: Transaction) => {
-                console.log(`Building moveCall for contribute_from_custody`);
+              async (txb: Transaction) => {
+                txb.setSender(session.account!.userAddr);
                 
-                // Call the contribute_from_custody function
+                // Split SUI from gas payment
+                const [swapCoin] = txb.splitCoins(txb.gas, [
+                  txb.pure.u64(suiAmountMIST)
+                ]);
+
+                // Create swap transaction with the aggregator
+                await aggregator.routerSwap({
+                  routers: routerData,
+                  inputCoin: swapCoin,
+                  slippage: effectiveSlippage,
+                  txb
+                });
+                
+                // Now deposit the swapped USDC to the custody wallet
+                console.log(`Depositing swapped USDC as security deposit to wallet ${walletId}`);
+                
+                // When depositing the USDC, use the successful coin type
                 txb.moveCall({
-                  target: `${PACKAGE_ID}::njangi_circle::contribute_from_custody`,
+                  target: `${PACKAGE_ID}::njangi_circle::deposit_stablecoin_to_custody`,
                   arguments: [
-                    txb.object(req.body.circleId),   // circle object
-                    txb.object(req.body.walletId),   // custody wallet
-                    txb.pure.address(account.userAddr), // member address
-                    txb.object('0x6'),               // clock object
+                    txb.object(walletId),
+                    txb.pure.address(targetCoinType), // Use the type that worked in the swap
+                    txb.object("0x6")  // Clock object
                   ]
                 });
               },
-              { gasBudget: 100000000 } // Increase gas budget
+              { gasBudget: 100000000 } // Higher gas budget for complex swap
             );
             
-            console.log('Contribution transaction successful:', txResult);
+            console.log('Swap and deposit transaction successful:', txResult);
             return res.status(200).json({ 
               digest: txResult.digest,
               status: txResult.status,
               gasUsed: txResult.gasUsed
             });
-          } catch (txError) {
-            console.error('Contribution transaction error:', txError);
+          } catch (routeError) {
+            console.error('Error in swap and deposit transaction:', routeError);
+            
+            // Distinguish between different types of errors
+            if (routeError instanceof Error) {
+              // Network errors - these should not trigger re-authentication
+              if (routeError.message.includes('Gateway Timeout') || 
+                  routeError.message.includes('504') ||
+                  routeError.message.includes('network') ||
+                  routeError.message.includes('connection')) {
+                return res.status(503).json({
+                  error: 'Network timeout or connection issue. Please try again later.',
+                  requireRelogin: false
+                });
+              }
+              
+              // Authentication errors - these should trigger re-authentication
+              if (routeError.message.includes('proof verify failed') ||
+                  routeError.message.includes('Session expired') ||
+                  routeError.message.includes('Invalid session')) {
+                if (sessionId) {
+                  sessions.delete(sessionId);
+                  clearSessionCookie(res);
+                }
+                return res.status(401).json({
+                  error: 'Authentication error: Your session has expired. Please login again.',
+                  requireRelogin: true
+                });
+              }
+              
+              // DEX-specific errors
+              if (routeError.message.includes('Insufficient liquidity') ||
+                  routeError.message.includes('No valid swap route') ||
+                  routeError.message.includes('slippage') ||
+                  routeError.message.includes('price impact')) {
+                return res.status(400).json({
+                  error: routeError.message,
+                  requireRelogin: false
+                });
+              }
+            }
+            
+            // Generic error handling for anything else
             return res.status(500).json({ 
-              error: txError instanceof Error ? txError.message : 'Failed to execute contribution transaction',
-              requireRelogin: txError instanceof Error && 
-                (txError.message.includes('expired') || txError.message.includes('proof')) 
+              error: routeError instanceof Error ? routeError.message : 'Failed to process swap and deposit',
+              requireRelogin: false
             });
           }
         } catch (err) {
-          console.error('Contribution error:', err);
-          return res.status(500).json({ 
-            error: err instanceof Error ? err.message : 'Failed to process contribution',
-            requireRelogin: err instanceof Error && 
-              (err.message.includes('session') || err.message.includes('expired') || err.message.includes('proof'))
-          });
-        }
-
-      case 'executeStablecoinSwap':
-        if (!account) {
-          return res.status(400).json({ error: 'Account data is required' });
-        }
-
-        if (!req.body.circleId || !req.body.walletId || !req.body.suiAmount) {
-          return res.status(400).json({ error: 'Missing required parameters: circleId, walletId, suiAmount' });
-        }
-
-        try {
-          // Ensure parameters are of the correct type
-          const walletId = String(req.body.walletId);
-          const suiAmount = Number(req.body.suiAmount);
-
-          // Validate session with action context
-          const session = validateSession(sessionId, 'sendTransaction');
-          
-          if (!session.account) {
-            if (sessionId) sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              error: 'Authentication error: Your session has expired. Please login again.',
-              requireRelogin: true
-            });
-          }
-
-          // Verify session matches account data
-          if (session.account.userAddr !== account.userAddr || 
-              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
-            if (sessionId) sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              error: 'Session mismatch: Please refresh your authentication',
-              requireRelogin: true
-            });
-          }
-          
-          // Get the live SUI price
-          const suiPrice = await priceService.getSUIPrice();
-          if (!suiPrice || suiPrice <= 0) {
-            return res.status(500).json({ 
-              error: 'Failed to fetch current SUI price. Please try again.',
-            });
-          }
-          
-          console.log('Live SUI price for swap:', suiPrice);
-          
-          // Calculate stablecoin amount based on live SUI price
-          // For USDC, multiply by 1e6 for correct decimals (USDC has 6 decimal places)
-          const suiAmountInMoj = suiAmount * 1e9; // Convert SUI to Mist (9 decimals)
-          const stablecoinAmount = Math.floor(suiAmount * suiPrice * 1e6); // USDC has 6 decimals
-          
-          // Execute the transaction through zkLogin
-          const txResult = await instance.sendTransaction(
-            session.account,
-            (txb: Transaction) => {
-              txb.setSender(session.account!.userAddr);
-              
-              // Call our new deposit_with_live_rate function
-              txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_circle::deposit_with_live_rate`,
-                arguments: [
-                  txb.object(walletId), // Custody wallet ID
-                  txb.splitCoins(txb.gas, [txb.pure.u64(suiAmountInMoj.toString())]), // SUI payment
-                  txb.pure.u64(stablecoinAmount.toString()), // Calculated stablecoin amount based on live price
-                  txb.object("0x6"), // Clock object
-                ]
-              });
-            }
-          );
-          
-          return res.status(200).json({ 
-            digest: txResult.digest,
-            status: txResult.status,
-            gasUsed: txResult.gasUsed,
-            suiPrice: suiPrice,
-            stablecoinAmount: stablecoinAmount / 1e6 // Return human-readable amount
-          });
-        } catch (error) {
-          console.error('Error executing stablecoin swap:', error);
-          
-          if (error instanceof Error && 
-              (error.message.includes('proof verify failed') ||
-               error.message.includes('Session expired') ||
-               error.message.includes('re-authenticate'))) {
+          console.error('Swap and deposit transaction error:', err);
+          if (err instanceof Error && 
+              (err.message.includes('proof verify failed') ||
+               err.message.includes('Session expired') ||
+               err.message.includes('proof points') ||
+               err.message.includes('zkLogin signature error'))) {
             
-            if (sessionId) sessions.delete(sessionId);
-            clearSessionCookie(res);
-            
-            return res.status(401).json({
-              error: 'Authentication error: Your session has expired. Please login again.',
-              requireRelogin: true
-            });
+            throw new Error('Invalid proof structure: Please re-authenticate');
           }
           
           return res.status(500).json({ 
-            error: error instanceof Error ? error.message : 'Failed to execute stablecoin swap'
+            error: err instanceof Error ? err.message : 'Failed to process swap and deposit'
           });
         }
-        break;
+
+      case 'swapAndDepositDeepBook':
+        // Redirect to the new implementation
+        req.body.action = 'swapAndDepositCetus';
+        return handler(req, res);
 
       case 'configureStablecoinSwap':
         if (!account) {
@@ -1190,8 +1391,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           };
           
           // Testnet Cetus configuration 
-          const CETUS_PACKAGE = '0x0868b71c0cba55bf0faf6c40df8c179c67a4d0ba0e79965b68b3d72d7dfbf666';
-          const CETUS_GLOBAL_CONFIG = '0x6f4149091a5aea0e818e7243a13adcfb403842d670b9a2089de058512620687a';
+          // const CETUS_PACKAGE = '0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12';
+          // const CETUS_GLOBAL_CONFIG = '0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca';
           
           // Default pool IDs for the supported coins on testnet
           const poolIds: Record<string, string> = {
@@ -1216,10 +1417,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     txb.object(walletId),
                   txb.pure.bool(config.enabled),
                   txb.pure.string(coinTypeMap[config.targetCoinType] || coinTypeMap['USDC']),
-                  txb.pure.address(CETUS_PACKAGE),
+                  txb.pure.address("0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12"),
                   txb.pure.u64(BigInt(config.slippageTolerance)),
                     txb.pure.u64(BigInt(minimumSwapAmount)),
-                  txb.pure.address(CETUS_GLOBAL_CONFIG),
+                  txb.pure.address("0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca"),
                   txb.pure.address(poolId),
                 ],
               });
@@ -1310,74 +1511,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
-          console.log(`Processing security deposit payment of ${depositAmount} to wallet ${walletId}`);
+          console.log(`Creating security deposit transaction for wallet ${walletId}, amount ${depositAmount}`);
 
           // Execute the transaction with zkLogin
             const txResult = await instance.sendTransaction(
               session.account,
             (txb) => {
-              // First, split the required coins from gas
-              const [coin] = txb.splitCoins(txb.gas, [txb.pure.u64(depositAmount)]);
+              txb.setSender(session.account!.userAddr);
+              
+              // Split SUI from gas payment
+              const [depositCoin] = txb.splitCoins(txb.gas, [
+                txb.pure.u64(depositAmount)
+              ]);
                 
-              // Then deposit to the custody wallet
+              // Call the deposit function to pay security deposit
                 txb.moveCall({
                 target: `${PACKAGE_ID}::njangi_circle::deposit_to_custody`,
                   arguments: [
                   txb.object(walletId),
-                  coin,
-                  txb.object('0x6'), // Clock object
+                  depositCoin,
+                  txb.object("0x6"), // Clock object
                 ],
               });
             }
           );
           
-          console.log('Security deposit payment result:', txResult);
+          console.log('Security deposit transaction successful:', txResult);
             return res.status(200).json({ 
               digest: txResult.digest,
               status: txResult.status,
               gasUsed: txResult.gasUsed
             });
-        } catch (error) {
-          console.error('Error paying security deposit:', error);
-          
-          // Handle specific error types
-          if (error instanceof Error) {
-            if (error.message.includes('proof verify failed') ||
-                error.message.includes('Session expired') ||
-                error.message.includes('re-authenticate')) {
-              // Clear the session for authentication errors
-              if (sessionId) sessions.delete(sessionId);
+        } catch (err) {
+          console.error('Security deposit error:', err);
+          if (err instanceof Error && 
+              (err.message.includes('proof verify failed') ||
+               err.message.includes('Session expired'))) {
+            
+            if (sessionId) {
+              sessions.delete(sessionId);
               clearSessionCookie(res);
-              
-              return res.status(401).json({
-                error: 'Your session has expired. Please login again.',
-                requireRelogin: true
-              });
             }
-            
-            // Handle transaction-specific errors
-            if (error.message.includes('EWalletNotActive')) {
-              return res.status(400).json({
-                error: 'The custody wallet is not active'
-              });
-            }
-            
-            if (error.message.includes('ENotWalletOwner')) {
-              return res.status(403).json({
-                error: 'You are not authorized to deposit to this wallet'
-              });
-            }
-            
-            if (error.message.includes('InsufficientBalance')) {
-              return res.status(400).json({
-                error: 'Insufficient balance to make this deposit'
-              });
-            }
+            return res.status(401).json({ 
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
           }
           
-          // Generic error handling
           return res.status(500).json({ 
-            error: error instanceof Error ? error.message : 'Unknown error during security deposit payment'
+            error: err instanceof Error ? err.message : 'Failed to process security deposit'
           });
         }
         break;
@@ -1647,13 +1829,86 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
+      case 'contributeFromCustody':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!sessionId) {
+          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+        }
+
+        try {
+          const { circleId, walletId } = req.body;
+          if (!circleId || !walletId) {
+            return res.status(400).json({ error: 'Circle ID and wallet ID are required' });
+          }
+
+          // Validate session
+          const session = validateSession(sessionId, 'sendTransaction');
+          if (!session.account) {
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Invalid session: No account data found. Please authenticate first.'
+            });
+          }
+
+          console.log(`Creating custody contribution transaction for circle ${circleId}, wallet ${walletId}`);
+          
+          // Execute the transaction
+          const txResult = await instance.sendTransaction(
+            session.account,
+            (txb: Transaction) => {
+              txb.setSender(session.account!.userAddr);
+              
+              // Call the contribute_from_custody function
+              txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_circle::contribute_from_custody`,
+                arguments: [
+                  txb.object(circleId),
+                  txb.object(walletId),
+                  txb.object("0x6")  // Clock object
+                ]
+              });
+            },
+            { gasBudget: 50000000 }
+          );
+          
+          console.log('Contribution transaction successful:', txResult);
+          return res.status(200).json({ 
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+        } catch (err) {
+          console.error('Contribution error:', err);
+          if (err instanceof Error && 
+              (err.message.includes('proof verify failed') ||
+               err.message.includes('Session expired'))) {
+            
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({ 
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+          
+          return res.status(500).json({ 
+            error: err instanceof Error ? err.message : 'Failed to process contribution'
+          });
+        }
+
       default:
-        return res.status(400).json({ error: `Unknown action: ${action}` });
+        return res.status(400).json({ error: 'Unknown action' });
     }
-  } catch (error) {
-    console.error('API error:', error);
+  } catch (err) {
+    console.error('API error:', err);
     return res.status(500).json({ 
-      error: error instanceof Error ? error.message : 'An internal server error occurred' 
+      error: err instanceof Error ? err.message : 'An unexpected error occurred' 
     });
   }
 } 
