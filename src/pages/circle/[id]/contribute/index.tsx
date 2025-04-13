@@ -9,6 +9,11 @@ import { priceService } from '../../../../services/price-service';
 import { PACKAGE_ID } from '../../../../services/circle-service';
 import SimplifiedSwapUI from '../../../../components/SimplifiedSwapUI';
 
+// Constants for transaction calculations
+const ESTIMATED_GAS_FEE = 0.00021; // Gas fee in SUI
+const DEFAULT_SLIPPAGE = 0.5; // Default slippage percentage
+const BUFFER_PERCENTAGE = 1.5; // Additional buffer percentage for swap rate fluctuations
+
 // Define a proper Circle type to fix linter errors
 interface Circle {
   id: string;
@@ -447,17 +452,65 @@ export default function ContributeToCircle() {
     return circle.securityDepositUsd / suiPrice;
   };
 
+  // New function to calculate total required amount including slippage and fees
+  const calculateTotalRequiredAmount = (baseAmount: number): number => {
+    if (!baseAmount || baseAmount <= 0) return 0;
+    
+    // Calculate slippage buffer (DEFAULT_SLIPPAGE% of the base amount)
+    const slippageBuffer = baseAmount * (DEFAULT_SLIPPAGE / 100);
+    
+    // Add additional buffer for exchange rate fluctuations
+    const rateFluctuationBuffer = baseAmount * (BUFFER_PERCENTAGE / 100);
+    
+    // Calculate total with all buffers and gas fee
+    const total = baseAmount + slippageBuffer + rateFluctuationBuffer + ESTIMATED_GAS_FEE;
+    
+    return total;
+  };
+
+  // New function to calculate the deposit amount including all necessary buffers
+  const getRequiredDepositAmount = (): number => {
+    const baseAmount = getSecurityDepositInSui();
+    return calculateTotalRequiredAmount(baseAmount);
+  };
+
+  // New function to calculate the contribution amount including all necessary buffers
+  const getRequiredContributionAmount = (): number => {
+    const baseAmount = getValidContributionAmount();
+    return calculateTotalRequiredAmount(baseAmount);
+  };
+
+  // Helper function to show the breakdown of a calculation
+  const getAmountBreakdown = (baseAmount: number): { 
+    baseAmount: number;
+    slippageBuffer: number;
+    rateBuffer: number;
+    gasFee: number;
+    total: number;
+  } => {
+    const slippageBuffer = baseAmount * (DEFAULT_SLIPPAGE / 100);
+    const rateBuffer = baseAmount * (BUFFER_PERCENTAGE / 100);
+    
+    return {
+      baseAmount,
+      slippageBuffer,
+      rateBuffer,
+      gasFee: ESTIMATED_GAS_FEE,
+      total: baseAmount + slippageBuffer + rateBuffer + ESTIMATED_GAS_FEE
+    };
+  };
+
   const handlePaySecurityDeposit = async () => {
     if (!circle || !userAddress || !circle.walletId) {
       toast.error('Circle information incomplete. Cannot process deposit.');
       return;
     }
     
-    // Use the live calculation for security deposit amount
-    const securityDepositAmount = getSecurityDepositInSui();
+    // Use the calculated amount that includes slippage and fees
+    const requiredAmount = getRequiredDepositAmount();
     
-    // Check if wallet balance is sufficient
-    if (userBalance !== null && userBalance < securityDepositAmount) {
+    // Check if wallet balance is sufficient for the total required amount
+    if (userBalance !== null && userBalance < requiredAmount) {
       toast.error('Insufficient wallet balance to pay security deposit.');
       return;
     }
@@ -465,7 +518,11 @@ export default function ContributeToCircle() {
     setIsPayingDeposit(true);
     
     try {
-      console.log('Preparing to pay security deposit of', securityDepositAmount, 'SUI to circle:', circle.id);
+      console.log('Preparing to pay security deposit:', {
+        baseAmount: getSecurityDepositInSui(),
+        requiredAmount,
+        breakdown: getAmountBreakdown(getSecurityDepositInSui())
+      });
       
       if (!account) {
         toast.error('User account not available. Please log in again.');
@@ -475,6 +532,10 @@ export default function ContributeToCircle() {
       
       toast.loading('Processing security deposit payment...', { id: 'pay-security-deposit' });
       
+      // Use the original security deposit amount for the actual transaction
+      // as the contract expects the exact amount, buffers are just for checking sufficient balance
+      const depositAmount = getSecurityDepositInSui();
+      
       // Execute the transaction through the API
       const response = await fetch('/api/zkLogin', {
         method: 'POST',
@@ -483,7 +544,7 @@ export default function ContributeToCircle() {
           action: 'paySecurityDeposit',
           account,
           walletId: circle.walletId,
-          depositAmount: Math.floor(securityDepositAmount * 1e9)
+          depositAmount: Math.floor(depositAmount * 1e9)
         }),
       });
       
@@ -699,14 +760,11 @@ export default function ContributeToCircle() {
               // Skip if deposit not paid or balance not loaded
               if (!userDepositPaid || userBalance === null) return null;
               
-              // Get valid contribution amount
-              const validContributionAmount = getValidContributionAmount();
-              
-              // Add small buffer for transaction fees
-              const requiredWithBuffer = validContributionAmount + 0.01;
+              // Get required contribution amount with buffer
+              const requiredAmount = getRequiredContributionAmount();
               
               // Only show warning if balance is insufficient
-              if (userBalance >= requiredWithBuffer) return null;
+              if (userBalance >= requiredAmount) return null;
               
               return (
                 <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg border border-red-200">
@@ -714,12 +772,31 @@ export default function ContributeToCircle() {
                     ⚠️ Your wallet balance is insufficient for this contribution.
                   </p>
                   <p className="text-xs mt-1">
-                    Required: {validContributionAmount.toFixed(4)} SUI (plus a small amount for transaction fees)<br/>
+                    Required base amount: {getValidContributionAmount().toFixed(4)} SUI<br/>
+                    With slippage & fees: {requiredAmount.toFixed(4)} SUI<br/>
                     Available: {userBalance.toFixed(4)} SUI
                   </p>
                 </div>
               );
             })()}
+
+            {/* Show detailed breakdown of contribution amount if deposit is paid */}
+            {userDepositPaid && circle && getValidContributionAmount() > 0 && (
+              <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                <p className="text-sm font-medium text-blue-800">
+                  Estimated amount needed for contribution:
+                </p>
+                <div className="text-blue-700 text-xs space-y-1 mt-2">
+                  <p>Base contribution: {getValidContributionAmount().toFixed(4)} SUI</p>
+                  <p>+ Slippage ({DEFAULT_SLIPPAGE}%): {(getValidContributionAmount() * DEFAULT_SLIPPAGE / 100).toFixed(4)} SUI</p>
+                  <p>+ Rate buffer ({BUFFER_PERCENTAGE}%): {(getValidContributionAmount() * BUFFER_PERCENTAGE / 100).toFixed(4)} SUI</p>
+                  <p>+ Network fee: {ESTIMATED_GAS_FEE.toFixed(6)} SUI</p>
+                  <p className="font-semibold border-t border-blue-200 pt-1 mt-1">
+                    Total required: {getRequiredContributionAmount().toFixed(4)} SUI
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* Show warning if security deposit is not paid */}
             {!userDepositPaid && (
@@ -742,19 +819,35 @@ export default function ContributeToCircle() {
                     </p>
                   </div>
                   
+                  {/* Show the required amount including slippage and fees */}
+                  {userBalance !== null && circle && circle.securityDeposit > 0 && (
+                    <div className="bg-blue-50 p-2 rounded border border-blue-100 text-sm">
+                      <p className="font-medium text-blue-800">Estimated amount needed:</p>
+                      <div className="text-blue-700 text-xs space-y-1 mt-1">
+                        <p>Base deposit: {getSecurityDepositInSui().toFixed(4)} SUI</p>
+                        <p>+ Slippage ({DEFAULT_SLIPPAGE}%): {(getSecurityDepositInSui() * DEFAULT_SLIPPAGE / 100).toFixed(4)} SUI</p>
+                        <p>+ Rate buffer ({BUFFER_PERCENTAGE}%): {(getSecurityDepositInSui() * BUFFER_PERCENTAGE / 100).toFixed(4)} SUI</p>
+                        <p>+ Network fee: {ESTIMATED_GAS_FEE.toFixed(6)} SUI</p>
+                        <p className="font-semibold border-t border-blue-200 pt-1 mt-1">
+                          Total required: {getRequiredDepositAmount().toFixed(4)} SUI
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                  
                   {/* Show combined insufficient balance warning for both security deposit and contribution */}
-                  {userBalance !== null && circle && userBalance < getSecurityDepositInSui() && (
+                  {userBalance !== null && circle && userBalance < getRequiredDepositAmount() && (
                     <div className="p-2 bg-red-50 text-red-700 rounded border border-red-200 text-sm">
                       <p className="font-medium">Insufficient funds for security deposit</p>
                       <p className="text-xs mt-1">
-                        You need <span><CurrencyDisplay usd={circle.securityDepositUsd} className="inline" /></span> for the security deposit, but your balance is only {userBalance.toFixed(2)} SUI.
+                        You need {getRequiredDepositAmount().toFixed(4)} SUI for the security deposit (including slippage & fees), but your balance is only {userBalance.toFixed(4)} SUI.
                       </p>
                     </div>
                   )}
                   
                   <button
                     onClick={handlePaySecurityDeposit}
-                    disabled={isPayingDeposit || !circle || circle.securityDepositUsd <= 0 || (userBalance !== null && userBalance < getSecurityDepositInSui())}
+                    disabled={isPayingDeposit || !circle || circle.securityDepositUsd <= 0 || (userBalance !== null && userBalance < getRequiredDepositAmount())}
                     className="w-full py-3 px-4 rounded-lg shadow-sm text-sm font-bold text-white bg-amber-500 hover:bg-amber-600 transition-all disabled:opacity-70 disabled:cursor-not-allowed"
                   >
                     {isPayingDeposit ? (
@@ -781,8 +874,8 @@ export default function ContributeToCircle() {
           
             <button
               onClick={handleContribute}
-              disabled={isProcessing || (userBalance !== null && userBalance < getValidContributionAmount() + 0.01) || !userDepositPaid}
-              className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all ${(isProcessing || (userBalance !== null && userBalance < getValidContributionAmount() + 0.01) || !userDepositPaid) ? 'opacity-70 cursor-not-allowed' : ''}`}
+              disabled={isProcessing || (userBalance !== null && userBalance < getRequiredContributionAmount()) || !userDepositPaid}
+              className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all ${(isProcessing || (userBalance !== null && userBalance < getRequiredContributionAmount()) || !userDepositPaid) ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
               {isProcessing ? 'Processing...' : 'Contribute Now'}
             </button>
