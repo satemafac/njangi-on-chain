@@ -122,7 +122,7 @@ export default function JoinCircle() {
         console.error('Error storing circle ID in localStorage:', error);
       }
     }
-  }, [id, userAddress, fetchCircleDetails]);
+  }, [id, userAddress]);
 
   const fetchCircleDetails = async () => {
     if (!id) return;

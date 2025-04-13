@@ -2,8 +2,8 @@ import { Transaction } from '@mysten/sui/transactions';
 import { SuiClient } from '@mysten/sui/client';
 
 // Constants for different DEXes on SUI
-const CETUS_PACKAGE_ID = '0x0868b71c0cba55bf0faf6c40df8c179c67a4d0ba0e79965b68b3d72d7dfbf666';
-const CETUS_GLOBAL_CONFIG_ID = '0x6f4149091a5aea0e818e7243a13adcfb403842d670b9a2089de058512620687a';
+const CETUS_PACKAGE_ID = '0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12';
+const CETUS_GLOBAL_CONFIG_ID = '0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca';
 
 // Common token addresses
 const SUI_TYPE = '0x2::sui::SUI';
@@ -394,23 +394,110 @@ export class SuiSwapRouter {
       throw new Error(`Pool not found for SUI to ${stablecoinSymbol}`);
     }
     
-    // For illustration, we'll just use a similar pattern to the aggregator
+    // For illustration, we'll use the router module instead of pool module since swap_sui doesn't exist in v1.26.0
     if (fromToken === SUI_TYPE) {
       const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(inputAmount)]);
       
+      // Using router module with swap_exact_sui_for_coin instead of pool::swap_sui
       tx.moveCall({
-        target: `${CETUS_PACKAGE_ID}::pool::swap_sui`,
+        target: `${CETUS_PACKAGE_ID}::router::swap_exact_sui_for_coin`,
         arguments: [
           tx.object(CETUS_GLOBAL_CONFIG_ID),
           coin,
           tx.pure.u64(minOutputAmount),
           tx.object(poolId),
+          tx.pure.u8(9), // SUI decimals
+          tx.pure.u8(6), // USDC/USDT decimals
         ],
         typeArguments: [toToken]
       });
+    }
+
+    // For illustration, we'll use the pool module with flash_swap since router module doesn't exist in v1.26.0
+    if (fromToken === SUI_TYPE) {
+      const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(inputAmount)]);
+      
+      // Using pool::flash_swap for SUI to stablecoin swap
+      const [, , receipt] = tx.moveCall({
+        target: `${CETUS_PACKAGE_ID}::pool::flash_swap`,
+        arguments: [
+          tx.object(CETUS_GLOBAL_CONFIG_ID), // Global config ID
+          tx.object(poolId), // Pool ID
+          tx.pure.bool(false), // is_a_to_b (SUI → stablecoin is false in this pool)
+          tx.pure.bool(true), // by_amount_in
+          tx.pure.u64(inputAmount), // amount in (SUI)
+          tx.pure.u128(BigInt(minOutputAmount)), // min amount out
+          tx.object('0x6'), // Clock object
+        ],
+        typeArguments: [toToken, SUI_TYPE]
+      });
+      
+      // Pay for the swap with the SUI we split earlier
+      tx.moveCall({
+        target: `${CETUS_PACKAGE_ID}::pool::repay_flash_swap`,
+        arguments: [
+          receipt,
+          coin
+        ],
+        typeArguments: [toToken, SUI_TYPE]
+      });
     } else {
-      // Similar pattern for other tokens
-      // Implementation would be token-specific
+      // For non-SUI tokens, we use flash_swap in the opposite direction
+      const coins = await this.suiClient.getCoins({
+        owner: this.userAddress,
+        coinType: fromToken
+      });
+      
+      if (coins.data.length === 0) {
+        throw new Error(`No coins found for token type ${fromToken}`);
+      }
+      
+      // Get a coin with sufficient balance
+      let coinToUse = null;
+      for (const coin of coins.data) {
+        if (BigInt(coin.balance) >= inputAmount) {
+          coinToUse = coin.coinObjectId;
+          break;
+        }
+      }
+      
+      if (!coinToUse) {
+        throw new Error(`Insufficient balance for token type ${fromToken}`);
+      }
+      
+      // If we need to split, do so
+      let coinObject;
+      if (BigInt(coins.data[0].balance) > inputAmount) {
+        const [splitCoin] = tx.splitCoins(tx.object(coinToUse), [tx.pure.u64(inputAmount)]);
+        coinObject = splitCoin;
+      } else {
+        coinObject = tx.object(coinToUse);
+      }
+      
+      // Use pool::flash_swap for token to SUI swap
+      const [, , receipt] = tx.moveCall({
+        target: `${CETUS_PACKAGE_ID}::pool::flash_swap`,
+        arguments: [
+          tx.object(CETUS_GLOBAL_CONFIG_ID), // Global config ID
+          tx.object(poolId), // Pool ID
+          tx.pure.bool(true), // is_a_to_b (token → SUI is true in this pool)
+          tx.pure.bool(true), // by_amount_in
+          tx.pure.u64(inputAmount), // amount in (token)
+          tx.pure.u128(BigInt(minOutputAmount)), // min amount out
+          tx.object('0x6'), // Clock object
+        ],
+        typeArguments: [fromToken, SUI_TYPE]
+      });
+      
+      // Repay with the token we have
+      tx.moveCall({
+        target: `${CETUS_PACKAGE_ID}::pool::repay_flash_swap`,
+        arguments: [
+          receipt,
+          coinObject
+        ],
+        typeArguments: [fromToken, SUI_TYPE]
+      });
     }
   }
   
