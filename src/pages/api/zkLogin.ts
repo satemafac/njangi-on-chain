@@ -154,9 +154,14 @@ async function getAggregatorSDK(): Promise<AggregatorClient> {
   }
 }
 
+// Function to get the JSON RPC URL
+function getJsonRpcUrl(): string {
+  return process.env.SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443';
+}
+
 // When using swapAndDepositCetus, replace accessing the private suiClient directly with the proper API
 const getEpochData = async (): Promise<{ epoch: string }> => {
-  const suiClient = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+  const suiClient = new SuiClient({ url: getJsonRpcUrl() });
   return await suiClient.getLatestSuiSystemState();
 };
 
@@ -164,7 +169,7 @@ const getEpochData = async (): Promise<{ epoch: string }> => {
 const checkPoolLiquidity = async () => {
   try {
     console.log('Checking available liquidity in SUI-USDC pools...');
-    const suiClient = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+    const suiClient = new SuiClient({ url: getJsonRpcUrl() });
     
     // First check which pools actually exist
     const validPools = [];
@@ -644,7 +649,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           // Check if the circle exists and is owned by the user
           try {
-            const suiClient = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+            const suiClient = new SuiClient({ url: getJsonRpcUrl() });
             
             console.log(`Verifying circle ${circleId} exists`);
             const objectResponse = await suiClient.getObject({
@@ -1100,13 +1105,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                           try {
                             console.log(`Attempting simple swap with pool ${poolId}`);
                             
-                            // Use a smaller amount for testing - 0.01 SUI
-                            const testAmount = BigInt(10000000); // 0.01 SUI in MIST
-                            console.log(`Using test amount: ${Number(testAmount) / 1e9} SUI`);
+                            // Use the full amount requested by the user
+                            console.log(`Using full amount for swap: ${Number(suiAmountMIST) / 1e9} SUI`);
                             
                             // Split coins from gas payment - use array destructuring pattern
                             const [splitCoin] = txb.splitCoins(txb.gas, [
-                              txb.pure.u64(testAmount)
+                              txb.pure.u64(suiAmountMIST)
                             ]);
                             
                             // Create a vector with the split coin - this is the key difference
@@ -1124,7 +1128,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                                 txb.object(poolId),
                                 coinVector,
                                 txb.pure.bool(true), // Set to true for swapping B->A (SUI to USDC)
-                                txb.pure.u64(testAmount),
+                                txb.pure.u64(suiAmountMIST),
                                 txb.pure.u64(0),
                                 txb.pure.u128("79226673515401279992447579055"), // Use the working b2a sqrt_price_limit value
                                 txb.object('0x6')
@@ -1901,6 +1905,388 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             error: err instanceof Error ? err.message : 'Failed to process contribution'
           });
         }
+
+      case 'executeSwapOnly':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        try {
+          const { suiAmount, minAmountOut, slippage = 0.5 } = req.body;
+          if (!suiAmount) {
+            return res.status(400).json({ error: 'SUI amount is required' });
+          }
+
+          if (!sessionId) {
+            return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+          }
+
+          // Validate session
+          const session = validateSession(sessionId, 'sendTransaction');
+          if (!session.account) {
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Invalid session: No account data found. Please authenticate first.'
+            });
+          }
+
+          console.log(`Creating SUI to USDC swap-only transaction for amount: ${suiAmount}`);
+          
+          // Use the full amount for the swap
+          const suiAmountMIST = typeof suiAmount === 'string' ? 
+            BigInt(Math.floor(parseFloat(suiAmount) * 1e9)) : 
+            BigInt(Math.floor(suiAmount * 1e9));
+            
+          console.log(`Using amount for swap: ${Number(suiAmountMIST) / 1e9} SUI`);
+
+          // Execute only the swap transaction
+          const txResult = await instance.sendTransaction(
+            session.account,
+            (txb: Transaction) => {
+              txb.setSender(session.account!.userAddr);
+              
+              try {
+                console.log(`Attempting swap with amount: ${Number(suiAmountMIST) / 1e9} SUI`);
+                
+                // Split coins from gas payment - use array destructuring pattern
+                const [splitCoin] = txb.splitCoins(txb.gas, [
+                  txb.pure.u64(suiAmountMIST)
+                ]);
+                
+                // Create a vector with the split coin
+                const coinVector = txb.makeMoveVec({
+                  elements: [splitCoin],
+                  type: `0x2::coin::Coin<${SUI_COIN_TYPE}>`
+                });
+
+                // Target stablecoin type - should be USDC
+                const targetCoinType = USDC_COIN_TYPE;
+                const poolId = 'b01b068bd0360bb3308b81eb42386707e460b7818816709b7f51e1635d542d40';
+
+                // Calculate minimum amount out with slippage
+                const minAmountOutMicro = minAmountOut || Math.floor(parseFloat(suiAmount) * 2.5 * 1e6 * (1 - slippage/100));
+                
+                // Use swap_b2a to swap FROM token B (SUI) TO token A (USDC)
+                txb.moveCall({
+                  target: `0x4f920e1ef6318cfba77e20a0538a419a5a504c14230169438b99aba485db40a6::pool_script::swap_b2a`,
+                  typeArguments: [targetCoinType, SUI_COIN_TYPE],
+                  arguments: [
+                    txb.object("0x9774e359588ead122af1c7e7f64e14ade261cfeecdb5d0eb4a5b3b4c8ab8bd3e"),
+                    txb.object(poolId),
+                    coinVector,
+                    txb.pure.bool(true), // Set to true for swapping B->A (SUI to USDC)
+                    txb.pure.u64(suiAmountMIST),
+                    txb.pure.u64(minAmountOutMicro),
+                    txb.pure.u128("79226673515401279992447579055"), // Use the working b2a sqrt_price_limit value
+                    txb.object('0x6')
+                  ]
+                });
+                
+              } catch (moveCallError) {
+                console.error('Error building swap transaction:', moveCallError);
+                throw moveCallError;
+              }
+            },
+            { gasBudget: 100000000 } // Higher gas budget for swap
+          );
+          
+          console.log('Swap transaction successful:', txResult);
+          
+          // Find the created coin object ID from transaction effects
+          let createdCoinId = null;
+          // Use optional chaining and type checking instead of type assertion
+          if (txResult && typeof txResult === 'object' && 'effects' in txResult) {
+            const effects = txResult.effects as {
+              created?: Array<{
+                reference?: { objectId?: string };
+                owner?: { AddressOwner?: string };
+                objectType?: string;
+              }>
+            };
+            
+            if (effects.created && Array.isArray(effects.created) && effects.created.length > 0) {
+              // First log all created objects for debugging
+              console.log('Created objects in transaction:', 
+                effects.created.map(obj => ({
+                  id: obj.reference?.objectId,
+                  type: obj.objectType,
+                  owner: obj.owner?.AddressOwner
+                }))
+              );
+              
+              // Improved detection for USDC coins with multiple patterns
+              const usdcPatterns = [
+                new RegExp(USDC_COIN_TYPE.replace(/[:]/g, '\\:')),  // Exact match with escaping
+                /Coin<.*usdc::USDC>/i,
+                /Coin<.*USDC>/i,
+                /0x[a-f0-9]+::usdc::USDC/i,
+                /usdc::USDC/i,
+                /coin::Coin<.*usdc::USDC>/i
+              ];
+              
+              // Check for all coins owned by the user first
+              const userOwnedCoins = effects.created.filter(created => 
+                created.reference?.objectId && 
+                created.owner?.AddressOwner === (session.account?.userAddr || '') &&
+                created.objectType && 
+                created.objectType.includes('Coin')
+              );
+              
+              console.log(`Found ${userOwnedCoins.length} coins owned by user:`, 
+                userOwnedCoins.map(coin => ({
+                  id: coin.reference?.objectId,
+                  type: coin.objectType
+                }))
+              );
+              
+              // Direct match using exact USDC coin type
+              for (const created of userOwnedCoins) {
+                if (created.objectType && created.objectType.includes(USDC_COIN_TYPE)) {
+                  createdCoinId = created.reference?.objectId;
+                  console.log(`Found exact match for USDC coin: ${createdCoinId}`);
+                  break;
+                }
+              }
+              
+              // If no direct match, try pattern matching
+              if (!createdCoinId) {
+                for (const created of userOwnedCoins) {
+                  if (created.objectType) {
+                    // Check if this is a USDC coin by looking at the objectType using any of our patterns
+                    for (const pattern of usdcPatterns) {
+                      if (pattern.test(created.objectType)) {
+                        createdCoinId = created.reference?.objectId;
+                        console.log(`Found USDC coin ID with pattern ${pattern}: ${createdCoinId}`);
+                        break;
+                      }
+                    }
+                    if (createdCoinId) break;
+                  }
+                }
+              }
+              
+              // If still no match, check for non-SUI coins as a fallback
+              if (!createdCoinId && userOwnedCoins.length > 0) {
+                for (const created of userOwnedCoins) {
+                  // If it's a coin but NOT a SUI coin, it's likely our USDC
+                  if (created.objectType && 
+                      !created.objectType.includes('sui::SUI') && 
+                      created.objectType.includes('Coin')) {
+                    createdCoinId = created.reference?.objectId;
+                    console.log('Found non-SUI coin, assuming USDC:', createdCoinId);
+                    break;
+                  }
+                }
+              }
+              
+              // Last resort - just use the first coin owned by the user if there's only one
+              if (!createdCoinId && userOwnedCoins.length === 1) {
+                createdCoinId = userOwnedCoins[0].reference?.objectId;
+                console.log('Fallback: Using only created coin as USDC:', createdCoinId);
+              }
+            }
+          }
+          
+          // If we still don't have a coin ID, also check mutated objects
+          if (!createdCoinId && txResult && typeof txResult === 'object' && 'effects' in txResult) {
+            try {
+              const effects = txResult.effects as {
+                mutated?: Array<{
+                  reference?: { objectId?: string };
+                  owner?: { AddressOwner?: string };
+                  objectType?: string;
+                }>
+              };
+              
+              if (effects.mutated && Array.isArray(effects.mutated)) {
+                console.log('Checking mutated objects for USDC coin...');
+                const userMutatedCoins = effects.mutated.filter(mutated => 
+                  mutated.reference?.objectId && 
+                  mutated.owner?.AddressOwner === (session.account?.userAddr || '') &&
+                  mutated.objectType && 
+                  mutated.objectType.includes('Coin') &&
+                  !mutated.objectType.includes('sui::SUI')
+                );
+                
+                console.log(`Found ${userMutatedCoins.length} mutated non-SUI coins owned by user`);
+                
+                // Try to find USDC in mutated coins
+                for (const mutated of userMutatedCoins) {
+                  if (mutated.objectType && 
+                      (mutated.objectType.includes('usdc') || 
+                       mutated.objectType.includes('USDC') ||
+                       mutated.objectType.includes(USDC_COIN_TYPE))) {
+                    createdCoinId = mutated.reference?.objectId;
+                    console.log('Found mutated USDC coin ID:', createdCoinId);
+                    break;
+                  }
+                }
+                
+                // If still not found but we have only one non-SUI coin, use it
+                if (!createdCoinId && userMutatedCoins.length === 1) {
+                  createdCoinId = userMutatedCoins[0].reference?.objectId;
+                  console.log('Using only mutated non-SUI coin as USDC:', createdCoinId);
+                }
+              }
+            } catch (extractionError) {
+              console.error('Error extracting from mutated objects:', extractionError);
+            }
+          }
+          
+          // If we still don't have a coin ID, try querying the blockchain
+          if (!createdCoinId && session.account) {
+            try {
+              console.log('Attempting to query blockchain for USDC coins...');
+              // We'll make this request conditionally to avoid unnecessary API calls
+              const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+              
+              // Look for USDC coins owned by the user
+              const userCoins = await suiClient.getCoins({
+                owner: session.account.userAddr,
+                coinType: USDC_COIN_TYPE
+              });
+              
+              if (userCoins.data && userCoins.data.length > 0) {
+                // Sort by balance (descending) to get the most recently received coin
+                userCoins.data.sort((a, b) => {
+                  const diff = BigInt(b.balance) - BigInt(a.balance);
+                  return diff > BigInt(0) ? 1 : diff < BigInt(0) ? -1 : 0;
+                });
+                
+                createdCoinId = userCoins.data[0].coinObjectId;
+                console.log('Found USDC coin by querying blockchain:', createdCoinId);
+              } else {
+                console.log('No USDC coins found for user on blockchain');
+              }
+            } catch (queryError) {
+              console.error('Error querying blockchain for USDC coins:', queryError);
+            }
+          }
+          
+          // If we still don't have a coin ID, log an error but don't fail completely
+          if (!createdCoinId) {
+            console.error('Failed to extract created USDC coin ID from transaction result');
+            
+            // Include error info in the response but return success status
+            return res.status(200).json({ 
+              digest: txResult.digest,
+              status: txResult.status,
+              gasUsed: txResult.gasUsed,
+              error: 'Could not identify the swapped USDC coin object',
+              // Still return transaction response for debugging
+              transactionResponse: txResult 
+            });
+          } else {
+            console.log('Successfully extracted USDC coin ID:', createdCoinId);
+          }
+          
+          return res.status(200).json({ 
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed,
+            createdCoinId: createdCoinId
+          });
+        } catch (error) {
+          console.error('Error executing swap-only transaction:', error);
+          
+          // Check if it's an authentication error
+          if (error instanceof Error && 
+              (error.message.includes('proof verify failed') ||
+               error.message.includes('Session expired') ||
+               error.message.includes('re-authenticate'))) {
+            
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({ 
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+          
+          return res.status(500).json({ 
+            error: error instanceof Error ? error.message : 'Failed to execute swap',
+            details: error instanceof Error ? error.stack : String(error),
+            requireRelogin: false
+          });
+        }
+        break;
+
+      case 'depositStablecoin':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!req.body.walletId || !req.body.coinObjectId || !req.body.stablecoinType) {
+          return res.status(400).json({ 
+            error: 'Missing required parameters: walletId, coinObjectId, stablecoinType' 
+          });
+        }
+
+        try {
+          const walletId = String(req.body.walletId);
+          const coinObjectId = String(req.body.coinObjectId);
+          const stablecoinType = String(req.body.stablecoinType);
+          
+          // Validate session
+          const session = validateSession(sessionId, 'sendTransaction');
+          
+          if (!session.account) {
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Authentication error: Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+          
+          // Execute the stablecoin deposit transaction
+          const txResult = await instance.sendTransaction(
+            session.account,
+            (txb: Transaction) => {
+              txb.setSender(session.account!.userAddr);
+              
+              txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_circle::deposit_stablecoin_to_custody`,
+                arguments: [
+                  txb.object(walletId),
+                  txb.object(coinObjectId),
+                  txb.object("0x6") // Clock object
+                ],
+                typeArguments: [stablecoinType]
+              });
+            }
+          );
+          
+          return res.status(200).json({ 
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+        } catch (error) {
+          console.error('Error depositing stablecoin:', error);
+          
+          // Handle authentication errors
+          if (error instanceof Error && 
+              (error.message.includes('proof verify failed') ||
+               error.message.includes('Session expired'))) {
+            
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            
+            return res.status(401).json({
+              error: 'Authentication error: Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+          
+          return res.status(500).json({ 
+            error: error instanceof Error ? error.message : 'Failed to deposit stablecoin'
+          });
+        }
+        break;
 
       default:
         return res.status(400).json({ error: 'Unknown action' });

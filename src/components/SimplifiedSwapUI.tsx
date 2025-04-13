@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import { swapService, SwapQuote } from '../services/swap-service';
-import { ArrowDown, Settings, AlertCircle, Info } from 'lucide-react';
+import { ArrowDown, Settings, AlertCircle, Info, CheckCircle2 } from 'lucide-react';
 import { priceService } from '../services/price-service';
 
 interface SimplifiedSwapUIProps {
@@ -33,6 +33,13 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
   const [effectiveRate, setEffectiveRate] = useState<number | null>(null);
   const [paymentStatus, setPaymentStatus] = useState<'underpaid' | 'overpaid' | 'exact' | null>(null);
   const [suggestedAmount, setSuggestedAmount] = useState<number | null>(null);
+  
+  // New state variables for two-transaction approach
+  const [transactionStep, setTransactionStep] = useState<'swap' | 'deposit' | 'complete'>('swap');
+  const [swapTxDigest, setSwapTxDigest] = useState<string | null>(null);
+  const [swappedCoinId, setSwappedCoinId] = useState<string | null>(null);
+  const [depositProcessing, setDepositProcessing] = useState<boolean>(false);
+  const [retryCount, setRetryCount] = useState<number>(0);
 
   // Determine the required amount based on whether security deposit is paid
   const requiredAmount = securityDepositPaid ? contributionAmount : securityDepositAmount;
@@ -341,8 +348,9 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
     }
   }, [suiPrice]);
 
-  const handleSwapAndDeposit = async () => {
-    if (!swapQuote || !account || !walletId || !circleId || !amount) {
+  // First transaction: Execute just the swap
+  const handleSwap = async () => {
+    if (!swapQuote || !account || !amount) {
       toast.error('Please enter an amount to swap');
       return;
     }
@@ -351,8 +359,8 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
     
     try {
       // Clear any existing toasts first
-      toast.dismiss('swap-deposit');
-      toast.loading('Processing swap using Cetus...', { id: 'swap-deposit' });
+      toast.dismiss('swap-step');
+      toast.loading('Processing SUI to USDC swap...', { id: 'swap-step' });
       
       // Calculate minimum amount out based on slippage
       const minAmountOut = Math.max(
@@ -360,27 +368,22 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
         Math.floor(swapQuote.amountOut * (1 - slippage / 100))
       );
       
-      console.log('Sending swap request with parameters:', {
-        circleId,
-        walletId,
+      console.log('Sending swap-only request with parameters:', {
         suiAmount: parseFloat(amount),
         minAmountOut,
-        isSecurityDeposit: !securityDepositPaid,
-        swapMethod: 'Cetus'
+        slippage,
       });
       
-      // Use zkLogin API to execute the swap and deposit through Cetus
+      // Use zkLogin API to execute just the swap (without deposit)
       const response = await fetch('/api/zkLogin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'swapAndDepositCetus', // Using Cetus pool under the hood
+          action: 'executeSwapOnly', // New API action for swap only
           account,
-          circleId,
-          walletId,
           suiAmount: parseFloat(amount),
           minAmountOut,
-          isSecurityDeposit: !securityDepositPaid,
+          slippage: slippage,
         }),
       });
       
@@ -391,7 +394,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
         
         // Check if we need to reauthenticate
         if (result.requireRelogin) {
-          toast.error('Your session has expired. Please login again.', { id: 'swap-deposit' });
+          toast.error('Your session has expired. Please login again.', { id: 'swap-step' });
           
           // Redirect to login page after a short delay
           setTimeout(() => {
@@ -424,36 +427,180 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
         throw new Error(errorMessage);
       }
       
-      toast.success(
-        !securityDepositPaid 
-          ? 'Security deposit paid using Cetus swap!' 
-          : 'Contribution made using Cetus swap!', 
-        { id: 'swap-deposit' }
-      );
-      console.log('Transaction executed with digest:', result.digest);
+      toast.success('SUI to USDC swap completed successfully!', { id: 'swap-step' });
+      console.log('Swap transaction executed with digest:', result.digest);
       
-      // Reset form
-      setAmount('');
-      setReceiveAmount('0.0');
-      setSwapQuote(null);
+      // Store the swap transaction digest and coin ID for the next step
+      setSwapTxDigest(result.digest);
+      setSwappedCoinId(result.createdCoinId); // API should return the created USDC coin's ID
       
-      // Notify parent component
-      if (onComplete) {
-        setTimeout(() => {
-          onComplete();
-        }, 500);
-      }
+      // Move to the deposit step
+      setTransactionStep('deposit');
     } catch (error) {
-      console.error('Error in swap and deposit:', error);
+      console.error('Error in swap step:', error);
       
       toast.error(
         error instanceof Error 
           ? `Swap failed: ${error.message}` 
           : 'Swap failed. Please try again.',
-        { id: 'swap-deposit' }
+        { id: 'swap-step' }
       );
     } finally {
       setProcessing(false);
+    }
+  };
+  
+  // Second transaction: Deposit the USDC to the custody wallet
+  const handleDeposit = async () => {
+    if (!account || !walletId || !circleId) {
+      toast.error('Missing required information for deposit');
+      console.error('Missing required info:', { 
+        hasAccount: !!account, 
+        hasWalletId: !!walletId, 
+        hasCircleId: !!circleId 
+      });
+      return;
+    }
+
+    // Check if we have a valid swappedCoinId
+    if (!swappedCoinId) {
+      console.error('Missing swapped coin ID for deposit step');
+      
+      if (retryCount > 0) {
+        toast.error(
+          'Still unable to find the swapped coin. Please go back to the swap step and try again.',
+          { id: 'deposit-step', duration: 5000 }
+        );
+      } else {
+        toast.error(
+          'Could not find the swapped USDC coin. Please wait a moment and try again.',
+          { id: 'deposit-step', duration: 3000 }
+        );
+      }
+      
+      setRetryCount(prev => prev + 1);
+      return;
+    }
+
+    // Validate the coin ID format
+    if (!swappedCoinId.match(/^0x[a-fA-F0-9]{40,64}$/)) {
+      console.error('Invalid coin ID format:', swappedCoinId);
+      toast.error('The swapped coin ID appears to be invalid. Please try again.', 
+        { id: 'deposit-step' });
+      return;
+    }
+
+    setDepositProcessing(true);
+    
+    try {
+      // Clear any existing toasts first
+      toast.dismiss('deposit-step');
+      toast.loading('Depositing USDC to custody wallet...', { id: 'deposit-step' });
+      
+      console.log('Sending deposit request with parameters:', {
+        coinObjectId: swappedCoinId,
+        walletId,
+        stablecoinType: USDC_COIN_TYPE,
+        isSecurityDeposit: !securityDepositPaid,
+      });
+      
+      // Use zkLogin API to deposit the USDC
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'depositStablecoin',
+          account,
+          walletId,
+          coinObjectId: swappedCoinId,
+          stablecoinType: USDC_COIN_TYPE,
+        }),
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        console.error('Deposit failed:', result);
+        
+        // Check if we need to reauthenticate
+        if (result.requireRelogin) {
+          toast.error('Your session has expired. Please login again.', { id: 'deposit-step' });
+          
+          // Redirect to login page after a short delay
+          setTimeout(() => {
+            window.location.href = '/';
+          }, 2000);
+          return;
+        }
+        
+        // Check for specific error related to coin object not found
+        if (result.error && (
+            result.error.includes('object not found') ||
+            result.error.includes('Object does not exist') ||
+            result.error.includes('Invalid object id') ||
+            result.error.includes('Coin object not found')
+        )) {
+          toast.error(
+            'USDC coin not found. The blockchain might still be processing the swap transaction. Please wait a moment and try again.',
+            { id: 'deposit-step', duration: 5000 }
+          );
+          setRetryCount(prev => prev + 1);
+          setDepositProcessing(false);
+          return;
+        }
+        
+        throw new Error(result.error || 'Failed to deposit USDC');
+      }
+      
+      // Success path
+      toast.success(
+        !securityDepositPaid 
+          ? 'Security deposit paid successfully!' 
+          : 'Contribution made successfully!', 
+        { id: 'deposit-step' }
+      );
+      console.log('Deposit transaction executed with digest:', result.digest);
+      
+      // Move to the complete step
+      setTransactionStep('complete');
+      
+      // Reset form and notify parent after completion
+      setTimeout(() => {
+        setAmount('');
+        setReceiveAmount('0.0');
+        setSwapQuote(null);
+        setSwapTxDigest(null);
+        setSwappedCoinId(null);
+        setRetryCount(0);
+        
+        // Reset back to swap step for next transaction
+        setTransactionStep('swap');
+        
+        // Notify parent component
+        if (onComplete) {
+          onComplete();
+        }
+      }, 3000);
+    } catch (error) {
+      console.error('Error in deposit step:', error);
+      
+      toast.error(
+        error instanceof Error 
+          ? `Deposit failed: ${error.message}` 
+          : 'Deposit failed. Please try again.',
+        { id: 'deposit-step' }
+      );
+    } finally {
+      setDepositProcessing(false);
+    }
+  };
+
+  // Replace the original handleSwapAndDeposit with a function that calls the appropriate handler
+  const handleSwapAndDeposit = async () => {
+    if (transactionStep === 'swap') {
+      await handleSwap();
+    } else if (transactionStep === 'deposit') {
+      await handleDeposit();
     }
   };
 
@@ -504,27 +651,101 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
     return null;
   };
 
-  // Get button text based on payment type
+  // Render transaction step indicator
+  const renderTransactionSteps = () => {
+    return (
+      <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-3">
+        <div className="flex items-center">
+          <div className={`flex items-center justify-center w-6 h-6 rounded-full mr-2 ${
+            transactionStep === 'swap' 
+              ? 'bg-blue-600 text-white' 
+              : transactionStep === 'deposit' || transactionStep === 'complete' 
+                ? 'bg-green-500 text-white' 
+                : 'bg-gray-700 text-gray-300'
+          }`}>
+            {transactionStep === 'swap' ? '1' : <CheckCircle2 size={14} />}
+          </div>
+          <span className={transactionStep === 'swap' ? 'text-white font-medium' : 'text-gray-300'}>Swap SUI to USDC</span>
+        </div>
+        
+        <div className="w-8 h-0.5 bg-gray-700"></div>
+        
+        <div className="flex items-center">
+          <div className={`flex items-center justify-center w-6 h-6 rounded-full mr-2 ${
+            transactionStep === 'deposit' 
+              ? 'bg-blue-600 text-white' 
+              : transactionStep === 'complete' 
+                ? 'bg-green-500 text-white' 
+                : 'bg-gray-700 text-gray-300'
+          }`}>
+            {transactionStep === 'deposit' ? '2' : transactionStep === 'complete' ? <CheckCircle2 size={14} /> : '2'}
+          </div>
+          <span className={transactionStep === 'deposit' ? 'text-white font-medium' : 'text-gray-300'}>Deposit to Circle</span>
+        </div>
+      </div>
+    );
+  };
+
+  // Get button text based on current transaction step
   const getButtonText = () => {
-    if (processing) {
-      return (
-        <span className="flex items-center justify-center">
-          <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-          </svg>
-          Processing...
-        </span>
-      );
+    if (transactionStep === 'swap') {
+      if (processing) {
+        return (
+          <span className="flex items-center justify-center">
+            <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            Swapping SUI to USDC...
+          </span>
+        );
+      }
+
+      if (!swapQuote || parseFloat(amount) <= 0) {
+        return "Enter an amount";
+      }
+
+      return "Swap SUI to USDC";
+    } else if (transactionStep === 'deposit') {
+      if (depositProcessing) {
+        return (
+          <span className="flex items-center justify-center">
+            <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            Depositing USDC...
+          </span>
+        );
+      }
+
+      return securityDepositPaid 
+        ? "Deposit as Contribution" 
+        : "Deposit as Security Deposit";
     }
 
-    if (!swapQuote || parseFloat(amount) <= 0) {
-      return "Enter an amount";
-    }
+    return "Processing...";
+  };
 
-    return securityDepositPaid 
-      ? "Swap and Contribute" 
-      : "Swap and Pay Security Deposit";
+  // Render the success message when transaction is complete
+  const renderCompletionMessage = () => {
+    if (transactionStep !== 'complete') return null;
+
+    return (
+      <div className="bg-green-900/30 border border-green-600/30 rounded-lg p-4 mb-4">
+        <div className="flex items-center space-x-3">
+          <CheckCircle2 size={24} className="text-green-400" />
+          <div>
+            <h3 className="font-medium text-green-400">Transaction Complete!</h3>
+            <p className="text-sm text-green-300">
+              {securityDepositPaid 
+                ? 'Your contribution was successfully processed.' 
+                : 'Your security deposit was successfully processed.'}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -546,6 +767,12 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Transaction steps indicator */}
+      {renderTransactionSteps()}
+      
+      {/* Completion message */}
+      {renderCompletionMessage()}
 
       {/* Settings panel */}
       {showSettings && (
@@ -571,120 +798,159 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
         </div>
       )}
 
-      {/* Payment info banner */}
-      {!securityDepositPaid && (
+      {/* Step-specific info banners */}
+      {transactionStep === 'swap' && !securityDepositPaid && (
         <div className="bg-[#1E1E2E] border border-blue-600/30 rounded-lg p-3 mb-3 text-sm">
           <div className="flex items-start space-x-2">
             <Info size={16} className="text-blue-400 flex-shrink-0 mt-0.5" />
-            <span>You need to pay a security deposit before contributing. This will be swapped to USDC and held in the circle.</span>
+            <span>Step 1: Swap your SUI to USDC for security deposit. After completing this step, you&apos;ll need to deposit the USDC.</span>
+          </div>
+        </div>
+      )}
+      
+      {transactionStep === 'deposit' && (
+        <div className="bg-[#1E1E2E] border border-blue-600/30 rounded-lg p-3 mb-3 text-sm">
+          <div className="flex items-start space-x-2">
+            <Info size={16} className="text-blue-400 flex-shrink-0 mt-0.5" />
+            <span>Step 2: Deposit the swapped USDC to the circle&apos;s custody wallet as {securityDepositPaid ? 'your contribution' : 'security deposit'}.</span>
           </div>
         </div>
       )}
 
-      {/* Required amount info */}
-      {requiredAmount > 0 && (
-        <div className="bg-[#1A1A1A] rounded-lg p-3 mb-3 text-sm">
-          <div className="flex justify-between items-center">
-            <span className="text-gray-400">Required {paymentType}:</span>
-            <span>{requiredAmount} SUI</span>
+      {/* Form fields - only shown in swap step */}
+      {transactionStep === 'swap' && (
+        <>
+          {/* Required amount info */}
+          {requiredAmount > 0 && (
+            <div className="bg-[#1A1A1A] rounded-lg p-3 mb-3 text-sm">
+              <div className="flex justify-between items-center">
+                <span className="text-gray-400">Required {paymentType}:</span>
+                <span>{requiredAmount} SUI</span>
+              </div>
+              {suggestedAmount && (
+                <div className="flex justify-between items-center mt-1">
+                  <span className="text-gray-400">Suggested amount (with {slippage}% slippage + gas):</span>
+                  <div className="flex items-center">
+                    <span>{suggestedAmount.toFixed(6)} SUI</span>
+                    <button
+                      onClick={handleSuggestedClick}
+                      className="ml-2 bg-blue-600 hover:bg-blue-700 text-xs px-2 py-1 rounded"
+                    >
+                      Use
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* You Pay section */}
+          <div className="bg-[#1A1A1A] rounded-lg p-4 mb-2">
+            <div className="flex justify-between text-gray-400 mb-1">
+              <span>You Pay</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <input
+                type="number"
+                value={amount}
+                onChange={handleAmountChange}
+                placeholder="0.0"
+                className="bg-transparent text-2xl outline-none w-full"
+                disabled={processing}
+              />
+              <div className="flex flex-col items-end">
+                <div className="flex items-center bg-[#333333] py-1 px-3 rounded-lg mb-1">
+                  <span className="font-medium">SUI</span>
+                </div>
+                <div className="flex space-x-1">
+                  <button 
+                    onClick={handleHalfClick}
+                    className="bg-[#2D2D2D] hover:bg-[#444444] text-xs px-2 py-1 rounded"
+                  >
+                    HALF
+                  </button>
+                  <button 
+                    onClick={handleMaxClick}
+                    className="bg-[#2D2D2D] hover:bg-[#444444] text-xs px-2 py-1 rounded"
+                  >
+                    MAX
+                  </button>
+                </div>
+              </div>
+            </div>
+            {renderPaymentStatus()}
           </div>
-          {suggestedAmount && (
-            <div className="flex justify-between items-center mt-1">
-              <span className="text-gray-400">Suggested amount (with {slippage}% slippage + gas):</span>
-              <div className="flex items-center">
-                <span>{suggestedAmount.toFixed(6)} SUI</span>
-                <button
-                  onClick={handleSuggestedClick}
-                  className="ml-2 bg-blue-600 hover:bg-blue-700 text-xs px-2 py-1 rounded"
-                >
-                  Use
-                </button>
+
+          {/* Arrow */}
+          <div className="flex justify-center -my-1 relative z-10">
+            <div className="bg-[#121212] p-2 rounded-full">
+              <ArrowDown size={16} className="text-gray-400" />
+            </div>
+          </div>
+
+          {/* You Receive section */}
+          <div className="bg-[#1A1A1A] rounded-lg p-4 mt-2">
+            <div className="flex justify-between text-gray-400 mb-1">
+              <span>You Receive</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <input
+                type="text"
+                value={receiveAmount}
+                readOnly
+                className="bg-transparent text-2xl outline-none w-full"
+              />
+              <div className="flex items-center bg-[#333333] py-1 px-3 rounded-lg">
+                <span className="font-medium">USDC</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Price details */}
+          {swapQuote && (
+            <div className="mt-4 bg-transparent px-1">
+              <div className="flex justify-between items-center text-sm text-gray-400 mb-1">
+                <span>Rate</span>
+                <span>1 SUI = {effectiveRate ? effectiveRate.toFixed(4) : '0.00'} USDC</span>
+              </div>
+              <div className="flex justify-between items-center text-sm text-gray-400">
+                <span>Price Impact</span>
+                {renderPriceImpact()}
+              </div>
+              <div className="flex justify-between items-center text-sm text-gray-400 mt-1">
+                <span>Network Fee</span>
+                <span>~{ESTIMATED_GAS_FEE.toFixed(6)} SUI</span>
+              </div>
+              <div className="flex justify-between items-center text-sm text-gray-400 mt-1">
+                <span>Swap Provider</span>
+                <span className="text-blue-400">Cetus</span>
               </div>
             </div>
           )}
-        </div>
+        </>
       )}
 
-      {/* You Pay section */}
-      <div className="bg-[#1A1A1A] rounded-lg p-4 mb-2">
-        <div className="flex justify-between text-gray-400 mb-1">
-          <span>You Pay</span>
-        </div>
-        <div className="flex justify-between items-center">
-          <input
-            type="number"
-            value={amount}
-            onChange={handleAmountChange}
-            placeholder="0.0"
-            className="bg-transparent text-2xl outline-none w-full"
-            disabled={processing}
-          />
-          <div className="flex flex-col items-end">
-            <div className="flex items-center bg-[#333333] py-1 px-3 rounded-lg mb-1">
-              <span className="font-medium">SUI</span>
-            </div>
-            <div className="flex space-x-1">
-              <button 
-                onClick={handleHalfClick}
-                className="bg-[#2D2D2D] hover:bg-[#444444] text-xs px-2 py-1 rounded"
-              >
-                HALF
-              </button>
-              <button 
-                onClick={handleMaxClick}
-                className="bg-[#2D2D2D] hover:bg-[#444444] text-xs px-2 py-1 rounded"
-              >
-                MAX
-              </button>
-            </div>
+      {/* Transaction details for deposit step */}
+      {transactionStep === 'deposit' && (
+        <div className="bg-[#1A1A1A] rounded-lg p-4 mb-4">
+          <div className="flex justify-between items-center text-sm text-gray-400 mb-2">
+            <span>Swap Transaction:</span>
+            <a 
+              href={`https://explorer.sui.io/txblock/${swapTxDigest}?network=testnet`} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="text-blue-400 hover:underline truncate max-w-[180px]"
+            >
+              {swapTxDigest ? `${swapTxDigest.substring(0, 8)}...` : 'Loading...'}
+            </a>
           </div>
-        </div>
-        {renderPaymentStatus()}
-      </div>
-
-      {/* Arrow */}
-      <div className="flex justify-center -my-1 relative z-10">
-        <div className="bg-[#121212] p-2 rounded-full">
-          <ArrowDown size={16} className="text-gray-400" />
-        </div>
-      </div>
-
-      {/* You Receive section */}
-      <div className="bg-[#1A1A1A] rounded-lg p-4 mt-2">
-        <div className="flex justify-between text-gray-400 mb-1">
-          <span>You Receive</span>
-        </div>
-        <div className="flex justify-between items-center">
-          <input
-            type="text"
-            value={receiveAmount}
-            readOnly
-            className="bg-transparent text-2xl outline-none w-full"
-          />
-          <div className="flex items-center bg-[#333333] py-1 px-3 rounded-lg">
-            <span className="font-medium">USDC</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Price details */}
-      {swapQuote && (
-        <div className="mt-4 bg-transparent px-1">
-          <div className="flex justify-between items-center text-sm text-gray-400 mb-1">
-            <span>Rate</span>
-            <span>1 SUI = {effectiveRate ? effectiveRate.toFixed(4) : '0.00'} USDC</span>
+          <div className="flex justify-between items-center text-sm text-gray-400 mb-2">
+            <span>Swapped Amount:</span>
+            <span className="font-medium text-white">{receiveAmount} USDC</span>
           </div>
           <div className="flex justify-between items-center text-sm text-gray-400">
-            <span>Price Impact</span>
-            {renderPriceImpact()}
-          </div>
-          <div className="flex justify-between items-center text-sm text-gray-400 mt-1">
-            <span>Network Fee</span>
-            <span>~{ESTIMATED_GAS_FEE.toFixed(6)} SUI</span>
-          </div>
-          <div className="flex justify-between items-center text-sm text-gray-400 mt-1">
-            <span>Swap Provider</span>
-            <span className="text-blue-400">Cetus</span>
+            <span>Destination:</span>
+            <span className="font-medium text-white">Circle Custody Wallet</span>
           </div>
         </div>
       )}
@@ -692,11 +958,15 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
       {/* Action button */}
       <button
         onClick={handleSwapAndDeposit}
-        disabled={processing || !swapQuote || parseFloat(amount) <= 0}
+        disabled={
+          (transactionStep === 'swap' && (processing || !swapQuote || parseFloat(amount) <= 0)) ||
+          (transactionStep === 'deposit' && depositProcessing) ||
+          transactionStep === 'complete'
+        }
         className={`w-full py-3 rounded-lg mt-4 text-center font-medium ${
-          !swapQuote || parseFloat(amount) <= 0 
+          (transactionStep === 'swap' && (!swapQuote || parseFloat(amount) <= 0)) || transactionStep === 'complete'
             ? 'bg-[#2D2D2D] text-gray-500 cursor-not-allowed' 
-            : processing 
+            : processing || depositProcessing 
               ? 'bg-blue-800 text-gray-300 cursor-wait' 
               : 'bg-[#4E60FF] hover:bg-[#3A4DE7] text-white'
         }`}
