@@ -8,6 +8,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
 import { PACKAGE_ID } from '../../../../services/circle-service';
 import SimplifiedSwapUI from '../../../../components/SimplifiedSwapUI';
+import { getCoinType } from '../../../../config/constants';
 
 // Constants for transaction calculations
 const ESTIMATED_GAS_FEE = 0.00021; // Gas fee in SUI
@@ -112,8 +113,15 @@ export default function ContributeToCircle() {
   const [showDirectDepositOption, setShowDirectDepositOption] = useState<boolean>(false);
   const [directDepositProcessing, setDirectDepositProcessing] = useState<boolean>(false);
   
-  // USDC coin type
-  const USDC_COIN_TYPE = '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC';
+  // USDC coin type - using constants to support different environments
+  const USDC_COIN_TYPE = getCoinType('USDC');
+
+  // Add these new state variables to track SUI balance
+  const [custodySuiBalance, setCustodySuiBalance] = useState<number | null>(null);
+  const [fetchingSuiBalance, setFetchingSuiBalance] = useState(false);
+  // Add separate states for SUI security deposits and contribution funds
+  const [suiSecurityDepositBalance, setSuiSecurityDepositBalance] = useState<number | null>(null);
+  const [suiContributionBalance, setSuiContributionBalance] = useState<number | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -187,6 +195,170 @@ export default function ContributeToCircle() {
     // re-run it every time the entire circle object changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [circle?.id, circle?.walletId]);
+
+  // Add effect to fetch SUI balance
+  useEffect(() => {
+    if (circle?.walletId) {
+      fetchCustodyWalletSuiBalance();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [circle?.walletId]);
+
+  useEffect(() => {
+    if (circle) {
+      fetchUserWalletInfo();
+      fetchCustodyWalletSuiBalance();
+      fetchCustodyWalletBalance();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [circle]);
+
+  // Fix type assertion issues in the function
+  const fetchCustodyWalletSuiBalance = async () => {
+    if (!circle?.walletId) return;
+    
+    setFetchingSuiBalance(true);
+    try {
+      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      
+      // Get events as the most reliable way to find SUI balance
+      const coinDepositedEvents = await client.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_custody::CoinDeposited`
+        },
+        limit: 50 // Increase limit to capture more history
+      });
+      
+      let suiBalance = 0;
+      let securityDepositSui = 0;
+      let contributionSui = 0;
+      
+      // First, get CustodyDeposited events to identify security deposits
+      const custodyEvents = await client.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited`
+        },
+        limit: 100 // Increase limit to capture more history
+      });
+      
+      // Process CoinDeposited events first to get the total balance
+      for (const event of coinDepositedEvents.data) {
+        if (event.parsedJson && 
+            typeof event.parsedJson === 'object' && 
+            'wallet_id' in event.parsedJson && 
+            'coin_type' in event.parsedJson &&
+            'new_balance' in event.parsedJson) {
+            
+          const parsedEvent = event.parsedJson as {
+            wallet_id: string;
+            coin_type: string;
+            new_balance: string;
+            amount: string;
+          };
+          
+          if (parsedEvent.wallet_id === circle.walletId && 
+              parsedEvent.coin_type === 'sui') {
+            // Get the total balance from the most recent event
+            const balance = Number(parsedEvent.new_balance) / 1e9;
+            if (balance > suiBalance) {
+              suiBalance = balance;
+            }
+          }
+        }
+      }
+      
+      // CRITICAL FIX: First assume ALL funds are security deposits
+      // until we can definitively identify contribution funds
+      securityDepositSui = suiBalance;
+      contributionSui = 0;
+      
+      // Build a map of all security deposit events for tracking
+      const securityDepositMap = new Map();
+      
+      // Process security deposit events separately
+      for (const event of custodyEvents.data) {
+        if (event.parsedJson && 
+            typeof event.parsedJson === 'object' && 
+            'circle_id' in event.parsedJson &&
+            'operation_type' in event.parsedJson &&
+            'member' in event.parsedJson &&
+            'amount' in event.parsedJson &&
+            event.parsedJson.circle_id === circle.id) {
+          
+          const parsedEvent = event.parsedJson as {
+            operation_type: number | string;
+            amount: string;
+            member: string;
+          };
+          
+          // Operation type 3 indicates security deposit
+          const opType = typeof parsedEvent.operation_type === 'string' ? 
+            parseInt(parsedEvent.operation_type) : parsedEvent.operation_type;
+            
+          if (opType === 3) {
+            // This is a security deposit
+            const amount = Number(parsedEvent.amount) / 1e9;
+            const member = parsedEvent.member;
+            
+            // Add to our tracking map
+            if (securityDepositMap.has(member)) {
+              securityDepositMap.set(member, securityDepositMap.get(member) + amount);
+            } else {
+              securityDepositMap.set(member, amount);
+            }
+            
+            console.log(`Found security deposit SUI from user ${member}: ${amount}`);
+          }
+        }
+      }
+      
+      // Calculate total security deposits from the map
+      let totalSecurityDeposits = 0;
+      for (const [, amount] of securityDepositMap.entries()) {
+        totalSecurityDeposits += amount;
+      }
+      
+      console.log(`Total security deposits across all members: ${totalSecurityDeposits} SUI`);
+      
+      // Safety check: ensure we don't exceed total balance
+      if (totalSecurityDeposits > suiBalance) {
+        console.log(`Warning: Security deposits (${totalSecurityDeposits}) exceed total balance (${suiBalance}). Capping at total balance.`);
+        totalSecurityDeposits = suiBalance;
+      }
+      
+      // Update security deposit amount
+      securityDepositSui = totalSecurityDeposits;
+      
+      // Set contribution as remainder or zero if somehow negative 
+      // (should always be zero in this case since we're treating all funds as security deposits)
+      contributionSui = Math.max(0, suiBalance - securityDepositSui);
+      
+      // Set all balances
+      setCustodySuiBalance(suiBalance);
+      setSuiSecurityDepositBalance(securityDepositSui);
+      setSuiContributionBalance(contributionSui);
+      
+      console.log('SUI balances breakdown:', {
+        total: suiBalance,
+        securityDeposit: securityDepositSui,
+        contribution: contributionSui
+      });
+    } catch (error) {
+      console.error('Error fetching custody wallet SUI balance:', error);
+      setCustodySuiBalance(null);
+      setSuiSecurityDepositBalance(null);
+      setSuiContributionBalance(null);
+    } finally {
+      setFetchingSuiBalance(false);
+    }
+  };
+
+  // Function to refresh all data
+  const refreshData = () => {
+    fetchUserWalletInfo();
+    fetchCustodyWalletBalance();
+    fetchCustodyWalletSuiBalance();
+  };
 
   const fetchCircleDetails = async () => {
     if (!id) return;
@@ -464,7 +636,7 @@ export default function ContributeToCircle() {
         console.log('User USDC balance:', totalUsdcBalance);
         
         // Enable direct deposit option if user has enough USDC
-        if (totalUsdcBalance > 0) {
+        if (totalUsdcBalance > 0 && circle.autoSwapEnabled) {
           // For security deposit
           if (!userDepositPaid && circle.securityDepositUsd > 0 && totalUsdcBalance >= circle.securityDepositUsd) {
             setShowDirectDepositOption(true);
@@ -615,12 +787,12 @@ export default function ContributeToCircle() {
       
       // Third method (fallback): Check USDC deposit events if we haven't found a deposit yet
       if (!depositPaid && circle.walletId) {
-        console.log('Checking custody wallet for deposit events...');
+        console.log('Checking custody wallet for stablecoin deposit events...');
         
         // Query events for deposits made by this user to the custody wallet
         const custodyDepositEvents = await client.queryEvents({
           query: {
-            MoveEventType: `${PACKAGE_ID}::njangi_circles::CustodyDeposited`
+            MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited`
           },
           limit: 50
         });
@@ -633,21 +805,100 @@ export default function ContributeToCircle() {
               wallet_id?: string;
               member?: string;
               amount?: string;
+              operation_type?: number | string;
             };
             
             console.log('Found custody deposit event:', eventData);
             
             // Check if this deposit was made by our user to our circle's wallet
+            // Operation type 3 indicates security deposit
             if (eventData.circle_id === circle.id && 
                 eventData.wallet_id === circle.walletId && 
                 eventData.member === userAddress && 
-                eventData.amount) {
+                eventData.amount &&
+                (eventData.operation_type === 3 || eventData.operation_type === "3")) {
               // Check if the amount is at least the required security deposit (with some margin for gas)
-              const depositAmount = Number(eventData.amount) / 1e9;
-              if (depositAmount >= circle.securityDeposit * 0.95) { // 5% margin for gas
+              const depositAmount = Number(eventData.amount) / 1e6; // Use 1e6 for USDC (6 decimals)
+              if (depositAmount >= circle.securityDepositUsd * 0.95) { // 5% margin for gas
                 depositPaid = true;
-                console.log('User deposit found in custody events:', depositAmount, 'SUI');
+                console.log('User USDC deposit found in custody events:', depositAmount, 'USDC');
                 break;
+              }
+            }
+          }
+        }
+        
+        // NEW: Check CoinDeposited events that have stablecoin deposits
+        if (!depositPaid) {
+          const coinDepositedEvents = await client.queryEvents({
+            query: {
+              MoveEventType: `${PACKAGE_ID}::njangi_custody::CoinDeposited`
+            },
+            limit: 50
+          });
+          
+          for (const event of coinDepositedEvents.data) {
+            if (event.parsedJson && typeof event.parsedJson === 'object') {
+              const eventData = event.parsedJson as {
+                circle_id?: string;
+                wallet_id?: string;
+                member?: string;
+                amount?: string;
+                coin_type?: string;
+              };
+              
+              console.log('Found coin deposited event:', eventData);
+              
+              // Check if this is a stablecoin deposit made by our user to our circle's wallet
+              if (eventData.circle_id === circle.id && 
+                  eventData.wallet_id === circle.walletId && 
+                  eventData.member === userAddress && 
+                  eventData.amount &&
+                  eventData.coin_type === 'stablecoin') {
+                // Check if the amount is at least the required security deposit (with some margin for gas)
+                const depositAmount = Number(eventData.amount) / 1e6; // 6 decimals for USDC
+                if (depositAmount >= circle.securityDepositUsd * 0.95) { // 5% margin for gas
+                  depositPaid = true;
+                  console.log('User stablecoin deposit found in CoinDeposited events:', depositAmount, 'USDC');
+                  break;
+                }
+              }
+            }
+          }
+        }
+        
+        // Also check StablecoinDeposited events as another source
+        if (!depositPaid) {
+          const stablecoinEvents = await client.queryEvents({
+            query: {
+              MoveEventType: `${PACKAGE_ID}::njangi_circles::StablecoinDeposited`
+            },
+            limit: 50
+          });
+          
+          for (const event of stablecoinEvents.data) {
+            if (event.parsedJson && typeof event.parsedJson === 'object') {
+              const eventData = event.parsedJson as {
+                circle_id?: string;
+                wallet_id?: string;
+                member?: string;
+                amount?: string;
+              };
+              
+              console.log('Found StablecoinDeposited event:', eventData);
+              
+              // Check if this is a stablecoin deposit made by our user to our circle's wallet
+              if (eventData.circle_id === circle.id && 
+                  eventData.wallet_id === circle.walletId && 
+                  eventData.member === userAddress && 
+                  eventData.amount) {
+                // Check if the amount is at least the required security deposit (with some margin for gas)
+                const depositAmount = Number(eventData.amount) / 1e6;
+                if (depositAmount >= circle.securityDepositUsd * 0.95) {
+                  depositPaid = true;
+                  console.log('User stablecoin deposit found in StablecoinDeposited events:', depositAmount, 'USDC');
+                  break;
+                }
               }
             }
           }
@@ -1028,151 +1279,137 @@ export default function ContributeToCircle() {
       let newSecurityDepositBalance = 0;
       let newContributionBalance = 0;
       
-      // First get total balance from StablecoinDeposited events
-      const stablecoinEvents = await client.queryEvents({
+      // First try to get the balance from CoinDeposited events with coin_type "stablecoin"
+      const coinDepositedEvents = await client.queryEvents({
         query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circles::StablecoinDeposited`
+          MoveEventType: `${PACKAGE_ID}::njangi_custody::CoinDeposited`
         },
-        limit: 10
+        limit: 20
       });
       
       // Find the most recent event for this wallet to get total balance
-      for (const event of stablecoinEvents.data) {
+      for (const event of coinDepositedEvents.data) {
         if (event.parsedJson && 
             typeof event.parsedJson === 'object' &&
-            'wallet_id' in event.parsedJson &&
-            event.parsedJson.wallet_id === circle.walletId &&
+            'wallet_id' in event.parsedJson && 
+            'coin_type' in event.parsedJson &&
             'new_balance' in event.parsedJson) {
-          const balanceInMicroUnits = Number(event.parsedJson.new_balance);
-          const balanceInDollars = balanceInMicroUnits / 1e6; // Convert from micro units to dollars
-          setCustodyStablecoinBalance(balanceInDollars);
-          newBalance = balanceInDollars;
-          console.log('Custody stablecoin balance:', balanceInDollars, 'USDC');
-          break;
-        }
-      }
-      
-      // Now query different event types to categorize funds
-      // 1. Get security deposit events - check both event types
-      
-      // First check SecurityDepositReceived events (older version)
-      const securityDepositEvents = await client.queryEvents({
-        query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circles::SecurityDepositReceived`
-        },
-        limit: 50
-      });
-      
-      // Then check CustodyDeposited events (newer version)
-      const custodyDepositEvents = await client.queryEvents({
-        query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circles::CustodyDeposited`
-        },
-        limit: 50
-      });
-      
-      // Calculate security deposit balance from SecurityDepositReceived events
-      console.log('Processing SecurityDepositReceived events:', securityDepositEvents.data);
-      for (const event of securityDepositEvents.data) {
-        if (event.parsedJson && 
-            typeof event.parsedJson === 'object' &&
-            'circle_id' in event.parsedJson &&
-            event.parsedJson.circle_id === circle.id &&
-            'amount' in event.parsedJson) {
-          const depositAmount = Number(event.parsedJson.amount) / 1e6; // Convert from micro units
-          newSecurityDepositBalance += depositAmount;
-          console.log('Found SecurityDepositReceived event for this circle:', {
-            circleId: event.parsedJson.circle_id,
-            amount: depositAmount,
-            runningTotal: newSecurityDepositBalance
-          });
-        }
-      }
-      
-      // Calculate security deposit balance from CustodyDeposited events
-      console.log('Processing CustodyDeposited events:', custodyDepositEvents.data);
-      for (const event of custodyDepositEvents.data) {
-        if (event.parsedJson && 
-            typeof event.parsedJson === 'object' &&
-            'circle_id' in event.parsedJson &&
-            event.parsedJson.circle_id === circle.id &&
-            'amount' in event.parsedJson &&
-            'operation_type' in event.parsedJson) {
-          console.log('Found CustodyDeposited event for this circle:', {
-            circleId: event.parsedJson.circle_id,
-            amount: Number(event.parsedJson.amount) / 1e6,
-            operationType: event.parsedJson.operation_type
-          });
+            
+          const parsedEvent = event.parsedJson as {
+            wallet_id: string;
+            coin_type: string;
+            new_balance: string;
+            amount: string;
+          };
           
-          // Operation type 3 indicates security deposit
-          // Check for both string "3" and number 3 since JSON parsing may vary
-          if (event.parsedJson.operation_type === 3 || 
-              event.parsedJson.operation_type === "3" || 
-              Number(event.parsedJson.operation_type) === 3) {
-            const depositAmount = Number(event.parsedJson.amount) / 1e6; // Convert from micro units
-            newSecurityDepositBalance += depositAmount;
-            console.log('Added to security deposit balance, new total:', newSecurityDepositBalance);
+          if (parsedEvent.wallet_id === circle.walletId && 
+              parsedEvent.coin_type === 'stablecoin') {
+            // Get the total balance from the most recent event
+            const balance = Number(parsedEvent.new_balance) / 1e6; // USDC has 6 decimals
+            if (newBalance === null || balance > newBalance) {
+              newBalance = balance;
+              console.log('Found stablecoin balance from CoinDeposited event:', balance);
+            }
           }
         }
       }
       
-      // 2. Get security deposit withdrawal events
-      const depositWithdrawEvents = await client.queryEvents({
-        query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circles::SecurityDepositWithdrawn`
-        },
-        limit: 50
-      });
-      
-      // Subtract withdrawn deposits
-      for (const event of depositWithdrawEvents.data) {
-        if (event.parsedJson && 
-            typeof event.parsedJson === 'object' &&
-            'circle_id' in event.parsedJson &&
-            event.parsedJson.circle_id === circle.id &&
-            'amount' in event.parsedJson) {
-          const withdrawAmount = Number(event.parsedJson.amount) / 1e6; // Convert from micro units
-          newSecurityDepositBalance -= withdrawAmount;
-        }
-      }
-      
-      // Ensure security deposit balance is not negative
-      newSecurityDepositBalance = Math.max(0, newSecurityDepositBalance);
-      
-      // Calculate contribution balance (total minus security deposits)
-      if (newBalance !== null) {
-        newContributionBalance = Math.max(0, newBalance - newSecurityDepositBalance);
-      }
-      
-      // Set the separated balances
-      setSecurityDepositBalance(newSecurityDepositBalance);
-      setContributionBalance(newContributionBalance);
-      
-      console.log('Custody balances breakdown:', {
-        total: newBalance,
-        securityDeposits: newSecurityDepositBalance,
-        contributionFunds: newContributionBalance
-      });
-      
-      // If we didn't find any events, try checking dynamic fields
+      // Fallback to checking StablecoinDeposited events
       if (newBalance === null) {
-        const dynamicFields = await client.getDynamicFields({
-          parentId: circle.walletId
+        const stablecoinEvents = await client.queryEvents({
+          query: {
+            MoveEventType: `${PACKAGE_ID}::njangi_circles::StablecoinDeposited`
+          },
+          limit: 10
         });
         
-        for (const field of dynamicFields.data) {
-          if (field.name && typeof field.name === 'object' && 'type' in field.name) {
-            if (field.name.value === 'coin_objects') {
-              // Found the coin objects field but can't determine breakdown
-              setCustodyStablecoinBalance(0);
-              setSecurityDepositBalance(0);
-              setContributionBalance(0);
-              newBalance = 0;
-              console.log('Found coin_objects field but could not determine balance');
+        // Find the most recent event for this wallet to get total balance
+        for (const event of stablecoinEvents.data) {
+          if (event.parsedJson && 
+              typeof event.parsedJson === 'object' &&
+              'wallet_id' in event.parsedJson &&
+              'new_balance' in event.parsedJson) {
+              
+            const eventData = event.parsedJson as {
+              circle_id?: string;
+              wallet_id?: string;
+              member?: string;
+              amount?: string;
+              new_balance?: string;
+              previous_balance?: string;
+              coin_type?: string;
+            };
+            
+            if (eventData.wallet_id === circle.walletId) {
+              const balanceInMicroUnits = Number(eventData.new_balance);
+              const balanceInDollars = balanceInMicroUnits / 1e6; // Convert from micro units to dollars
+              newBalance = balanceInDollars;
+              console.log('Found stablecoin balance from StablecoinDeposited event:', balanceInDollars, 'USDC');
               break;
             }
           }
         }
+      }
+      
+      // Process CustodyDeposited events to identify security deposits in USDC
+      const custodyEvents = await client.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited`
+        },
+        limit: 50
+      });
+      
+      for (const event of custodyEvents.data) {
+        if (event.parsedJson && 
+            typeof event.parsedJson === 'object' && 
+            'circle_id' in event.parsedJson &&
+            'operation_type' in event.parsedJson &&
+            'amount' in event.parsedJson &&
+            event.parsedJson.circle_id === circle.id) {
+          
+          const parsedEvent = event.parsedJson as {
+            operation_type: number | string;
+            amount: string;
+          };
+          
+          // Operation type 3 indicates security deposit
+          const opType = typeof parsedEvent.operation_type === 'string' ? 
+            parseInt(parsedEvent.operation_type) : parsedEvent.operation_type;
+            
+          if (opType === 3) {
+            // This is a security deposit in USDC (we're in the stablecoin balance function)
+            const amount = Number(parsedEvent.amount) / 1e6; // Convert from micro units (USDC has 6 decimals)
+            newSecurityDepositBalance += amount;
+            console.log(`Found security deposit USDC: ${amount}`);
+          }
+        }
+      }
+      
+      // Ensure security deposit is not larger than the total balance
+      if (newBalance !== null) {
+        newSecurityDepositBalance = Math.min(newSecurityDepositBalance, newBalance);
+        
+        // Calculate contribution balance (total minus security deposits)
+        newContributionBalance = Math.max(0, newBalance - newSecurityDepositBalance);
+      }
+      
+      // Set the balances if we found any
+      if (newBalance !== null) {
+        setCustodyStablecoinBalance(newBalance);
+        setSecurityDepositBalance(newSecurityDepositBalance);
+        setContributionBalance(newContributionBalance);
+        
+        console.log('Custody stablecoin balances breakdown:', {
+          total: newBalance,
+          securityDeposits: newSecurityDepositBalance,
+          contributionFunds: newContributionBalance
+        });
+      } else {
+        // If we couldn't find any balance, default to zero but don't override existing values
+        setCustodyStablecoinBalance(0);
+        setSecurityDepositBalance(0);
+        setContributionBalance(0);
+        console.log('No stablecoin balance found, setting to zero');
       }
       
       // Show success message if this was a manual refresh
@@ -1297,8 +1534,8 @@ export default function ContributeToCircle() {
           </div>
         )}
 
-        {/* Show direct USDC deposit option if user has sufficient USDC balance */}
-        {showDirectDepositOption && userUsdcBalance !== null && (
+        {/* Show direct USDC deposit option if user has sufficient USDC balance and auto-swap is enabled */}
+        {showDirectDepositOption && userUsdcBalance !== null && circle?.autoSwapEnabled && (
           <div className="mb-4 p-4 bg-emerald-50 rounded-lg border-2 border-emerald-200">
             <div className="flex items-start space-x-3">
               <div className="bg-emerald-100 p-1.5 rounded-full flex-shrink-0 mt-0.5">
@@ -1656,11 +1893,11 @@ export default function ContributeToCircle() {
                         <div className="flex justify-between items-center mb-1">
                           <p className="text-sm text-gray-500">Custody Wallet USDC Balance</p>
                           <button 
-                            onClick={fetchCustodyWalletBalance}
-                            disabled={loadingStablecoinBalance}
+                            onClick={refreshData}
+                            disabled={loadingStablecoinBalance || fetchingSuiBalance}
                             className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-600 py-1 px-2 rounded flex items-center transition-colors disabled:opacity-50"
                           >
-                            {loadingStablecoinBalance ? (
+                            {loadingStablecoinBalance || fetchingSuiBalance ? (
                               <span className="flex items-center">
                                 <svg className="animate-spin -ml-1 mr-1 h-3 w-3 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
@@ -1673,7 +1910,7 @@ export default function ContributeToCircle() {
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                                 </svg>
-                                Refresh
+                                Refresh All Balances
                               </span>
                             )}
                           </button>
@@ -1731,6 +1968,79 @@ export default function ContributeToCircle() {
                         )}
                         <p className="text-xs text-gray-500 mt-1">
                           This is the current USDC balance in the circle&apos;s custody wallet used for automated contributions.
+                        </p>
+                      </div>
+                      
+                      {/* Add Custody Wallet SUI Balance */}
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm md:col-span-2">
+                        <div className="flex justify-between items-center mb-1">
+                          <p className="text-sm text-gray-500">Custody Wallet SUI Balance</p>
+                        </div>
+                        {fetchingSuiBalance ? (
+                          <div className="animate-pulse h-6 w-32 bg-gray-200 rounded"></div>
+                        ) : (
+                          <div className="flex flex-col gap-2">
+                            {/* SUI Balance */}
+                            <div className="flex items-center">
+                              <span className="text-lg font-medium text-blue-700">
+                                {custodySuiBalance !== null 
+                                  ? `${custodySuiBalance.toFixed(6)} SUI`
+                                  : "No balance data available"}
+                              </span>
+                              <span className="ml-2 px-2 py-1 bg-gray-100 text-gray-600 text-xs font-medium rounded-full">
+                                Total SUI Balance
+                              </span>
+                              
+                              {/* Show a badge for the security deposit status */}
+                              {userDepositPaid && custodySuiBalance !== null && custodySuiBalance > 0 && (
+                                <span className="ml-2 px-2 py-1 bg-green-100 text-green-600 text-xs font-medium rounded-full">
+                                  Security Deposit Detected
+                                </span>
+                              )}
+                            </div>
+                            
+                            {/* Breakdown of SUI Balances */}
+                            {custodySuiBalance !== null && custodySuiBalance > 0 && (
+                              <div className="mt-1 space-y-2 border-t border-gray-200 pt-2">
+                                {/* Security Deposits */}
+                                <div className="flex items-center">
+                                  <div className="w-4 h-4 bg-amber-200 rounded-sm mr-2" title="Security deposits held in escrow"></div>
+                                  <span className="text-sm text-gray-700">
+                                    {suiSecurityDepositBalance !== null ? suiSecurityDepositBalance.toFixed(6) : '0.000000'} SUI
+                                  </span>
+                                  <span className="ml-2 px-2 py-0.5 bg-amber-100 text-amber-800 text-xs font-medium rounded-full" 
+                                    title="These funds are security deposits from members and cannot be used for contributions">
+                                    Security Deposits
+                                  </span>
+                                  {suiSecurityDepositBalance === 0 && (
+                                    <span className="ml-2 px-2 py-0.5 bg-red-100 text-red-800 text-xs font-medium rounded-full">
+                                      Not detected
+                                    </span>
+                                  )}
+                                  {userDepositPaid && suiSecurityDepositBalance !== null && suiSecurityDepositBalance > 0 && suiSecurityDepositBalance === circle?.securityDeposit && (
+                                    <span className="ml-2 px-2 py-0.5 bg-blue-100 text-blue-800 text-xs font-medium rounded-full">
+                                      Estimated value
+                                    </span>
+                                  )}
+                                </div>
+                                
+                                {/* Contribution Funds */}
+                                <div className="flex items-center">
+                                  <div className="w-4 h-4 bg-green-200 rounded-sm mr-2" title="Funds available for SUI contributions"></div>
+                                  <span className="text-sm text-gray-700">
+                                    {suiContributionBalance !== null ? suiContributionBalance.toFixed(6) : '0.000000'} SUI
+                                  </span>
+                                  <span className="ml-2 px-2 py-0.5 bg-green-100 text-green-800 text-xs font-medium rounded-full"
+                                    title="These funds can be used for SUI contributions to the circle">
+                                    Available for Contributions
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <p className="text-xs text-gray-500 mt-1">
+                          This is the current SUI balance in the circle&apos;s custody wallet, including your security deposit if paid.
                         </p>
                       </div>
                     </div>

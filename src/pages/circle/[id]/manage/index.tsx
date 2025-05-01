@@ -1200,9 +1200,43 @@ export default function ManageCircle() {
     
     // Function to handle toggle directly on blockchain
     const handleToggleAutoSwap = async () => {
+      // Show confirmation dialog first
+      const newState = !isEnabled;
+      const actionText = newState ? 'enable' : 'disable';
+      
+      setConfirmationModal({
+        isOpen: true,
+        title: `${newState ? 'Enable' : 'Disable'} Auto-Swap`,
+        message: (
+          <div>
+            <p>Are you sure you want to {actionText} automatic stablecoin conversion?</p>
+            {newState ? (
+              <div className="mt-2 text-sm">
+                <p>When enabled:</p>
+                <ul className="list-disc pl-5 mt-1">
+                  <li>Members can use DEX swaps for contributions</li>
+                  <li>SUI will be automatically converted to USDC</li>
+                  <li>This helps protect against market volatility</li>
+                </ul>
+              </div>
+            ) : (
+              <div className="mt-2 text-sm text-amber-700">
+                <p className="font-semibold">When disabled:</p>
+                <ul className="list-disc pl-5 mt-1">
+                  <li>Direct USDC deposits will not be available</li>
+                  <li>Funds will remain in SUI and be subject to market volatility</li>
+                  <li>Members will only be able to contribute using SUI</li>
+                </ul>
+              </div>
+            )}
+          </div>
+        ),
+        confirmText: newState ? 'Enable Auto-Swap' : 'Disable Auto-Swap',
+        cancelText: 'Cancel',
+        confirmButtonVariant: newState ? 'primary' : 'warning',
+        onConfirm: async () => {
       setIsConfiguring(true);
       try {
-        const newState = !isEnabled;
         const success = await toggleAutoSwap(newState);
         if (success) {
           setIsEnabled(newState);
@@ -1210,6 +1244,8 @@ export default function ManageCircle() {
       } finally {
         setIsConfiguring(false);
       }
+        },
+      });
     };
 
     const handleSwapComplete = () => {
