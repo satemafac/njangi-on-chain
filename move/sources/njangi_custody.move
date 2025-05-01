@@ -110,7 +110,7 @@ module njangi::njangi_custody {
         timestamp: u64,
     }
     
-    public struct StablecoinDeposited has copy, drop {
+    public struct CoinDeposited has copy, drop {
         circle_id: ID,
         wallet_id: ID,
         coin_type: String,
@@ -581,8 +581,14 @@ module njangi::njangi_custody {
         );
         vector::push_back(&mut wallet.transaction_history, txn);
 
-        // We'll handle different coin types consistently
-        let coin_type_str = string::utf8(b"stablecoin");
+        // Determine the correct coin type string based on the type
+        let coin_type_str = if (std::type_name::get<CoinType>() == std::type_name::get<SUI>()) {
+            // If it's SUI, use "sui" instead of "stablecoin"
+            string::utf8(b"sui")
+        } else {
+            // For other coins (actual stablecoins), use "stablecoin"
+            string::utf8(b"stablecoin")
+        };
 
         event::emit(CustodyDeposited {
             circle_id: wallet.circle_id,
@@ -592,7 +598,7 @@ module njangi::njangi_custody {
             operation_type: core::custody_op_stablecoin_deposit(),
         });
 
-        event::emit(StablecoinDeposited {
+        event::emit(CoinDeposited {
             circle_id: wallet.circle_id,
             wallet_id: object::uid_to_inner(&wallet.id),
             coin_type: coin_type_str,
@@ -607,7 +613,7 @@ module njangi::njangi_custody {
         event::emit(StablecoinDepositWithPrice {
             circle_id: wallet.circle_id,
             wallet_id: object::uid_to_inner(&wallet.id),
-            coin_type: string::utf8(b"stablecoin"),
+            coin_type: coin_type_str,
             amount,
             usd_value,
             member: member_addr,
@@ -763,8 +769,14 @@ module njangi::njangi_custody {
         );
         vector::push_back(&mut wallet.transaction_history, txn);
 
-        // We'll handle different coin types consistently
-        let coin_type_str = string::utf8(b"stablecoin");
+        // Determine the correct coin type string based on the type
+        let coin_type_str = if (std::type_name::get<CoinType>() == std::type_name::get<SUI>()) {
+            // If it's SUI, use "sui" instead of "stablecoin"
+            string::utf8(b"sui")
+        } else {
+            // For other coins (actual stablecoins), use "stablecoin"
+            string::utf8(b"stablecoin")
+        };
 
         event::emit(CustodyDeposited {
             circle_id: wallet.circle_id,
@@ -774,7 +786,7 @@ module njangi::njangi_custody {
             operation_type: core::custody_op_stablecoin_deposit(),
         });
 
-        event::emit(StablecoinDeposited {
+        event::emit(CoinDeposited {
             circle_id: wallet.circle_id,
             wallet_id: object::uid_to_inner(&wallet.id),
             coin_type: coin_type_str,

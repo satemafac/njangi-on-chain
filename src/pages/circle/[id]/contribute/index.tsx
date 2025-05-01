@@ -24,6 +24,11 @@ const BUFFER_PERCENTAGE = 1.5; // Additional buffer percentage for swap rate flu
 // security_deposit_usd * 10000. For example:
 // $0.20 USD (20 cents) should be exactly 200,000 microUSDC (0.2 USDC with 6 decimals).
 // 
+// For SUI deposits, the validation requires an EXACT match with the security_deposit
+// value stored in the CircleConfig, which is in MIST (9 decimals). Frontend calculations 
+// can sometimes lead to rounding differences, so it's safest to query the exact value
+// from the CircleConfig and use that.
+// 
 // Do NOT double-convert values. The frontend should calculate and pass the exact 
 // required amount, and the contract will not perform additional scaling.
 
