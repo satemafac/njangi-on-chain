@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../../../contexts/AuthContext';
-import Image from 'next/image';
 import { SuiClient } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
 import { ArrowLeft, Copy, Link } from 'lucide-react';
@@ -24,6 +23,21 @@ interface Circle {
   currentMembers: number;
   nextPayoutTime: number;
   isActive: boolean;
+}
+
+// Fix linter errors by using more specific types
+type SuiFieldValue = string | number | boolean | null | undefined | SuiFieldValue[] | Record<string, unknown>;
+
+// Define CircleCreatedEvent interface
+interface CircleCreatedEvent {
+  circle_id: string;
+  admin: string;
+  name: string;
+  contribution_amount: string;
+  contribution_amount_usd: string;
+  security_deposit_usd: string;
+  max_members: string;
+  cycle_length: string;
 }
 
 export default function CircleDetails() {
@@ -66,136 +80,197 @@ export default function CircleDetails() {
   }, []);
 
   const fetchCircleDetails = async () => {
-    console.log('Fetching circle details:', id);
+    if (!id) return;
+    console.log('Details - Fetching circle details:', id);
     const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
     
     try {
+      setLoading(true);
+      // Get object data
       const objectData = await client.getObject({
         id: id as string,
-        options: { showContent: true }
+        options: { showContent: true, showType: true }
       });
       
-      console.log('Circle data:', objectData);
-      
-      if (objectData.data?.content && 'fields' in objectData.data.content) {
-        const fields = objectData.data.content.fields as {
-          name: string;
-          admin: string;
-          contribution_amount: string;
-          security_deposit: string;
-          cycle_length: string;
-          cycle_day: string;
-          max_members: string;
-          current_members: string;
-          next_payout_time: string;
-          usd_amounts?: {
-            contribution_amount?: string;
-            security_deposit?: string;
-          };
-        };
-        
-        // Check for circle activation events
-        let isActive = false;
+      console.log('Details - Circle object data:', objectData);
+      if (!objectData.data?.content || !('fields' in objectData.data.content)) {
+        throw new Error('Invalid circle object data received');
+      }
+      const fields = objectData.data.content.fields as Record<string, SuiFieldValue>;
+
+      // Get dynamic fields
+      const dynamicFieldsResult = await client.getDynamicFields({
+        parentId: id as string
+      });
+      console.log('Details - Dynamic fields:', dynamicFieldsResult.data);
+
+      // Fetch creation event and transaction inputs
+      let transactionInput: Record<string, unknown> | undefined;
+      let circleCreationEventData: CircleCreatedEvent | undefined;
+
         try {
-          const activationEvents = await client.queryEvents({
-            query: {
-              MoveEventType: `${PACKAGE_ID}::njangi_circle::CircleActivated`
-            },
+        const circleEvents = await client.queryEvents({
+          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleCreated` },
             limit: 50
           });
-          
-          // Check if any activation event matches this circle
-          isActive = activationEvents.data.some(event => {
-            if (event.parsedJson && typeof event.parsedJson === 'object') {
-              const eventJson = event.parsedJson as { circle_id?: string };
-              return eventJson.circle_id === id;
-            }
-            return false;
+        const createEvent = circleEvents.data.find(event => 
+          (event.parsedJson as { circle_id?: string })?.circle_id === id
+        );
+        console.log('Details - Found creation event:', !!createEvent);
+
+        if (createEvent?.parsedJson) {
+          circleCreationEventData = createEvent.parsedJson as CircleCreatedEvent;
+          transactionInput = {
+            contribution_amount: circleCreationEventData.contribution_amount,
+            contribution_amount_usd: circleCreationEventData.contribution_amount_usd,
+            security_deposit_usd: circleCreationEventData.security_deposit_usd,
+          };
+        }
+
+        if (createEvent?.id?.txDigest) {
+          const txData = await client.getTransactionBlock({
+            digest: createEvent.id.txDigest,
+            options: { showInput: true }
           });
-          
-          console.log('Circle activation status:', isActive);
+          console.log('Details - Transaction data fetched:', !!txData);
+          if (txData?.transaction?.data?.transaction?.kind === 'ProgrammableTransaction') {
+            const inputs = txData.transaction.data.transaction.inputs || [];
+            console.log('Details - Transaction inputs:', inputs);
+            if (!transactionInput) transactionInput = {};
+            if (inputs.length > 1 && inputs[1]?.type === 'pure') transactionInput.contribution_amount = inputs[1].value;
+            if (inputs.length > 2 && inputs[2]?.type === 'pure') transactionInput.contribution_amount_usd = inputs[2].value;
+            if (inputs.length > 4 && inputs[4]?.type === 'pure') transactionInput.security_deposit_usd = inputs[4].value;
+            if (inputs.length > 6 && inputs[6]?.type === 'pure') transactionInput.cycle_day = inputs[6].value;
+            console.log('Details - Extracted from Tx Inputs:', transactionInput);
+          }
+        }
         } catch (error) {
-          console.error('Error checking circle activation:', error);
+        console.error('Details - Error fetching transaction data:', error);
         }
         
-        // Get the USD amounts
-        let contributionAmountUsd = 0;
-        let securityDepositUsd = 0;
-        
-        if (fields.usd_amounts) {
-          contributionAmountUsd = Number(fields.usd_amounts.contribution_amount || 0) / 100;
-          securityDepositUsd = Number(fields.usd_amounts.security_deposit || 0) / 100;
-        }
-        
-        // Accurately calculate member count from events
-        let actualMemberCount = 1; // Default to 1 (admin)
-        try {
-          // Fetch all MemberJoined events and filter for this circle
-          const memberEvents = await client.queryEvents({
-            query: {
-              MoveEventType: `${PACKAGE_ID}::njangi_circle::MemberJoined`
-            },
-            limit: 1000 // Increased limit to capture more events
-          });
-          
-          console.log(`Found ${memberEvents.data.length} total MemberJoined events, filtering for circle ${id}`);
-          
-          // Count unique member addresses for this specific circle
-          const memberAddresses = new Set<string>();
-          
-          // Filter events for the specific circle
-          const circleEvents = memberEvents.data.filter(event => {
-            if (event.parsedJson && typeof event.parsedJson === 'object') {
-              const eventJson = event.parsedJson as { circle_id?: string };
-              return eventJson.circle_id === id;
-            }
-            return false;
-          });
-          
-          console.log(`Filtered down to ${circleEvents.length} events for circle ${id}`);
-          
-          // Process the filtered events
-          for (const event of circleEvents) {
-            if (event.parsedJson && typeof event.parsedJson === 'object') {
-              const eventJson = event.parsedJson as { circle_id?: string, member?: string };
-              
-              if (eventJson.member) {
-                memberAddresses.add(eventJson.member);
+      // --- Process Extracted Data --- 
+      const configValues = {
+        contributionAmount: 0,
+        contributionAmountUsd: 0,
+        securityDeposit: 0,
+        securityDepositUsd: 0,
+        cycleLength: 0,
+        cycleDay: 1,
+        maxMembers: 3,
+      };
+
+      // 1. Use values from transaction/event first
+      if (transactionInput) {
+        if (transactionInput.contribution_amount) configValues.contributionAmount = Number(transactionInput.contribution_amount) / 1e9;
+        if (transactionInput.contribution_amount_usd) configValues.contributionAmountUsd = Number(transactionInput.contribution_amount_usd) / 100;
+        if (transactionInput.security_deposit_usd) configValues.securityDepositUsd = Number(transactionInput.security_deposit_usd) / 100;
+        if (transactionInput.cycle_day) configValues.cycleDay = Number(transactionInput.cycle_day);
+      }
+      if (circleCreationEventData) {
+        if (circleCreationEventData.cycle_length) configValues.cycleLength = Number(circleCreationEventData.cycle_length);
+        if (circleCreationEventData.max_members) configValues.maxMembers = Number(circleCreationEventData.max_members);
+      }
+      console.log('Details - Config after Tx/Event:', configValues);
+
+      // 2. Look for config in dynamic fields
+      for (const field of dynamicFieldsResult.data) {
+         if ((field.name && typeof field.name === 'object' && 'value' in field.name && field.name.value === 'circle_config') ||
+             (field.type && typeof field.type === 'string' && field.type.includes('CircleConfig'))) {
+          console.log('Details - Found CircleConfig dynamic field:', field);
+          if (field.objectId) {
+            try {
+              const configData = await client.getObject({
+                id: field.objectId,
+                options: { showContent: true }
+              });
+              console.log('Details - Config object data:', configData);
+              if (configData.data?.content && 'fields' in configData.data.content) {
+                const configFields = configData.data.content.fields as Record<string, SuiFieldValue>;
+                if (configFields.contribution_amount) configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
+                if (configFields.contribution_amount_usd) configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
+                if (configFields.security_deposit) configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
+                if (configFields.security_deposit_usd) configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
+                if (configFields.cycle_length !== undefined) configValues.cycleLength = Number(configFields.cycle_length);
+                if (configFields.cycle_day !== undefined) configValues.cycleDay = Number(configFields.cycle_day);
+                if (configFields.max_members !== undefined) configValues.maxMembers = Number(configFields.max_members);
               }
+            } catch (error) {
+              console.error('Details - Error fetching config object:', error);
             }
           }
-          
-          // Add admin to the member count
-          if (fields.admin) {
-            memberAddresses.add(fields.admin);
-          }
-          
+        }
+      }
+      console.log('Details - Config after Dynamic Fields:', configValues);
+
+      // 3. Use direct fields from the circle object as a fallback
+      if (configValues.contributionAmount === 0 && fields.contribution_amount) configValues.contributionAmount = Number(fields.contribution_amount) / 1e9;
+      if (configValues.contributionAmountUsd === 0 && fields.contribution_amount_usd) configValues.contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
+      if (configValues.securityDeposit === 0 && fields.security_deposit) configValues.securityDeposit = Number(fields.security_deposit) / 1e9;
+      if (configValues.securityDepositUsd === 0 && fields.security_deposit_usd) configValues.securityDepositUsd = Number(fields.security_deposit_usd) / 100;
+      // Fallback for cycle info if not found earlier
+      if (configValues.cycleLength === 0 && fields.cycle_length !== undefined) configValues.cycleLength = Number(fields.cycle_length);
+      if (configValues.cycleDay === 1 && fields.cycle_day !== undefined) configValues.cycleDay = Number(fields.cycle_day);
+      if (configValues.maxMembers === 3 && fields.max_members !== undefined) configValues.maxMembers = Number(fields.max_members);
+
+      console.log('Details - Final Config Values:', configValues);
+
+      // Check activation status
+      let isActive = false;
+      try {
+        const activationEvents = await client.queryEvents({
+          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleActivated` },
+          limit: 50
+        });
+        isActive = activationEvents.data.some(event => 
+          (event.parsedJson as { circle_id?: string })?.circle_id === id
+        );
+        console.log('Details - Circle activation status:', isActive);
+      } catch (error) {
+        console.error('Details - Error checking activation:', error);
+      }
+
+      // Calculate member count
+      let actualMemberCount = 1;
+      const memberAddresses = new Set<string>();
+      if (typeof fields.admin === 'string') memberAddresses.add(fields.admin);
+      try {
+        const memberEvents = await client.queryEvents({
+          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::MemberJoined` },
+          limit: 1000
+        });
+        const circleMemberEvents = memberEvents.data.filter(event => 
+          (event.parsedJson as { circle_id?: string })?.circle_id === id
+        );
+        circleMemberEvents.forEach(event => {
+          const memberAddr = (event.parsedJson as { member?: string })?.member;
+          if (memberAddr) memberAddresses.add(memberAddr);
+        });
           actualMemberCount = memberAddresses.size;
-          console.log(`Found ${actualMemberCount} members for circle ${id}`);
+        console.log(`Details - Calculated member count: ${actualMemberCount}`);
         } catch (error) {
-          console.error('Error calculating member count:', error);
-          // Use fallback member count from the object
-          actualMemberCount = Number(fields.current_members);
+        console.error('Details - Error calculating member count:', error);
+        actualMemberCount = Number(fields.current_members || 1);
         }
         
+      // Set circle state
         setCircle({
           id: id as string,
-          name: fields.name,
-          admin: fields.admin,
-          contributionAmount: Number(fields.contribution_amount) / 1e9,
-          contributionAmountUsd: contributionAmountUsd,
-          securityDeposit: Number(fields.security_deposit) / 1e9,
-          securityDepositUsd: securityDepositUsd,
-          cycleLength: Number(fields.cycle_length),
-          cycleDay: Number(fields.cycle_day),
-          maxMembers: Number(fields.max_members),
+        name: typeof fields.name === 'string' ? fields.name : '',
+        admin: typeof fields.admin === 'string' ? fields.admin : '',
+        contributionAmount: configValues.contributionAmount,
+        contributionAmountUsd: configValues.contributionAmountUsd,
+        securityDeposit: configValues.securityDeposit,
+        securityDepositUsd: configValues.securityDepositUsd,
+        cycleLength: configValues.cycleLength,
+        cycleDay: configValues.cycleDay,
+        maxMembers: configValues.maxMembers,
           currentMembers: actualMemberCount,
-          nextPayoutTime: Number(fields.next_payout_time),
+        nextPayoutTime: Number(fields.next_payout_time || 0),
           isActive: isActive,
         });
-      }
+
     } catch (error) {
-      console.error('Error fetching circle details:', error);
+      console.error('Details - Error fetching circle details:', error);
       toast.error('Error loading circle details');
     } finally {
       setLoading(false);
@@ -312,30 +387,160 @@ export default function CircleDetails() {
     return `${id.slice(0, 10)}...${id.slice(-8)}`;
   };
 
+  // Add formatCycleInfo function to match dashboard display
+  const formatCycleInfo = (cycleLength: number, cycleDay: number) => {
+    // Cycle length: 0 = weekly, 1 = monthly, 2 = quarterly
+    let cyclePeriod = '';
+    let dayFormat = '';
+    
+    // Validate inputs to avoid errors
+    const validCycleLength = typeof cycleLength === 'number' ? cycleLength : 0;
+    let validCycleDay = typeof cycleDay === 'number' ? cycleDay : 0;
+    
+    // Ensure cycle day is in valid range
+    if (validCycleLength === 0 && validCycleDay > 6) validCycleDay = 0; // Weekly (0-6)
+    if (validCycleLength > 0 && validCycleDay > 31) validCycleDay = 1; // Monthly/Quarterly
+    
+    switch (validCycleLength) {
+      case 0: // Weekly
+        cyclePeriod = 'Weekly';
+        // For weekly, cycleDay is 0-6
+        const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        dayFormat = weekdays[validCycleDay] || weekdays[0]; // Default to Monday if out of range
+        break;
+      case 1: // Monthly
+        cyclePeriod = 'Monthly';
+        // Ensure we have a valid day (1-31)
+        validCycleDay = validCycleDay === 0 ? 1 : validCycleDay;
+        dayFormat = getOrdinalSuffix(validCycleDay);
+        break;
+      case 2: // Quarterly
+        cyclePeriod = 'Quarterly';
+        // Ensure we have a valid day (1-31)
+        validCycleDay = validCycleDay === 0 ? 1 : validCycleDay;
+        dayFormat = getOrdinalSuffix(validCycleDay);
+        break;
+      default:
+        cyclePeriod = 'Unknown';
+        dayFormat = `Day ${validCycleDay === 0 ? 1 : validCycleDay}`;
+    }
+    
+    return `${cyclePeriod} (${dayFormat} day)`;
+  };
+
+  // Helper to format dates with ordinal suffix
+  const getOrdinalSuffix = (day: number) => {
+    const suffixes = ['th', 'st', 'nd', 'rd'];
+    const relevantDigits = (day % 100);
+    
+    // Special case for 11, 12, 13
+    if (relevantDigits >= 11 && relevantDigits <= 13) {
+      return `${day}th`;
+    }
+    
+    // For other numbers, use last digit
+    const lastDigit = day % 10;
+    const suffix = lastDigit >= 1 && lastDigit <= 3 ? suffixes[lastDigit] : suffixes[0];
+    return `${day}${suffix}`;
+  };
+
+  // Add the missing function to calculate potential next payout date
+  const calculatePotentialNextPayoutDate = (cycleLength: number, cycleDay: number): number => {
+    try {
+      // Get the current date
+      const now = new Date();
+      
+      // Create a new date for the potential payout
+      const potentialDate = new Date();
+      
+      // Set to beginning of day
+      potentialDate.setHours(0, 0, 0, 0);
+      
+      // Handle different cycle types
+      switch (cycleLength) {
+        case 0: // Weekly
+          // Adjust day of week (0-6, with 0 being Sunday)
+          // Convert our day (0-6, with 0 being Monday) to JavaScript's day of week
+          const targetDay = cycleDay === 6 ? 0 : cycleDay + 1; // Convert from Mon-Sun (0-6) to Sun-Sat (0-6)
+          const currentDay = potentialDate.getDay(); // Sunday = 0, Monday = 1, etc.
+          
+          // Calculate days to add
+          let daysToAdd = targetDay - currentDay;
+          if (daysToAdd <= 0) {
+            daysToAdd += 7; // Go to next week if the day has passed or is today
+          }
+          
+          potentialDate.setDate(potentialDate.getDate() + daysToAdd);
+          break;
+          
+        case 1: // Monthly
+          // Set to the specified day of the current month
+          potentialDate.setDate(cycleDay);
+          
+          // If that day has passed this month, go to next month
+          if (potentialDate.getTime() <= now.getTime()) {
+            potentialDate.setMonth(potentialDate.getMonth() + 1);
+          }
+          
+          // Handle invalid dates (e.g., Feb 30 becomes Mar 2)
+          // If the day changed, it means we hit an invalid date
+          if (potentialDate.getDate() !== cycleDay) {
+            // Go back to the last day of the previous month
+            potentialDate.setDate(0);
+          }
+          break;
+          
+        case 2: // Quarterly
+          // Start with current month
+          const currentMonth = now.getMonth();
+          
+          // Determine which quarter we're in
+          const currentQuarter = Math.floor(currentMonth / 3);
+          
+          // Calculate the month of the next quarter
+          let nextQuarterMonth = (currentQuarter + 1) * 3;
+          
+          // If we're at Q4, wrap around to Q1 of next year
+          if (nextQuarterMonth >= 12) {
+            nextQuarterMonth = 0;
+            potentialDate.setFullYear(potentialDate.getFullYear() + 1);
+          }
+          
+          // Set to the first month of the next quarter
+          potentialDate.setMonth(nextQuarterMonth);
+          
+          // Set the day
+          potentialDate.setDate(cycleDay);
+          
+          // Handle invalid dates (e.g., Feb 30)
+          if (potentialDate.getDate() !== cycleDay) {
+            // Go back to the last day of the previous month
+            potentialDate.setDate(0);
+          }
+          break;
+          
+        default:
+          console.error('Unknown cycle length:', cycleLength);
+          return now.getTime();
+      }
+      
+      // Set payout time to 12 PM UTC
+      potentialDate.setUTCHours(12, 0, 0, 0);
+      
+      // Return timestamp in milliseconds
+      return potentialDate.getTime();
+    } catch (error) {
+      console.error('Error calculating potential next payout date:', error);
+      return new Date().getTime(); // Fallback to current time
+    }
+  };
+
   if (!isAuthenticated || !account) {
     return null;
   }
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
-              <Image
-                src="/njangi-on-chain-logo.png"
-                alt="Njangi on-chain"
-                width={48}
-                height={48}
-                className="mr-3"
-                priority
-              />
-              <h1 className="text-xl font-semibold text-blue-600">Njangi on-chain</h1>
-            </div>
-          </div>
-        </div>
-      </nav>
-
       <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         <div className="px-4 py-6 sm:px-0">
           <div className="mb-6">
@@ -414,7 +619,7 @@ export default function CircleDetails() {
                 </div>
               ) : circle ? (
                 <div className="py-4 space-y-8">
-                  {/* Circle Details */}
+                  {/* Circle Details Section - Original style but improved layout */}
                   <div className="px-2">
                     <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Details</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -444,11 +649,24 @@ export default function CircleDetails() {
                       </div>
                       
                       <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Cycle</p>
+                        <p className="text-lg font-medium">{formatCycleInfo(circle.cycleLength, circle.cycleDay)}</p>
+                      </div>
+                      
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm col-span-1 md:col-span-2">
                         <p className="text-sm text-gray-500 mb-1">
                           {circle.isActive ? 'Next Payout' : 'Potential Next Payout'}
                         </p>
                         <p className="text-lg font-medium">
-                          {circle.isActive ? formatDate(circle.nextPayoutTime) : "Activate Circle to Start"}
+                          {circle.isActive 
+                            ? formatDate(circle.nextPayoutTime)
+                            : <span className="text-blue-600">Activate Circle to Start</span>
+                          }
+                          {!circle.isActive && 
+                            <span className="ml-2 text-sm text-gray-500">
+                              (Estimated: {formatDate(calculatePotentialNextPayoutDate(circle.cycleLength, circle.cycleDay))})
+                            </span>
+                          }
                         </p>
                       </div>
                     </div>

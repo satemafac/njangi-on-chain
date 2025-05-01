@@ -1,0 +1,1213 @@
+module njangi::njangi_circles {
+    use sui::object::{Self, UID, ID};
+    use sui::transfer;
+    use sui::tx_context::{Self, TxContext};
+    use sui::coin::{Self, Coin};
+    use sui::balance::{Self, Balance};
+    use sui::table::{Self, Table};
+    use sui::clock::{Self, Clock};
+    use sui::event;
+    use sui::sui::SUI;
+    use sui::dynamic_field;
+    use std::string::{Self, String};
+    use std::vector;
+    use std::option::{Self, Option};
+    use std::type_name;
+    
+    use njangi::njangi_core::{Self as core};
+    use njangi::njangi_members::{Self as members, Member};
+    use njangi::njangi_custody::{Self as custody, CustodyWallet};
+    use njangi::njangi_circle_config as config;
+    
+    use pyth::price_info::PriceInfoObject;
+    use njangi::njangi_price_validator as price_validator;
+    
+    // ----------------------------------------------------------
+    // Error codes specific to circles
+    // ----------------------------------------------------------
+    const ECircleNotActive: u64 = 60;
+    const ECircleHasActiveMembers: u64 = 37;
+    const ECircleHasContributions: u64 = 38;
+    const EPendingMembersExist: u64 = 41;
+    const EWalletCircleMismatch: u64 = 46;
+    const EMemberAlreadyExists: u64 = 55;
+    const ENotCircleMember: u64 = 61;
+    const ENotAdmin: u64 = 7;
+    
+    // ----------------------------------------------------------
+    // Main Circle struct
+    // ----------------------------------------------------------
+    public struct Circle has key, store {
+        id: UID,
+        name: String,
+        admin: address,
+        current_members: u64,
+        members: Table<address, Member>,
+        contributions: Balance<SUI>,
+        deposits: Balance<SUI>,
+        penalties: Balance<SUI>,
+        current_cycle: u64,
+        next_payout_time: u64,
+        created_at: u64,
+        rotation_order: vector<address>,
+        rotation_history: vector<address>,
+        current_position: u64,
+        active_auction: Option<Auction>,
+        is_active: bool,
+    }
+    
+    // ----------------------------------------------------------
+    // Support structs for Circle
+    // ----------------------------------------------------------
+    public struct Auction has store, drop {
+        position: u64,
+        minimum_bid: u64,
+        highest_bid: u64,
+        highest_bidder: Option<address>,
+        start_time: u64,
+        end_time: u64,
+        discount_rate: u64,
+    }
+
+    // ----------------------------------------------------------
+    // Events
+    // ----------------------------------------------------------
+    public struct CircleCreated has copy, drop {
+        circle_id: ID,
+        admin: address,
+        name: String,
+        contribution_amount: u64,
+        contribution_amount_usd: u64, // USD amount in cents
+        security_deposit_usd: u64,    // USD amount in cents
+        max_members: u64,
+        cycle_length: u64,
+    }
+    
+    public struct CircleActivated has copy, drop {
+        circle_id: ID,
+        activated_by: address,
+    }
+    
+    public struct CircleDeleted has copy, drop {
+        circle_id: ID,
+        admin: address,
+        name: String,
+    }
+    
+    public struct TreasuryUpdated has copy, drop {
+        circle_id: ID,
+        contributions_balance: u64,
+        deposits_balance: u64,
+        penalties_balance: u64,
+        cycle: u64,
+    }
+    
+    public struct AutoSwapToggled has copy, drop {
+        circle_id: ID,
+        enabled: bool,
+        toggled_by: address,
+    }
+    
+    // Add the MemberJoined event that we need
+    public struct MemberJoined has copy, drop {
+        circle_id: ID,
+        member: address,
+        position: Option<u64>,
+    }
+
+    // Add these events near other event definitions around line 140
+    public struct MemberActivated has copy, drop {
+        circle_id: ID,
+        member: address,
+        deposit_amount: u64,
+    }
+
+    // ----------------------------------------------------------
+    // Create Circle
+    // ----------------------------------------------------------
+    public fun create_circle(
+        name: vector<u8>,
+        contribution_amount: u64,
+        contribution_amount_usd: u64, // USD amount in cents
+        security_deposit: u64,
+        security_deposit_usd: u64,    // USD amount in cents
+        cycle_length: u64,
+        cycle_day: u64,
+        circle_type: u8,
+        max_members: u64,
+        rotation_style: u8,
+        penalty_rules: vector<bool>,
+        goal_type: Option<u8>,
+        target_amount: Option<u64>,
+        target_amount_usd: Option<u64>, // USD amount in cents
+        target_date: Option<u64>,
+        verification_required: bool,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        // The frontend now sends properly formatted values with 9 decimals
+        // No need for additional scaling, values are already in MIST format
+        let contribution_amount_scaled = contribution_amount;
+        let security_deposit_scaled = security_deposit;
+        let target_amount_scaled = if (option::is_some(&target_amount)) {
+            // Still need to extract the value from the option but no need to scale
+            let amt_ref = option::borrow(&target_amount);
+            option::some(*amt_ref)
+        } else {
+            option::none()
+        };
+
+        // Basic validations
+        assert!(max_members >= core::get_min_members() && max_members <= core::get_max_members(), 0);
+        assert!(contribution_amount_scaled > 0, 1);
+        assert!(security_deposit_scaled >= core::min_security_deposit(contribution_amount_scaled), 2);
+        assert!(cycle_length <= 2, 3);
+        assert!(
+            (cycle_length == 0 && cycle_day < 7)   // weekly
+            || (cycle_length > 0 && cycle_day < 28), // monthly/quarterly up to 28
+            4
+        );
+
+        // Get admin address
+        let admin = tx_context::sender(ctx);
+        let current_time = clock::timestamp_ms(clock);
+
+        // Create the circle with minimal fields
+        let mut circle = Circle {
+            id: object::new(ctx),
+            name: string::utf8(name),
+            admin,
+            current_members: 0,
+            members: table::new(ctx),
+            contributions: balance::zero<SUI>(),
+            deposits: balance::zero<SUI>(),
+            penalties: balance::zero<SUI>(),
+            current_cycle: 0,
+            next_payout_time: core::calculate_next_payout_time(cycle_length, cycle_day, clock::timestamp_ms(clock)),
+            created_at: current_time,
+            rotation_order: vector::empty(),
+            rotation_history: vector::empty(),
+            current_position: 0,
+            active_auction: option::none(),
+            is_active: false,
+        };
+        
+        // Create and attach configurations using the new module
+        let circle_config = config::create_circle_config(
+            contribution_amount_scaled,
+            security_deposit_scaled,
+            contribution_amount_usd,
+            security_deposit_usd,
+            cycle_length,
+            cycle_day,
+            circle_type,
+            rotation_style,
+            max_members,
+            false // auto_swap_enabled starts as false
+        );
+        
+        let milestone_config = config::create_milestone_config(
+            goal_type,
+            target_amount_scaled,
+            target_amount_usd,
+            target_date,
+            verification_required
+        );
+        
+        let penalty_config = config::create_penalty_rules(penalty_rules);
+        
+        // Attach configurations as dynamic fields
+        config::attach_circle_config(&mut circle.id, circle_config);
+        config::attach_milestone_config(&mut circle.id, milestone_config);
+        config::attach_penalty_rules(&mut circle.id, penalty_config);
+        
+        // Create the circle's custody wallet
+        let circle_id = object::uid_to_inner(&circle.id);
+        custody::create_custody_wallet(circle_id, current_time, ctx);
+
+        // Automatically add the admin as a member
+        let admin_member = members::create_member(
+            current_time,           // joined_at 
+            option::some(0),        // payout_position - put admin in position 0
+            0,                      // deposit_balance
+            core::member_status_active() // status - use core definition consistently
+        );
+        
+        // Add the admin to the circle members
+        add_member(&mut circle, admin, admin_member);
+        
+        // Also add admin to rotation_order in position 0
+        vector::push_back(&mut circle.rotation_order, admin);
+
+        event::emit(CircleCreated {
+            circle_id: object::uid_to_inner(&circle.id),
+            admin,
+            name: string::utf8(name),
+            contribution_amount: contribution_amount_scaled,
+            contribution_amount_usd,
+            security_deposit_usd,
+            max_members,
+            cycle_length,
+        });
+        
+        // Emit MemberJoined event for admin
+        event::emit(MemberJoined {
+            circle_id: object::uid_to_inner(&circle.id),
+            member: admin,
+            position: option::some(0),
+        });
+
+        // Make the newly created `Circle` object shared
+        transfer::share_object(circle);
+    }
+    
+    // ----------------------------------------------------------
+    // Admin activates the circle, requiring all members to have deposits
+    // ----------------------------------------------------------
+    public fun activate_circle(
+        circle: &mut Circle,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        
+        // Only admin can activate the circle
+        assert!(sender == circle.admin, 7);
+        
+        // Get max members from config
+        let max_members = config::get_max_members(&circle.id);
+        
+        // Circle must have at least 3 members (minimum required)
+        assert!(circle.current_members >= 3, 22);
+        
+        // Get security deposit amount from config
+        let security_deposit = config::get_security_deposit(&circle.id);
+        
+        // Check if admin has paid deposit
+        if (table::contains(&circle.members, circle.admin)) {
+            let admin_member = table::borrow(&circle.members, circle.admin);
+            assert!(members::get_deposit_balance(admin_member) >= security_deposit, 21);
+        };
+        
+        // Check other members using our member checking helper function
+        check_all_members_have_security_deposit(circle);
+        
+        // Set the circle to active
+        circle.is_active = true;
+        
+        // Get cycle length and day from config
+        let cycle_length = config::get_cycle_length(&circle.id);
+        let cycle_day = config::get_cycle_day(&circle.id);
+        
+        // Recalculate next payout time now that circle is active
+        circle.next_payout_time = core::calculate_next_payout_time(
+            cycle_length, 
+            cycle_day, 
+            tx_context::epoch_timestamp_ms(ctx)
+        );
+        
+        // Start cycle
+        circle.current_cycle = 1;
+        
+        event::emit(CircleActivated {
+            circle_id: object::uid_to_inner(&circle.id),
+            activated_by: sender,
+        });
+    }
+    
+    // Helper function to check if all members have paid their security deposit
+    fun check_all_members_have_security_deposit(circle: &Circle): bool {
+        // Since we can't directly iterate through table entries in Move,
+        // we'll use a sample approach to check members
+        
+        let known_addresses = core::get_sample_addresses();
+        let len = vector::length(&known_addresses);
+        
+        // Get security deposit from config
+        let security_deposit = config::get_security_deposit(&circle.id);
+        
+        let mut i = 0;
+        while (i < len) {
+            let addr = *vector::borrow(&known_addresses, i);
+            if (table::contains(&circle.members, addr) && addr != circle.admin) {
+                let member = table::borrow(&circle.members, addr);
+                // Check if member has paid security deposit
+                if (members::get_deposit_balance(member) < security_deposit) {
+                    // Found a member who hasn't paid deposit
+                    assert!(false, 21);
+                }
+            };
+            i = i + 1;
+        };
+        
+        // If we got here, all checked members have paid their deposits
+        true
+    }
+    
+    // ----------------------------------------------------------
+    // Toggle auto-swap enabled status (admin only)
+    // ----------------------------------------------------------
+    public fun toggle_auto_swap(
+        circle: &mut Circle,
+        enabled: bool,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        
+        // Only admin can toggle auto-swap
+        assert!(sender == circle.admin, 7);
+        
+        // Update config using the config module
+        config::toggle_auto_swap(&mut circle.id, enabled);
+        
+        // Emit an event so frontend can track changes
+        event::emit(AutoSwapToggled {
+            circle_id: object::uid_to_inner(&circle.id),
+            enabled,
+            toggled_by: sender,
+        });
+    }
+    
+    // ----------------------------------------------------------
+    // Treasury (payout scheduling, tracking balances)
+    // ----------------------------------------------------------
+    public fun manage_treasury_balances(
+        circle: &mut Circle,
+        ctx: &mut TxContext
+    ) {
+        assert!(tx_context::sender(ctx) == circle.admin, 7);
+        
+        // Circle must be active to manage treasury
+        assert!(circle.is_active, ECircleNotActive);
+        
+        let contributions = balance::value(&circle.contributions);
+        let deposits = balance::value(&circle.deposits);
+        let penalties = balance::value(&circle.penalties);
+        
+        event::emit(TreasuryUpdated {
+            circle_id: object::uid_to_inner(&circle.id),
+            contributions_balance: contributions,
+            deposits_balance: deposits,
+            penalties_balance: penalties,
+            cycle: circle.current_cycle,
+        });
+    }
+    
+    // ----------------------------------------------------------
+    // Admin function: update cycle if we passed payout time
+    // ----------------------------------------------------------
+    public fun update_cycle(
+        circle: &mut Circle,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        assert!(tx_context::sender(ctx) == circle.admin, 7);
+        
+        // Circle must be active to update cycle
+        assert!(circle.is_active, ECircleNotActive);
+        
+        let current_time = clock::timestamp_ms(clock);
+        if (current_time >= circle.next_payout_time) {
+            circle.current_cycle = circle.current_cycle + 1;
+            circle.next_payout_time = core::calculate_next_payout_time(
+                config::get_cycle_length(&circle.id),
+                config::get_cycle_day(&circle.id),
+                current_time
+            );
+        };
+    }
+    
+    // ----------------------------------------------------------
+    // Check if circle is active
+    // ----------------------------------------------------------
+    public fun is_circle_active(circle: &Circle): bool {
+        circle.is_active
+    }
+    
+    // ----------------------------------------------------------
+    // Check if a circle is eligible for deletion by admin
+    // ----------------------------------------------------------
+    public fun can_delete_circle(circle: &Circle, admin_addr: address): bool {
+        // Only admin can delete
+        if (circle.admin != admin_addr) {
+            return false
+        };
+        
+        // Must have 0 or 1 members (only admin)
+        if (circle.current_members > 1) {
+            return false
+        };
+        
+        // No contributions allowed
+        if (balance::value(&circle.contributions) > 0) {
+            return false
+        };
+        
+        true
+    }
+    
+    // ----------------------------------------------------------
+    // Delete Circle
+    // ----------------------------------------------------------
+    public entry fun delete_circle(
+        mut circle: Circle,
+        ctx: &mut TxContext
+    ) {
+        // Only admin can delete the circle
+        assert!(tx_context::sender(ctx) == circle.admin, 7);
+        
+        // Ensure there are no members other than the admin (current_members starts from 0)
+        assert!(circle.current_members <= 1, ECircleHasActiveMembers);
+        
+        // Ensure no money has been contributed
+        assert!(balance::value(&circle.contributions) == 0, ECircleHasContributions);
+        
+        // Return any deposits to the admin if they joined as a member
+        if (circle.current_members == 1 && table::contains(&circle.members, circle.admin)) {
+            let deposit_balance = balance::value(&circle.deposits);
+            if (deposit_balance > 0) {
+                let deposit_coin = coin::from_balance(
+                    balance::withdraw_all(&mut circle.deposits),
+                    ctx
+                );
+                transfer::public_transfer(deposit_coin, circle.admin);
+            };
+        };
+        
+        // Get circle ID for milestone cleanup
+        let circle_id = object::uid_to_inner(&circle.id);
+        
+        // Delete milestone data (will be implemented in njangi_milestones)
+        // njangi::njangi_milestones::delete_milestone_data(circle_id, ctx);
+        
+        // Emit event for circle deletion
+        event::emit(CircleDeleted {
+            circle_id,
+            admin: circle.admin,
+            name: circle.name,
+        });
+        
+        // In Sui, we can directly delete a shared object if we have it by value
+        // First, extract and destroy all balances if any remain
+        let Circle { 
+            id,
+            name: _,
+            admin: _,
+            current_members: _,
+            members,
+            contributions,
+            deposits,
+            penalties,
+            current_cycle: _,
+            next_payout_time: _,
+            rotation_order: _,
+            rotation_history: _,
+            current_position: _,
+            active_auction: _,
+            created_at: _,
+            is_active: _,
+        } = circle;
+        
+        // Destroy balances and tables
+        balance::destroy_zero(contributions);
+        balance::destroy_zero(deposits);
+        balance::destroy_zero(penalties);
+        table::drop(members);
+        
+        // Delete the object
+        object::delete(id);
+    }
+    
+    // ----------------------------------------------------------
+    // Rotation management
+    // ----------------------------------------------------------
+    public fun set_rotation_position(
+        circle: &mut Circle,
+        member_addr: address,
+        position: u64,
+        ctx: &mut TxContext
+    ) {
+        assert!(tx_context::sender(ctx) == circle.admin, 7);
+        assert!(position < config::get_max_members(&circle.id), 29);
+        assert!(table::contains(&circle.members, member_addr), 8);
+        
+        let current_size = vector::length(&circle.rotation_order);
+        if (position >= current_size) {
+            // fill gap with 0x0 addresses
+            while (vector::length(&circle.rotation_order) < position) {
+                vector::push_back(&mut circle.rotation_order, @0x0);
+            };
+            vector::push_back(&mut circle.rotation_order, member_addr);
+        } else {
+            // Must be empty OR already contain the same address
+            assert!(
+                vector::borrow(&circle.rotation_order, position) == &(@0x0) ||
+                vector::borrow(&circle.rotation_order, position) == &member_addr, 
+                30
+            );
+            *vector::borrow_mut(&mut circle.rotation_order, position) = member_addr;
+        };
+        
+        let member = table::borrow_mut(&mut circle.members, member_addr);
+        members::set_payout_position(member, option::some(position));
+    }
+    
+    // ----------------------------------------------------------
+    // Replace the entire rotation order at once
+    // ----------------------------------------------------------
+    public fun reorder_rotation_positions(
+        circle: &mut Circle,
+        new_order: vector<address>,
+        ctx: &mut TxContext
+    ) {
+        // Only admin can reorder positions
+        assert!(tx_context::sender(ctx) == circle.admin, 7);
+        
+        // Order can't be larger than max members
+        let order_length = vector::length(&new_order);
+        assert!(order_length <= config::get_max_members(&circle.id), 29);
+        
+        // Verify all addresses in the new order are circle members
+        let mut i = 0;
+        while (i < order_length) {
+            let member_addr = *vector::borrow(&new_order, i);
+            assert!(table::contains(&circle.members, member_addr), 8);
+            i = i + 1;
+        };
+        
+        // Replace the rotation order completely
+        circle.rotation_order = new_order;
+        
+        // Update each member's payout position
+        let mut i = 0;
+        while (i < order_length) {
+            let member_addr = *vector::borrow(&circle.rotation_order, i);
+            let member = table::borrow_mut(&mut circle.members, member_addr);
+            members::set_payout_position(member, option::some(i));
+            i = i + 1;
+        };
+    }
+    
+    // ----------------------------------------------------------
+    // Replace the entire rotation order at once (entry function for frontend)
+    // ----------------------------------------------------------
+    public entry fun reorder_rotation_positions_entry(
+        circle: &mut Circle,
+        new_order: vector<address>,
+        ctx: &mut TxContext
+    ) {
+        reorder_rotation_positions(circle, new_order, ctx);
+    }
+    
+    // ----------------------------------------------------------
+    // Treasury balance getters (human-friendly)
+    // ----------------------------------------------------------
+    public fun get_treasury_balances(circle: &Circle): (u64, u64, u64) {
+        (
+            core::from_decimals(balance::value(&circle.contributions)),
+            core::from_decimals(balance::value(&circle.deposits)),
+            core::from_decimals(balance::value(&circle.penalties))
+        )
+    }
+    
+    // ----------------------------------------------------------
+    // Getters for UI display
+    // ----------------------------------------------------------
+    public fun get_contribution_amount(circle: &Circle): u64 {
+        core::from_decimals(config::get_contribution_amount(&circle.id))
+    }
+
+    public fun get_security_deposit(circle: &Circle): u64 {
+        core::from_decimals(config::get_security_deposit(&circle.id))
+    }
+
+    public fun get_target_amount(circle: &Circle): Option<u64> {
+        let target_opt = config::get_target_amount(&circle.id);
+        if (option::is_some(&target_opt)) {
+            let amt = *option::borrow(&target_opt);
+            option::some(core::from_decimals(amt))
+        } else {
+            option::none()
+        }
+    }
+
+    // USD value getters (in cents)
+    public fun get_contribution_amount_usd(circle: &Circle): u64 {
+        config::get_contribution_amount_usd(&circle.id)
+    }
+
+    public fun get_security_deposit_usd(circle: &Circle): u64 {
+        config::get_security_deposit_usd(&circle.id)
+    }
+
+    public fun get_target_amount_usd(circle: &Circle): Option<u64> {
+        config::get_target_amount_usd(&circle.id)
+    }
+    
+    // ----------------------------------------------------------
+    // Add to members table - shared helper to avoid table access error
+    // ----------------------------------------------------------
+    public(package) fun add_member(
+        circle: &mut Circle, 
+        addr: address, 
+        member: Member
+    ) {
+        table::add(&mut circle.members, addr, member);
+        circle.current_members = circle.current_members + 1;
+    }
+    
+    // ----------------------------------------------------------
+    // Get the members table - accessor for other modules
+    // ----------------------------------------------------------
+    public(package) fun get_members_table(circle: &Circle): &Table<address, Member> {
+        &circle.members
+    }
+    
+    public(package) fun get_members_table_mut(circle: &mut Circle): &mut Table<address, Member> {
+        &mut circle.members
+    }
+    
+    // ----------------------------------------------------------
+    // Get member - accessor for other modules
+    // ----------------------------------------------------------
+    public fun get_member(circle: &Circle, addr: address): &Member {
+        table::borrow(&circle.members, addr)
+    }
+    
+    // ----------------------------------------------------------
+    // Get mutable member - accessor for other modules
+    // ----------------------------------------------------------
+    public(package) fun get_member_mut(circle: &mut Circle, addr: address): &mut Member {
+        table::borrow_mut(&mut circle.members, addr)
+    }
+    
+    // ----------------------------------------------------------
+    // Check if address is a member
+    // ----------------------------------------------------------
+    public fun is_member(circle: &Circle, addr: address): bool {
+        table::contains(&circle.members, addr)
+    }
+    
+    // ----------------------------------------------------------
+    // Get circle admin
+    // ----------------------------------------------------------
+    public fun get_admin(circle: &Circle): address {
+        circle.admin
+    }
+    
+    // ----------------------------------------------------------
+    // Get the circle ID
+    // ----------------------------------------------------------
+    public fun get_id(circle: &Circle): ID {
+        object::uid_to_inner(&circle.id)
+    }
+    
+    // ----------------------------------------------------------
+    // Join penalty amount to penalties Balance
+    // ----------------------------------------------------------
+    public(package) fun add_to_penalties(circle: &mut Circle, amount: Balance<SUI>) {
+        balance::join(&mut circle.penalties, amount);
+    }
+    
+    // ----------------------------------------------------------
+    // Join deposit amount to deposits Balance
+    // ----------------------------------------------------------
+    public(package) fun add_to_deposits(circle: &mut Circle, amount: Balance<SUI>) {
+        balance::join(&mut circle.deposits, amount);
+    }
+    
+    // ----------------------------------------------------------
+    // Join contribution amount to contributions Balance
+    // ----------------------------------------------------------
+    public(package) fun add_to_contributions(circle: &mut Circle, amount: Balance<SUI>) {
+        balance::join(&mut circle.contributions, amount);
+    }
+    
+    // ----------------------------------------------------------
+    // Split from deposits Balance
+    // ----------------------------------------------------------
+    public(package) fun split_from_deposits(circle: &mut Circle, amount: u64): Balance<SUI> {
+        balance::split(&mut circle.deposits, amount)
+    }
+    
+    // ----------------------------------------------------------
+    // Split from contributions Balance
+    // ----------------------------------------------------------
+    public(package) fun split_from_contributions(circle: &mut Circle, amount: u64): Balance<SUI> {
+        balance::split(&mut circle.contributions, amount)
+    }
+    
+    // ----------------------------------------------------------
+    // Get circle name
+    // ----------------------------------------------------------
+    public fun get_name(circle: &Circle): String {
+        circle.name
+    }
+    
+    // ----------------------------------------------------------
+    // Get auto swap status
+    // ----------------------------------------------------------
+    public fun is_auto_swap_enabled(circle: &Circle): bool {
+        config::is_auto_swap_enabled(&circle.id)
+    }
+    
+    // ----------------------------------------------------------
+    // Get next payout time
+    // ----------------------------------------------------------
+    public fun get_next_payout_time(circle: &Circle): u64 {
+        circle.next_payout_time
+    }
+    
+    // ----------------------------------------------------------
+    // Get next payout info in a more readable manner
+    // ----------------------------------------------------------
+    public fun get_next_payout_info(circle: &Circle): (u64, u64, u64) {
+        let timestamp = circle.next_payout_time;
+        let weekday = core::get_weekday(timestamp);
+        let day =
+            if (config::get_cycle_length(&circle.id) == 0) {
+                weekday
+            } else if (config::get_cycle_length(&circle.id) == 1) {
+                core::get_day_of_month(timestamp)
+            } else {
+                core::get_day_of_quarter(timestamp)
+            };
+        
+        (timestamp, weekday, day)
+    }
+    
+    // ----------------------------------------------------------
+    // Get all members in a circle - for frontend access
+    // ----------------------------------------------------------
+    public fun get_circle_members(circle: &Circle): vector<address> {
+        let mut members = vector::empty<address>();
+        
+        // First, add admin if they are a member
+        if (table::contains(&circle.members, circle.admin)) {
+            vector::push_back(&mut members, circle.admin);
+        };
+        
+        // Add members from rotation order (if any)
+        let rotation_members = circle.rotation_order;
+        let mut i = 0;
+        let len = vector::length(&rotation_members);
+        
+        while (i < len) {
+            let addr = *vector::borrow(&rotation_members, i);
+            // Only add non-zero addresses and avoid duplicates
+            if (addr != @0x0 && !vector::contains(&members, &addr)) {
+                vector::push_back(&mut members, addr);
+            };
+            i = i + 1;
+        };
+        
+        // Try with some sample addresses as fallback
+        let sample_addrs = core::get_sample_addresses();
+        i = 0;
+        let sample_len = vector::length(&sample_addrs);
+        
+        while (i < sample_len) {
+            let addr = *vector::borrow(&sample_addrs, i);
+            if (table::contains(&circle.members, addr) && !vector::contains(&members, &addr)) {
+                vector::push_back(&mut members, addr);
+            };
+            i = i + 1;
+        };
+        
+        members
+    }
+    
+    // ----------------------------------------------------------
+    // Get rotation order
+    // ----------------------------------------------------------
+    public fun get_rotation_order(circle: &Circle): vector<address> {
+        circle.rotation_order
+    }
+    
+    // ----------------------------------------------------------
+    // Get current cycle
+    // ----------------------------------------------------------
+    public fun get_current_cycle(circle: &Circle): u64 {
+        circle.current_cycle
+    }
+    
+    // ----------------------------------------------------------
+    // Get warning penalty amount
+    // ----------------------------------------------------------
+    public fun get_warning_penalty_amount(circle: &Circle): u64 {
+        core::from_decimals(config::get_warning_penalty_amount(&circle.id))
+    }
+
+    // Add functions for auction management
+    public fun has_active_auction(circle: &Circle): bool {
+        option::is_some(&circle.active_auction)
+    }
+
+    public fun start_auction(
+        circle: &mut Circle,
+        position: u64,
+        minimum_bid: u64,
+        duration_days: u64,
+        discount_rate: u64,
+        start_time: u64
+    ) {
+        let end_time = start_time + (duration_days * core::ms_per_day());
+        
+        circle.active_auction = option::some(Auction {
+            position,
+            minimum_bid: core::to_decimals(minimum_bid),
+            highest_bid: 0,
+            highest_bidder: option::none(),
+            start_time,
+            end_time,
+            discount_rate,
+        });
+    }
+
+    public fun get_auction_info(circle: &Circle): (u64, u64, Option<address>, u64) {
+        assert!(option::is_some(&circle.active_auction), 27); // EAuctionNotActive
+        
+        let auction = option::borrow(&circle.active_auction);
+        (
+            auction.position,
+            auction.highest_bid,
+            auction.highest_bidder,
+            auction.end_time
+        )
+    }
+
+    public fun update_auction_bid(circle: &mut Circle, bid_amount: u64, bidder: address) {
+        assert!(option::is_some(&circle.active_auction), 27); // EAuctionNotActive
+        
+        let auction = option::borrow_mut(&mut circle.active_auction);
+        auction.highest_bid = bid_amount;
+        auction.highest_bidder = option::some(bidder);
+    }
+
+    public fun end_auction(circle: &mut Circle) {
+        circle.active_auction = option::none();
+    }
+
+    // Add functions for milestone management
+    public fun has_goal_type(circle: &Circle): bool {
+        let goal_type_opt = config::get_goal_type(&circle.id);
+        option::is_some(&goal_type_opt)
+    }
+
+    public fun get_goal_type(circle: &Circle): u8 {
+        let goal_type_opt = config::get_goal_type(&circle.id);
+        if (option::is_some(&goal_type_opt)) {
+            *option::borrow(&goal_type_opt)
+        } else {
+            0 // Default to standard rotational type
+        }
+    }
+
+    public fun get_member_count(circle: &Circle): u64 {
+        circle.current_members
+    }
+
+    // ----------------------------------------------------------
+    // Member exit
+    // ----------------------------------------------------------
+    public fun process_member_exit(
+        circle: &mut Circle,
+        member_addr: address,
+        ctx: &mut TxContext
+    ): bool {
+        // Only admin can process member exits
+        assert!(tx_context::sender(ctx) == circle.admin, 7);
+        
+        // Check if member exists and is active
+        assert!(is_member(circle, member_addr), 8);
+        
+        // In Move, we need to calculate the result differently
+        if (table::contains(&circle.members, member_addr)) {
+            let member = table::borrow_mut(&mut circle.members, member_addr);
+            members::process_member_exit(member, config::get_contribution_amount(&circle.id))
+        } else {
+            false
+        }
+    }
+
+    // ----------------------------------------------------------
+    // Admin approve member to join circle - entry function for frontend use
+    // ----------------------------------------------------------
+    public entry fun admin_approve_member(
+        circle: &mut Circle,
+        member_addr: address,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        // Ensure that only the admin can approve members
+        let sender = tx_context::sender(ctx);
+        assert!(sender == circle.admin, 7);
+        
+        // Ensure the member isn't already part of the circle
+        assert!(!is_member(circle, member_addr), EMemberAlreadyExists);
+        
+        // Ensure the circle isn't at max capacity
+        assert!(circle.current_members < config::get_max_members(&circle.id), 29);
+        
+        // Create a new Member object
+        let current_time = clock::timestamp_ms(clock);
+        let member = members::create_member(
+            current_time,           // joined_at 
+            option::none(),         // payout_position
+            0,                      // deposit_balance
+            core::member_status_active() // status - use core definition consistently
+        );
+        
+        // Add the member to the circle
+        add_member(circle, member_addr, member);
+        
+        // Emit MemberJoined event so the dashboard can detect this user's membership
+        event::emit(MemberJoined {
+            circle_id: object::uid_to_inner(&circle.id),
+            member: member_addr,
+            position: option::none(),
+        });
+    }
+    
+    // ----------------------------------------------------------
+    // Admin approve multiple members to join circle at once - entry function for frontend
+    // ----------------------------------------------------------
+    public entry fun admin_approve_members(
+        circle: &mut Circle,
+        member_addrs: vector<address>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        // Ensure that only the admin can approve members
+        let sender = tx_context::sender(ctx);
+        assert!(sender == circle.admin, 7);
+        
+        // Get current time once for all members
+        let current_time = clock::timestamp_ms(clock);
+        
+        // Track how many members we're adding
+        let members_to_add = vector::length(&member_addrs);
+        
+        // Ensure the circle won't exceed max capacity
+        assert!(circle.current_members + members_to_add <= config::get_max_members(&circle.id), 29);
+        
+        // Process each member address
+        let mut i = 0;
+        while (i < members_to_add) {
+            let member_addr = *vector::borrow(&member_addrs, i);
+            
+            // Ensure the member isn't already part of the circle
+            if (!is_member(circle, member_addr)) {
+                // Create a new Member object
+                let member = members::create_member(
+                    current_time,           // joined_at 
+                    option::none(),         // payout_position
+                    0,                      // deposit_balance
+                    core::member_status_active() // status - use core definition consistently
+                );
+                
+                // Add the member to the circle
+                add_member(circle, member_addr, member);
+                
+                // Emit MemberJoined event
+                event::emit(MemberJoined {
+                    circle_id: object::uid_to_inner(&circle.id),
+                    member: member_addr,
+                    position: option::none(),
+                });
+            };
+            
+            i = i + 1;
+        };
+    }
+
+    // ----------------------------------------------------------
+    // Get security deposit amount
+    // ----------------------------------------------------------
+    public fun get_security_deposit_amount(circle: &Circle): u64 {
+        config::get_security_deposit(&circle.id)
+    }
+
+    // ----------------------------------------------------------
+    // Member Entry function to deposit security deposit
+    // Performs checks and updates Member state, then calls custody to store the coin.
+    // ----------------------------------------------------------
+    public entry fun member_deposit_security_deposit<CoinType>(
+        circle: &mut Circle,
+        wallet: &mut custody::CustodyWallet,
+        deposit_coin: Coin<CoinType>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        let amount = coin::value(&deposit_coin);
+
+        // Read immutable values before getting mutable member reference
+        let circle_id = get_id(circle);
+        // Store admin address before mutable borrow
+        let admin = circle.admin;
+        
+        // Get security deposit requirement for both SUI and USD
+        let required_sui_amount = config::get_security_deposit(&circle.id);
+        let required_usd_cents = config::get_security_deposit_usd(&circle.id);
+
+        // --- Verification Steps (Now done in circles module) --- 
+        // Verify wallet belongs to this circle
+        assert!(custody::get_circle_id(wallet) == circle_id, EWalletCircleMismatch); 
+
+        // Verify caller is a member
+        assert!(is_member(circle, sender), 8); // Use existing error code for MemberNotFound
+
+        // Get member data mutably to update deposit status
+        let member = get_member_mut(circle, sender);
+
+        // Verify member is active - use core constants only
+        let member_status = members::get_status(member);
+        assert!(
+            member_status == core::member_status_active() ||
+            sender == admin, // Special case: admin can always deposit
+            14
+        ); // EMemberNotActive
+
+        // Verify security deposit hasn't already been paid
+        assert!(members::get_deposit_balance(member) == 0, 21); // Reuse error code EDepositAlreadyPaid
+
+        // --- Simplified Validation Logic ---
+        // For USDC (6 decimals): Convert USD cents to microUSDC (multiply by 10000)
+        // For SUI (9 decimals): Use the raw security_deposit amount
+        
+        // Check if it's SUI or stablecoin by comparing with SUI type
+        if (std::type_name::get<CoinType>() == std::type_name::get<SUI>()) {
+            // For SUI, validate against the SUI amount
+            assert!(amount == required_sui_amount, 2); // EIncorrectDepositAmount
+        } else {
+            // For stablecoins like USDC, validate against USD amount
+            // 20 cents ($0.20 USD) should equal 200,000 microUSDC (0.2 USDC)
+            let expected_stablecoin_amount = required_usd_cents * 10000;
+            assert!(amount == expected_stablecoin_amount, 2); // EIncorrectDepositAmount
+        };
+
+        // --- Update Member State --- 
+        members::set_deposit_balance(member, amount);
+
+        // --- Call Custody to Store Coin --- 
+        custody::internal_store_security_deposit_without_validation<CoinType>(
+            wallet,
+            deposit_coin,
+            sender, // Pass sender as the member address
+            clock,
+            ctx
+        );
+    }
+
+    // ----------------------------------------------------------
+    // Deposit stablecoin to circle with price validation
+    // ----------------------------------------------------------
+    public entry fun deposit_stablecoin_with_price_validation<CoinType>(
+        circle: &mut Circle,
+        wallet: &mut custody::CustodyWallet,
+        stablecoin: coin::Coin<CoinType>,
+        mut required_amount: u64,
+        price_info_object: &PriceInfoObject,
+        clock: &clock::Clock,
+        ctx: &mut tx_context::TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        
+        // Circle must be active
+        assert!(circle.is_active, ECircleNotActive);
+        
+        // Verify the sender is a member of the circle
+        assert!(table::contains(&circle.members, sender), ENotCircleMember);
+        
+        // If we're using custom validation requirements
+        if (required_amount == 0) {
+            required_amount = config::get_security_deposit(&circle.id);
+        };
+        
+        // Process the deposit with price validation
+        custody::internal_store_security_deposit<CoinType>(
+            wallet,
+            stablecoin,
+            sender,
+            required_amount,
+            price_info_object,
+            clock,
+            ctx
+        );
+        
+        // Update member status if deposit meets security deposit requirement
+        update_member_status_after_deposit(circle, sender, required_amount, ctx);
+    }
+    
+    // ----------------------------------------------------------
+    // Update member status after deposit
+    // ----------------------------------------------------------
+    fun update_member_status_after_deposit(
+        circle: &mut Circle,
+        member_addr: address,
+        amount: u64,
+        ctx: &mut tx_context::TxContext
+    ) {
+        let current_time = tx_context::epoch_timestamp_ms(ctx);
+        
+        // Get the member record
+        let member = table::borrow_mut(&mut circle.members, member_addr);
+        
+        // Check if member is pending and deposit is sufficient
+        if (config::get_security_deposit(&circle.id) <= amount) {
+            // If the member is pending, activate them
+            let member_status = members::get_status(member);
+            if (member_status == core::member_status_pending()) {
+                // Change status to active - use core values consistently
+                members::set_status(member, core::member_status_active());
+                members::set_activated_at(member, current_time);
+                
+                // Update deposit balance
+                members::set_deposit_balance(member, amount);
+                
+                // Emit member activated event
+                event::emit(MemberActivated {
+                    circle_id: object::uid_to_inner(&circle.id),
+                    member: member_addr,
+                    deposit_amount: amount
+                });
+            };
+        };
+    }
+
+    // ----------------------------------------------------------
+    // Deposit stablecoin to circle with price validation
+    // ----------------------------------------------------------
+    public fun process_member_deposit(
+        circle: &mut Circle, 
+        deposit_amount: u64,
+        member_addr: address,
+        ctx: &mut TxContext
+    ): bool {
+        // Make sure member exists in the circle
+        assert!(is_member(circle, member_addr), 8);
+        
+        // Get security deposit requirement and USD value before getting mutable references
+        let security_deposit = config::get_security_deposit(&circle.id);
+        let security_deposit_usd = config::get_security_deposit_usd(&circle.id);
+        
+        // Now get the member object (after the immutable borrow is done)
+        let member = get_member_mut(circle, member_addr);
+        
+        // --- Validate deposit amount directly ---
+        // Check if deposit is sufficient
+        assert!(deposit_amount >= security_deposit, 2); // EIncorrectDepositAmount
+
+        // --- Update Member State --- 
+        members::set_deposit_balance(member, deposit_amount);
+
+        // Emit member activated event
+        event::emit(MemberActivated {
+            circle_id: object::uid_to_inner(&circle.id),
+            member: member_addr,
+            deposit_amount: deposit_amount,
+        });
+        true
+    }
+
+} 

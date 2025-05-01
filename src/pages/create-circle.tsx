@@ -123,7 +123,9 @@ const prepareCircleCreationData = (formData: CircleFormData, suiPrice: number) =
     ? { some: BigInt(Math.round(formData.smartGoal.targetAmount * 1e9)) }
     : { none: null };
 
-  // Store the USD values (converted to cents)
+  // Store the USD values (converted to cents) - This is the primary value for the contract
+  // IMPORTANT: The contract expects USD values in cents (2 decimal places)
+  // For example, $0.20 = 20 cents, $10.50 = 1050 cents
   const contribution_amount_usd = Math.floor(formData.contributionAmountUSD * 100);
   const security_deposit_usd = Math.floor(formData.securityDepositUSD * 100);
   const target_amount_usd = formData.smartGoal?.targetAmountUSD 
@@ -135,16 +137,14 @@ const prepareCircleCreationData = (formData: CircleFormData, suiPrice: number) =
     ? { some: BigInt(Math.round(new Date(formData.smartGoal.targetDate).getTime() / 1000)) }
     : { none: null };
 
-  // Convert amounts to MIST (1 SUI = 1e9 MIST)
-  // Use real-time conversion of USD to SUI at transaction time
-  const contribution_amount = BigInt(Math.round(formData.contributionAmountUSD / suiPrice * 1e9));
+  // Calculate SUI amounts based on USD values and current SUI price
+  // IMPORTANT: These values are proper SUI amounts with 9 decimals (MIST)
+  // For example, if $0.20 USD = 0.0575 SUI, then it would be 57,500,000 MIST (0.0575 * 1e9)
+  // The contract expects values in MIST format (9 decimals)
+  const contribution_amount = BigInt(Math.round((formData.contributionAmountUSD / suiPrice) * 1e9));
   
-  // Ensure security deposit is at least 50% of contribution amount as required by the contract
-  const min_security_deposit = contribution_amount / BigInt(2);
-  const calculated_security_deposit = BigInt(Math.round(formData.securityDepositUSD / suiPrice * 1e9));
-  const security_deposit = calculated_security_deposit >= min_security_deposit 
-    ? calculated_security_deposit 
-    : min_security_deposit;
+  // Calculate security deposit similarly
+  const security_deposit = BigInt(Math.round((formData.securityDepositUSD / suiPrice) * 1e9));
 
   // Convert penalty rules to array of booleans
   const penalty_rules = [
@@ -342,6 +342,17 @@ export default function CreateCircle() {
     try {
       // Prepare data for contract with current SUI price
       const contractData = prepareCircleCreationData(formData, suiPrice!);
+      
+      // Debug logging
+      console.log("Circle Creation Data:", {
+        contributionAmountUSD: formData.contributionAmountUSD.toFixed(2),
+        securityDepositUSD: formData.securityDepositUSD.toFixed(2),
+        suiPrice: suiPrice!.toFixed(4),
+        contributionAmountMIST: contractData.contribution_amount.toString(),
+        securityDepositMIST: contractData.security_deposit.toString(),
+        expectedSUIAmount: (formData.contributionAmountUSD / suiPrice!).toFixed(6),
+        expectedMIST: Math.round((formData.contributionAmountUSD / suiPrice!) * 1e9)
+      });
       
       // Convert BigInt values to strings for JSON serialization
       const serializedData = {
@@ -576,6 +587,22 @@ export default function CreateCircle() {
                     )}
                   </div>
                 </div>
+                
+                {/* USD Pegging Explanation */}
+                <div className="px-3 py-2 bg-blue-50 border border-blue-200 rounded-md text-sm text-blue-700">
+                  <div className="flex items-start">
+                    <div className="mr-2 mt-0.5">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="font-medium">USD-Pegged Contributions</p>
+                      <p className="mt-1 text-xs">All contributions and security deposits are stored in USD value and converted to SUI at the current exchange rate when transactions occur. This provides stability against SUI price fluctuations.</p>
+                    </div>
+                  </div>
+                </div>
+                
                 {useCustomContribution ? (
                   <div className="flex items-center space-x-2">
                     <span className="text-gray-500">$</span>
@@ -869,6 +896,22 @@ export default function CreateCircle() {
                     )}
                   </div>
                 </div>
+                
+                {/* USD Pegging Explanation for Security Deposit */}
+                <div className="px-3 py-2 bg-green-50 border border-green-200 rounded-md text-sm text-green-700">
+                  <div className="flex items-start">
+                    <div className="mr-2 mt-0.5">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="font-medium">Stable Security Deposit</p>
+                      <p className="mt-1 text-xs">The security deposit is stored as a USD value on-chain. Members will always deposit the same USD value regardless of SUI price, ensuring fairness across time.</p>
+                    </div>
+                  </div>
+                </div>
+                
                 {useCustomDeposit ? (
                   <div className="flex items-center space-x-2">
                     <span className="text-gray-500">$</span>
@@ -1031,7 +1074,7 @@ export default function CreateCircle() {
                           }}
                           placeholder="Enter target amount in USD"
                           className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                          min={formData.contributionAmountUSD}
+                          min={formData.securityDepositUSD}
                           step="100"
                         />
                         <span className="text-gray-500">USD</span>
@@ -1146,6 +1189,26 @@ export default function CreateCircle() {
                       <Switch.Thumb className="block w-5 h-5 bg-white rounded-full shadow-lg transition-transform duration-200 transform translate-x-0.5 data-[state=checked]:translate-x-[22px]" />
                     </Switch.Root>
                   </div>
+                </div>
+              </div>
+
+              {/* Final USD Peg Summary */}
+              <div className="mt-8 mb-6 border border-indigo-200 bg-indigo-50 rounded-lg p-4 text-indigo-700">
+                <h3 className="font-semibold text-sm flex items-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-indigo-600" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 11-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clipRule="evenodd" />
+                  </svg>
+                  USD-Pegged Njangi Feature
+                </h3>
+                <div className="mt-2 text-sm">
+                  <p>This circle will store all monetary values in USD. Key benefits:</p>
+                  <ul className="mt-2 list-disc list-inside space-y-1 text-xs">
+                    <li>Contribution amounts remain stable in USD terms regardless of SUI price</li>
+                    <li>Members joining at different times pay the same real-world value</li>
+                    <li>Security deposits maintain consistent value over time</li>
+                    <li>The UI will always show both USD and equivalent SUI amounts</li>
+                  </ul>
+                  <p className="mt-2 text-xs">Current SUI price: {suiPrice ? `$${suiPrice.toFixed(4)}` : "Loading..."}</p>
                 </div>
               </div>
 

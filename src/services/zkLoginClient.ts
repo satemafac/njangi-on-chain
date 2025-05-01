@@ -529,4 +529,284 @@ export class ZkLoginClient {
       throw new ZkLoginError(String(error), false);
     }
   }
+
+  public async setRotationPosition(
+    account: AccountData, 
+    circleId: string,
+    memberAddress: string,
+    position: number
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    try {
+      // Ensure address is in the correct format for the smart contract
+      // First, strip any leading 0x if present
+      const cleanAddress = memberAddress.toLowerCase().replace(/^0x/, '');
+      // Then ensure it has 0x prefix for the API call
+      const normalizedMemberAddress = `0x${cleanAddress}`;
+      
+      // Log key information for debugging
+      console.log('Setting rotation position with:', {
+        sender: account.userAddr,
+        circleId,
+        rawMemberAddress: memberAddress,
+        normalizedMemberAddress,
+        position,
+        hasProofPoints: !!account.zkProofs?.proofPoints,
+        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
+        hasHeaderBase64: !!account.zkProofs?.headerBase64,
+        maxEpoch: account.maxEpoch
+      });
+
+      // Verify the account has valid proof data
+      if (!account.zkProofs?.proofPoints || 
+          !account.zkProofs.issBase64Details || 
+          !account.zkProofs.headerBase64) {
+        throw new ZkLoginError(
+          'Missing required authentication data. Please login again.',
+          true
+        );
+      }
+
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'setRotationPosition', 
+          account,
+          circleId,
+          memberAddress: normalizedMemberAddress,
+          position
+        })
+      });
+      
+      // Try to parse the response even if status is not OK
+      let responseData;
+      try {
+        responseData = await response.json();
+        console.log('ZkLoginClient: Set rotation position response:', 
+          response.status, response.statusText, responseData);
+      } catch (parseError) {
+        console.error('Failed to parse response:', parseError);
+        throw new ZkLoginError(`Failed to parse server response: ${response.statusText}`, false);
+      }
+      
+      // Handle authentication errors (401)
+      if (response.status === 401) {
+        console.error('Authentication error:', responseData);
+        throw new ZkLoginError(
+          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
+          true
+        );
+      }
+      
+      // Handle server errors (500)
+      if (!response.ok) {
+        console.error('Set rotation position failed:', responseData);
+        
+        // Check if this is a business logic error (HTTP 400)
+        if (response.status === 400 && responseData.error) {
+          throw new Error(responseData.error);
+        }
+        
+        throw new ZkLoginError(
+          responseData.error || 'Failed to set rotation position', 
+          !!responseData.requireRelogin
+        );
+      }
+      
+      // Even for successful response, check if we have a digest
+      if (!responseData.digest) {
+        throw new ZkLoginError('No transaction digest received from server', false);
+      }
+      
+      console.log('Set rotation position succeeded:', responseData);
+      return {
+        digest: responseData.digest,
+        requireRelogin: responseData.requireRelogin
+      };
+    } catch (error) {
+      console.error('Set rotation position error in client:', error);
+      // Rethrow ZkLoginError as is
+      if (error instanceof ZkLoginError) {
+        throw error;
+      }
+      // Otherwise wrap in a new error
+      throw new ZkLoginError(String(error), false);
+    }
+  }
+
+  /**
+   * Reorder all rotation positions in one transaction
+   * @param account ZkLogin account data
+   * @param circleId The circle ID
+   * @param newOrder Array of member addresses in the desired order
+   */
+  public async reorderRotationPositions(
+    account: AccountData, 
+    circleId: string,
+    newOrder: string[]
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    try {
+      // Log key information for debugging
+      console.log('ZkLoginClient: Reordering rotation positions with account:', {
+        address: account.userAddr,
+        circleId,
+        newOrderLength: newOrder.length,
+        hasProofPoints: !!account.zkProofs?.proofPoints,
+        hasHeaderBase64: !!account.zkProofs?.headerBase64,
+        maxEpoch: account.maxEpoch
+      });
+
+      // Verify the account has valid proof data
+      if (!account.zkProofs?.proofPoints || 
+          !account.zkProofs.issBase64Details || 
+          !account.zkProofs.headerBase64) {
+        throw new ZkLoginError(
+          'Missing required authentication data. Please login again.',
+          true
+        );
+      }
+
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'reorderRotationPositions', 
+          account,
+          circleId,
+          newOrder
+        })
+      });
+      
+      // Try to parse the response even if status is not OK
+      let responseData;
+      try {
+        responseData = await response.json();
+      } catch (parseError) {
+        console.error('Failed to parse response:', parseError);
+        throw new ZkLoginError(`Failed to parse server response: ${response.statusText}`, false);
+      }
+      
+      // Handle authentication errors (401)
+      if (response.status === 401) {
+        console.error('Authentication error:', responseData);
+        throw new ZkLoginError(
+          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
+          true
+        );
+      }
+      
+      // Handle server errors (500)
+      if (!response.ok) {
+        console.error('Transaction failed:', responseData);
+        throw new ZkLoginError(
+          responseData.error || 'Transaction failed', 
+          !!responseData.requireRelogin
+        );
+      }
+      
+      // Even for successful response, check if we have a digest
+      if (!responseData.digest) {
+        throw new ZkLoginError('No transaction digest received from server', false);
+      }
+      
+      console.log('Reorder rotation positions succeeded:', responseData);
+      return {
+        digest: responseData.digest,
+        requireRelogin: responseData.requireRelogin
+      };
+    } catch (error) {
+      console.error('Reorder rotation positions error in client:', error);
+      // Rethrow ZkLoginError as is
+      if (error instanceof ZkLoginError) {
+        throw error;
+      }
+      // Otherwise wrap in a new error
+      throw new ZkLoginError(String(error), false);
+    }
+  }
+
+  public async adminApproveMembers(
+    account: AccountData, 
+    circleId: string,
+    memberAddresses: string[]
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    try {
+      // Log key information for debugging
+      console.log('ZkLoginClient: Approving multiple members with account:', {
+        address: account.userAddr,
+        circleId,
+        memberCount: memberAddresses.length,
+        hasProofPoints: !!account.zkProofs?.proofPoints,
+        hasHeaderBase64: !!account.zkProofs?.headerBase64,
+        maxEpoch: account.maxEpoch
+      });
+
+      // Verify the account has valid proof data
+      if (!account.zkProofs?.proofPoints || 
+          !account.zkProofs.issBase64Details || 
+          !account.zkProofs.headerBase64) {
+        throw new ZkLoginError(
+          'Missing required authentication data. Please login again.',
+          true
+        );
+      }
+
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'adminApproveMembers', 
+          account,
+          circleId,
+          memberAddresses
+        })
+      });
+      
+      // Try to parse the response even if status is not OK
+      let responseData;
+      try {
+        responseData = await response.json();
+      } catch (parseError) {
+        console.error('Failed to parse response:', parseError);
+        throw new ZkLoginError(`Failed to parse server response: ${response.statusText}`, false);
+      }
+      
+      // Handle authentication errors (401)
+      if (response.status === 401) {
+        console.error('Authentication error:', responseData);
+        throw new ZkLoginError(
+          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
+          true
+        );
+      }
+      
+      // Handle server errors (500)
+      if (!response.ok) {
+        console.error('Transaction failed:', responseData);
+        throw new ZkLoginError(
+          responseData.error || 'Transaction failed', 
+          !!responseData.requireRelogin
+        );
+      }
+      
+      // Even for successful response, check if we have a digest
+      if (!responseData.digest) {
+        throw new ZkLoginError('No transaction digest received from server', false);
+      }
+      
+      console.log('Approve multiple members succeeded:', responseData);
+      return {
+        digest: responseData.digest,
+        requireRelogin: responseData.requireRelogin
+      };
+    } catch (error) {
+      console.error('Approve multiple members error in client:', error);
+      // Rethrow ZkLoginError as is
+      if (error instanceof ZkLoginError) {
+        throw error;
+      }
+      // Otherwise wrap in a new error
+      throw new ZkLoginError(String(error), false);
+    }
+  }
 } 

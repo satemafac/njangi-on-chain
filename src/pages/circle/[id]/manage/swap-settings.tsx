@@ -3,7 +3,6 @@ import { useRouter } from 'next/router';
 import { useAuth } from '../../../../contexts/AuthContext';
 import { SuiClient } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
-import Image from 'next/image';
 import { ArrowLeft } from 'lucide-react';
 import { cetusService } from '../../../../lib/cetus-service';
 import { PACKAGE_ID } from '../../../../services/circle-service';
@@ -90,15 +89,15 @@ export default function SwapSettings() {
     try {
       const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
       
-      const walletCreatedEvents = await client.queryEvents({
+      const hasCustodyWallet = await client.queryEvents({
         query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circle::CustodyWalletCreated`
+          MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyWalletCreated`
         },
-        limit: 50
+        limit: 1000
       });
       
       // Look for events related to this circle
-      for (const event of walletCreatedEvents.data) {
+      for (const event of hasCustodyWallet.data) {
         if (event.parsedJson && 
             typeof event.parsedJson === 'object' &&
             'circle_id' in event.parsedJson &&

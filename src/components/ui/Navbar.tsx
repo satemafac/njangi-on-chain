@@ -24,12 +24,9 @@ export const Navbar: React.FC = () => {
       setLoading(true);
       console.log('Fetching join requests...');
       
-      // Since we don't have a method to get all requests, we'll need to simulate by:
-      // 1. First get the circles from localStorage or context to identify admin circles
+      // Get only admin circles from localStorage
       const storedCircles = localStorage.getItem('adminCircles');
-      const storedViewedCircles = localStorage.getItem('viewedCircles');
       let adminCircleIds: string[] = [];
-      let viewedCircleIds: string[] = [];
       
       if (storedCircles) {
         try {
@@ -39,29 +36,16 @@ export const Navbar: React.FC = () => {
         }
       }
       
-      if (storedViewedCircles) {
-        try {
-          viewedCircleIds = JSON.parse(storedViewedCircles);
-        } catch (e) {
-          console.error('Error parsing stored viewed circles:', e);
-        }
-      }
-      
       console.log('Admin circle IDs:', adminCircleIds);
-      console.log('Viewed circle IDs:', viewedCircleIds);
       
-      // Combine unique circle IDs to check
-      const allCircleIds = [...new Set([...adminCircleIds, ...viewedCircleIds])];
-      console.log('All circle IDs to check:', allCircleIds);
-      
-      // 2. For each circle, fetch the pending requests
+      // Only fetch requests for circles where the user is an admin
       const allRequests: JoinRequest[] = [];
       
-      // If we have circles to check, use them
-      if (allCircleIds.length > 0) {
-        for (const circleId of allCircleIds) {
+      // If we have admin circles to check, use them
+      if (adminCircleIds.length > 0) {
+        for (const circleId of adminCircleIds) {
           try {
-            console.log(`Fetching requests for circle: ${circleId}`);
+            console.log(`Fetching requests for admin circle: ${circleId}`);
             const requests = await joinRequestService.getPendingRequestsByCircleId(circleId);
             console.log(`Received ${requests.length} requests for circle ${circleId}`);
             allRequests.push(...requests);
@@ -70,8 +54,8 @@ export const Navbar: React.FC = () => {
           }
         }
       } 
-      // Fallback approach: Try to use the circle ID from the URL 
-      else if (router.query.id && typeof router.query.id === 'string') {
+      // Fallback approach: Try to use the circle ID from the URL ONLY if we're on a circle management page
+      else if (router.pathname.includes('/circle') && router.pathname.includes('/manage') && router.query.id && typeof router.query.id === 'string') {
         const circleId = router.query.id;
         console.log(`Fallback: Fetching requests for circle from URL: ${circleId}`);
         const requests = await joinRequestService.getPendingRequestsByCircleId(circleId);
@@ -89,7 +73,7 @@ export const Navbar: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [account, router.query.id]);
+  }, [account, router.query.id, router.pathname]);
 
   useEffect(() => {
     fetchPendingRequests();

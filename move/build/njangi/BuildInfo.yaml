@@ -3,9 +3,11 @@ compiled_package_info:
   package_name: njangi
   address_alias_instantiation:
     njangi: "0000000000000000000000000000000000000000000000000000000000000000"
+    pyth: abf837e98c26087cba0883c0a7a28326b1fa3c5e1e2c5abdb486f9e8f594c837
     std: "0000000000000000000000000000000000000000000000000000000000000001"
     sui: "0000000000000000000000000000000000000000000000000000000000000002"
-  source_digest: 786A7749AD8730311918C922BE31AA5DA3B38F1CFF5A5ABFA43D00B4F8513B87
+    wormhole: f47329f4344f3bf0f8e436e2f7b485466cff300f12a166563995d3888c296a94
+  source_digest: 829907CF6FCE292A6B0F363BF6B49292840BAEDC3CF855DE47D6DD852976637C
   build_flags:
     dev_mode: false
     test_mode: false
@@ -26,6 +28,49 @@ compiled_package_info:
     lint_flag:
       no_lint: false
       lint: false
+    implicit_dependencies:
+      Bridge:
+        Internal:
+          kind:
+            Git:
+              git_url: "https://github.com/MystenLabs/sui.git"
+              git_rev: fbb68879cbd1
+              subdir: crates/sui-framework/packages/bridge
+          subst: ~
+          digest: ~
+          dep_override: true
+      MoveStdlib:
+        Internal:
+          kind:
+            Git:
+              git_url: "https://github.com/MystenLabs/sui.git"
+              git_rev: fbb68879cbd1
+              subdir: crates/sui-framework/packages/move-stdlib
+          subst: ~
+          digest: ~
+          dep_override: true
+      Sui:
+        Internal:
+          kind:
+            Git:
+              git_url: "https://github.com/MystenLabs/sui.git"
+              git_rev: fbb68879cbd1
+              subdir: crates/sui-framework/packages/sui-framework
+          subst: ~
+          digest: ~
+          dep_override: true
+      SuiSystem:
+        Internal:
+          kind:
+            Git:
+              git_url: "https://github.com/MystenLabs/sui.git"
+              git_rev: fbb68879cbd1
+              subdir: crates/sui-framework/packages/sui-system
+          subst: ~
+          digest: ~
+          dep_override: true
 dependencies:
   - MoveStdlib
+  - Pyth
   - Sui
+  - Wormhole

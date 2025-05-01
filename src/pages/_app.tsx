@@ -6,6 +6,7 @@ import { ActivityDetector } from '@/components/ActivityDetector';
 import { IdleWarningModal } from '@/components/IdleWarningModal';
 import { useAuth } from '@/contexts/AuthContext';
 import { Navbar } from '@/components/ui/Navbar';
+import { Toaster } from 'react-hot-toast';
 
 function AppContent({ Component, pageProps }: AppProps) {
   const { isAuthenticated } = useAuth();
@@ -19,6 +20,23 @@ function AppContent({ Component, pageProps }: AppProps) {
         </>
       )}
       <Component {...pageProps} />
+      <Toaster 
+        position="bottom-center" 
+        reverseOrder={false}
+        toastOptions={{
+          duration: 5000,
+          style: {
+            background: '#363636',
+            color: '#fff',
+          },
+          success: {
+            duration: 3000,
+          },
+          error: {
+            duration: 6000,
+          }
+        }}
+      />
     </ActivityDetector>
   );
 }
