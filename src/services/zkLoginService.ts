@@ -661,7 +661,13 @@ export class ZkLoginService {
       console.error('Transaction error:', err);
       
       if (err instanceof Error) {
-        // Check for specific error types
+        // **New**: Prioritize MoveAbort errors
+        if (err.message.includes('MoveAbort')) {
+          // Re-throw the original MoveAbort error so it gets passed back
+          throw new Error(err.message);
+        }
+        
+        // Keep existing checks for session/proof related errors
         if (err.message.includes('epoch has expired') || 
             err.message.includes('maxEpoch') || 
             err.message.includes('proof verify failed') ||
@@ -675,14 +681,20 @@ export class ZkLoginService {
           throw new Error('Insufficient gas: Please ensure you have enough SUI for gas');
         }
 
+        // Keep the check for invalid proof structure, but it should be less likely to catch MoveAborts now
         if (err.message.includes('Invalid proof') || 
             err.message.includes('proof points') ||
             err.message.includes('zkLogin signature error')) {
           throw new Error('Invalid proof structure: Please re-authenticate');
         }
+        
+        // If none of the above specific errors match, re-throw the original error message
+        // instead of the generic "Failed to execute transaction"
+        throw new Error(err.message || 'Failed to execute transaction. Please try again.');
       }
       
-      throw new Error('Failed to execute transaction. Please try again.');
+      // If it's not an Error instance, throw a generic message
+      throw new Error('An unknown error occurred during transaction execution.');
     }
   }
 

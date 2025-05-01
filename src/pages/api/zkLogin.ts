@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { ZkLoginService, SetupData, AccountData, OAuthProvider } from '@/services/zkLoginService';
-import { Transaction } from '@mysten/sui/transactions';
+import { ZkLoginError } from '@/services/zkLoginClient';
 import { SuiClient } from '@mysten/sui/client';
 import { PACKAGE_ID } from '../../services/circle-service';
 import { 
@@ -9,6 +9,7 @@ import {
 } from '../../services/constants';
 import { AggregatorClient, Env } from '@cetusprotocol/aggregator-sdk';
 import BN from 'bn.js';
+import { Transaction } from '@mysten/sui/transactions';
 
 // Add at the top with other imports
 interface RPCError extends Error {
@@ -239,6 +240,13 @@ const checkPoolLiquidity = async () => {
   }
 };
 
+// Add a utility function for formatting micro units (for USDC with 6 decimals)
+function formatMicroUnits(amount: bigint): string {
+  return (Number(amount) / 1_000_000).toFixed(6);
+}
+
+const CLOCK_OBJECT_ID = "0x6"; // Sui system clock object ID
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -423,6 +431,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const deposit = BigInt(circleData.security_deposit);
           const depositUsd = BigInt(circleData.security_deposit_usd || 0);
           
+          // Debug logging to understand value conversions
+          console.log("Circle Creation - Monetary Values:", {
+            contributionAmountSUI: Number(contribution) / 1e9,  // Convert MIST to SUI
+            contributionAmountMIST: contribution.toString(),
+            contributionUsdCents: contributionUsd.toString(),
+            contributionUsdDollars: Number(contributionUsd) / 100,
+            securityDepositSUI: Number(deposit) / 1e9,  // Convert MIST to SUI
+            securityDepositMIST: deposit.toString(),
+            securityDepositUsdCents: depositUsd.toString(),
+            securityDepositUsdDollars: Number(depositUsd) / 100,
+            expectedFormat: "The contract expects SUI values in MIST format (9 decimals)"
+          });
+          
+          // Basic validation for reasonable SUI amounts
+          const estSuiPrice = Number(contributionUsd) / 100 / (Number(contribution) / 1e9);
+          console.log(`Estimated SUI price from values: $${estSuiPrice.toFixed(4)} USD`);
+          
           if (contribution <= BigInt(0) || deposit <= BigInt(0)) {
             return res.status(400).json({ 
               error: 'Invalid amount: Contribution and security deposit must be greater than 0'
@@ -485,7 +510,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 txb.setSender(session.account!.userAddr);
                 
                 txb.moveCall({
-                  target: `${PACKAGE_ID}::njangi_circle::create_circle`,
+                  target: `${PACKAGE_ID}::njangi_circles::create_circle`,
                   arguments: [
                     txb.pure.string(circleData.name),
                     txb.pure.u64(contribution),
@@ -669,7 +694,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             // Check if this is indeed a circle object
             if ('type' in objectResponse.data.content && 
                 typeof objectResponse.data.content.type === 'string' &&
-                !objectResponse.data.content.type.includes('njangi_circle::Circle')) {
+                !objectResponse.data.content.type.includes('njangi_circles::Circle')) {
               console.error(`Object ${circleId} is not a Circle`);
               return res.status(400).json({ 
                 error: `Object is not a Circle: ${circleId}`
@@ -707,7 +732,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 console.log(`Using circleId: ${circleId} as object argument`);
                 
                 txb.moveCall({
-                  target: `${PACKAGE_ID}::njangi_circle::delete_circle`,
+                  target: `${PACKAGE_ID}::njangi_circles::delete_circle`,
                   arguments: [
                     txb.object(circleId)
                   ]
@@ -835,90 +860,87 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           try {
             // Create a transaction for admin_approve_member
-            const txb = new Transaction();
+            console.log(`Building moveCall for adding member: ${req.body.circleId}, member: ${req.body.memberAddress}`);
             
-            // Add the admin_approve_member call
-            txb.moveCall({
-              target: `${PACKAGE_ID}::njangi_circle::admin_approve_member`,
-              arguments: [
-                txb.object(req.body.circleId),
-                txb.pure.address(req.body.memberAddress),
-                txb.pure.option('u64', null), // Position option - pass None/null for default position
-                txb.object('0x6'), // Clock object
-              ]
-            });
-
-            // Execute the transaction with zkLogin signature
-            const txResult = await instance.sendTransaction(
-              account,
-              (txBlock) => {
-                console.log(`Building moveCall for admin_approve_member on circle: ${req.body.circleId}, member: ${req.body.memberAddress}`);
-                // Transfer the prepared call to the new transaction block
-                txBlock.moveCall({
-                  target: `${PACKAGE_ID}::njangi_circle::admin_approve_member`,
-                  arguments: [
-                    txBlock.object(req.body.circleId),
-                    txBlock.pure.address(req.body.memberAddress),
-                    txBlock.pure.option('u64', null), // Position option - pass None/null for default position
-                    txBlock.object('0x6'), // Clock object
-                  ]
-                });
-              },
-              { gasBudget: 100000000 } // Increase gas budget for approval operation
-            );
-            
-            console.log('Admin approve member transaction successful:', txResult);
-            return res.status(200).json({ 
-              digest: txResult.digest,
-              status: txResult.status,
-              gasUsed: txResult.gasUsed
-            });
-          } catch (txError) {
-            console.error('Admin approve member transaction error:', txError);
-            console.error('Error type:', typeof txError);
-            console.error('Error message:', txError instanceof Error ? txError.message : String(txError));
-            console.error('Error stack:', txError instanceof Error ? txError.stack : 'No stack trace');
-            
-            // Check if the error is related to proof verification
-            if (txError instanceof Error && 
-                (txError.message.includes('proof verify failed') ||
-                 txError.message.includes('Session expired') ||
-                 txError.message.includes('re-authenticate'))) {
+            try {
+              // Send transaction using zkLogin service
+              const txResult = await instance.sendTransaction(
+                account,
+                (txb: Transaction) => {
+                  txb.setSender(account.userAddr);
+                  
+                  // Call our implemented admin_approve_member function
+                  txb.moveCall({
+                    target: `${PACKAGE_ID}::njangi_circles::admin_approve_member`,
+                    arguments: [
+                      txb.object(req.body.circleId),
+                      txb.pure.address(req.body.memberAddress),
+                      txb.object("0x6")  // Clock object
+                    ]
+                  });
+                },
+                { gasBudget: 100000000 } // Higher gas budget for member approval
+              );
               
-              // Clear the session for authentication errors
-                sessions.delete(sessionId);
-              clearSessionCookie(res);
-              
-              return res.status(401).json({
-                error: 'Your session has expired. Please login again.',
-                requireRelogin: true
+              console.log('Admin approve member transaction successful:', txResult);
+              return res.status(200).json({
+                digest: txResult.digest,
+                status: txResult.status,
+                gasUsed: txResult.gasUsed
               });
-            }
-            
-            // Check for specific contract errors
-            if (txError instanceof Error) {
-              if (txError.message.includes('ENotCircleAdmin')) {
-                return res.status(400).json({ 
-                  error: 'Cannot approve: Only the circle admin can approve new members',
-                  requireRelogin: false
-                });
-              } else if (txError.message.includes('EMemberAlreadyActive')) {
-                return res.status(400).json({ 
-                  error: 'Member is already active in this circle',
-                  requireRelogin: false
-                });
-              } else if (txError.message.includes('ECircleIsFull')) {
-                return res.status(400).json({ 
-                  error: 'Cannot approve: Circle has reached maximum member capacity',
-                  requireRelogin: false
+            } catch (txError) {
+              console.error('Admin approve member transaction error:', txError);
+              console.error('Error type:', typeof txError);
+              console.error('Error message:', txError instanceof Error ? txError.message : String(txError));
+              console.error('Error stack:', txError instanceof Error ? txError.stack : 'No stack trace');
+              
+              // Check if the error is related to proof verification
+              if (txError instanceof Error && 
+                  (txError.message.includes('proof verify failed') ||
+                   txError.message.includes('Session expired') ||
+                   txError.message.includes('re-authenticate'))) {
+                
+                // Clear the session for authentication errors
+                  sessions.delete(sessionId);
+                clearSessionCookie(res);
+                
+                return res.status(401).json({
+                  error: 'Your session has expired. Please login again.',
+                  requireRelogin: true
                 });
               }
+              
+              // Check for specific contract errors
+              if (txError instanceof Error) {
+                if (txError.message.includes('ENotCircleAdmin')) {
+                  return res.status(400).json({ 
+                    error: 'Cannot approve: Only the circle admin can approve new members',
+                    requireRelogin: false
+                  });
+                } else if (txError.message.includes('EMemberAlreadyActive')) {
+                  return res.status(400).json({ 
+                    error: 'Member is already active in this circle',
+                    requireRelogin: false
+                  });
+                } else if (txError.message.includes('ECircleIsFull')) {
+                  return res.status(400).json({ 
+                    error: 'Cannot approve: Circle has reached maximum member capacity',
+                    requireRelogin: false
+                  });
+                }
+              }
+              
+              // For other errors, keep the session but return error with more detail
+              return res.status(500).json({ 
+                error: txError instanceof Error ? txError.message : 'Failed to execute transaction',
+                details: txError instanceof Error ? txError.stack : String(txError),
+                requireRelogin: false
+              });
             }
-            
-            // For other errors, keep the session but return error with more detail
+          } catch (error) {
+            console.error('Admin approve member error:', error);
             return res.status(500).json({ 
-              error: txError instanceof Error ? txError.message : 'Failed to execute transaction',
-              details: txError instanceof Error ? txError.stack : String(txError),
+              error: error instanceof Error ? error.message : 'Failed to process admin approve member request',
               requireRelogin: false
             });
           }
@@ -926,6 +948,135 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           console.error('Admin approve member error:', error);
           return res.status(500).json({ 
             error: error instanceof Error ? error.message : 'Failed to process admin approve member request',
+            requireRelogin: false
+          });
+        }
+
+      case 'adminApproveMembers':
+        try {
+          if (!account) {
+            return res.status(400).json({ error: 'Account data is required' });
+          }
+
+          if (!req.body.circleId || !req.body.memberAddresses || !Array.isArray(req.body.memberAddresses)) {
+            return res.status(400).json({ error: 'Circle ID and member addresses array are required' });
+          }
+
+          // Validate the session
+          try {
+            if (!sessionId) {
+              throw new Error('No session ID provided');
+            }
+            // Just validate the session without storing the result
+            validateSession(sessionId, 'sendTransaction');
+          } catch (validationError) {
+            console.error('Session validation failed:', validationError);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: validationError instanceof Error ? validationError.message : 'Session validation failed',
+              requireRelogin: true
+            });
+          }
+
+          try {
+            // Create a transaction for admin_approve_members
+            console.log(`Building moveCall for adding multiple members to circle: ${req.body.circleId}, member count: ${req.body.memberAddresses.length}`);
+            
+            try {
+              // Normalize all addresses
+              const normalizedAddresses = req.body.memberAddresses.map((addr: string) => {
+                // Ensure all addresses have 0x prefix and are lowercase
+                return addr.toLowerCase().startsWith('0x') ? addr.toLowerCase() : `0x${addr.toLowerCase()}`;
+              });
+
+              // Send transaction using zkLogin service
+              const txResult = await instance.sendTransaction(
+                account,
+                (txb: Transaction) => {
+                  txb.setSender(account.userAddr);
+                  
+                  // Create a move vector of addresses
+                  const addressArgs = normalizedAddresses.map((addr: string) => txb.pure.address(addr));
+                  
+                  // Call our implemented admin_approve_members function
+                  txb.moveCall({
+                    target: `${PACKAGE_ID}::njangi_circles::admin_approve_members`,
+                    arguments: [
+                      txb.object(req.body.circleId),
+                      txb.makeMoveVec({ elements: addressArgs, type: 'address' }),
+                      txb.object("0x6")  // Clock object
+                    ]
+                  });
+                },
+                { gasBudget: 150000000 } // Higher gas budget for multiple member approvals
+              );
+              
+              console.log('Admin approve multiple members transaction successful:', txResult);
+              return res.status(200).json({
+                digest: txResult.digest,
+                status: txResult.status,
+                gasUsed: txResult.gasUsed
+              });
+            } catch (txError) {
+              console.error('Admin approve multiple members transaction error:', txError);
+              console.error('Error type:', typeof txError);
+              console.error('Error message:', txError instanceof Error ? txError.message : String(txError));
+              console.error('Error stack:', txError instanceof Error ? txError.stack : 'No stack trace');
+              
+              // Check if the error is related to proof verification
+              if (txError instanceof Error && 
+                  (txError.message.includes('proof verify failed') ||
+                   txError.message.includes('Session expired') ||
+                   txError.message.includes('re-authenticate'))) {
+                
+                // Clear the session for authentication errors
+                sessions.delete(sessionId);
+                clearSessionCookie(res);
+                
+                return res.status(401).json({
+                  error: 'Your session has expired. Please login again.',
+                  requireRelogin: true
+                });
+              }
+              
+              // Check for specific contract errors
+              if (txError instanceof Error) {
+                if (txError.message.includes('ENotCircleAdmin')) {
+                  return res.status(400).json({ 
+                    error: 'Cannot approve: Only the circle admin can approve new members',
+                    requireRelogin: false
+                  });
+                } else if (txError.message.includes('EMemberAlreadyActive')) {
+                  return res.status(400).json({ 
+                    error: 'One or more members are already active in this circle',
+                    requireRelogin: false
+                  });
+                } else if (txError.message.includes('ECircleIsFull')) {
+                  return res.status(400).json({ 
+                    error: 'Cannot approve: Circle has reached maximum member capacity',
+                    requireRelogin: false
+                  });
+                }
+              }
+              
+              // For other errors, keep the session but return error with more detail
+              return res.status(500).json({ 
+                error: txError instanceof Error ? txError.message : 'Failed to execute transaction',
+                details: txError instanceof Error ? txError.stack : String(txError),
+                requireRelogin: false
+              });
+            }
+          } catch (error) {
+            console.error('Admin approve multiple members error:', error);
+            return res.status(500).json({ 
+              error: error instanceof Error ? error.message : 'Failed to process bulk member approval request',
+              requireRelogin: false
+            });
+          }
+        } catch (error) {
+          console.error('Admin approve multiple members error:', error);
+          return res.status(500).json({ 
+            error: error instanceof Error ? error.message : 'Failed to process bulk member approval request',
             requireRelogin: false
           });
         }
@@ -946,9 +1097,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         try {
-          const { walletId, suiAmount, slippage = 100 } = req.body; // slippage in basis points (100 = 1%)
-          if (!walletId || !suiAmount) {
-            return res.status(400).json({ error: 'Wallet ID and SUI amount are required' });
+          // Add circleId to the required parameters
+          const { walletId, suiAmount, slippage = 100, circleId } = req.body; 
+          if (!walletId || !suiAmount || !circleId) {
+            return res.status(400).json({ error: 'Wallet ID, Circle ID, and SUI amount are required' });
           }
 
           // Validate amount and convert from SUI to MIST (smallest unit, 1 SUI = 10^9 MIST)
@@ -1240,7 +1392,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 ]);
 
                 // Create swap transaction with the aggregator
-                await aggregator.routerSwap({
+                // THIS RETURNS THE RESULTING STABLECOIN OBJECT
+                const stableCoinResult = await aggregator.routerSwap({
                   routers: routerData,
                   inputCoin: swapCoin,
                   slippage: effectiveSlippage,
@@ -1248,22 +1401,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 });
                 
                 // Now deposit the swapped USDC to the custody wallet
-                console.log(`Depositing swapped USDC as security deposit to wallet ${walletId}`);
+                console.log(`Depositing swapped ${targetCoinType} as security deposit to circle ${circleId}, wallet ${walletId}`);
                 
-                // When depositing the USDC, use the successful coin type
+                // Call the new deposit_security_deposit function with the resulting coin
                 txb.moveCall({
-                  target: `${PACKAGE_ID}::njangi_circle::deposit_stablecoin_to_custody`,
+                  target: `${PACKAGE_ID}::njangi_circles::member_deposit_security_deposit`,
                   arguments: [
+                    txb.object(circleId), // Pass circleId first
                     txb.object(walletId),
-                    txb.pure.address(targetCoinType), // Use the type that worked in the swap
+                    stableCoinResult,     // Use the coin returned from the swap
                     txb.object("0x6")  // Clock object
-                  ]
+                  ],
+                  typeArguments: [targetCoinType] // Use the coin type determined during routing
                 });
               },
-              { gasBudget: 100000000 } // Higher gas budget for complex swap
+              { gasBudget: 100000000 } // Higher gas budget for complex swap + deposit
             );
             
-            console.log('Swap and deposit transaction successful:', txResult);
+            console.log('Swap and security deposit transaction successful:', txResult);
             return res.status(200).json({ 
               digest: txResult.digest,
               status: txResult.status,
@@ -1416,7 +1571,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               (txb) => {
               // Add a simple moveCall directly
                 txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_circle::configure_stablecoin_swap`,
+                target: `${PACKAGE_ID}::njangi_circles::configure_stablecoin_swap`,
                   arguments: [
                     txb.object(walletId),
                   txb.pure.bool(config.enabled),
@@ -1481,12 +1636,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res.status(400).json({ error: 'Account data is required' });
         }
 
-        if (!req.body.walletId || !req.body.depositAmount) {
-          return res.status(400).json({ error: 'Missing required parameters: walletId, depositAmount' });
+        // Add circleId to the required parameters
+        if (!req.body.walletId || !req.body.depositAmount || !req.body.circleId) {
+          return res.status(400).json({ error: 'Missing required parameters: walletId, depositAmount, circleId' });
         }
 
         try {
           // Ensure parameters are of the correct type
+          const circleId = String(req.body.circleId); // Get circleId
           const walletId = String(req.body.walletId);
           const depositAmount = typeof req.body.depositAmount === 'number' ? 
             BigInt(Math.floor(req.body.depositAmount)) : 
@@ -1515,7 +1672,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
-          console.log(`Creating security deposit transaction for wallet ${walletId}, amount ${depositAmount}`);
+          console.log(`Creating SUI security deposit transaction for circle ${circleId}, wallet ${walletId}, amount ${depositAmount}`);
 
           // Execute the transaction with zkLogin
             const txResult = await instance.sendTransaction(
@@ -1528,16 +1685,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 txb.pure.u64(depositAmount)
               ]);
                 
-              // Call the deposit function to pay security deposit
+              // Call the NEW entry function in njangi_circles with the resulting coin
                 txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_circle::deposit_to_custody`,
-                  arguments: [
+                target: `${PACKAGE_ID}::njangi_circles::member_deposit_security_deposit`,
+                arguments: [
+                  txb.object(circleId), // Pass circleId first
                   txb.object(walletId),
                   depositCoin,
                   txb.object("0x6"), // Clock object
                 ],
+                typeArguments: [SUI_COIN_TYPE] // Specify SUI type argument
               });
-            }
+            },
+            { gasBudget: 100000000 } // Keep increased gas budget
           );
           
           console.log('Security deposit transaction successful:', txResult);
@@ -1562,6 +1722,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
           
+          // Add checks for new error codes from the contract
+          if (err instanceof Error) {
+            if (err.message.includes('EMemberNotFound')) {
+              return res.status(400).json({ error: 'Member not found in this circle.' });
+            }
+            if (err.message.includes('EMemberNotActive')) {
+              return res.status(400).json({ error: 'Member is not active in this circle.' });
+            }
+            if (err.message.includes('EDepositAlreadyPaid')) {
+              return res.status(400).json({ error: 'Security deposit has already been paid.' });
+            }
+            if (err.message.includes('EIncorrectDepositAmount')) {
+              return res.status(400).json({ error: 'Incorrect security deposit amount provided.' });
+            }
+          }
+
           return res.status(500).json({ 
             error: err instanceof Error ? err.message : 'Failed to process security deposit'
           });
@@ -1573,13 +1749,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res.status(400).json({ error: 'Account data is required' });
         }
 
-        if (!req.body.walletId || !req.body.coinObjectId || !req.body.stablecoinType) {
+        // Add circleId to required parameters
+        if (!req.body.walletId || !req.body.coinObjectId || !req.body.stablecoinType || !req.body.circleId) {
           return res.status(400).json({ 
-            error: 'Missing required parameters: walletId, coinObjectId, stablecoinType' 
+            error: 'Missing required parameters: circleId, walletId, coinObjectId, stablecoinType' 
           });
         }
 
         try {
+          const circleId = String(req.body.circleId); // Get circleId
           const walletId = String(req.body.walletId);
           const coinObjectId = String(req.body.coinObjectId);
           const stablecoinType = String(req.body.stablecoinType);
@@ -1596,24 +1774,152 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
           
-          // Execute the stablecoin deposit transaction
+          // Step 1: Get the required security deposit amount from the circle
+          const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+          let requiredDepositAmount = 0;
+          let coinValue = 0;
+          
+          try {
+            // Get the coin object to check available balance
+            const coinObject = await suiClient.getObject({
+              id: coinObjectId,
+              options: { showContent: true }
+            });
+            
+            if (coinObject.data?.content && 'fields' in coinObject.data.content) {
+              const coinFields = coinObject.data.content.fields as Record<string, unknown>;
+              coinValue = Number(coinFields.balance || 0);
+            }
+            
+            // For USDC security deposit, we need to get it from the dynamic fields
+            if (stablecoinType.toLowerCase().includes('usdc')) {
+              // First, get the dynamic fields of the circle to find the config
+              const dynamicFields = await suiClient.getDynamicFields({
+                parentId: circleId
+              });
+              
+              console.log('Searching for CircleConfig in dynamic fields...');
+              
+              // Find the CircleConfig field
+              let configFieldObjectId: string | null = null;
+              for (const field of dynamicFields.data) {
+                if (field.name && 
+                    typeof field.name === 'object' && 
+                    'type' in field.name && 
+                    field.name.type && 
+                    field.name.type.includes('vector<u8>') && 
+                    field.objectType && 
+                    field.objectType.includes('CircleConfig')) {
+                  
+                  configFieldObjectId = field.objectId;
+                  console.log(`Found CircleConfig dynamic field: ${configFieldObjectId}`);
+                  break;
+                }
+              }
+              
+              // Get the CircleConfig object if found
+              if (configFieldObjectId) {
+                const configObject = await suiClient.getObject({
+                  id: configFieldObjectId,
+                  options: { showContent: true }
+                });
+                
+                console.log('CircleConfig field content:', configObject);
+                
+                if (configObject.data?.content && 
+                    'fields' in configObject.data.content &&
+                    'value' in configObject.data.content.fields) {
+                  
+                  const valueField = configObject.data.content.fields.value;
+                  if (typeof valueField === 'object' && 
+                      valueField !== null && 
+                      'fields' in valueField) {
+                    
+                    // Extract the security_deposit_usd field
+                    const configFields = valueField.fields as Record<string, unknown>;
+                    const securityDepositUsd = Number(configFields.security_deposit_usd || 0);
+                    
+                    console.log('Found security_deposit_usd in CircleConfig:', securityDepositUsd);
+                    
+                    // The security_deposit_usd is in CENTS (e.g., 20 = $0.20)
+                    // But USDC coins are in microUSDC (e.g., 1 USDC = 1,000,000 microUSDC)
+                    // So we need to convert cents to microUSDC: 
+                    // 1 cent = $0.01 = 10,000 microUSDC
+                    if (securityDepositUsd > 0) {
+                      requiredDepositAmount = Math.floor(securityDepositUsd * 10000); // cents to microUSDC
+                      console.log('Calculated requiredDepositAmount (in microUSDC):', requiredDepositAmount);
+                    }
+                  }
+                }
+              }
+            } else {
+              // For other coins, try to get the regular security_deposit field from circle
+              const circleObject = await suiClient.getObject({
+                id: circleId,
+                options: { showContent: true }
+              });
+              
+              if (circleObject.data?.content && 'fields' in circleObject.data.content) {
+                const circleFields = circleObject.data.content.fields as Record<string, unknown>;
+                requiredDepositAmount = Number(circleFields.security_deposit || 0);
+              }
+            }
+            
+            console.log('Security deposit info:', {
+              requiredDepositAmount,
+              coinValue,
+              coinType: stablecoinType
+            });
+          } catch (e) {
+            console.error('Error checking circle and coin info:', e);
+          }
+          
+          // Execute the transaction with coin splitting if needed
           const txResult = await instance.sendTransaction(
             session.account,
             (txb: Transaction) => {
               txb.setSender(session.account!.userAddr);
               
-              txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_circle::deposit_stablecoin_to_custody`,
-                arguments: [
-                  txb.object(walletId),
-                  txb.object(coinObjectId),
-                  txb.object("0x6") // Clock object
-                ],
-                typeArguments: [stablecoinType]
-              });
-            }
+              if (requiredDepositAmount > 0 && coinValue > requiredDepositAmount) {
+                // Create a SplitCoins transaction for exact amount if needed
+                console.log(`Splitting coin ${coinObjectId} to get exact required amount: ${requiredDepositAmount} microUSDC`);
+                
+                // Split the coin to get the exact required amount
+                const [depositCoin] = txb.splitCoins(
+                  txb.object(coinObjectId), 
+                  [txb.pure.u64(BigInt(requiredDepositAmount))]
+                );
+                
+                // Execute the deposit with the split coin
+                txb.moveCall({
+                  target: `${PACKAGE_ID}::njangi_circles::member_deposit_security_deposit`,
+                  typeArguments: [stablecoinType],
+                  arguments: [
+                    txb.object(circleId),
+                    txb.object(walletId),
+                    depositCoin, // Use the split coin with the exact amount
+                    txb.object(CLOCK_OBJECT_ID)
+                  ]
+                });
+              } else {
+                // Just use the coin directly if it matches the required amount
+                // or if we couldn't determine the required amount
+                txb.moveCall({
+                  target: `${PACKAGE_ID}::njangi_circles::member_deposit_security_deposit`,
+                  typeArguments: [stablecoinType],
+                  arguments: [
+                    txb.object(circleId),
+                    txb.object(walletId),
+                    txb.object(coinObjectId),
+                    txb.object(CLOCK_OBJECT_ID)
+                  ]
+                });
+              }
+            },
+            { gasBudget: 150000000 } // Increase gas budget
           );
           
+          console.log('Security deposit transaction successful:', txResult);
           return res.status(200).json({ 
             digest: txResult.digest,
             status: txResult.status,
@@ -1634,6 +1940,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               error: 'Authentication error: Your session has expired. Please login again.',
               requireRelogin: true
             });
+          }
+
+          // Add checks for new error codes from the contract
+          if (error instanceof Error) {
+            if (error.message.includes('EMemberNotFound') || error.message.includes('ENotCircleMember') || error.message.includes(', 8)')) {
+              return res.status(400).json({ 
+                error: 'You are not a member of this circle. Please join the circle first.' 
+              });
+            }
+            
+            // More detailed handling for EMemberNotActive error (code 14)
+            if (error.message.includes('EMemberNotActive') || error.message.includes(', 14)') || 
+                error.message.match(/MoveAbort\(.+, 14\)/)) {
+              return res.status(400).json({ 
+                error: 'Your membership is not active in this circle. Please contact the circle admin to activate your membership before making a deposit.' 
+              });
+            }
+            
+            if (error.message.includes('EDepositAlreadyPaid') || error.message.includes(', 21)')) {
+              return res.status(400).json({ 
+                error: 'You have already paid the security deposit for this circle.' 
+              });
+            }
+            
+            if (error.message.includes('EIncorrectDepositAmount') || error.message.includes(', 2)')) {
+              // Since requiredDepositAmount may not be in this scope, provide a generic message
+              return res.status(400).json({ 
+                error: 'The deposit amount does not match the required security deposit for this circle. For USDC deposits, this should be the exact USD value in micro-units (20 cents = 200,000 microUSDC).' 
+              });
+            }
           }
           
           return res.status(500).json({ 
@@ -1770,7 +2106,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 
                 // Toggle auto-swap call
                 txb.moveCall({
-                  target: `${PACKAGE_ID}::njangi_circle::toggle_auto_swap`,
+                  target: `${PACKAGE_ID}::njangi_circles::toggle_auto_swap`,
                   arguments: [
                     txb.object(circleId),
                     txb.pure.bool(enabled)
@@ -1868,7 +2204,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               
               // Call the contribute_from_custody function
               txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_circle::contribute_from_custody`,
+                target: `${PACKAGE_ID}::njangi_circles::contribute_from_custody`,
                 arguments: [
                   txb.object(circleId),
                   txb.object(walletId),
@@ -1939,6 +2275,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             BigInt(Math.floor(suiAmount * 1e9));
             
           console.log(`Using amount for swap: ${Number(suiAmountMIST) / 1e9} SUI`);
+          
+          // Dynamic slippage approach based on amount size
+          // Use more careful slippage for larger amounts, more flexible for smaller amounts
+          const effectiveSlippage = Number(slippage);
+          const amountInSUI = Number(suiAmountMIST) / 1e9;
+          let adaptiveBuffer = 0.05; // Default 5% buffer
+          
+          // For very small transactions (< 0.1 SUI), allow more buffer to ensure success
+          if (amountInSUI < 0.1) {
+            adaptiveBuffer = 0.10; // 10% buffer for tiny amounts
+          } 
+          // For medium transactions around 0.16-0.2 SUI (common security deposit range), be most aggressive
+          else if (amountInSUI >= 0.15 && amountInSUI <= 0.2) {
+            adaptiveBuffer = 0.25; // 25% buffer for this problematic range
+            console.log(`Using extra aggressive buffer (25%) for problematic amount range around 0.16 SUI`);
+          }
+          // For large transactions (> 1 SUI), be more conservative
+          else if (amountInSUI > 1) {
+            adaptiveBuffer = 0.03; // 3% buffer for large amounts
+          }
+          
+          // Calculate minAmountOut with adaptive buffer
+          // Base calculation on expected rate of ~2.5 USDC per SUI
+          const expectedRate = 2.5; // USDC per SUI (approximate market rate)
+          const expectedOutput = amountInSUI * expectedRate;
+          const calculatedMinAmountOut = Math.floor(expectedOutput * 1e6 * (1 - effectiveSlippage/100));
+          
+          // Apply adaptive buffer to ensure transaction success
+          const effectiveMinAmountOut = minAmountOut ? 
+            Math.floor(Number(minAmountOut) * (1 - adaptiveBuffer)) : 
+            Math.floor(calculatedMinAmountOut * (1 - adaptiveBuffer));
+          
+          // Log detailed price information
+          console.log(`Expected price: ~${expectedRate} USDC per SUI`);
+          console.log(`Expected output: ~${expectedOutput.toFixed(6)} USDC`);
+          console.log(`User slippage setting: ${effectiveSlippage}%`);
+          console.log(`Adaptive buffer: ${(adaptiveBuffer * 100).toFixed(1)}% based on amount size`);
+          console.log(`Min acceptable output: ${(effectiveMinAmountOut/1e6).toFixed(6)} USDC (${((1-(effectiveMinAmountOut/1e6)/expectedOutput)*100).toFixed(2)}% max total slippage)`);
 
           // Execute only the swap transaction
           const txResult = await instance.sendTransaction(
@@ -1964,8 +2338,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 const targetCoinType = USDC_COIN_TYPE;
                 const poolId = 'b01b068bd0360bb3308b81eb42386707e460b7818816709b7f51e1635d542d40';
 
-                // Calculate minimum amount out with slippage
-                const minAmountOutMicro = minAmountOut || Math.floor(parseFloat(suiAmount) * 2.5 * 1e6 * (1 - slippage/100));
+                // Use optimized price limit based on transaction size and amount
+                // For the problematic amount range around 0.16 SUI, use the value that worked previously
+                const sqrtPriceLimit = (amountInSUI >= 0.15 && amountInSUI <= 0.2) ? 
+                  "79226673515401279992447579000" : // More flexible for problematic range
+                  amountInSUI < 0.1 ? 
+                    "79226673515401279992447579000" : // Slightly more flexible for small amounts
+                    "79226673515401279992447579055"; // Standard for regular amounts
                 
                 // Use swap_b2a to swap FROM token B (SUI) TO token A (USDC)
                 txb.moveCall({
@@ -1977,8 +2356,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     coinVector,
                     txb.pure.bool(true), // Set to true for swapping B->A (SUI to USDC)
                     txb.pure.u64(suiAmountMIST),
-                    txb.pure.u64(minAmountOutMicro),
-                    txb.pure.u128("79226673515401279992447579055"), // Use the working b2a sqrt_price_limit value
+                    txb.pure.u64(effectiveMinAmountOut),
+                    txb.pure.u128(sqrtPriceLimit),
                     txb.object('0x6')
                   ]
                 });
@@ -2214,64 +2593,68 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         break;
 
-      case 'depositStablecoin':
+      case 'activateCircle':
         if (!account) {
           return res.status(400).json({ error: 'Account data is required' });
         }
 
-        if (!req.body.walletId || !req.body.coinObjectId || !req.body.stablecoinType) {
-          return res.status(400).json({ 
-            error: 'Missing required parameters: walletId, coinObjectId, stablecoinType' 
-          });
+        if (!sessionId) {
+          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
         }
 
         try {
-          const walletId = String(req.body.walletId);
-          const coinObjectId = String(req.body.coinObjectId);
-          const stablecoinType = String(req.body.stablecoinType);
-          
-          // Validate session
+          // Validate the circleId from the request
+          const circleId = req.body.circleId;
+          if (!circleId) {
+            return res.status(400).json({ error: 'Circle ID is required' });
+          }
+
+          // Validate session with action context
           const session = validateSession(sessionId, 'sendTransaction');
           
           if (!session.account) {
-            if (sessionId) sessions.delete(sessionId);
+            sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
-              error: 'Authentication error: Your session has expired. Please login again.',
-              requireRelogin: true
+              error: 'Invalid session: No account data found. Please authenticate first.'
             });
           }
-          
-          // Execute the stablecoin deposit transaction
+
+          // Verify session matches account data
+          if (session.account.userAddr !== account.userAddr || 
+            session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Session mismatch: Please refresh your authentication'
+            });
+          }
+
+          // Execute the activate circle transaction using ZkLoginService's sendTransaction method
           const txResult = await instance.sendTransaction(
             session.account,
             (txb: Transaction) => {
-              txb.setSender(session.account!.userAddr);
-              
               txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_circle::deposit_stablecoin_to_custody`,
+                target: `${PACKAGE_ID}::njangi_circles::activate_circle`,
                 arguments: [
-                  txb.object(walletId),
-                  txb.object(coinObjectId),
-                  txb.object("0x6") // Clock object
+                  txb.object(circleId)
                 ],
-                typeArguments: [stablecoinType]
               });
             }
           );
-          
-          return res.status(200).json({ 
+
+          return res.status(200).json({
+            status: 'success',
             digest: txResult.digest,
-            status: txResult.status,
             gasUsed: txResult.gasUsed
           });
         } catch (error) {
-          console.error('Error depositing stablecoin:', error);
+          console.error('Error activating circle:', error);
           
           // Handle authentication errors
           if (error instanceof Error && 
               (error.message.includes('proof verify failed') ||
-               error.message.includes('Session expired'))) {
+              error.message.includes('Session expired'))) {
             
             if (sessionId) sessions.delete(sessionId);
             clearSessionCookie(res);
@@ -2282,8 +2665,280 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
           
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Unknown error',
+            details: JSON.stringify(error),
+            requireRelogin: error instanceof ZkLoginError ? error.requireRelogin : false
+          });
+        }
+
+      case 'setRotationPosition': {
+        // Extract parameters properly
+        const { account, circleId, memberAddress, position } = req.body;
+        
+        // Validate required parameters
+        if (!account) {
+          return res.status(400).json({ error: 'account is required' });
+        }
+        if (!circleId) {
+          return res.status(400).json({ error: 'circleId is required' });
+        }
+        if (typeof memberAddress === 'undefined') {
+          return res.status(400).json({ error: 'memberAddress is required' });
+        }
+        if (typeof position === 'undefined') {
+          return res.status(400).json({ error: 'position is required' });
+        }
+
+        try {
+          console.log(`Setting rotation position for member ${memberAddress} to position ${position} in circle ${circleId}`);
+          
+          // Get the ZkLoginService instance
+          const zkLoginService = ZkLoginService.getInstance();
+          
+          // Send the transaction using the service's sendTransaction method
+          const result = await zkLoginService.sendTransaction(
+            account,
+            (txb) => {
+              // Build the transaction in this callback
+              txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_circles::set_rotation_position`,
+                arguments: [
+                  txb.object(circleId), // circle
+                  txb.pure.address(memberAddress.toLowerCase().startsWith('0x') ? memberAddress.toLowerCase() : `0x${memberAddress.toLowerCase()}`), // Normalize the address
+                  txb.pure.u64(position), // position as u64 integer
+                ],
+              });
+            }
+          );
+          
+          return res.status(200).json({
+            digest: result.digest,
+            status: result.status,
+            message: `Set rotation position for member ${memberAddress} to position ${position}`,
+            gasUsed: result.gasUsed,
+          });
+        } catch (error) {
+          console.error('Error setting rotation position:', error);
+          
+          // Handle authentication errors
+          if (error instanceof Error && 
+              (error.message.includes('authentication') || 
+               error.message.includes('login') || 
+               error.message.includes('session') ||
+               error.message.includes('expired'))) {
+            return res.status(401).json({
+              error: error.message,
+              requireRelogin: true
+            });
+          }
+          
+          return res.status(500).json({
+            error: 'Failed to set rotation position',
+            details: error instanceof Error ? error.message : String(error),
+            requireRelogin: error instanceof ZkLoginError ? error.requireRelogin : false
+          });
+        }
+      }
+
+      case 'reorderRotationPositions': {
+        // Extract parameters properly
+        const { account, circleId, newOrder } = req.body;
+        
+        // Validate required parameters
+        if (!account) {
+          return res.status(400).json({ error: 'account is required' });
+        }
+        if (!circleId) {
+          return res.status(400).json({ error: 'circleId is required' });
+        }
+        if (!newOrder || !Array.isArray(newOrder) || newOrder.length === 0) {
+          return res.status(400).json({ error: 'newOrder is required and must be a non-empty array' });
+        }
+
+        try {
+          console.log(`Reordering rotation positions for circle ${circleId} with ${newOrder.length} members`);
+          
+          // Get the ZkLoginService instance
+          const zkLoginService = ZkLoginService.getInstance();
+          
+          // Send the transaction using the service's sendTransaction method
+          const result = await zkLoginService.sendTransaction(
+            account,
+            (txb) => {
+              // Convert the addresses array to an array of arguments
+              const addressArgs = newOrder.map(address => 
+                txb.pure.address(address.toLowerCase())
+              );
+              
+              // Build the transaction in this callback
+              txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_circles::reorder_rotation_positions_entry`,
+                arguments: [
+                  txb.object(circleId), // circle
+                  txb.makeMoveVec({ elements: addressArgs, type: 'address' }),
+                ],
+              });
+            }
+          );
+          
+          return res.status(200).json({
+            digest: result.digest,
+            status: result.status,
+            message: `Reordered rotation positions for circle ${circleId}`,
+            gasUsed: result.gasUsed,
+          });
+        } catch (error) {
+          console.error('Error reordering rotation positions:', error);
+          
+          // Handle authentication errors
+          if (error instanceof Error && 
+              (error.message.includes('authentication') || 
+               error.message.includes('login') || 
+               error.message.includes('session') ||
+               error.message.includes('expired'))) {
+            return res.status(401).json({
+              error: error.message,
+              requireRelogin: true
+            });
+          }
+          
+          return res.status(500).json({
+            error: 'Failed to reorder rotation positions',
+            details: error instanceof Error ? error.message : String(error),
+            requireRelogin: error instanceof ZkLoginError ? error.requireRelogin : false
+          });
+        }
+      }
+
+      case 'depositUsdcDirect':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!sessionId) {
+          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+        }
+
+        try {
+          // Validate required parameters
+          const { circleId, walletId, usdcAmount, isSecurityDeposit } = req.body;
+          if (!circleId || !walletId || !usdcAmount) {
+            return res.status(400).json({ 
+              error: 'Missing required parameters: circleId, walletId, usdcAmount'
+            });
+          }
+
+          // Convert USDC amount to BigInt if it's not already
+          const usdcAmountMicroUnits = typeof usdcAmount === 'string' ? 
+            BigInt(usdcAmount) : BigInt(usdcAmount);
+
+          // Validate session
+          const session = validateSession(sessionId, 'sendTransaction');
+          if (!session.account) {
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Invalid session: No account data found. Please authenticate first.'
+            });
+          }
+
+          console.log(`Creating direct USDC deposit transaction for circle ${circleId}, wallet ${walletId}, amount ${usdcAmountMicroUnits} (${Number(usdcAmountMicroUnits) / 1e6} USDC)`);
+          console.log(`Operation type: ${isSecurityDeposit ? 'Security Deposit' : 'Contribution'}`);
+
+          // Execute the transaction
+          const txResult = await instance.sendTransaction(
+            session.account,
+            async (txb: Transaction) => {
+              txb.setSender(session.account!.userAddr);
+              
+              // Use SuiClient to get coins of USDC type from the user's wallet
+              const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+              const coinsResponse = await suiClient.getCoins({
+                owner: session.account!.userAddr,
+                coinType: USDC_COIN_TYPE
+              });
+              
+              console.log(`Found ${coinsResponse.data.length} USDC coins in wallet`);
+              
+              if (coinsResponse.data.length === 0) {
+                throw new Error("No USDC coins found in wallet");
+              }
+              
+              // Calculate total available balance
+              let totalAvailable = BigInt(0);
+              for (const coin of coinsResponse.data) {
+                totalAvailable += BigInt(coin.balance);
+              }
+              
+              console.log(`Total available: ${formatMicroUnits(totalAvailable)} USDC`);
+              console.log(`Required amount: ${formatMicroUnits(usdcAmountMicroUnits)} USDC`);
+              
+              // Ensure we have enough balance
+              if (totalAvailable < usdcAmountMicroUnits) {
+                throw new Error(`Insufficient USDC balance. Need ${formatMicroUnits(usdcAmountMicroUnits)} USDC but only have ${formatMicroUnits(totalAvailable)} USDC.`);
+              }
+              
+              // Use the first coin as primary, we'll merge others if needed
+              const primaryCoinId = coinsResponse.data[0].coinObjectId;
+              
+              // Call the appropriate deposit function based on operation type
+              if (isSecurityDeposit) {
+                console.log(`Calling njangi_circles::member_deposit_security_deposit for USDC`);
+                
+                txb.moveCall({
+                  target: `${PACKAGE_ID}::njangi_circles::member_deposit_security_deposit`,
+                  arguments: [
+                    txb.object(circleId),     // Arg 0: circle
+                    txb.object(walletId),     // Arg 1: wallet
+                    txb.object(primaryCoinId),// Arg 2: stablecoin (USDC Coin object)
+                    txb.object("0x6")         // Arg 3: clock
+                  ],
+                  typeArguments: [USDC_COIN_TYPE]
+                });
+              } else {
+                console.log(`Calling njangi_circles::contribute_from_wallet for USDC`);
+                
+                txb.moveCall({
+                  target: `${PACKAGE_ID}::njangi_circles::contribute_from_wallet`,
+                  arguments: [
+                    txb.object(circleId),     // Arg 0: circle
+                    txb.object(walletId),     // Arg 1: wallet
+                    txb.object(primaryCoinId),// Arg 2: contribution_coin (USDC Coin object)
+                    txb.object("0x6")         // Arg 3: clock
+                  ],
+                  typeArguments: [USDC_COIN_TYPE]
+                });
+              }
+            },
+            { gasBudget: 100000000 } // Higher gas budget for complex transaction
+          );
+          
+          console.log('Direct USDC deposit transaction successful:', txResult);
+          return res.status(200).json({ 
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+        } catch (error) {
+          console.error('Direct USDC deposit error:', error);
+          
+          if (error instanceof Error && 
+              (error.message.includes('proof verify failed') ||
+               error.message.includes('Session expired'))) {
+            
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({ 
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+          
           return res.status(500).json({ 
-            error: error instanceof Error ? error.message : 'Failed to deposit stablecoin'
+            error: error instanceof Error ? error.message : 'Failed to process USDC deposit'
           });
         }
         break;

@@ -11,6 +11,8 @@ import { toast } from 'react-hot-toast';
 import { Eye, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle } from 'lucide-react';
 import { ZkLoginError } from '../services/zkLoginClient';
 import { PACKAGE_ID } from '../services/circle-service';
+// Use alias path for the modal import
+import ConfirmationModal from '@/components/ConfirmationModal';
 
 // Circle type definition
 interface Circle {
@@ -127,25 +129,240 @@ declare global {
     ethos?: typeof Window.prototype.suiWallet;
     suiet?: typeof Window.prototype.suiWallet;
     martian?: typeof Window.prototype.suiWallet;
+    MoonPayWebSdk?: {
+      init: (config: {
+        flow: string;
+        environment: string;
+        variant: string;
+        params: {
+          apiKey: string;
+          currencyCode?: string;
+          walletAddress?: string;
+          baseCurrencyCode?: string;
+          baseCurrencyAmount?: string;
+          [key: string]: unknown;
+        };
+      }) => {
+        show: () => void;
+        close: () => void;
+      };
+    };
   }
+}
+
+// Update the TokenIcon component to use existing SVG files for SUI and USDC
+const TokenIcon = ({ symbol }: { symbol: string }) => {
+  // Define the path to each token icon
+  const iconPath = (tokenSymbol: string): string => {
+    const normalizedSymbol = tokenSymbol.toLowerCase();
+    
+    // Use existing SVG files for SUI and USDC
+    if (normalizedSymbol === 'sui') {
+      return '/images/sui-sui-logo.svg';
+    }
+    
+    if (normalizedSymbol === 'usdc') {
+      return '/images/usd-coin-usdc-logo.svg';
+    }
+    
+    // For other tokens, use the assets/icons directory
+    const supportedTokens = ['usdt', 'btc', 'eth'];
+    if (supportedTokens.includes(normalizedSymbol)) {
+      return `/assets/icons/${normalizedSymbol}.svg`;
+    }
+    
+    // Return the unknown token icon for any unsupported token
+    return '/assets/icons/unknown.svg';
+  };
+  
+  return (
+    <img 
+      src={iconPath(symbol)}
+      alt={`${symbol} icon`}
+      className="w-5 h-5 mr-2"
+      style={{ objectFit: 'contain' }}
+      onError={(e) => {
+        // Fallback if the image fails to load
+        console.error(`Failed to load icon for ${symbol}`);
+        (e.target as HTMLImageElement).src = '/assets/icons/unknown.svg';
+      }}
+    />
+  );
+};
+
+// Define types for SUI object field values
+type SuiValue = string | number | boolean | null | undefined | SuiValue[] | Record<string, unknown>;
+
+// Define an interface for the object data structure
+interface EnhancedObjectData {
+  data?: {
+    objectId?: string;
+    content?: {
+      fields: Record<string, SuiValue>;
+      [key: string]: unknown;
+    };
+    dynamicFields?: Array<{
+      name?: string;
+      type?: string;
+      objectId?: string;
+      content?: {
+        fields?: Record<string, SuiValue>;
+      };
+      value?: Record<string, SuiValue>;
+    }>;
+    [key: string]: unknown;
+  };
+  transactionInput?: {
+    cycle_day?: number;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+// Define type for transaction input data
+interface TransactionInputData {
+  cycle_day?: number;
+  [key: string]: unknown;
 }
 
 export default function Dashboard() {
   const router = useRouter();
   const { isAuthenticated, userAddress, account, deleteCircle: authDeleteCircle } = useAuth();
   const [balance, setBalance] = useState<string>('0');
+  const [allCoins, setAllCoins] = useState<{coinType: string, symbol: string, balance: string}[]>([]);
   const [showFullAddress, setShowFullAddress] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const [circles, setCircles] = useState<Circle[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [suiPrice, setSuiPrice] = useState<number | null>(null); // Changed to null as default
+  const [suiPrice, setSuiPrice] = useState<number | null>(null);
   const [isPriceLoading, setIsPriceLoading] = useState(true);
   const [deleteableCircles, setDeleteableCircles] = useState<Set<string>>(new Set());
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [isJoinDialogOpen, setIsJoinDialogOpen] = useState(false);
   const [circleIdInput, setCircleIdInput] = useState('');
   const [copiedCircleId, setCopiedCircleId] = useState<string | null>(null);
+  
+  // Add MoonPay state for the current implementation
+  const [moonpayWidget, setMoonpayWidget] = useState<{ show: () => void; close: () => void } | null>(null);
+
+  // Keep the confirmation modal state
+  const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
+  const [confirmModalProps, setConfirmModalProps] = useState<{
+    title: string;
+    message: string | React.ReactNode;
+    onConfirm: () => void;
+    confirmText?: string;
+    variant?: 'primary' | 'danger' | 'warning';
+  } | null>(null);
+
+  // Update the script loading in useEffect for MoonPay SDK
+  useEffect(() => {
+    // Load MoonPay SDK script
+    const loadMoonPaySDK = () => {
+      if (document.getElementById('moonpay-sdk')) {
+        console.log('MoonPay SDK already loaded');
+        return;
+      }
+      
+      console.log('Loading MoonPay SDK...');
+      const script = document.createElement('script');
+      script.id = 'moonpay-sdk';
+      script.src = 'https://sdk.moonpay.com/embed/moonpay-sdk.js';
+      script.async = true;
+      
+      script.onload = () => {
+        console.log('MoonPay SDK loaded successfully');
+      };
+      
+      script.onerror = (error) => {
+        console.error('Failed to load MoonPay SDK:', error);
+      };
+      
+      document.body.appendChild(script);
+      
+      return () => {
+        const scriptElement = document.getElementById('moonpay-sdk');
+        if (scriptElement && document.body.contains(scriptElement)) {
+          document.body.removeChild(scriptElement);
+        }
+      };
+    };
+    
+    loadMoonPaySDK();
+  }, []);
+
+  // Update the openMoonPayWidget function with better debugging
+  const openMoonPayWidget = (currencyCode: string = 'usdc') => {
+    console.log("Buy button clicked", { currencyCode });
+    if (typeof window === 'undefined') {
+      console.log('Window undefined, cannot open widget');
+      return;
+    }
+    
+    console.log("MoonPay API Key:", process.env.NEXT_PUBLIC_MOONPAY_API_KEY);
+    console.log("MoonPay SDK available:", !!window.MoonPayWebSdk);
+    
+    try {
+      // Close any existing widget
+      if (moonpayWidget) {
+        moonpayWidget.close();
+        setMoonpayWidget(null);
+      }
+      
+      // Initialize the widget with new settings
+      if (window.MoonPayWebSdk) {
+        const sdk = window.MoonPayWebSdk.init({
+          flow: "buy",
+          environment: "sandbox", // Use 'production' for live environment
+          variant: "overlay",
+          params: {
+            apiKey: process.env.NEXT_PUBLIC_MOONPAY_API_KEY || "", // Using API key from environment variables
+            currencyCode: currencyCode,
+            walletAddress: userAddress,
+            baseCurrencyCode: "usd",
+            baseCurrencyAmount: "50", // Default amount in USD
+          }
+        });
+        
+        // Store the widget reference
+        setMoonpayWidget(sdk);
+        
+        // Open the widget
+        sdk.show();
+        console.log("MoonPay widget opened successfully");
+      } else {
+        console.error('MoonPay SDK not loaded, falling back to direct URL');
+        openMoonPaySimple(currencyCode);
+      }
+    } catch (error) {
+      console.error('Error initializing MoonPay widget:', error);
+      toast.error('Failed to open MoonPay widget. Trying alternative method...');
+      openMoonPaySimple(currencyCode);
+    }
+  };
+
+  // Add a simpler implementation using direct URL
+  const openMoonPaySimple = (currencyCode: string = 'usdc') => {
+    console.log("Using simple MoonPay URL approach");
+    const apiKey = process.env.NEXT_PUBLIC_MOONPAY_API_KEY;
+    const baseUrl = 'https://buy-sandbox.moonpay.com'; // Use buy.moonpay.com for production
+    const url = new URL(baseUrl);
+    
+    // Add params
+    url.searchParams.append('apiKey', apiKey || '');
+    url.searchParams.append('currencyCode', currencyCode);
+    if (userAddress) {
+      url.searchParams.append('walletAddress', userAddress);
+    }
+    
+    const finalUrl = url.toString();
+    console.log("Opening MoonPay URL:", finalUrl);
+    
+    // Open in new window
+    window.open(finalUrl, '_blank');
+    toast.success('MoonPay checkout opened in a new tab');
+  };
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -160,11 +377,56 @@ export default function Dashboard() {
     const fetchBalance = async () => {
       if (userAddress) {
         const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
-        const balance = await client.getBalance({
+        
+        // Fetch SUI balance for the primary balance display
+        const suiBalance = await client.getBalance({
           owner: userAddress,
           coinType: '0x2::sui::SUI'
         });
-        setBalance(balance.totalBalance);
+        setBalance(suiBalance.totalBalance);
+        
+        // Fetch all coins
+        try {
+          const allCoinsData = await client.getAllCoins({
+            owner: userAddress
+          });
+          
+          // Create a map to aggregate coins by symbol
+          const coinMap = new Map<string, {coinType: string, symbol: string, balance: string}>();
+          
+          // Process the coins
+          allCoinsData.data.forEach(coin => {
+            // Extract coin symbol from the type string (e.g., "0x2::sui::SUI" -> "SUI")
+            const typeStr = coin.coinType;
+            const typeMatch = typeStr.match(/::([^:]+)$/);
+            const symbol = typeMatch ? typeMatch[1] : typeStr;
+            
+            // If this symbol already exists in our map, add to its balance
+            if (coinMap.has(symbol)) {
+              const existingCoin = coinMap.get(symbol)!;
+              const newBalance = BigInt(existingCoin.balance) + BigInt(coin.balance);
+              coinMap.set(symbol, {
+                ...existingCoin,
+                balance: newBalance.toString()
+              });
+            } else {
+              // Otherwise, add it as a new entry
+              coinMap.set(symbol, {
+                coinType: coin.coinType,
+                symbol: symbol,
+                balance: coin.balance
+              });
+            }
+          });
+          
+          // Convert the map back to an array
+          const processedCoins = Array.from(coinMap.values());
+          
+          console.log('Aggregated coins by symbol:', processedCoins);
+          setAllCoins(processedCoins);
+        } catch (error) {
+          console.error('Error fetching all coins:', error);
+        }
       }
     };
     fetchBalance();
@@ -206,7 +468,198 @@ export default function Dashboard() {
     fetchPrice();
   }, []);
 
-  // Use useCallback to memoize the fetchUserCircles function
+  // Process circle data correctly after the contract restructuring
+  const processCircleObject = (objectData: EnhancedObjectData, userAddress: string, circleCreationData?: CircleCreatedEvent) => {
+    if (!objectData?.data?.content || !('fields' in objectData.data.content)) {
+      console.warn('Invalid object data structure', objectData);
+      return null;
+    }
+
+    const fields = objectData.data.content.fields as Record<string, unknown>;
+    console.log('Processing circle object fields:', fields);
+
+    // Extract basic circle information
+    const circleId = objectData.data.objectId;
+    const name = fields.name || '';
+    const admin = fields.admin || '';
+    const currentMembers = Number(fields.current_members || 0);
+    const nextPayoutTime = Number(fields.next_payout_time || 0);
+    const isActive = fields.is_active === true || fields.is_active === 'true';
+    
+    // Initialize config values with default values
+    const configValues = {
+      contributionAmount: 0,
+      contributionAmountUsd: 0,
+      securityDeposit: 0,
+      securityDepositUsd: 0,
+      cycleLength: 0,
+      cycleDay: 1,  // Default to day 1 instead of 0
+      maxMembers: 3, // Fallback to default if not found
+    };
+
+    // Extract from transaction inputs if available
+    if (circleCreationData) {
+      // Check if we have the raw transaction data for cycle day (not in event)
+      console.log('Using creation event data for circle:', circleId);
+      
+      // Try to extract contribution amount
+      if (circleCreationData.contribution_amount) {
+        configValues.contributionAmount = Number(circleCreationData.contribution_amount) / 1e9;
+      }
+      
+      // Try to extract contribution USD amount
+      if (circleCreationData.contribution_amount_usd) {
+        configValues.contributionAmountUsd = Number(circleCreationData.contribution_amount_usd) / 100;
+      }
+      
+      // Try to extract security deposit USD amount
+      if (circleCreationData.security_deposit_usd) {
+        configValues.securityDepositUsd = Number(circleCreationData.security_deposit_usd) / 100;
+      }
+      
+      // Try to extract cycle length
+      if (circleCreationData.cycle_length) {
+        configValues.cycleLength = Number(circleCreationData.cycle_length);
+      }
+      
+      // Try to extract max members
+      if (circleCreationData.max_members) {
+        configValues.maxMembers = Number(circleCreationData.max_members);
+      }
+
+      // Note: cycle_day is not in the event but could be in fields or dynamic fields
+    }
+
+    // Next, try to extract values from dynamic fields
+    const dynamicFields = objectData.data.dynamicFields || [];
+    console.log('Dynamic fields for circle:', dynamicFields);
+
+    // Look for config objects in dynamic fields
+    for (const field of dynamicFields) {
+      if (!field) continue;
+      
+      // Check if this field has the circle config
+      const isCircleConfig = field.name === 'circle_config' || 
+                             (field.type && field.type.includes('CircleConfig'));
+      
+      if (isCircleConfig) {
+        console.log('Found CircleConfig field:', field);
+        
+        // Try to get field object content if available
+        if (field.objectId) {
+          console.log('Found CircleConfig objectId:', field.objectId);
+        }
+        
+        // Try to access content or value
+        const fieldValue = field.value || field.content?.fields;
+        if (fieldValue && typeof fieldValue === 'object') {
+          const typedFieldValue = fieldValue as Record<string, unknown>;
+          if ('contribution_amount' in typedFieldValue) {
+            configValues.contributionAmount = Number(typedFieldValue.contribution_amount) / 1e9;
+          }
+          
+          if ('security_deposit' in typedFieldValue) {
+            configValues.securityDeposit = Number(typedFieldValue.security_deposit) / 1e9;
+          }
+          
+          if ('contribution_amount_usd' in typedFieldValue) {
+            configValues.contributionAmountUsd = Number(typedFieldValue.contribution_amount_usd) / 100;
+          }
+          
+          if ('security_deposit_usd' in typedFieldValue) {
+            configValues.securityDepositUsd = Number(typedFieldValue.security_deposit_usd) / 100;
+          }
+          
+          if ('cycle_length' in typedFieldValue) {
+            configValues.cycleLength = Number(typedFieldValue.cycle_length);
+          }
+          
+          if ('cycle_day' in typedFieldValue) {
+            configValues.cycleDay = Number(typedFieldValue.cycle_day);
+            console.log('Found cycle_day in dynamic field:', configValues.cycleDay);
+          }
+          
+          if ('max_members' in typedFieldValue) {
+            configValues.maxMembers = Number(typedFieldValue.max_members);
+          }
+        }
+      }
+    }
+
+    // Type assertions for direct field access
+    if ('contribution_amount' in fields) {
+      configValues.contributionAmount = Number(fields.contribution_amount) / 1e9;
+    }
+    
+    if ('security_deposit' in fields) {
+      configValues.securityDeposit = Number(fields.security_deposit) / 1e9;
+    }
+    
+    if ('contribution_amount_usd' in fields) {
+      configValues.contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
+    } else if ('usd_amounts' in fields && 
+               typeof fields.usd_amounts === 'object' && 
+               fields.usd_amounts !== null && 
+               'contribution_amount' in (fields.usd_amounts as Record<string, unknown>)) {
+      const usdAmounts = fields.usd_amounts as Record<string, unknown>;
+      configValues.contributionAmountUsd = Number(usdAmounts.contribution_amount) / 100;
+    }
+    
+    if ('security_deposit_usd' in fields) {
+      configValues.securityDepositUsd = Number(fields.security_deposit_usd) / 100;
+    } else if ('usd_amounts' in fields && 
+               typeof fields.usd_amounts === 'object' && 
+               fields.usd_amounts !== null && 
+               'security_deposit' in (fields.usd_amounts as Record<string, unknown>)) {
+      const usdAmounts = fields.usd_amounts as Record<string, unknown>;
+      configValues.securityDepositUsd = Number(usdAmounts.security_deposit) / 100;
+    }
+    
+    // CRITICAL: Try to extract cycle info
+    if ('cycle_length' in fields) {
+      configValues.cycleLength = Number(fields.cycle_length);
+    }
+    
+    if ('cycle_day' in fields) {
+      configValues.cycleDay = Number(fields.cycle_day);
+      console.log('Found cycle_day in direct fields:', configValues.cycleDay);
+    }
+    
+    if ('max_members' in fields) {
+      configValues.maxMembers = Number(fields.max_members);
+    }
+
+    // Check transaction input fields for cycle day specifically
+    if (objectData.transactionInput) {
+      const txInput = objectData.transactionInput;
+      if (txInput.cycle_day) {
+        configValues.cycleDay = Number(txInput.cycle_day);
+        console.log('Using transaction input for cycle_day:', configValues.cycleDay);
+      }
+    }
+
+    console.log('Final config values for circle:', circleId, configValues);
+    
+    return {
+      id: circleId,
+      name: name,
+      admin: admin,
+      contributionAmount: configValues.contributionAmount,
+      contributionAmountUsd: configValues.contributionAmountUsd,
+      securityDeposit: configValues.securityDeposit,
+      securityDepositUsd: configValues.securityDepositUsd,
+      cycleLength: configValues.cycleLength,
+      cycleDay: configValues.cycleDay,
+      maxMembers: configValues.maxMembers,
+      currentMembers: currentMembers,
+      nextPayoutTime: nextPayoutTime,
+      memberStatus: 'active' as const,
+      isAdmin: admin === userAddress,
+      isActive: isActive
+    };
+  };
+
+  // Update fetchUserCircles function to get and store transaction inputs
   const fetchUserCircles = useCallback(async () => {
     console.log('fetchUserCircles starting...');
     
@@ -226,58 +679,32 @@ export default function Dashboard() {
         url: 'https://fullnode.testnet.sui.io:443'
       });
       
-      console.log('Using package ID:', process.env.NEXT_PUBLIC_PACKAGE_ID);
+      // Log package ID for debugging
+      console.log('Using package ID:', PACKAGE_ID);
       
-      // Define package ID where njangi_circle module is deployed
-      const packageId = process.env.NEXT_PUBLIC_PACKAGE_ID;
+      // Get Circle Created events for admin of circles
+      const circleEvents = await client.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleCreated`
+        },
+        limit: 100
+      });
       
-      // Note: We use the old package ID for event types but new package ID for direct object queries
+      // Get Member Joined events
+      const memberEvents = await client.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_circles::MemberJoined`
+        },
+        limit: 100
+      });
       
-      // Step 1: Find circles created by this user (admin)
-      let createdCircles;
-      try {
-        createdCircles = await client.queryEvents({
-          query: {
-            MoveEventType: `${PACKAGE_ID}::njangi_circle::CircleCreated`
-          },
-          order: 'descending',
-          limit: 50, // Limit to 50 most recent circles
-        });
-      } catch (error) {
-        console.error('Error fetching created circles:', error);
-        createdCircles = { data: [] }; // Provide default empty data
-      }
-      
-      // Step 2: Find circles this user has joined - using the correct filter structure
-      let joinedCircles;
-      try {
-        joinedCircles = await client.queryEvents({
-          query: {
-            MoveEventType: `${PACKAGE_ID}::njangi_circle::MemberJoined`
-          },
-          order: 'descending',
-          limit: 100, // Limit to 100 most recent joins
-        });
-      } catch (error) {
-        console.error('Error fetching joined circles:', error);
-        joinedCircles = { data: [] }; // Provide default empty data
-      }
-      
-      // Step 3: Fetch circle activation events
-      let activationEvents;
-      try {
-        activationEvents = await client.queryEvents({
-          query: {
-            MoveEventType: `${PACKAGE_ID}::njangi_circle::CircleActivated`
-          },
-          order: 'descending',
-          limit: 100, // Limit to 100 most recent activations
-        });
-        console.log('Found activation events:', activationEvents.data.length);
-      } catch (error) {
-        console.error('Error fetching activation events:', error);
-        activationEvents = { data: [] }; // Provide default empty data
-      }
+      // Get circle activation events
+      const activationEvents = await client.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleActivated`
+        },
+        limit: 50
+      });
       
       // Create a set of activated circle IDs for quick lookup
       const activatedCircleIds = new Set<string>();
@@ -291,302 +718,148 @@ export default function Dashboard() {
       }
       console.log('Activated circle IDs:', Array.from(activatedCircleIds));
       
-      // Add a cache and optimize the getCircleMemberCount function
-      // Create a cache for member counts to avoid redundant blockchain queries
-      const memberCountCache = new Map<string, number>();
+      // Create a member count map based on member events
+      const memberCountMap = new Map<string, Set<string>>();
       
-      const getCircleMemberCount = async (circleId: string, forceFetch: boolean = false): Promise<number> => {
-        // Check if we already have this count in cache and not forcing refresh
-        if (!forceFetch && memberCountCache.has(circleId)) {
-          console.log(`Using cached member count for circle ${circleId}: ${memberCountCache.get(circleId)}`);
-          return memberCountCache.get(circleId)!;
-        }
-        
-        if (forceFetch) {
-          console.log(`Force fetching fresh member count for circle ${circleId}`);
-        }
-        
-        try {
-          console.log(`Fetching member count for circle ${circleId}`);
-          
-          // Fetch all MemberJoined events and filter in code
-          const memberEvents = await client.queryEvents({
-            query: {
-              MoveEventType: `${PACKAGE_ID}::njangi_circle::MemberJoined`
-            },
-            limit: 1000 // Increased limit to capture more events
-          });
-          
-          console.log(`Found ${memberEvents.data.length} total MemberJoined events, filtering for circle ${circleId}`);
-          
-          // Count unique member addresses for this specific circle
-          const memberAddresses = new Set<string>();
-          
-          // Filter and log events for the specific circle
-          const circleEvents = memberEvents.data.filter(event => {
-            if (event.parsedJson && typeof event.parsedJson === 'object') {
-              const eventJson = event.parsedJson as { circle_id?: string };
-              return eventJson.circle_id === circleId;
+      // Process all member events to build the member count map
+      for (const event of memberEvents.data) {
+        if (event.parsedJson && typeof event.parsedJson === 'object') {
+          const eventJson = event.parsedJson as { circle_id?: string, member?: string };
+          if (eventJson.circle_id && eventJson.member) {
+            // Initialize set if not exists
+            if (!memberCountMap.has(eventJson.circle_id)) {
+              memberCountMap.set(eventJson.circle_id, new Set<string>());
             }
-            return false;
-          });
-          
-          console.log(`Filtered down to ${circleEvents.length} events for circle ${circleId}`);
-          
-          // Process the filtered events
-          for (const event of circleEvents) {
-            if (event.parsedJson && typeof event.parsedJson === 'object') {
-              const eventJson = event.parsedJson as { circle_id?: string, member?: string };
-              
-              if (eventJson.member) {
-                memberAddresses.add(eventJson.member);
-                console.log(`Added member ${eventJson.member} to count`);
-              }
-            }
+            // Add member to the set
+            memberCountMap.get(eventJson.circle_id)!.add(eventJson.member);
           }
-          
-          // Get the circle to find the admin address
-          try {
-            const objectData = await client.getObject({
-              id: circleId,
-              options: { showContent: true }
-            });
+        }
+      }
+      
+      // Create mapping from circle ID to creation event data
+      const circleCreationDataMap = new Map<string, CircleCreatedEvent>();
+      
+      // Also store transaction data to extract cycle_day which isn't in the event
+      const transactionInputMap = new Map<string, TransactionInputData>();
+      
+      for (const event of circleEvents.data) {
+        if (event.parsedJson) {
+          const parsedEvent = event.parsedJson as CircleCreatedEvent;
+          if (parsedEvent.circle_id) {
+            circleCreationDataMap.set(parsedEvent.circle_id, parsedEvent);
             
-            const content = objectData.data?.content;
-            if (content && 'fields' in content) {
-              const fields = content.fields as { admin?: string, name?: string };
-              if (fields.admin) {
-                // Add admin to the member count as they are a member too
-                memberAddresses.add(fields.admin);
-                console.log(`Added admin ${fields.admin} as member for circle ${circleId} (${fields.name || 'unnamed'})`);
+            // Try to get the transaction digest and fetch transaction data
+            if (event.id?.txDigest) {
+              try {
+                const txData = await client.getTransactionBlock({
+                  digest: event.id.txDigest,
+                  options: {
+                    showInput: true,
+                    showEffects: false,
+                    showEvents: false,
+                    showObjectChanges: false,
+                  }
+                });
+                
+                // Extract inputs from transaction data if available
+                if (txData?.transaction?.data?.transaction?.kind === 'ProgrammableTransaction') {
+                  const tx = txData.transaction.data.transaction;
+                  const inputs = tx.inputs || [];
+                  
+                  // Try to find the cycle_day input (typically at index 6)
+                  if (inputs.length > 6 && inputs[6].type === 'pure' && inputs[6].valueType === 'u64') {
+                    const cycleDay = inputs[6].value;
+                    console.log(`Found cycle_day ${cycleDay} for circle ${parsedEvent.circle_id} from tx`);
+                    
+                    // Store this with the circle ID
+                    transactionInputMap.set(parsedEvent.circle_id, {
+                      cycle_day: Number(cycleDay)
+                    });
+                  }
+                }
+              } catch (error) {
+                console.error(`Error fetching transaction data for ${event.id.txDigest}:`, error);
               }
             }
-          } catch (err) {
-            console.error(`Error fetching admin for circle ${circleId}:`, err);
           }
-          
-          // Get the final member list for debugging
-          console.log(`Final member list for circle ${circleId}:`, Array.from(memberAddresses));
-          
-          const count = memberAddresses.size;
-          console.log(`Final count: Found ${count} members for circle ${circleId}`);
-          
-          // Sanity check - ensure count is at least 1 for admin
-          const safeCount = count > 0 ? count : 1;
-          console.log(`Safe count (min 1): ${safeCount} members for circle ${circleId}`);
-          
-          // Cache the result
-          memberCountCache.set(circleId, safeCount);
-          
-          return safeCount;
-        } catch (error) {
-          console.error(`Error fetching member count for circle ${circleId}:`, error);
-          return 1; // Default to 1 (admin only) on error
         }
-      };
+      }
       
       // Process both result sets
       const circleMap = new Map<string, Circle>();
       
       // Process created circles (admin)
-      for (const event of createdCircles.data) {
+      for (const event of circleEvents.data) {
         const parsedEvent = event.parsedJson as CircleCreatedEvent;
         if (parsedEvent?.admin === userAddress) {
           try {
             // First verify if the circle still exists (hasn't been deleted)
-            const objectExists = await client.getObject({
+            const objectData = await client.getObject({
               id: parsedEvent.circle_id,
-              options: { showType: true, showOwner: true }
+              options: { 
+                showType: true, 
+                showOwner: true,
+                showContent: true,
+                showDisplay: false,
+                showStorageRebate: false,
+                showPreviousTransaction: false,
+                showBcs: false
+              }
             });
             
-            // Add logging to see object type and package information
-            console.log(`Circle ${parsedEvent.circle_id} belongs to package: ${packageId}`);
-            
             // Skip this circle if it doesn't exist or is not accessible
-            if (!objectExists.data || objectExists.error) {
+            if (!objectData.data || objectData.error) {
               console.log(`Circle ${parsedEvent.circle_id} no longer exists, skipping...`);
               continue;
             }
             
-            // Get the detailed circle data to retrieve USD values
-            const objectData = await client.getObject({
-              id: parsedEvent.circle_id,
-              options: { showContent: true }
+            // Get the dynamic fields for this circle
+            const dynamicFieldsResult = await client.getDynamicFields({
+              parentId: parsedEvent.circle_id
             });
             
-            // Log the entire object to better understand its structure
-            console.log('Full circle object data:', JSON.stringify(objectData.data, null, 2));
+            console.log(`Dynamic fields for circle ${parsedEvent.circle_id}:`, dynamicFieldsResult.data);
             
-            const content = objectData.data?.content;
-            if (content && 'fields' in content) {
-              // Log the entire fields object to see what properties are available
-              console.log('Circle fields:', JSON.stringify(content.fields, null, 2));
-              
-              const fields = content.fields as {
-                name: string;
-                admin: string;
-                contribution_amount: string;
-                contribution_amount_usd: string;
-                security_deposit: string;
-                security_deposit_usd: string;
-                cycle_length: string;
-                cycle_day: string;
-                max_members: string;
-                current_members: string;
-                next_payout_time: string;
-                // Try to look for nested USD amounts
-                usd_amounts?: {
-                  contribution_amount?: string;
-                  security_deposit?: string;
-                  target_amount?: string;
-                };
-              };
-              
-              // Get the USD amounts, checking all possible structures for USD values
-              let contributionAmountUsd = 0;
-              let securityDepositUsd = 0;
-              
-              // Check for direct fields first
-              if (fields.contribution_amount_usd) {
-                contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
-                console.log('Found direct contribution_amount_usd:', fields.contribution_amount_usd);
-              } 
-              // Then check for nested usd_amounts structure
-              else if (fields.usd_amounts && fields.usd_amounts.contribution_amount) {
-                contributionAmountUsd = Number(fields.usd_amounts.contribution_amount) / 100;
-                console.log('Found usd_amounts.contribution_amount:', fields.usd_amounts.contribution_amount);
-              }
-              // Finally, check if it's in the parsedEvent directly
-              else if (parsedEvent.contribution_amount_usd) {
-                contributionAmountUsd = Number(parsedEvent.contribution_amount_usd) / 100;
-                console.log('Using event contribution_amount_usd:', parsedEvent.contribution_amount_usd);
-              }
-              
-              // Same for security deposit
-              if (fields.security_deposit_usd) {
-                securityDepositUsd = Number(fields.security_deposit_usd) / 100;
-                console.log('Found direct security_deposit_usd:', fields.security_deposit_usd);
-              }
-              else if (fields.usd_amounts && fields.usd_amounts.security_deposit) {
-                securityDepositUsd = Number(fields.usd_amounts.security_deposit) / 100;
-                console.log('Found usd_amounts.security_deposit:', fields.usd_amounts.security_deposit);
-              }
-              else if (parsedEvent.security_deposit_usd) {
-                securityDepositUsd = Number(parsedEvent.security_deposit_usd) / 100;
-                console.log('Using event security_deposit_usd:', parsedEvent.security_deposit_usd);
-              }
-              
-              // Log data for debugging
-              console.log('Circle USD values after processing:', {
-                circleId: parsedEvent.circle_id,
-                contributionUSD: contributionAmountUsd,
-                securityDepositUSD: securityDepositUsd,
-                directFieldsPresent: {
-                  contribution_amount_usd: !!fields.contribution_amount_usd,
-                  security_deposit_usd: !!fields.security_deposit_usd
-                },
-                usdAmountsPresent: !!fields.usd_amounts,
-                parsedEventFields: {
-                  contribution_amount_usd: !!parsedEvent.contribution_amount_usd,
-                  security_deposit_usd: !!parsedEvent.security_deposit_usd
-                }
-              });
-              
-              // Convert SUI values from MIST to SUI
-              const contributionAmountSui = Number(fields.contribution_amount) / 1e9;
-              const securityDepositSui = Number(fields.security_deposit) / 1e9;
-              
-              // Use contribution_amount_usd and security_deposit_usd from event if they exist
-              if (parsedEvent.contribution_amount_usd && contributionAmountUsd === 0) {
-                contributionAmountUsd = Number(parsedEvent.contribution_amount_usd) / 100;
-                console.log('Using contribution_amount_usd from event:', contributionAmountUsd);
-              }
-              
-              if (parsedEvent.security_deposit_usd && securityDepositUsd === 0) {
-                securityDepositUsd = Number(parsedEvent.security_deposit_usd) / 100;
-                console.log('Using security_deposit_usd from event:', securityDepositUsd);
-              }
-              
-              // Debug log the values we've loaded
-              console.log('Final USD values for circle:', {
-                contributionUSD: contributionAmountUsd,
-                securityDepositUSD: securityDepositUsd
-              });
-              
-              // Get accurate member count from blockchain events
-              const actualMemberCount = await getCircleMemberCount(parsedEvent.circle_id);
+            // Add transaction input data if we have it
+            const transactionInput = transactionInputMap.get(parsedEvent.circle_id);
+            
+            // Add type assertions for the EnhancedObjectData
+            const enhancedObjectData = {
+              ...objectData,
+              data: {
+                ...objectData.data,
+                dynamicFields: dynamicFieldsResult.data,
+              },
+              transactionInput
+            };
+            
+            // Process circle using the helper function with all data sources
+            // @ts-expect-error - Type compatibility issues with SUI SDK
+            const circleData = processCircleObject(enhancedObjectData, userAddress, parsedEvent);
+            
+            if (circleData) {
+              // Update with the actual member count from events
+              const memberCount = memberCountMap.has(parsedEvent.circle_id) 
+                ? memberCountMap.get(parsedEvent.circle_id)!.size 
+                : 1; // Default to 1 (admin only)
               
               // Check if the circle has been activated
               const isActive = activatedCircleIds.has(parsedEvent.circle_id);
               
-              circleMap.set(parsedEvent.circle_id, {
-                id: parsedEvent.circle_id,
-                name: fields.name,
-                admin: fields.admin,
-                contributionAmount: contributionAmountSui,
-                contributionAmountUsd: contributionAmountUsd || 0,
-                securityDeposit: securityDepositSui,
-                securityDepositUsd: securityDepositUsd || 0,
-                cycleLength: Number(fields.cycle_length),
-                cycleDay: Number(fields.cycle_day),
-                maxMembers: Number(fields.max_members),
-                currentMembers: actualMemberCount, // Use actual member count
-                nextPayoutTime: Number(fields.next_payout_time),
-                memberStatus: 'active',
-                isAdmin: true,
-                isActive: isActive
-              });
-            } else {
-              // Handle case where we can't get full content but can use event data
-              // Check for USD amounts in the event
-              let contributionAmountUsd = 0;
-              let securityDepositUsd = 0;
-              
-              if (parsedEvent.contribution_amount_usd) {
-                contributionAmountUsd = Number(parsedEvent.contribution_amount_usd) / 100;
-              }
-              
-              if (parsedEvent.security_deposit_usd) {
-                securityDepositUsd = Number(parsedEvent.security_deposit_usd) / 100;
-              }
-              
-              // Log event data for debugging
-              console.log('Circle USD values from event:', {
-                circleId: parsedEvent.circle_id,
-                contributionUSD: contributionAmountUsd,
-                securityDepositUSD: securityDepositUsd,
-                rawContributionUSD: parsedEvent.contribution_amount_usd,
-                rawSecurityDepositUSD: parsedEvent.security_deposit_usd,
-                fullParsedEvent: JSON.stringify(parsedEvent)
-              });
-              
-              // Try to get SUI values
-              const contributionRaw = Number(parsedEvent.contribution_amount) / 1e9;
-              const isUnreasonableAmount = contributionRaw > 1_000_000_000;
-              
-              // Get accurate member count from blockchain events
-              const actualMemberCount = await getCircleMemberCount(parsedEvent.circle_id);
-              
-              // Check if the circle has been activated
-              const isActive = activatedCircleIds.has(parsedEvent.circle_id);
+              const safeCircleData = {
+                ...circleData,
+                id: circleData?.id ?? '',
+                name: typeof circleData?.name === 'string' ? circleData.name : '',
+                admin: typeof circleData?.admin === 'string' ? circleData.admin : '',
+              } as Circle;
               
               circleMap.set(parsedEvent.circle_id, {
-                id: parsedEvent.circle_id,
-                name: parsedEvent.name,
-                admin: parsedEvent.admin,
-                contributionAmount: isUnreasonableAmount ? 0 : contributionRaw,
-                contributionAmountUsd: contributionAmountUsd || 0,
-                securityDeposit: 0,
-                securityDepositUsd: securityDepositUsd || 0,
-                cycleLength: Number(parsedEvent.cycle_length),
-                cycleDay: 0,
-                maxMembers: Number(parsedEvent.max_members),
-                currentMembers: actualMemberCount, // Use actual member count
-                nextPayoutTime: 0,
-                memberStatus: 'active',
-                isAdmin: parsedEvent.admin === userAddress,
+                ...safeCircleData,
+                currentMembers: memberCount,
                 isActive: isActive
               });
+              
+              console.log('Added admin circle:', parsedEvent.circle_id, 'with members:', memberCount);
             }
           } catch (error) {
             console.error(`Error fetching circle details for ${parsedEvent.circle_id}:`, error);
@@ -595,289 +868,70 @@ export default function Dashboard() {
       }
       
       // Process joined circles (member)
-      for (const event of joinedCircles.data) {
+      for (const event of memberEvents.data) {
         const parsedEvent = event.parsedJson as MemberJoinedEvent;
-        if (parsedEvent?.member === userAddress) {
-          // Check if we already have this circle as admin
-          if (!circleMap.has(parsedEvent.circle_id)) {
-            // Need to fetch more details about this circle
-            try {
-              // First try to get the specific circle details
-              console.log(`Fetching member circle details for ${parsedEvent.circle_id}`);
-              
-              // Use same approach as admin circles to get complete data
-              const creationEvents = await client.queryEvents({
-                query: {
-                  MoveEventType: `${PACKAGE_ID}::njangi_circle::CircleCreated`
-                },
-                limit: 100
-              });
-              
-              // Find the creation event for this specific circle
-              const creationEvent = creationEvents.data.find(event => {
-                if (event.parsedJson && typeof event.parsedJson === 'object') {
-                  const eventJson = event.parsedJson as { circle_id?: string };
-                  return eventJson.circle_id === parsedEvent.circle_id;
-                }
-                return false;
-              });
-              
-              console.log('Found creation event for member circle:', creationEvent);
-              
+        if (parsedEvent?.member === userAddress && !circleMap.has(parsedEvent.circle_id)) {
+          // This means the user is a member but not the admin of this circle
+          try {
               // Get detailed object data
               const objectData = await client.getObject({
                 id: parsedEvent.circle_id,
-                options: { showContent: true }
-              });
-              
-              const content = objectData.data?.content;
-              let addedToMap = false;
-              
-              // Process creation event data first if available
-              if (creationEvent && creationEvent.parsedJson) {
-                const creationData = creationEvent.parsedJson as CircleCreatedEvent;
-                console.log('Circle creation data:', creationData);
-                
-                // Get USD values from creation event
-                let contributionAmountUsd = 0;
-                let securityDepositUsd = 0;
-                
-                if (creationData.contribution_amount_usd) {
-                  contributionAmountUsd = Number(creationData.contribution_amount_usd) / 100;
-                  console.log('Using contribution_amount_usd from creation event:', contributionAmountUsd);
-                }
-                
-                if (creationData.security_deposit_usd) {
-                  securityDepositUsd = Number(creationData.security_deposit_usd) / 100;
-                  console.log('Using security_deposit_usd from creation event:', securityDepositUsd);
-                }
-                
-                // Handle the case when fields from the object are available
-                if (content && 'fields' in content) {
-                  console.log('Got object fields for member circle');
-                  const fields = content.fields as {
-                    name: string;
-                    admin: string;
-                    contribution_amount: string;
-                    contribution_amount_usd: string;
-                    security_deposit: string;
-                    security_deposit_usd: string;
-                    cycle_length: string;
-                    cycle_day: string;
-                    max_members: string;
-                    current_members: string;
-                    next_payout_time: string;
-                    usd_amounts?: {
-                      contribution_amount?: string;
-                      security_deposit?: string;
-                      target_amount?: string;
-                    };
-                  };
-                  
-                  // Try to get USD values from object first
-                  if (fields.contribution_amount_usd) {
-                    contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
-                    console.log('Overriding with direct contribution_amount_usd:', contributionAmountUsd);
-                  } else if (fields.usd_amounts && fields.usd_amounts.contribution_amount) {
-                    contributionAmountUsd = Number(fields.usd_amounts.contribution_amount) / 100;
-                    console.log('Overriding with usd_amounts.contribution_amount:', contributionAmountUsd);
-                  }
-                  
-                  if (fields.security_deposit_usd) {
-                    securityDepositUsd = Number(fields.security_deposit_usd) / 100;
-                    console.log('Overriding with direct security_deposit_usd:', securityDepositUsd);
-                  } else if (fields.usd_amounts && fields.usd_amounts.security_deposit) {
-                    securityDepositUsd = Number(fields.usd_amounts.security_deposit) / 100;
-                    console.log('Overriding with usd_amounts.security_deposit:', securityDepositUsd);
-                  }
-                  
-                  // Also try values from the member join event if needed
-                  if (contributionAmountUsd === 0 && parsedEvent.contribution_amount_usd) {
-                    contributionAmountUsd = Number(parsedEvent.contribution_amount_usd) / 100;
-                    console.log('Fallback to event contribution_amount_usd:', contributionAmountUsd);
-                  }
-                  
-                  if (securityDepositUsd === 0 && parsedEvent.security_deposit_usd) {
-                    securityDepositUsd = Number(parsedEvent.security_deposit_usd) / 100;
-                    console.log('Fallback to event security_deposit_usd:', securityDepositUsd);
-                  }
-                  
-                  // Calculate SUI values
-                  const contributionAmountSui = Number(fields.contribution_amount) / 1e9;
-                  const securityDepositSui = Number(fields.security_deposit) / 1e9;
-                  
-                  console.log('Final member circle values:', {
-                    name: fields.name,
-                    contributionAmountSui,
-                    contributionAmountUsd,
-                    securityDepositSui,
-                    securityDepositUsd
-                  });
-                  
-                  // Get accurate member count and check if circle is active
-                  const actualMemberCount = await getCircleMemberCount(parsedEvent.circle_id);
-                  const isActive = activatedCircleIds.has(parsedEvent.circle_id);
-                  
-                  // Add to map with all available data
-                  circleMap.set(parsedEvent.circle_id, {
-                    id: parsedEvent.circle_id,
-                    name: fields.name,
-                    admin: fields.admin,
-                    contributionAmount: contributionAmountSui,
-                    contributionAmountUsd: contributionAmountUsd,
-                    securityDeposit: securityDepositSui,
-                    securityDepositUsd: securityDepositUsd,
-                    cycleLength: Number(fields.cycle_length),
-                    cycleDay: Number(fields.cycle_day),
-                    maxMembers: Number(fields.max_members),
-                    currentMembers: actualMemberCount,
-                    nextPayoutTime: Number(fields.next_payout_time),
-                    memberStatus: 'active',
-                    isAdmin: fields.admin === userAddress,
-                    isActive: isActive
-                  });
-                  
-                  addedToMap = true;
-                } else if (creationData) {
-                  // If we can't get object fields but have creation data
-                  console.log('Using only creation event data for member circle');
-                  
-                  // Get accurate member count and check if circle is active
-                  const actualMemberCount = await getCircleMemberCount(parsedEvent.circle_id);
-                  const isActive = activatedCircleIds.has(parsedEvent.circle_id);
-                  
-                  // Calculate SUI amount from USD if we have it
-                  let contributionAmountSui = 0;
-                  if (contributionAmountUsd > 0 && suiPrice && suiPrice > 0) {
-                    contributionAmountSui = contributionAmountUsd / suiPrice;
-                    console.log('Calculated SUI amount from USD:', contributionAmountSui);
-                  }
-                  
-                  circleMap.set(parsedEvent.circle_id, {
-                    id: parsedEvent.circle_id,
-                    name: creationData.name,
-                    admin: creationData.admin,
-                    contributionAmount: contributionAmountSui,
-                    contributionAmountUsd: contributionAmountUsd,
-                    securityDeposit: 0, // No reliable way to get this
-                    securityDepositUsd: securityDepositUsd,
-                    cycleLength: Number(creationData.cycle_length),
-                    cycleDay: 0, // We don't have this from creation event
-                    maxMembers: Number(creationData.max_members),
-                    currentMembers: actualMemberCount,
-                    nextPayoutTime: 0, // We don't have this
-                    memberStatus: 'active',
-                    isAdmin: creationData.admin === userAddress,
-                    isActive: isActive
-                  });
-                  
-                  addedToMap = true;
-                }
+              options: { 
+                showContent: true
               }
-              
-              // Fallback to old method if we couldn't add it to the map yet
-              if (!addedToMap) {
-                console.log('Falling back to original method for member circle');
-                
-                if (content && 'fields' in content) {
-                  // Log the entire fields object to see what properties are available
-                  console.log('Member circle fields:', JSON.stringify(content.fields, null, 2));
-                  
-                  const fields = content.fields as {
-                    name: string;
-                    admin: string;
-                    contribution_amount: string;
-                    contribution_amount_usd: string;
-                    security_deposit: string;
-                    security_deposit_usd: string;
-                    cycle_length: string;
-                    cycle_day: string;
-                    max_members: string;
-                    current_members: string;
-                    next_payout_time: string;
-                    // Try to look for nested USD amounts
-                    usd_amounts?: {
-                      contribution_amount?: string;
-                      security_deposit?: string;
-                      target_amount?: string;
-                    };
-                  };
-                  
-                  // Get the USD amounts, checking both direct fields and potentially nested usd_amounts
-                  let contributionAmountUsd = 0;
-                  let securityDepositUsd = 0;
-                  
-                  // Check for direct fields first
-                  if (fields.contribution_amount_usd) {
-                    contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
-                    console.log('Found direct contribution_amount_usd for member:', fields.contribution_amount_usd);
-                  } 
-                  // Then check for nested usd_amounts structure
-                  else if (fields.usd_amounts && fields.usd_amounts.contribution_amount) {
-                    contributionAmountUsd = Number(fields.usd_amounts.contribution_amount) / 100;
-                    console.log('Found usd_amounts.contribution_amount for member:', fields.usd_amounts.contribution_amount);
-                  }
-                  // Finally, check if it's in the parsedEvent directly
-                  else if (parsedEvent.contribution_amount_usd) {
-                    contributionAmountUsd = Number(parsedEvent.contribution_amount_usd) / 100;
-                    console.log('Using event contribution_amount_usd for member:', parsedEvent.contribution_amount_usd);
-                  }
-                  
-                  // Same for security deposit
-                  if (fields.security_deposit_usd) {
-                    securityDepositUsd = Number(fields.security_deposit_usd) / 100;
-                    console.log('Found direct security_deposit_usd for member:', fields.security_deposit_usd);
-                  }
-                  else if (fields.usd_amounts && fields.usd_amounts.security_deposit) {
-                    securityDepositUsd = Number(fields.usd_amounts.security_deposit) / 100;
-                    console.log('Found usd_amounts.security_deposit for member:', fields.usd_amounts.security_deposit);
-                  }
-                  else if (parsedEvent.security_deposit_usd) {
-                    securityDepositUsd = Number(parsedEvent.security_deposit_usd) / 100;
-                    console.log('Using event security_deposit_usd for member:', parsedEvent.security_deposit_usd);
-                  }
-                  
-                  // We'll use the SUI amounts directly from the contract
-                  const contributionAmountSui = Number(fields.contribution_amount) / 1e9;
-                  const securityDepositSui = Number(fields.security_deposit) / 1e9;
-                  
-                  // Debug log the final values we'll use
-                  console.log('Final USD values for fallback member circle:', {
-                    contributionUSD: contributionAmountUsd,
-                    securityDepositUSD: securityDepositUsd,
-                    contributionSUI: contributionAmountSui,
-                    securityDepositSUI: securityDepositSui
-                  });
-                  
-                  // Get accurate member count from blockchain events
-                  const actualMemberCount = await getCircleMemberCount(parsedEvent.circle_id);
+            });
+            
+            // Get any creation data we might have for this circle
+            const creationData = circleCreationDataMap.get(parsedEvent.circle_id);
+            
+            // Get dynamic fields for this circle
+            const dynamicFieldsResult = await client.getDynamicFields({
+              parentId: parsedEvent.circle_id
+            });
+            
+            // Add transaction input data if we have it
+            const transactionInput = transactionInputMap.get(parsedEvent.circle_id);
+            
+            // Prepare the enhanced object data
+            const enhancedObjectData = {
+              ...objectData,
+              data: {
+                ...objectData.data,
+                dynamicFields: dynamicFieldsResult.data
+              },
+              transactionInput
+            };
+            
+            // Process member circle using the helper function
+            // @ts-expect-error - Type compatibility issues with SUI SDK
+            const circleData = processCircleObject(enhancedObjectData, userAddress, creationData);
+            
+            if (circleData) {
+              // Update with the actual member count from events
+              const memberCount = memberCountMap.has(parsedEvent.circle_id) 
+                ? memberCountMap.get(parsedEvent.circle_id)!.size 
+                : 1;
                   
                   // Check if the circle has been activated
                   const isActive = activatedCircleIds.has(parsedEvent.circle_id);
                   
+                  const safeCircleData = {
+                    ...circleData,
+                    id: circleData?.id ?? '',
+                    name: typeof circleData?.name === 'string' ? circleData.name : '',
+                    admin: typeof circleData?.admin === 'string' ? circleData.admin : '',
+                  } as Circle;
+                  
                   circleMap.set(parsedEvent.circle_id, {
-                    id: parsedEvent.circle_id,
-                    name: fields.name,
-                    admin: fields.admin,
-                    contributionAmount: contributionAmountSui,
-                    contributionAmountUsd: contributionAmountUsd || 0, 
-                    securityDeposit: securityDepositSui,
-                    securityDepositUsd: securityDepositUsd || 0,
-                    cycleLength: Number(fields.cycle_length),
-                    cycleDay: Number(fields.cycle_day),
-                    maxMembers: Number(fields.max_members),
-                    currentMembers: actualMemberCount, // Use actual member count
-                    nextPayoutTime: Number(fields.next_payout_time),
-                    memberStatus: 'active', // Default, will update if needed
-                    isAdmin: fields.admin === userAddress,
+                ...safeCircleData,
+                currentMembers: memberCount,
                     isActive: isActive
                   });
-                }
-              }
               
+              console.log('Added member circle:', parsedEvent.circle_id, 'with members:', memberCount);
+            }
             } catch (err) {
               console.error(`Error fetching circle details for ${parsedEvent.circle_id}:`, err);
-            }
           }
         }
       }
@@ -966,257 +1020,18 @@ export default function Dashboard() {
     checkWalletAvailability();
   }, [isAuthenticated, account]);
 
-  // New function to delete circle with zkLogin
+  // --- Updated deleteCircleWithZkLogin to use the modal ---
   const deleteCircleWithZkLogin = async (circleId: string) => {
-    try {
-      console.log("Deleting circle with zkLogin:", circleId);
-      setIsDeleting(circleId);
+    // The actual deletion logic, to be called by the modal
+    const performDeletion = async () => {
+      try {
+        console.log("Deleting circle with zkLogin:", circleId);
+        setIsDeleting(circleId); // Keep track of which circle is being deleted
 
-      // Use the AuthContext's deleteCircle method
-      const digest = await authDeleteCircle(circleId);
-      
-      console.log('Transaction succeeded with digest:', digest);
-      toast.success('Circle deleted successfully');
-      
-      // Update the UI - remove the deleted circle
-      setCircles(prevCircles => prevCircles.filter(c => c.id !== circleId));
-      setDeleteableCircles(prev => {
-        const updated = new Set(prev);
-        updated.delete(circleId);
-        return updated;
-      });
-      
-    } catch (error: unknown) {
-      console.error('Error deleting circle with zkLogin:', error);
-      
-      // Check if this is a ZkLoginError with requireRelogin flag
-      if (error instanceof ZkLoginError && error.requireRelogin) {
-        toast.error(
-          <div className="flex flex-col">
-            <div>Authentication issue: Please login again</div>
-            <button 
-              onClick={() => window.location.href = '/'} 
-              className="mt-2 bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-sm flex items-center justify-center"
-            >
-              <RefreshCw className="w-3 h-3 mr-1" /> Re-authenticate
-            </button>
-          </div>,
-          { duration: 10000 }
-        );
-        return;
-      }
-      
-      // Show appropriate error message based on the error
-      if (error instanceof Error) {
-        // Log the full error for debugging
-        console.error('Full error details:', {
-          message: error.message,
-          stack: error.stack,
-          name: error.name,
-          isZkLoginError: error instanceof ZkLoginError
-        });
+        // Use the AuthContext's deleteCircle method
+        const digest = await authDeleteCircle(circleId);
         
-        if (error.message.includes('ECircleHasActiveMembers') || 
-            error.message.includes('Cannot delete: Circle has active members')) {
-          toast.error('Cannot delete: Circle has active members');
-        } else if (error.message.includes('ECircleHasContributions') || 
-                  error.message.includes('Cannot delete: Circle has received contributions')) {
-          toast.error('Cannot delete: Circle has received contributions');
-        } else if (error.message.includes('EOnlyCircleAdmin') || 
-                  error.message.includes('Only the circle admin')) {
-          toast.error('Cannot delete: Only the circle admin can delete this circle');
-        } else if (error.message.includes('not found') || 
-                  error.message.includes('not accessible')) {
-          toast.error('Circle not found or not accessible');
-        } else if (error.message.includes('Session') || 
-                  error.message.includes('authentication') || 
-                  error.message.includes('expired')) {
-          toast.error(
-            <div className="flex flex-col">
-              <div>Authentication issue: {error.message}</div>
-              <button 
-                onClick={() => window.location.href = '/'} 
-                className="mt-2 bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-sm flex items-center justify-center"
-              >
-                <RefreshCw className="w-3 h-3 mr-1" /> Re-authenticate
-              </button>
-            </div>,
-            { duration: 10000 }
-          );
-        } else {
-          toast.error(`Error: ${error.message}`, {
-            duration: 5000
-          });
-        }
-      } else {
-        toast.error('Error deleting circle', {
-          duration: 5000
-        });
-      }
-    } finally {
-      setIsDeleting(null);
-    }
-  };
-
-  const deleteCircle = async (circleId: string) => {
-    console.log("deleteCircle function called with circleId:", circleId);
-    
-    // Check if using zkLogin authentication
-    if (isAuthenticated && account) {
-      console.log("Using zkLogin authentication for deletion");
-      return deleteCircleWithZkLogin(circleId);
-    }
-    
-    // Check for wallet availability - expanded to check multiple wallet objects
-    const walletDetectionDetails = {
-      suiWallet: !!window.suiWallet,
-      sui: !!window.sui,
-      suix: !!window.suix,
-      ethos: !!window.ethos,
-      suiet: !!window.suiet,
-      martian: !!window.martian
-    };
-    
-    console.log("Wallet detection results:", walletDetectionDetails);
-    
-    // Try to find an available wallet
-    let wallet = null;
-    if (window.suiWallet) {
-      console.log("Using standard SUI wallet");
-      wallet = window.suiWallet;
-    } else if (window.sui) {
-      console.log("Using 'sui' wallet object");
-      wallet = window.sui;
-    } else if (window.suix) {
-      console.log("Using 'suix' wallet object");
-      wallet = window.suix;
-    } else if (window.ethos) {
-      console.log("Using Ethos wallet");
-      wallet = window.ethos;
-    } else if (window.suiet) {
-      console.log("Using Suiet wallet");
-      wallet = window.suiet;
-    } else if (window.martian) {
-      console.log("Using Martian wallet");
-      wallet = window.martian;
-    }
-    
-    if (!wallet) {
-      console.log("No compatible SUI wallet found");
-      toast.error('No wallet detected. Please install a SUI wallet extension or use zkLogin authentication.');
-      return;
-    }
-    
-    // Log available methods on the wallet object
-    console.log("Available wallet methods:", Object.keys(wallet));
-    
-    // Updated package ID to the newly published contract
-    const packageId = PACKAGE_ID;
-    console.log("Using packageId:", packageId);
-    
-    setIsDeleting(circleId);
-    console.log("Set isDeleting state to:", circleId);
-    
-    try {
-      // Check for wallet features/capabilities
-      const hasSignAndExecuteTransactionBlock = typeof wallet.signAndExecuteTransactionBlock === 'function';
-      const hasSignTransactionBlock = typeof wallet.signTransactionBlock === 'function';
-      const hasSignAndExecuteTransaction = typeof wallet.signAndExecuteTransaction === 'function';
-      const hasConstructTransaction = typeof wallet.constructTransaction === 'function';
-      const hasSignAndExecuteTransactionV2 = typeof wallet.signAndExecuteTransaction === 'function';
-      
-      console.log("Wallet capabilities:", {
-        signAndExecuteTransactionBlock: hasSignAndExecuteTransactionBlock,
-        signTransactionBlock: hasSignTransactionBlock,
-        signAndExecuteTransaction: hasSignAndExecuteTransaction,
-        constructTransaction: hasConstructTransaction,
-        signAndExecuteTransactionV2: hasSignAndExecuteTransactionV2
-      });
-      
-      let result: Record<string, unknown> | null = null;
-      
-      // Try newer wallet API first (preferred)
-      if (hasSignAndExecuteTransactionBlock && wallet.signAndExecuteTransactionBlock) {
-        console.log("Using signAndExecuteTransactionBlock API");
-        
-        // Create a transaction block for the newer API format
-        const txb: TransactionBlockPayload = {
-          transactionBlock: {
-            // Modern format for transaction block
-            transactions: [
-              {
-                kind: 'MoveCall',
-                target: `${packageId}::njangi_circle::delete_circle`,
-                arguments: [
-                  { kind: 'Input', index: 0, type: 'object', value: circleId }
-                ]
-              }
-            ]
-          },
-          options: {
-            showEffects: true,
-            showEvents: true,
-          }
-        };
-        
-        console.log("Transaction block created:", txb);
-        result = await wallet.signAndExecuteTransactionBlock(txb);
-      }
-      // Try alternative format for signAndExecuteTransactionBlock
-      else if (hasSignAndExecuteTransactionBlock && wallet.signAndExecuteTransactionBlock) {
-        console.log("Using alternative signAndExecuteTransactionBlock format");
-        
-        const txb: TransactionBlockPayload = {
-          transactionBlock: {
-            // Alternative format
-            moveCall: {
-              packageObjectId: packageId,
-              module: 'njangi_circle',
-              function: 'delete_circle',
-              typeArguments: [],
-              arguments: [circleId]
-            }
-          },
-          options: {
-            showEffects: true,
-            showEvents: true,
-          }
-        };
-        
-        console.log("Transaction block created (alternative format):", txb);
-        result = await wallet.signAndExecuteTransactionBlock(txb);
-      }
-      // Fall back to older wallet API
-      else if (hasConstructTransaction && hasSignAndExecuteTransaction && 
-               wallet.constructTransaction && wallet.signAndExecuteTransaction) {
-        console.log("Using legacy transaction flow");
-        const transaction = wallet.constructTransaction({
-          kind: 'moveCall',
-          data: {
-            packageObjectId: packageId,
-            module: 'njangi_circle',
-            function: 'delete_circle',
-            typeArguments: [],
-            arguments: [circleId],
-            gasBudget: 10000000,
-          }
-        });
-        
-        console.log("Transaction constructed:", transaction);
-        result = await wallet.signAndExecuteTransaction({
-          transaction: transaction,
-        });
-      }
-      else {
-        console.error("No compatible wallet API methods found");
-        toast.error('Your wallet does not support the required transaction methods. Please try a different wallet.');
-        setIsDeleting(null);
-        return;
-      }
-      
-      console.log("Transaction execution result:", result);
-      
-      if (result) {
+        console.log('Transaction succeeded with digest:', digest);
         toast.success('Circle deleted successfully');
         
         // Update the UI - remove the deleted circle
@@ -1226,24 +1041,282 @@ export default function Dashboard() {
           updated.delete(circleId);
           return updated;
         });
-      }
-    } catch (error) {
-      console.error('Error deleting circle:', error);
-      
-      // Show error toast with appropriate message
-      if (error instanceof Error) {
-        if (error.message.includes('ECircleHasActiveMembers')) {
-          toast.error('Cannot delete: Circle has active members');
-        } else if (error.message.includes('ECircleHasContributions')) {
-          toast.error('Cannot delete: Circle has received contributions');
-        } else {
-          toast.error('Error deleting circle: ' + error.message);
+        
+      } catch (error: unknown) {
+        console.error('Error deleting circle with zkLogin:', error);
+        
+        // Check if this is a ZkLoginError with requireRelogin flag
+        if (error instanceof ZkLoginError && error.requireRelogin) {
+          toast.error(
+            <div className="flex flex-col">
+              <div>Authentication issue: Please login again</div>
+              <button 
+                onClick={() => window.location.href = '/'} 
+                className="mt-2 bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-sm flex items-center justify-center"
+              >
+                <RefreshCw className="w-3 h-3 mr-1" /> Re-authenticate
+              </button>
+            </div>,
+            { duration: 10000 }
+          );
+          return;
         }
-      } else {
-        toast.error('Error deleting circle');
+        
+        // Show appropriate error message based on the error
+        if (error instanceof Error) {
+          // Log the full error for debugging
+          console.error('Full error details:', {
+            message: error.message,
+            stack: error.stack,
+            name: error.name,
+            isZkLoginError: error instanceof ZkLoginError
+          });
+          
+          if (error.message.includes('ECircleHasActiveMembers') || 
+              error.message.includes('Cannot delete: Circle has active members')) {
+            toast.error('Cannot delete: Circle has active members');
+          } else if (error.message.includes('ECircleHasContributions') || 
+                    error.message.includes('Cannot delete: Circle has received contributions')) {
+            toast.error('Cannot delete: Circle has received contributions');
+          } else if (error.message.includes('EOnlyCircleAdmin') || 
+                    error.message.includes('Only the circle admin')) {
+            toast.error('Cannot delete: Only the circle admin can delete this circle');
+          } else if (error.message.includes('not found') || 
+                    error.message.includes('not accessible')) {
+            toast.error('Circle not found or not accessible');
+          } else if (error.message.includes('Session') || 
+                    error.message.includes('authentication') || 
+                    error.message.includes('expired')) {
+            toast.error(
+              <div className="flex flex-col">
+                <div>Authentication issue: {error.message}</div>
+                <button 
+                  onClick={() => window.location.href = '/'} 
+                  className="mt-2 bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-sm flex items-center justify-center"
+                >
+                  <RefreshCw className="w-3 h-3 mr-1" /> Re-authenticate
+                </button>
+              </div>,
+              { duration: 10000 }
+            );
+          } else {
+            toast.error(`Error: ${error.message}`, {
+              duration: 5000
+            });
+          }
+        } else {
+          toast.error('Error deleting circle', { duration: 5000 });
+        }
+      } finally {
+        setIsDeleting(null);
       }
-    } finally {
-      setIsDeleting(null);
+    };
+
+    // Set props to open the confirmation modal
+    const circleToDelete = circles.find(c => c.id === circleId);
+    setConfirmModalProps({
+      title: `Delete Circle: ${circleToDelete?.name || 'Unknown'}`,
+      message: (
+        <>
+          <p>Are you absolutely sure you want to delete this circle?</p>
+          <p className="mt-2 font-semibold text-red-600">This action cannot be undone.</p>
+        </>
+      ),
+      onConfirm: performDeletion,
+      confirmText: 'Delete Circle',
+      variant: 'danger',
+    });
+    setIsConfirmModalOpen(true);
+  };
+
+  // --- Updated deleteCircle (non-zkLogin) to use the modal ---
+  const deleteCircle = async (circleId: string) => {
+    console.log("deleteCircle function called with circleId:", circleId);
+
+    // The actual deletion logic (for wallet extension), to be called by the modal
+    const performWalletDeletion = async () => {
+      // Check for wallet availability - expanded to check multiple wallet objects
+      const walletDetectionDetails = {
+        suiWallet: !!window.suiWallet,
+        sui: !!window.sui,
+        suix: !!window.suix,
+        ethos: !!window.ethos,
+        suiet: !!window.suiet,
+        martian: !!window.martian
+      };
+      console.log("Wallet detection results:", walletDetectionDetails);
+      
+      // Try to find an available wallet
+      let wallet = null;
+      if (window.suiWallet) wallet = window.suiWallet;
+      else if (window.sui) wallet = window.sui;
+      else if (window.suix) wallet = window.suix;
+      else if (window.ethos) wallet = window.ethos;
+      else if (window.suiet) wallet = window.suiet;
+      else if (window.martian) wallet = window.martian;
+      
+      if (!wallet) {
+        console.log("No compatible SUI wallet found");
+        toast.error('No wallet detected. Please install a SUI wallet extension.');
+        return;
+      }
+      
+      console.log("Available wallet methods:", Object.keys(wallet));
+      const packageId = PACKAGE_ID;
+      console.log("Using packageId:", packageId);
+      
+      setIsDeleting(circleId);
+      console.log("Set isDeleting state to:", circleId);
+      
+      try {
+        // Check for wallet features/capabilities
+        const hasSignAndExecuteTransactionBlock = typeof wallet.signAndExecuteTransactionBlock === 'function';
+        const hasSignTransactionBlock = typeof wallet.signTransactionBlock === 'function';
+        const hasSignAndExecuteTransaction = typeof wallet.signAndExecuteTransaction === 'function';
+        const hasConstructTransaction = typeof wallet.constructTransaction === 'function';
+        const hasSignAndExecuteTransactionV2 = typeof wallet.signAndExecuteTransaction === 'function';
+        
+        console.log("Wallet capabilities:", {
+          signAndExecuteTransactionBlock: hasSignAndExecuteTransactionBlock,
+          signTransactionBlock: hasSignTransactionBlock,
+          signAndExecuteTransaction: hasSignAndExecuteTransaction,
+          constructTransaction: hasConstructTransaction,
+          signAndExecuteTransactionV2: hasSignAndExecuteTransactionV2
+        });
+        
+        let result: Record<string, unknown> | null = null;
+        
+        // Try newer wallet API first (preferred)
+        if (hasSignAndExecuteTransactionBlock && wallet.signAndExecuteTransactionBlock) {
+          console.log("Using signAndExecuteTransactionBlock API");
+          
+          // Create a transaction block for the newer API format
+          const txb: TransactionBlockPayload = {
+            transactionBlock: {
+              // Modern format for transaction block
+              transactions: [
+                {
+                  kind: 'MoveCall',
+                  target: `${packageId}::njangi_circles::delete_circle`,
+                  arguments: [
+                    { kind: 'Input', index: 0, type: 'object', value: circleId }
+                  ]
+                }
+              ]
+            },
+            options: {
+              showEffects: true,
+              showEvents: true,
+            }
+          };
+          
+          console.log("Transaction block created:", txb);
+          result = await wallet.signAndExecuteTransactionBlock(txb);
+        }
+        // Try alternative format for signAndExecuteTransactionBlock
+        else if (hasSignAndExecuteTransactionBlock && wallet.signAndExecuteTransactionBlock) {
+          console.log("Using alternative signAndExecuteTransactionBlock format");
+          
+          const txb: TransactionBlockPayload = {
+            transactionBlock: {
+              // Alternative format
+              moveCall: {
+                packageObjectId: packageId,
+                module: 'njangi_circle',
+                function: 'delete_circle',
+                typeArguments: [],
+                arguments: [circleId]
+              }
+            },
+            options: {
+              showEffects: true,
+              showEvents: true,
+            }
+          };
+          
+          console.log("Transaction block created (alternative format):", txb);
+          result = await wallet.signAndExecuteTransactionBlock(txb);
+        }
+        // Fall back to older wallet API
+        else if (hasConstructTransaction && hasSignAndExecuteTransaction && 
+                 wallet.constructTransaction && wallet.signAndExecuteTransaction) {
+          console.log("Using legacy transaction flow");
+          const transaction = wallet.constructTransaction({
+            kind: 'moveCall',
+            data: {
+              packageObjectId: packageId,
+              module: 'njangi_circle',
+              function: 'delete_circle',
+              typeArguments: [],
+              arguments: [circleId],
+              gasBudget: 10000000,
+            }
+          });
+          
+          console.log("Transaction constructed:", transaction);
+          result = await wallet.signAndExecuteTransaction({
+            transaction: transaction,
+          });
+        }
+        else {
+          console.error("No compatible wallet API methods found");
+          toast.error('Your wallet does not support the required transaction methods.');
+          setIsDeleting(null);
+          return;
+        }
+
+        console.log("Transaction execution result:", result);
+        
+        if (result) {
+          toast.success('Circle deleted successfully');
+          // Update the UI - remove the deleted circle
+          setCircles(prevCircles => prevCircles.filter(c => c.id !== circleId));
+          setDeleteableCircles(prev => {
+            const updated = new Set(prev);
+            updated.delete(circleId);
+            return updated;
+          });
+        }
+      } catch (error) {
+        console.error('Error deleting circle with wallet:', error);
+        // Show error toast with appropriate message
+        if (error instanceof Error) {
+          if (error.message.includes('ECircleHasActiveMembers')) {
+            toast.error('Cannot delete: Circle has active members');
+          } else if (error.message.includes('ECircleHasContributions')) {
+            toast.error('Cannot delete: Circle has received contributions');
+          } else {
+            toast.error('Error deleting circle: ' + error.message);
+          }
+        } else {
+          toast.error('Error deleting circle');
+        }
+      } finally {
+        setIsDeleting(null);
+      }
+    };
+
+    // Check if using zkLogin authentication
+    if (isAuthenticated && account) {
+      console.log("Using zkLogin authentication for deletion");
+      // Call the zkLogin version which will handle the modal opening
+      deleteCircleWithZkLogin(circleId);
+    } else {
+      // If using wallet extension, open the modal directly
+      const circleToDelete = circles.find(c => c.id === circleId);
+      setConfirmModalProps({
+        title: `Delete Circle: ${circleToDelete?.name || 'Unknown'}`,
+        message: (
+          <>
+            <p>Are you absolutely sure you want to delete this circle?</p>
+            <p className="mt-2 font-semibold text-red-600">This action cannot be undone.</p>
+          </>
+        ),
+        onConfirm: performWalletDeletion,
+        confirmText: 'Delete Circle',
+        variant: 'danger',
+      });
+      setIsConfirmModalOpen(true);
     }
   };
 
@@ -1287,30 +1360,36 @@ export default function Dashboard() {
     let cyclePeriod = '';
     let dayFormat = '';
     
-    switch (cycleLength) {
+    // Validate inputs to avoid errors
+    const validCycleLength = typeof cycleLength === 'number' ? cycleLength : 0;
+    let validCycleDay = typeof cycleDay === 'number' ? cycleDay : 0;
+    
+    // Ensure cycle day is in valid range
+    if (validCycleLength === 0 && validCycleDay > 6) validCycleDay = 0; // Weekly (0-6)
+    if (validCycleLength > 0 && validCycleDay > 31) validCycleDay = 1; // Monthly/Quarterly
+    
+    switch (validCycleLength) {
       case 0: // Weekly
         cyclePeriod = 'Weekly';
-        // For weekly, cycleDay is 0-6 (Sunday-Saturday)
-        // The Move contract uses 0 = Sunday, 1 = Monday, etc.
-        const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-        dayFormat = weekdays[cycleDay % 7]; // Ensure we don't go out of bounds
+        // For weekly, cycleDay is 0-6
+        const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        dayFormat = weekdays[validCycleDay] || weekdays[0]; // Default to Monday if out of range
         break;
       case 1: // Monthly
         cyclePeriod = 'Monthly';
-        // In your specific case, 0th day was shown for Monthly cycle
-        // Let's handle this special case and just default to 1st day when we see 0
-        const adjustedDay = cycleDay === 0 ? 1 : cycleDay;
-        dayFormat = getOrdinalSuffix(adjustedDay);
+        // Ensure we have a valid day (1-31)
+        validCycleDay = validCycleDay === 0 ? 1 : validCycleDay;
+        dayFormat = getOrdinalSuffix(validCycleDay);
         break;
       case 2: // Quarterly
         cyclePeriod = 'Quarterly';
-        // Same fix for quarterly
-        const adjustedQuarterlyDay = cycleDay === 0 ? 1 : cycleDay;
-        dayFormat = getOrdinalSuffix(adjustedQuarterlyDay);
+        // Ensure we have a valid day (1-31)
+        validCycleDay = validCycleDay === 0 ? 1 : validCycleDay;
+        dayFormat = getOrdinalSuffix(validCycleDay);
         break;
       default:
         cyclePeriod = 'Unknown';
-        dayFormat = `Day ${cycleDay === 0 ? 1 : cycleDay}`;
+        dayFormat = `Day ${validCycleDay === 0 ? 1 : validCycleDay}`;
     }
     
     return `${cyclePeriod} (${dayFormat})`;
@@ -1589,6 +1668,43 @@ export default function Dashboard() {
                 <div className="p-6">
                   <p className="text-sm font-medium text-gray-500">Balance</p>
                   <p className="mt-1 text-2xl font-semibold text-blue-600">{Number(balance) / 1000000000} SUI</p>
+                  
+                  {/* Display all coins */}
+                  {allCoins.length > 1 && (
+                    <div className="mt-3">
+                      <p className="text-xs font-medium text-gray-500 mb-1">All Tokens</p>
+                      <div className="space-y-1 max-h-40 overflow-y-auto pr-2">
+                        {allCoins.map((coin, index) => (
+                          <div key={index} className="flex justify-between items-center text-sm py-1">
+                            <div className="flex items-center">
+                              <TokenIcon symbol={coin.symbol} />
+                              <span className="font-medium">{coin.symbol}</span>
+                            </div>
+                            <div className="flex items-center">
+                              <span className="text-gray-700 mr-2">
+                                {coin.symbol.toLowerCase() === 'usdc' 
+                                  ? (Number(coin.balance) / 1000000).toFixed(6) // Use 1e6 for USDC (6 decimals)
+                                  : Number(coin.balance) / 1000000000 // Use 1e9 for SUI and other coins
+                                }
+                              </span>
+                              {coin.symbol.toLowerCase() === 'usdc' && (
+                                <button
+                                  onClick={() => {
+                                    console.log('Buy USDC button clicked');
+                                    openMoonPayWidget('usdc');
+                                  }}
+                                  className="text-xs bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded transition-colors"
+                                  title="Buy USDC with MoonPay"
+                                >
+                                  Buy
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -2425,6 +2541,19 @@ export default function Dashboard() {
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+
+      {/* Render the Confirmation Modal */}
+      {confirmModalProps && (
+        <ConfirmationModal
+          isOpen={isConfirmModalOpen}
+          onClose={() => setIsConfirmModalOpen(false)}
+          onConfirm={confirmModalProps.onConfirm}
+          title={confirmModalProps.title}
+          message={confirmModalProps.message}
+          confirmText={confirmModalProps.confirmText}
+          confirmButtonVariant={confirmModalProps.variant}
+        />
+      )}
     </div>
   );
 } 

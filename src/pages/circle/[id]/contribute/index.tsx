@@ -14,6 +14,19 @@ const ESTIMATED_GAS_FEE = 0.00021; // Gas fee in SUI
 const DEFAULT_SLIPPAGE = 0.5; // Default slippage percentage
 const BUFFER_PERCENTAGE = 1.5; // Additional buffer percentage for swap rate fluctuations
 
+// IMPORTANT: The values in CircleConfig are stored as follows:
+// - contribution_amount: SUI amount with 9 decimals (MIST)
+// - contribution_amount_usd: USD amount in cents (e.g., 20 = $0.20)
+// - security_deposit: SUI amount with 9 decimals (MIST)
+// - security_deposit_usd: USD amount in cents (e.g., 20 = $0.20)
+//
+// For USDC deposits (6 decimals), the validation compares the USDC amount with 
+// security_deposit_usd * 10000. For example:
+// $0.20 USD (20 cents) should be exactly 200,000 microUSDC (0.2 USDC with 6 decimals).
+// 
+// Do NOT double-convert values. The frontend should calculate and pass the exact 
+// required amount, and the contract will not perform additional scaling.
+
 // Define a proper Circle type to fix linter errors
 interface Circle {
   id: string;
@@ -35,19 +48,36 @@ interface CircleFields {
   security_deposit: string;
   contribution_amount_usd?: string;
   security_deposit_usd?: string;
-  usd_amounts: {
+  usd_amounts?: {
     fields?: {
       contribution_amount: string;
       security_deposit: string;
       target_amount?: string;
-    }
+    };
     contribution_amount?: string;
     security_deposit?: string;
     target_amount?: string;
-  } | string;
+  } | string; // Allow string for potential older structures
+  wallet_id?: string; // Add wallet_id if it can be a direct field
+  auto_swap_enabled?: boolean | string; // Allow string for potential older structures
   // Use unknown for index signature as a safer alternative to any
   [key: string]: string | number | boolean | object | unknown;
 }
+
+// Add missing CircleCreatedEvent interface
+interface CircleCreatedEvent {
+  circle_id: string;
+  admin: string;
+  name: string;
+  contribution_amount: string;
+  contribution_amount_usd: string;
+  security_deposit_usd: string;
+  max_members: string;
+  cycle_length: string;
+}
+
+// Define types for SUI object field values
+type SuiFieldValue = string | number | boolean | null | undefined | SuiFieldValue[] | Record<string, unknown>;
 
 export default function ContributeToCircle() {
   const router = useRouter();
@@ -63,6 +93,22 @@ export default function ContributeToCircle() {
   const [userDepositPaid, setUserDepositPaid] = useState(false);
   const [fetchingBalance, setFetchingBalance] = useState(false);
   const [isPayingDeposit, setIsPayingDeposit] = useState(false);
+
+  // Add state to track custody wallet stablecoin balance
+  const [custodyStablecoinBalance, setCustodyStablecoinBalance] = useState<number | null>(null);
+  // Add separate states for security deposits and contribution funds
+  const [securityDepositBalance, setSecurityDepositBalance] = useState<number | null>(null);
+  const [contributionBalance, setContributionBalance] = useState<number | null>(null);
+  const [loadingStablecoinBalance, setLoadingStablecoinBalance] = useState(false);
+  const [isInitialBalanceLoad, setIsInitialBalanceLoad] = useState(true);
+  
+  // New state for user's USDC balance
+  const [userUsdcBalance, setUserUsdcBalance] = useState<number | null>(null);
+  const [showDirectDepositOption, setShowDirectDepositOption] = useState<boolean>(false);
+  const [directDepositProcessing, setDirectDepositProcessing] = useState<boolean>(false);
+  
+  // USDC coin type
+  const USDC_COIN_TYPE = '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC';
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -115,7 +161,7 @@ export default function ContributeToCircle() {
     }
   }, [circle, userDepositPaid]);
 
-  // Add a debug log to check the security deposit value when showing the warning
+  // Add debug log to check the security deposit value when showing the warning
   useEffect(() => {
     if (circle) {
       console.log('Security deposit values:', {
@@ -127,134 +173,256 @@ export default function ContributeToCircle() {
     }
   }, [circle]);
 
+  // Add effect to fetch custody wallet stablecoin balance when circle data is loaded
+  useEffect(() => {
+    if (circle && circle.walletId) {
+      fetchCustodyWalletBalance();
+    }
+    // fetchCustodyWalletBalance depends on circle but we don't need to
+    // re-run it every time the entire circle object changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [circle?.id, circle?.walletId]);
+
   const fetchCircleDetails = async () => {
     if (!id) return;
+    console.log('Contribute - Fetching circle details for:', id);
     
     setLoading(true);
     try {
       const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
       
-      // Get circle object
+      // Get circle object with content
       const objectData = await client.getObject({
         id: id as string,
-        options: { showContent: true }
+        options: { showContent: true, showType: true }
       });
       
-      if (objectData.data?.content && 'fields' in objectData.data.content) {
+      if (!objectData.data?.content || !('fields' in objectData.data.content)) {
+        throw new Error('Invalid circle object data received');
+      }
         const fields = objectData.data.content.fields as CircleFields;
+      console.log('Contribute - Raw Circle Object Fields:', fields);
         
-        console.log('Circle data from blockchain:', fields);
-        
-        // Get the USD amounts (contribution and security deposit)
-        let contributionAmountUsd = 0;
-        let securityDepositUsd = 0;
-        
-        // Check for nested usd_amounts structure
-        if (fields.usd_amounts) {
-          if (typeof fields.usd_amounts === 'object') {
-            let usdAmounts: {
-              fields?: {
-                contribution_amount: string;
-                security_deposit: string;
-                target_amount?: string;
-              };
-              contribution_amount?: string;
-              security_deposit?: string;
-              target_amount?: string;
-            } = fields.usd_amounts;
-            
-            // If it has a fields property, use that
-            if (usdAmounts.fields) {
-              usdAmounts = usdAmounts.fields;
-            }
-            
-            if (usdAmounts.contribution_amount) {
-              contributionAmountUsd = Number(usdAmounts.contribution_amount) / 100;
-            }
-            
-            if (usdAmounts.security_deposit) {
-              securityDepositUsd = Number(usdAmounts.security_deposit) / 100;
-            }
-          }
-        } 
-        // Fallback to direct fields
-        else if (fields.contribution_amount_usd) {
-          contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
-        }
-        
-        if (fields.security_deposit_usd) {
-          securityDepositUsd = Number(fields.security_deposit_usd) / 100;
-        }
-        
-        // Now we need to find the circle's custody wallet ID
-        const walletCreatedEvents = await client.queryEvents({
-          query: {
-            MoveEventType: `${PACKAGE_ID}::njangi_circle::CustodyWalletCreated`
-          },
+      // Get dynamic fields
+      const dynamicFieldsResult = await client.getDynamicFields({
+        parentId: id as string
+      });
+      const dynamicFields = dynamicFieldsResult.data;
+      console.log('Contribute - Dynamic Fields:', dynamicFields);
+
+      // Fetch creation event and transaction inputs (similar to dashboard)
+      let transactionInput: Record<string, unknown> | undefined;
+      let circleCreationEventData: CircleCreatedEvent | undefined;
+      let walletId = '';
+
+      try {
+        // 1. Fetch CircleCreated event
+        const circleEvents = await client.queryEvents({
+          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleCreated` },
           limit: 50
         });
+        const createEvent = circleEvents.data.find(event => 
+          (event.parsedJson as { circle_id?: string })?.circle_id === id
+        );
+        console.log('Contribute - Found creation event:', !!createEvent);
+
+        if (createEvent?.parsedJson) {
+          circleCreationEventData = createEvent.parsedJson as CircleCreatedEvent;
+          // Try extracting basic config from event
+          transactionInput = {
+            contribution_amount: circleCreationEventData.contribution_amount,
+            contribution_amount_usd: circleCreationEventData.contribution_amount_usd,
+            security_deposit_usd: circleCreationEventData.security_deposit_usd,
+          };
+        }
+
+        // 2. Fetch Transaction Block for inputs (like cycle_day, potentially others)
+        if (createEvent?.id?.txDigest) {
+          const txData = await client.getTransactionBlock({
+            digest: createEvent.id.txDigest,
+            options: { showInput: true }
+          });
+          console.log('Contribute - Transaction data fetched:', !!txData);
+          if (txData?.transaction?.data?.transaction?.kind === 'ProgrammableTransaction') {
+            const inputs = txData.transaction.data.transaction.inputs || [];
+            console.log('Contribute - Transaction inputs:', inputs);
+            if (!transactionInput) transactionInput = {};
+            // Extract relevant inputs based on expected positions (adjust if needed)
+            if (inputs.length > 1 && inputs[1]?.type === 'pure') transactionInput.contribution_amount = inputs[1].value;
+            if (inputs.length > 2 && inputs[2]?.type === 'pure') transactionInput.contribution_amount_usd = inputs[2].value;
+            if (inputs.length > 4 && inputs[4]?.type === 'pure') transactionInput.security_deposit_usd = inputs[4].value;
+            // Add any other inputs you stored this way
+          }
+        }
         
-        let walletId = null;
-        
-        // Look for events related to this circle
-        for (const event of walletCreatedEvents.data) {
-          if (event.parsedJson && 
+        // 3. Fetch CustodyWalletCreated event for walletId
+        const custodyEvents = await client.queryEvents({
+          query: { MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyWalletCreated` },
+          limit: 100
+        });
+        const custodyEvent = custodyEvents.data.find(event =>
+          event.parsedJson && 
               typeof event.parsedJson === 'object' &&
               'circle_id' in event.parsedJson &&
               'wallet_id' in event.parsedJson &&
-              event.parsedJson.circle_id === id) {
-            walletId = event.parsedJson.wallet_id as string;
-            console.log('Found wallet ID from events:', walletId);
-            break;
-          }
+          event.parsedJson.circle_id === id
+        );
+        if (custodyEvent?.parsedJson) {
+          walletId = (custodyEvent.parsedJson as { wallet_id: string }).wallet_id;
+          console.log('Contribute - Found wallet ID from events:', walletId);
         }
 
-        // Parse and validate the security deposit value
-        // First try directly from the blockchain value
-        let securityDepositAmount = Number(fields.security_deposit) / 1e9;
-        
-        // Check if the security deposit is unreasonably large or zero
-        if (securityDepositAmount > 1000000 || securityDepositAmount === 0) {
-          console.log('Invalid security deposit from blockchain, calculating from USD value');
-          
-          // If the blockchain value is invalid, calculate from USD value and price
-          // Using non-nullable price with fallback
-          const effectiveSuiPrice = suiPrice || 1.25; // Fallback to default price if suiPrice is 0
-          securityDepositAmount = securityDepositUsd / effectiveSuiPrice;
-          
-          console.log('Calculated security deposit amount:', {
-            securityDepositUsd,
-            suiPrice: effectiveSuiPrice,
-            calculatedSUI: securityDepositAmount
-          });
+      } catch (error) {
+        console.error('Contribute - Error fetching event/transaction data:', error);
+        // Continue even if this fails, rely on other data sources
         }
-        
-        // Ensure we have a reasonable value
-        if (isNaN(securityDepositAmount) || securityDepositAmount <= 0) {
-          console.warn('Still have invalid security deposit amount, using fallback');
-          // If we still have an invalid amount, calculate from USD with a default conversion
-          securityDepositAmount = securityDepositUsd / 2.3; // Fallback using a common SUI price
+
+      // --- Process Extracted Data (Prioritize sources) ---
+      const configValues = {
+        contributionAmount: 0,
+        contributionAmountUsd: 0,
+        securityDeposit: 0, // SUI amount
+        securityDepositUsd: 0,
+        autoSwapEnabled: false,
+      };
+
+      // 1. Use values from transaction/event first
+      if (transactionInput) {
+        if (transactionInput.contribution_amount) configValues.contributionAmount = Number(transactionInput.contribution_amount) / 1e9;
+        if (transactionInput.contribution_amount_usd) configValues.contributionAmountUsd = Number(transactionInput.contribution_amount_usd) / 100;
+        if (transactionInput.security_deposit_usd) configValues.securityDepositUsd = Number(transactionInput.security_deposit_usd) / 100;
+      }
+      // Note: CircleCreatedEvent doesn't hold SUI amounts directly, rely on other sources or calculation
+      console.log('Contribute - Config after Tx/Event:', configValues);
+
+      // 2. Look for config in dynamic fields
+      for (const field of dynamicFields) {
+        if (!field) continue;
+
+        // CORRECTED CONDITION: Check the objectType property
+        if (field.objectType && typeof field.objectType === 'string' && field.objectType.includes('::CircleConfig')) {
+          console.log('Contribute - Found CircleConfig dynamic field by objectType:', field);
+          if (field.objectId) {
+            console.log('Contribute - Fetching CircleConfig dynamic field object:', field.objectId);
+            try {
+              const configData = await client.getObject({
+                id: field.objectId,
+                options: { showContent: true }
+              });
+              console.log('Contribute - Config object content:', configData);
+
+              // Check if content and fields exist
+              if (configData.data?.content && 'fields' in configData.data.content) {
+                const outerFields = configData.data.content.fields;
+
+                // TYPE GUARD: Safely check if outerFields is an object and has a 'value' property
+                if (typeof outerFields === 'object' && outerFields !== null && 'value' in outerFields) {
+                  const valueField = outerFields.value;
+
+                  // TYPE GUARD: Safely check if valueField is an object and has a 'fields' property
+                  if (typeof valueField === 'object' && valueField !== null && 'fields' in valueField) {
+                    // Access the NESTED fields object safely
+                    const configFields = valueField.fields as Record<string, SuiFieldValue>;
+                    console.log('Contribute - Accessed nested configFields:', configFields);
+
+                    // Override with values from the config object
+                    if (configFields.contribution_amount) configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
+                    if (configFields.contribution_amount_usd) configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
+                    if (configFields.security_deposit) configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
+                    if (configFields.security_deposit_usd) configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
+                    if (configFields.auto_swap_enabled !== undefined) {
+                        const dynamicValue = Boolean(configFields.auto_swap_enabled);
+                        console.log(`Contribute - Found auto_swap_enabled (${dynamicValue}) in dynamic field ${field.objectId}`);
+                        configValues.autoSwapEnabled = dynamicValue;
+                    }
+                    // Add other config fields if needed
+                  } else {
+                     console.warn('Contribute - Could not find nested fields in outerFields.value');
+                  }
+                } else {
+                  console.warn("Contribute - Could not find 'value' property in outerFields");
+                }
+               } else {
+                  console.warn('Contribute - Could not find fields in configData.data.content');
+               }
+            } catch (error) {
+              console.error(`Contribute - Error fetching config object ${field.objectId}:`, error);
+            }
+            break; // Assuming only one config object
+          }
         }
+      }
+      console.log('Contribute - Config after Dynamic Fields:', configValues);
+
+      // 3. Use direct fields from the circle object as a fallback
+      // Only update if the value hasn't been set yet (is 0 or false)
+      if (configValues.contributionAmount === 0 && fields.contribution_amount) configValues.contributionAmount = Number(fields.contribution_amount) / 1e9;
+      if (configValues.contributionAmountUsd === 0) {
+          if (fields.contribution_amount_usd) {
+              configValues.contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
+          } else if (fields.usd_amounts && typeof fields.usd_amounts === 'object' && fields.usd_amounts !== null) {
+              // Refined type assertion for usd_amounts
+              const usdData = fields.usd_amounts as {
+                 fields?: { contribution_amount?: string; security_deposit?: string };
+                 contribution_amount?: string;
+                 security_deposit?: string;
+              };
+              const usdFields = usdData.fields || usdData;
+              if (usdFields?.contribution_amount) {
+                  configValues.contributionAmountUsd = Number(usdFields.contribution_amount) / 100;
+        }
+          }
+      }
+      if (configValues.securityDeposit === 0 && fields.security_deposit) configValues.securityDeposit = Number(fields.security_deposit) / 1e9;
+      if (configValues.securityDepositUsd === 0) {
+          if (fields.security_deposit_usd) {
+              configValues.securityDepositUsd = Number(fields.security_deposit_usd) / 100;
+          } else if (fields.usd_amounts && typeof fields.usd_amounts === 'object' && fields.usd_amounts !== null) {
+              // Refined type assertion for usd_amounts
+              const usdData = fields.usd_amounts as {
+                 fields?: { contribution_amount?: string; security_deposit?: string };
+                 contribution_amount?: string;
+                 security_deposit?: string;
+              };
+              const usdFields = usdData.fields || usdData;
+              if (usdFields?.security_deposit) {
+                  configValues.securityDepositUsd = Number(usdFields.security_deposit) / 100;
+              }
+          }
+      }
+      console.log('Contribute - Config after Direct Fields Fallback:', configValues);
+      
+      // 4. Calculate SUI amounts from USD if SUI amount is still zero (and price is available)
+      if (configValues.contributionAmount === 0 && configValues.contributionAmountUsd > 0 && suiPrice > 0) {
+          configValues.contributionAmount = configValues.contributionAmountUsd / suiPrice;
+          console.log(`Contribute - Calculated contribution SUI from USD: ${configValues.contributionAmount}`);
+      }
+      if (configValues.securityDeposit === 0 && configValues.securityDepositUsd > 0 && suiPrice > 0) {
+          configValues.securityDeposit = configValues.securityDepositUsd / suiPrice;
+          console.log(`Contribute - Calculated security deposit SUI from USD: ${configValues.securityDeposit}`);
+      }
+
+      // Ensure walletId is set, even if event fetch failed, try direct field (less reliable)
+      if (!walletId && typeof fields.wallet_id === 'string') {
+          walletId = fields.wallet_id;
+          console.log('Contribute - Using wallet ID from direct field:', walletId);
+      }
         
-        // Read the auto_swap_enabled field (defaulting to false if not present)
-        const autoSwapEnabled = fields.auto_swap_enabled === true || 
-                             (typeof fields.auto_swap_enabled === 'string' && fields.auto_swap_enabled === 'true') || 
-                             false;
-        
+      // Set the final circle state
         setCircle({
           id: id as string,
-          name: fields.name,
-          contributionAmount: Number(fields.contribution_amount) / 1e9,
-          contributionAmountUsd: contributionAmountUsd,
-          securityDeposit: securityDepositAmount,
-          securityDepositUsd: securityDepositUsd,
-          admin: fields.admin,
-          walletId: walletId || '',
-          autoSwapEnabled: autoSwapEnabled,
+        name: typeof fields.name === 'string' ? fields.name : '',
+        admin: typeof fields.admin === 'string' ? fields.admin : '',
+        contributionAmount: configValues.contributionAmount,
+        contributionAmountUsd: configValues.contributionAmountUsd,
+        securityDeposit: configValues.securityDeposit,
+        securityDepositUsd: configValues.securityDepositUsd,
+        walletId: walletId, // Use the reliably fetched walletId
+        autoSwapEnabled: configValues.autoSwapEnabled,
         });
-      }
+
     } catch (error) {
-      console.error('Error fetching circle details:', error);
+      console.error('Contribute - Error fetching circle details:', error);
       toast.error('Could not load circle information');
     } finally {
       setLoading(false);
@@ -277,6 +445,38 @@ export default function ContributeToCircle() {
       // Calculate total balance
       const totalBalance = coins.data.reduce((sum, coin) => sum + Number(coin.balance), 0) / 1e9;
       setUserBalance(totalBalance);
+      
+      // Get user's USDC coins and calculate USDC balance
+      try {
+        const usdcCoins = await client.getCoins({
+          owner: userAddress,
+          coinType: USDC_COIN_TYPE
+        });
+        
+        // Calculate total USDC balance (USDC typically has 6 decimals)
+        const totalUsdcBalance = usdcCoins.data.reduce((sum, coin) => sum + Number(coin.balance), 0) / 1e6;
+        setUserUsdcBalance(totalUsdcBalance);
+        console.log('User USDC balance:', totalUsdcBalance);
+        
+        // Enable direct deposit option if user has enough USDC
+        if (totalUsdcBalance > 0) {
+          // For security deposit
+          if (!userDepositPaid && circle.securityDepositUsd > 0 && totalUsdcBalance >= circle.securityDepositUsd) {
+            setShowDirectDepositOption(true);
+          }
+          // For regular contribution
+          else if (userDepositPaid && circle.contributionAmountUsd > 0 && totalUsdcBalance >= circle.contributionAmountUsd) {
+            setShowDirectDepositOption(true);
+          }
+        } else {
+          setShowDirectDepositOption(false);
+        }
+        
+      } catch (error) {
+        console.error('Error fetching USDC balance:', error);
+        setUserUsdcBalance(null);
+        setShowDirectDepositOption(false);
+      }
       
       // 2. Check if the user has already paid their security deposit
       let depositPaid = false;
@@ -334,14 +534,88 @@ export default function ContributeToCircle() {
         }
       }
       
-      // Second method: Check for custody wallet deposits if we haven't found a deposit yet
+      // Second method: Check custody wallet's dynamic fields for coins
       if (!depositPaid && circle.walletId) {
-        console.log('Checking custody wallet for deposits...');
+        console.log('Checking custody wallet dynamic fields for deposits...');
+        
+        // Get dynamic fields
+        const dynamicFields = await client.getDynamicFields({
+          parentId: circle.walletId
+        });
+        
+        console.log('Dynamic fields in custody wallet:', dynamicFields);
+
+        // Look for the coin_objects field that holds the coins
+        for (const field of dynamicFields.data) {
+          if (field.name && typeof field.name === 'object' && 'type' in field.name) {
+            // Check if it's our coin_objects field
+            if (field.name.value === 'coin_objects') {
+              console.log('Found coin_objects field:', field);
+              
+              // Get the actual dynamic field object to find the coin references
+              const coinObjectsField = await client.getObject({
+                id: field.objectId,
+                options: { showContent: true, showOwner: true, showDisplay: true }
+              });
+              
+              console.log('Coin objects field content:', coinObjectsField);
+              
+              // If it contains USDC coins, check if they came from this user
+              if (coinObjectsField.data?.content && 'fields' in coinObjectsField.data.content) {
+                // Check for any USDC deposit events from this user
+                const custodyDepositEvents = await client.queryEvents({
+                  query: {
+                    MoveEventType: `${PACKAGE_ID}::njangi_circles::StablecoinDeposited`
+                  },
+                  limit: 50
+                });
+                
+                // Process events to find deposits by this user
+                for (const event of custodyDepositEvents.data) {
+                  if (event.parsedJson && typeof event.parsedJson === 'object') {
+                    const eventData = event.parsedJson as {
+                      circle_id?: string;
+                      wallet_id?: string;
+                      member?: string;
+                      amount?: string;
+                      new_balance?: string;
+                      previous_balance?: string;
+                      coin_type?: string;
+                    };
+                    
+                    console.log('Found stablecoin deposit event:', eventData);
+                    
+                    // Check if this deposit was made by our user to our circle's wallet
+                    if (eventData.circle_id === circle.id && 
+                        eventData.wallet_id === circle.walletId && 
+                        eventData.member === userAddress && 
+                        eventData.amount) {
+                      // Check if the amount is at least the required security deposit (with some margin for gas)
+                      const depositAmount = Number(eventData.amount) / 1e6; // USDC typically has 6 decimals
+                      if (depositAmount >= circle.securityDeposit * 0.95) { // 5% margin for gas
+                        depositPaid = true;
+                        console.log('User deposit found in stablecoin events:', depositAmount, 'USDC');
+                        break;
+                      }
+                    }
+                  }
+                }
+              }
+              
+              break;
+            }
+          }
+        }
+      }
+      
+      // Third method (fallback): Check USDC deposit events if we haven't found a deposit yet
+      if (!depositPaid && circle.walletId) {
+        console.log('Checking custody wallet for deposit events...');
         
         // Query events for deposits made by this user to the custody wallet
         const custodyDepositEvents = await client.queryEvents({
           query: {
-            MoveEventType: `${PACKAGE_ID}::njangi_circle::CustodyDeposited`
+            MoveEventType: `${PACKAGE_ID}::njangi_circles::CustodyDeposited`
           },
           limit: 50
         });
@@ -392,48 +666,71 @@ export default function ContributeToCircle() {
     try {
       if (!userDepositPaid) {
         toast.error('Security deposit required before contributing');
+        setIsProcessing(false);
         return;
       }
       
       if (!account) {
         toast.error('User account not available. Please log in again.');
+        setIsProcessing(false);
         return;
       }
       
-      toast.loading('Processing contribution...', { id: 'contribute-tx' });
+      // Check if there's sufficient USDC balance in contribution funds (not security deposits)
+      const hasEnoughUSDC = contributionBalance !== null && 
+                           contributionBalance >= circle.contributionAmountUsd;
+
+      // Log the contribution source decision with detailed breakdown
+      console.log('Contribution source decision:', {
+        totalBalance: custodyStablecoinBalance,
+        securityDeposits: securityDepositBalance,
+        contributionFunds: contributionBalance,
+        requiredAmount: circle.contributionAmountUsd,
+        hasEnoughUSDC,
+        willUseUSDC: hasEnoughUSDC
+      });
       
-      // Check if we can contribute directly through the custody wallet
-      if (circle.walletId) {
-        // Execute contribution through the custody wallet
-        const result = await fetch('/api/zkLogin', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'contributeFromCustody',
-            account,
-            circleId: circle.id,
-            walletId: circle.walletId
-          }),
-        });
-        
-        const responseData = await result.json();
-        
-        if (!result.ok) {
-          console.error('Contribution failed:', responseData);
-          toast.error(responseData.error || 'Failed to process contribution', { id: 'contribute-tx' });
-          return;
-        }
-        
-        toast.success('Contribution successful!', { id: 'contribute-tx' });
-        console.log('Contribution transaction digest:', responseData.digest);
-        
-        // Refresh user wallet info and circle data
-        fetchUserWalletInfo();
-        fetchCircleDetails();
+      // Show different toast message based on the source of funds
+      if (hasEnoughUSDC) {
+        toast.loading('Processing contribution from custody wallet USDC...', { id: 'contribute-tx' });
       } else {
-        // If no custody wallet ID (fallback to old method)
-        toast.error('Custody wallet not found for this circle', { id: 'contribute-tx' });
+        toast.loading('Processing contribution from SUI...', { id: 'contribute-tx' });
       }
+      
+      // Execute contribution through the custody wallet
+      const result = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'contributeFromCustody',
+          account,
+          circleId: circle.id,
+          walletId: circle.walletId,
+          useUSDC: hasEnoughUSDC // Tell backend to prefer USDC if available
+        }),
+      });
+      
+      const responseData = await result.json();
+      
+      if (!result.ok) {
+        console.error('Contribution failed:', responseData);
+        toast.error(responseData.error || 'Failed to process contribution', { id: 'contribute-tx' });
+        return;
+      }
+      
+      // Show success message based on source of funds
+      if (hasEnoughUSDC) {
+        toast.success('Contribution successful! Used USDC from custody wallet.', { id: 'contribute-tx' });
+      } else {
+        toast.success('Contribution successful!', { id: 'contribute-tx' });
+      }
+      
+      console.log('Contribution transaction digest:', responseData.digest);
+      
+      // Refresh user wallet info, circle data, and custody wallet balance
+      fetchUserWalletInfo();
+      fetchCircleDetails();
+      fetchCustodyWalletBalance();
     } catch (error) {
       console.error('Error contributing:', error);
       toast.error('Failed to process contribution');
@@ -543,6 +840,7 @@ export default function ContributeToCircle() {
         body: JSON.stringify({
           action: 'paySecurityDeposit',
           account,
+          circleId: circle.id,
           walletId: circle.walletId,
           depositAmount: Math.floor(depositAmount * 1e9)
         }),
@@ -702,6 +1000,283 @@ export default function ContributeToCircle() {
     );
   };
 
+  // Add function to fetch custody wallet stablecoin balance
+  const fetchCustodyWalletBalance = async () => {
+    if (!circle || !circle.walletId) return;
+    
+    setLoadingStablecoinBalance(true);
+    let toastId;
+    const wasManualRefresh = !isInitialBalanceLoad;
+    
+    // Only show loading toast if this was triggered by a user clicking refresh (not initial load)
+    if (wasManualRefresh) {
+      toastId = toast.loading('Refreshing USDC balance...'); 
+    }
+    
+    // Update initial load state for future refreshes
+    setIsInitialBalanceLoad(false);
+    
+    try {
+      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      const previousBalance = custodyStablecoinBalance;
+      let newBalance = null;
+      let newSecurityDepositBalance = 0;
+      let newContributionBalance = 0;
+      
+      // First get total balance from StablecoinDeposited events
+      const stablecoinEvents = await client.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_circles::StablecoinDeposited`
+        },
+        limit: 10
+      });
+      
+      // Find the most recent event for this wallet to get total balance
+      for (const event of stablecoinEvents.data) {
+        if (event.parsedJson && 
+            typeof event.parsedJson === 'object' &&
+            'wallet_id' in event.parsedJson &&
+            event.parsedJson.wallet_id === circle.walletId &&
+            'new_balance' in event.parsedJson) {
+          const balanceInMicroUnits = Number(event.parsedJson.new_balance);
+          const balanceInDollars = balanceInMicroUnits / 1e6; // Convert from micro units to dollars
+          setCustodyStablecoinBalance(balanceInDollars);
+          newBalance = balanceInDollars;
+          console.log('Custody stablecoin balance:', balanceInDollars, 'USDC');
+          break;
+        }
+      }
+      
+      // Now query different event types to categorize funds
+      // 1. Get security deposit events - check both event types
+      
+      // First check SecurityDepositReceived events (older version)
+      const securityDepositEvents = await client.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_circles::SecurityDepositReceived`
+        },
+        limit: 50
+      });
+      
+      // Then check CustodyDeposited events (newer version)
+      const custodyDepositEvents = await client.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_circles::CustodyDeposited`
+        },
+        limit: 50
+      });
+      
+      // Calculate security deposit balance from SecurityDepositReceived events
+      console.log('Processing SecurityDepositReceived events:', securityDepositEvents.data);
+      for (const event of securityDepositEvents.data) {
+        if (event.parsedJson && 
+            typeof event.parsedJson === 'object' &&
+            'circle_id' in event.parsedJson &&
+            event.parsedJson.circle_id === circle.id &&
+            'amount' in event.parsedJson) {
+          const depositAmount = Number(event.parsedJson.amount) / 1e6; // Convert from micro units
+          newSecurityDepositBalance += depositAmount;
+          console.log('Found SecurityDepositReceived event for this circle:', {
+            circleId: event.parsedJson.circle_id,
+            amount: depositAmount,
+            runningTotal: newSecurityDepositBalance
+          });
+        }
+      }
+      
+      // Calculate security deposit balance from CustodyDeposited events
+      console.log('Processing CustodyDeposited events:', custodyDepositEvents.data);
+      for (const event of custodyDepositEvents.data) {
+        if (event.parsedJson && 
+            typeof event.parsedJson === 'object' &&
+            'circle_id' in event.parsedJson &&
+            event.parsedJson.circle_id === circle.id &&
+            'amount' in event.parsedJson &&
+            'operation_type' in event.parsedJson) {
+          console.log('Found CustodyDeposited event for this circle:', {
+            circleId: event.parsedJson.circle_id,
+            amount: Number(event.parsedJson.amount) / 1e6,
+            operationType: event.parsedJson.operation_type
+          });
+          
+          // Operation type 3 indicates security deposit
+          // Check for both string "3" and number 3 since JSON parsing may vary
+          if (event.parsedJson.operation_type === 3 || 
+              event.parsedJson.operation_type === "3" || 
+              Number(event.parsedJson.operation_type) === 3) {
+            const depositAmount = Number(event.parsedJson.amount) / 1e6; // Convert from micro units
+            newSecurityDepositBalance += depositAmount;
+            console.log('Added to security deposit balance, new total:', newSecurityDepositBalance);
+          }
+        }
+      }
+      
+      // 2. Get security deposit withdrawal events
+      const depositWithdrawEvents = await client.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_circles::SecurityDepositWithdrawn`
+        },
+        limit: 50
+      });
+      
+      // Subtract withdrawn deposits
+      for (const event of depositWithdrawEvents.data) {
+        if (event.parsedJson && 
+            typeof event.parsedJson === 'object' &&
+            'circle_id' in event.parsedJson &&
+            event.parsedJson.circle_id === circle.id &&
+            'amount' in event.parsedJson) {
+          const withdrawAmount = Number(event.parsedJson.amount) / 1e6; // Convert from micro units
+          newSecurityDepositBalance -= withdrawAmount;
+        }
+      }
+      
+      // Ensure security deposit balance is not negative
+      newSecurityDepositBalance = Math.max(0, newSecurityDepositBalance);
+      
+      // Calculate contribution balance (total minus security deposits)
+      if (newBalance !== null) {
+        newContributionBalance = Math.max(0, newBalance - newSecurityDepositBalance);
+      }
+      
+      // Set the separated balances
+      setSecurityDepositBalance(newSecurityDepositBalance);
+      setContributionBalance(newContributionBalance);
+      
+      console.log('Custody balances breakdown:', {
+        total: newBalance,
+        securityDeposits: newSecurityDepositBalance,
+        contributionFunds: newContributionBalance
+      });
+      
+      // If we didn't find any events, try checking dynamic fields
+      if (newBalance === null) {
+        const dynamicFields = await client.getDynamicFields({
+          parentId: circle.walletId
+        });
+        
+        for (const field of dynamicFields.data) {
+          if (field.name && typeof field.name === 'object' && 'type' in field.name) {
+            if (field.name.value === 'coin_objects') {
+              // Found the coin objects field but can't determine breakdown
+              setCustodyStablecoinBalance(0);
+              setSecurityDepositBalance(0);
+              setContributionBalance(0);
+              newBalance = 0;
+              console.log('Found coin_objects field but could not determine balance');
+              break;
+            }
+          }
+        }
+      }
+      
+      // Show success message if this was a manual refresh
+      if (wasManualRefresh && toastId) {
+        if (newBalance !== null) {
+          if (previousBalance !== newBalance) {
+            toast.success(`Balance updated: $${newBalance.toFixed(2)} USDC`, { id: toastId });
+            
+            // If there was a security deposit transaction, show a specific message
+            if (newSecurityDepositBalance > 0) {
+              // Use a new toast ID to avoid conflicting with the first toast
+              toast.success(`Security deposit detected: $${newSecurityDepositBalance.toFixed(2)} USDC`, { 
+                id: 'security-deposit-toast',
+                duration: 5000
+              });
+            }
+          } else {
+            toast.success('Balance refreshed', { id: toastId });
+          }
+        } else {
+          toast.success('Balance check completed', { id: toastId });
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching custody wallet stablecoin balance:', error);
+      if (wasManualRefresh && toastId) {
+        toast.error('Failed to fetch balance', { id: toastId });
+      }
+    } finally {
+      setLoadingStablecoinBalance(false);
+    }
+  };
+
+  // New function to handle direct USDC deposit
+  const handleDirectUsdcDeposit = async () => {
+    if (!circle || !userAddress || !userUsdcBalance) return;
+    
+    setDirectDepositProcessing(true);
+    
+    try {
+      const toastId = toast.loading('Processing direct USDC deposit...');
+      
+      // Determine amount and type based on whether security deposit is already paid
+      const isSecurityDeposit = !userDepositPaid;
+      const requiredAmount = isSecurityDeposit ? circle.securityDepositUsd : circle.contributionAmountUsd;
+      
+      if (userUsdcBalance < requiredAmount) {
+        toast.error(`Insufficient USDC balance. Need ${requiredAmount.toFixed(2)} USDC but you have ${userUsdcBalance.toFixed(2)} USDC.`, { id: toastId });
+        setDirectDepositProcessing(false);
+        return;
+      }
+      
+      if (!account) {
+        toast.error('User account not available. Please log in again.', { id: toastId });
+        setDirectDepositProcessing(false);
+        return;
+      }
+      
+      console.log('Processing direct USDC deposit with parameters:', {
+        circleId: circle.id,
+        walletId: circle.walletId,
+        usdcAmount: requiredAmount,
+        isSecurityDeposit
+      });
+      
+      // Call API to transfer USDC directly
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'depositUsdcDirect',
+          account,
+          circleId: circle.id,
+          walletId: circle.walletId,
+          usdcAmount: Math.floor(requiredAmount * 1e6), // Convert to micro USDC (6 decimals)
+          isSecurityDeposit
+        }),
+      });
+      
+      const responseData = await response.json();
+      
+      if (!response.ok) {
+        console.error('Direct USDC deposit failed:', responseData);
+        toast.error(responseData.error || 'Failed to process USDC deposit', { id: toastId });
+        return;
+      }
+      
+      // Success message
+      if (isSecurityDeposit) {
+        toast.success('Security deposit paid successfully with your USDC!', { id: toastId });
+      } else {
+        toast.success('Contribution made successfully with your USDC!', { id: toastId });
+      }
+      
+      console.log('Direct USDC deposit transaction digest:', responseData.digest);
+      
+      // Refresh user wallet info, circle data, and custody wallet balance
+      fetchUserWalletInfo();
+      fetchCircleDetails();
+      fetchCustodyWalletBalance();
+      
+    } catch (error) {
+      console.error('Error in direct USDC deposit:', error);
+      toast.error('Failed to process USDC deposit');
+    } finally {
+      setDirectDepositProcessing(false);
+    }
+  };
+
   // Modify the renderContributionOptions function
   const renderContributionOptions = () => {
     return (
@@ -717,6 +1292,47 @@ export default function ContributeToCircle() {
           </div>
         )}
 
+        {/* Show direct USDC deposit option if user has sufficient USDC balance */}
+        {showDirectDepositOption && userUsdcBalance !== null && (
+          <div className="mb-4 p-4 bg-emerald-50 rounded-lg border-2 border-emerald-200">
+            <div className="flex items-start space-x-3">
+              <div className="bg-emerald-100 p-1.5 rounded-full flex-shrink-0 mt-0.5">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <h4 className="font-medium text-emerald-800">Use USDC from your wallet</h4>
+                <p className="text-sm text-emerald-700 mt-1">
+                  You have <span className="font-medium">${userUsdcBalance.toFixed(2)} USDC</span> in your wallet.
+                  You can directly deposit {!userDepositPaid ? 'security deposit' : 'contribution'} without swapping SUI.
+                </p>
+                <div className="mt-3">
+                  <button
+                    onClick={handleDirectUsdcDeposit}
+                    disabled={directDepositProcessing}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+                  >
+                    {directDepositProcessing ? (
+                      <span className="flex items-center">
+                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Processing...
+                      </span>
+                    ) : !userDepositPaid ? (
+                      `Deposit ${circle?.securityDepositUsd?.toFixed(2)} USDC as Security Deposit`
+                    ) : (
+                      `Contribute ${circle?.contributionAmountUsd?.toFixed(2)} USDC Directly`
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Show the appropriate form based on auto-swap setting */}
         {circle?.autoSwapEnabled ? (
           <SimplifiedSwapUI
@@ -724,7 +1340,7 @@ export default function ContributeToCircle() {
             circleId={circle?.id || ''}
             contributionAmount={getValidContributionAmount()}
             securityDepositPaid={userDepositPaid}
-            securityDepositAmount={circle.securityDeposit}
+            securityDepositAmount={getSecurityDepositInSui()}
             onComplete={() => {
               fetchUserWalletInfo();
               fetchCircleDetails();
@@ -871,6 +1487,45 @@ export default function ContributeToCircle() {
                 </div>
               </div>
             )}
+
+            {/* Add contribution source indicator */}
+            {userDepositPaid && (
+              <div className="mb-4 p-3 rounded-lg border">
+                {userDepositPaid && contributionBalance !== null && circle?.contributionAmountUsd !== undefined && contributionBalance >= circle.contributionAmountUsd ? (
+                  <div className="bg-green-50 border-green-200 p-3 rounded-lg flex items-start">
+                    <div className="bg-green-100 rounded-full p-1 mr-3 mt-0.5">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-600" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-green-800">USDC available for contribution</p>
+                      <p className="text-xs text-green-700 mt-1">
+                        Your contribution will use ${contributionBalance.toFixed(2)} USDC from the contribution funds in the custody wallet.
+                        No SUI will be taken from your wallet for this contribution.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-blue-50 border-blue-200 p-3 rounded-lg flex items-start">
+                    <div className="bg-blue-100 rounded-full p-1 mr-3 mt-0.5">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-blue-600" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-blue-800">Using SUI for contribution</p>
+                      <p className="text-xs text-blue-700 mt-1">
+                        This contribution will require {getValidContributionAmount().toFixed(4)} SUI from your wallet.
+                        {contributionBalance !== null && contributionBalance > 0 && (
+                          <span> The custody wallet has ${contributionBalance.toFixed(2)} USDC available for contributions, but it&apos;s not enough for this contribution.</span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           
             <button
               onClick={handleContribute}
@@ -989,6 +1644,89 @@ export default function ContributeToCircle() {
                             )}
                           </div>
                         )}
+                      </div>
+                      
+                      {/* Add Custody Wallet Stablecoin Balance */}
+                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm md:col-span-2">
+                        <div className="flex justify-between items-center mb-1">
+                          <p className="text-sm text-gray-500">Custody Wallet USDC Balance</p>
+                          <button 
+                            onClick={fetchCustodyWalletBalance}
+                            disabled={loadingStablecoinBalance}
+                            className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-600 py-1 px-2 rounded flex items-center transition-colors disabled:opacity-50"
+                          >
+                            {loadingStablecoinBalance ? (
+                              <span className="flex items-center">
+                                <svg className="animate-spin -ml-1 mr-1 h-3 w-3 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                Refreshing...
+                              </span>
+                            ) : (
+                              <span className="flex items-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                </svg>
+                                Refresh
+                              </span>
+                            )}
+                          </button>
+                        </div>
+                        {loadingStablecoinBalance ? (
+                          <div className="animate-pulse h-6 w-32 bg-gray-200 rounded"></div>
+                        ) : (
+                          <div className="flex flex-col gap-2">
+                            {/* Total Balance */}
+                            <div className="flex items-center">
+                              <span className="text-lg font-medium text-indigo-700">
+                                {custodyStablecoinBalance !== null 
+                                  ? `$${custodyStablecoinBalance.toFixed(2)} USDC`
+                                  : "No balance data available"}
+                              </span>
+                              <span className="ml-2 px-2 py-1 bg-gray-100 text-gray-600 text-xs font-medium rounded-full">
+                                Total Balance
+                              </span>
+                            </div>
+                            
+                            {/* Breakdown of Balances */}
+                            {custodyStablecoinBalance !== null && custodyStablecoinBalance > 0 && (
+                              <div className="mt-1 space-y-2 border-t border-gray-200 pt-2">
+                                {/* Security Deposits */}
+                                <div className="flex items-center">
+                                  <div className="w-4 h-4 bg-amber-200 rounded-sm mr-2" title="Security deposits held in escrow"></div>
+                                  <span className="text-sm text-gray-700">
+                                    ${securityDepositBalance?.toFixed(2) || '0.00'} USDC
+                                  </span>
+                                  <span className="ml-2 px-2 py-0.5 bg-amber-100 text-amber-800 text-xs font-medium rounded-full" 
+                                    title="These funds are security deposits from members and cannot be used for contributions">
+                                    Security Deposits
+                                  </span>
+                                  {securityDepositBalance === 0 && (
+                                    <span className="ml-2 px-2 py-0.5 bg-red-100 text-red-800 text-xs font-medium rounded-full">
+                                      Not detected
+                                    </span>
+                                  )}
+                                </div>
+                                
+                                {/* Contribution Funds */}
+                                <div className="flex items-center">
+                                  <div className="w-4 h-4 bg-green-200 rounded-sm mr-2" title="Funds available for automated contributions"></div>
+                                  <span className="text-sm text-gray-700">
+                                    ${contributionBalance?.toFixed(2) || '0.00'} USDC
+                                  </span>
+                                  <span className="ml-2 px-2 py-0.5 bg-green-100 text-green-800 text-xs font-medium rounded-full"
+                                    title="These funds can be used for automated contributions to the circle">
+                                    Available for Contributions
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <p className="text-xs text-gray-500 mt-1">
+                          This is the current USDC balance in the circle&apos;s custody wallet used for automated contributions.
+                        </p>
                       </div>
                     </div>
                   </div>

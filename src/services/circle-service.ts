@@ -90,7 +90,7 @@ export class CircleService {
       
       // 7. Build transaction
       tx.moveCall({
-        target: `${PACKAGE_ID}::njangi_circle::create_circle`,
+        target: `${PACKAGE_ID}::njangi_circles::create_circle`,
         arguments: [
           tx.pure(nameBytes),                    // name: vector<u8>
           tx.pure.u64(contributionAmount),       // contribution_amount: u64
@@ -141,7 +141,7 @@ export class CircleService {
 
       // Join the circle
       tx.moveCall({
-        target: `${PACKAGE_ID}::njangi_circle::join_circle`,
+        target: `${PACKAGE_ID}::njangi_circles::join_circle`,
         arguments: [
           tx.object(circleId),    // circle: &mut Circle
           depositCoin,            // deposit: Coin<SUI>
@@ -164,7 +164,7 @@ export class CircleService {
       
       for (const address of memberAddresses) {
         tx.moveCall({
-          target: `${PACKAGE_ID}::njangi_circle::invite_member`,
+          target: `${PACKAGE_ID}::njangi_circles::invite_member`,
           typeArguments: [],
           arguments: [
             tx.object(circleId), // circle: &mut NjangiCircle

@@ -8,14 +8,14 @@ import { priceService } from '../../../../services/price-service';
 import joinRequestService from '../../../../services/join-request-service';
 import { PACKAGE_ID } from '../../../../services/circle-service';
 
-// Define a proper Circle type to fix linter errors
+// Define Circle type
 interface Circle {
   id: string;
   name: string;
   admin: string;
-  contributionAmount: number; // Raw SUI amount from blockchain
+  contributionAmount: number; // Calculated SUI amount
   contributionAmountUsd: number; // USD amount (cents/100)
-  securityDeposit: number; // Raw SUI amount from blockchain
+  securityDeposit: number; // Calculated SUI amount
   securityDepositUsd: number; // USD amount (cents/100)
   cycleLength: number;
   cycleDay: number;
@@ -24,31 +24,40 @@ interface Circle {
   nextPayoutTime: number;
 }
 
-// Define a type for the fields from the SUI object
+// Define CircleFields type
 interface CircleFields {
   name: string;
   admin: string;
-  contribution_amount: string;
-  contribution_amount_usd?: string; // Now optional since it might be in usd_amounts
-  security_deposit: string;
-  security_deposit_usd?: string; // Now optional since it might be in usd_amounts
-  cycle_length: string;
-  cycle_day: string;
-  max_members: string;
-  current_members: string;
+  // Allow potentially missing direct fields after refactor
+  contribution_amount?: string;
+  contribution_amount_usd?: string;
+  security_deposit?: string;
+  security_deposit_usd?: string;
+  cycle_length?: string;
+  cycle_day?: string;
+  max_members?: string;
+  current_members: string; // Assume this is still reliable
   next_payout_time: string;
-  usd_amounts: {
-    fields?: {
-      contribution_amount: string;
-      security_deposit: string;
-      target_amount?: string;
-    }
-    contribution_amount?: string;
-    security_deposit?: string;
-    target_amount?: string;
-  } | string; // Can be an object with fields or a string reference
-  // Use unknown for index signature as a safer alternative to any
+  usd_amounts?: object | string;
   [key: string]: string | number | boolean | object | unknown;
+}
+
+// Define CircleCreatedEvent interface (same as dashboard)
+interface CircleCreatedEvent {
+  circle_id: string;
+  admin: string;
+  name: string;
+  contribution_amount: string;
+  contribution_amount_usd: string;
+  security_deposit_usd: string;
+  max_members: string;
+  cycle_length: string;
+}
+
+// Define type for transaction input data (same as dashboard)
+interface TransactionInputData {
+  cycle_day?: number;
+  [key: string]: unknown;
 }
 
 export default function JoinCircle() {
@@ -126,6 +135,7 @@ export default function JoinCircle() {
 
   const fetchCircleDetails = async () => {
     if (!id) return;
+    console.log('Join - Fetching circle details for:', id);
     
     setLoading(true);
     try {
@@ -134,154 +144,202 @@ export default function JoinCircle() {
       // Get circle object
       const objectData = await client.getObject({
         id: id as string,
-        options: { showContent: true }
+        options: { showContent: true, showType: true }
       });
       
-      if (objectData.data?.content && 'fields' in objectData.data.content) {
+      if (!objectData.data?.content || !('fields' in objectData.data.content)) {
+        throw new Error('Invalid circle object data received');
+      }
         const fields = objectData.data.content.fields as CircleFields;
+      console.log('Join - Raw Circle Object Fields:', fields);
         
-        console.log('Circle data from blockchain:', fields);
+      // Get dynamic fields
+      const dynamicFieldsResult = await client.getDynamicFields({
+        parentId: id as string
+      });
+      const dynamicFields = dynamicFieldsResult.data;
+      console.log('Join - Dynamic Fields:', dynamicFields);
         
-        // Check if user is already a member (simplified check)
-        const isAdmin = fields.admin === userAddress;
-        
-        // This is a simplified check - in reality you'd check members array from the contract
-        const checkMembership = isAdmin; // For now, only admin is confirmed to be a member
-        setIsMember(checkMembership);
-        
-        // If already a member, redirect to circle view
-        if (checkMembership) {
-          toast('You are already a member of this circle');
-          router.push(`/circle/${id}`);
-          return;
-        }
-        
-        // Get the USD amounts, checking both direct fields and potentially nested usd_amounts
-        let contributionAmountUsd = 0;
-        let securityDepositUsd = 0;
-        
-        // Check for nested usd_amounts structure (this is the new structure)
-        if (fields.usd_amounts) {
-          if (typeof fields.usd_amounts === 'object') {
-            // It could have a nested 'fields' property or direct properties
-            const usdAmountsObj = fields.usd_amounts as {
-              contribution_amount?: string; 
-              security_deposit?: string; 
-              target_amount?: string;
-              fields?: {
-                contribution_amount: string;
-                security_deposit: string;
-                target_amount?: string;
-              }
-            };
-            
-            // Create a local variable we can modify
-            let usdAmounts = usdAmountsObj;
-            
-            // If it has a fields property, use that
-            if (usdAmounts.fields) {
-              usdAmounts = usdAmounts.fields;
-            }
-            
-            if (usdAmounts.contribution_amount) {
-              contributionAmountUsd = Number(usdAmounts.contribution_amount) / 100;
-              console.log('Using nested contribution amount USD:', contributionAmountUsd);
-            }
-            
-            if (usdAmounts.security_deposit) {
-              securityDepositUsd = Number(usdAmounts.security_deposit) / 100;
-              console.log('Using nested security deposit USD:', securityDepositUsd);
-            }
-          } else if (typeof fields.usd_amounts === 'string') {
-            // If it's a string reference to another object, we need to handle differently
-            console.log('usd_amounts is a string reference:', fields.usd_amounts);
-          }
-        } 
-        // Fallback to direct fields if nested structure not available or empty
-        else if (fields.contribution_amount_usd) {
-          contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
-          console.log('Using direct contribution amount USD:', contributionAmountUsd);
-        }
-        
-        if (!fields.usd_amounts && fields.security_deposit_usd) {
-          securityDepositUsd = Number(fields.security_deposit_usd) / 100;
-          console.log('Using direct security deposit USD:', securityDepositUsd);
-        }
-        
-        console.log('Final USD values:', {
-          contributionAmountUsd,
-          securityDepositUsd
+      // --- Fetch Event/Transaction Data (like dashboard) ---
+      let transactionInput: TransactionInputData | undefined;
+      let circleCreationEventData: CircleCreatedEvent | undefined;
+
+      try {
+        // 1. Fetch CircleCreated event
+        const circleEvents = await client.queryEvents({
+          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleCreated` },
+          limit: 50 // Limit scope if needed
         });
-        
-        // Get accurate member count from MemberJoined events
-        let memberCount = 1; // Start with 1 for admin
-        try {
-          // Fetch all MemberJoined events and filter for this circle
-          const memberEvents = await client.queryEvents({
-            query: {
-              MoveEventType: `${PACKAGE_ID}::njangi_circle::MemberJoined`
-            },
-            limit: 1000
+        const createEvent = circleEvents.data.find(event => 
+          (event.parsedJson as { circle_id?: string })?.circle_id === id
+        );
+        console.log('Join - Found creation event:', !!createEvent);
+
+        if (createEvent?.parsedJson) {
+          circleCreationEventData = createEvent.parsedJson as CircleCreatedEvent;
+        }
+
+        // 2. Fetch Transaction Block for inputs (if possible)
+        if (createEvent?.id?.txDigest) {
+          const txData = await client.getTransactionBlock({
+            digest: createEvent.id.txDigest,
+            options: { showInput: true } // Only need inputs
           });
-          
-          console.log(`Found ${memberEvents.data.length} total MemberJoined events, filtering for circle ${id}`);
-          
-          // Count unique member addresses for this specific circle
-          const memberAddresses = new Set<string>();
-          
-          // Filter events for the specific circle
-          const circleEvents = memberEvents.data.filter(event => {
-            if (event.parsedJson && typeof event.parsedJson === 'object') {
-              const eventJson = event.parsedJson as { circle_id?: string };
-              return eventJson.circle_id === id;
-            }
-            return false;
-          });
-          
-          console.log(`Filtered down to ${circleEvents.length} events for circle ${id}`);
-          
-          // Process the filtered events
-          for (const event of circleEvents) {
-            if (event.parsedJson && typeof event.parsedJson === 'object') {
-              const eventJson = event.parsedJson as { circle_id?: string, member?: string };
-              
-              if (eventJson.member) {
-                memberAddresses.add(eventJson.member);
-                console.log(`Added member ${eventJson.member} to count`);
-              }
+          console.log('Join - Transaction data fetched:', !!txData);
+          if (txData?.transaction?.data?.transaction?.kind === 'ProgrammableTransaction') {
+            const tx = txData.transaction.data.transaction;
+            const inputs = tx.inputs || [];
+            console.log('Join - Transaction inputs:', inputs);
+            // Try to find cycle_day (adjust index if creation logic changes)
+            if (inputs.length > 6 && inputs[6].type === 'pure' && inputs[6].valueType === 'u64') {
+              transactionInput = { cycle_day: Number(inputs[6].value) };
+              console.log(`Join - Found cycle_day ${transactionInput.cycle_day} from tx`);
             }
           }
-          
-          // Add admin to the set
-          memberAddresses.add(fields.admin);
-          console.log(`Added admin ${fields.admin} as member for circle ${id} (${fields.name || 'unnamed'})`);
-          
-          memberCount = memberAddresses.size;
-          console.log(`Final count: Found ${memberCount} members for circle ${id}`);
-        } catch (error) {
-          console.error(`Error fetching member count for circle ${id}:`, error);
-          // Fall back to contract stored count if event fetch fails
-          memberCount = Number(fields.current_members);
-          console.log(`Falling back to contract-stored count: ${memberCount}`);
         }
+      } catch (error) {
+        console.error('Join - Error fetching event/transaction data:', error);
+        // Continue even if this fails
+      }
+      
+      // --- Process Extracted Data (Prioritize sources) ---
+      const configValues = {
+        contributionAmount: 0,      // SUI
+        contributionAmountUsd: 0,   // USD cents / 100
+        securityDeposit: 0,         // SUI
+        securityDepositUsd: 0,      // USD cents / 100
+        cycleLength: 0,             // 0=weekly, 1=monthly, 2=quarterly
+        cycleDay: 1,                // Default to 1st day
+        maxMembers: 3,              // Default max members
+      };
+
+      // 1. Use values from transaction/event first
+      if (circleCreationEventData) {
+        if (circleCreationEventData.contribution_amount) configValues.contributionAmount = Number(circleCreationEventData.contribution_amount) / 1e9;
+        if (circleCreationEventData.contribution_amount_usd) configValues.contributionAmountUsd = Number(circleCreationEventData.contribution_amount_usd) / 100;
+        if (circleCreationEventData.security_deposit_usd) configValues.securityDepositUsd = Number(circleCreationEventData.security_deposit_usd) / 100;
+        if (circleCreationEventData.cycle_length) configValues.cycleLength = Number(circleCreationEventData.cycle_length);
+        if (circleCreationEventData.max_members) configValues.maxMembers = Number(circleCreationEventData.max_members);
+      }
+      if (transactionInput?.cycle_day !== undefined) {
+        configValues.cycleDay = transactionInput.cycle_day;
+      }
+      console.log('Join - Config after Tx/Event:', configValues);
+
+      // 2. Look for config in dynamic fields (e.g., 'circle_config')
+      for (const field of dynamicFields) {
+        if (!field) continue;
+        let isConfigField = false;
+        // Check by name or type depending on how dynamic field was added
+         if ((field.name && typeof field.name === 'object' && 'value' in field.name && field.name.value === 'circle_config') ||
+             (field.type && typeof field.type === 'string' && field.type.includes('CircleConfig'))) {
+             isConfigField = true;
+         }
+
+        if (isConfigField && field.objectId) {
+          console.log('Join - Found CircleConfig dynamic field object:', field.objectId);
+          try {
+            const configData = await client.getObject({
+              id: field.objectId,
+              options: { showContent: true }
+            });
+            console.log('Join - Config object content:', configData);
+            if (configData.data?.content && 'fields' in configData.data.content) {
+              const configFields = configData.data.content.fields as Record<string, unknown>;
+              // Override with values from the config object
+              if (configFields.contribution_amount !== undefined) configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
+              if (configFields.contribution_amount_usd !== undefined) configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
+              if (configFields.security_deposit !== undefined) configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
+              if (configFields.security_deposit_usd !== undefined) configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
+              if (configFields.cycle_length !== undefined) configValues.cycleLength = Number(configFields.cycle_length);
+              if (configFields.cycle_day !== undefined) configValues.cycleDay = Number(configFields.cycle_day);
+              if (configFields.max_members !== undefined) configValues.maxMembers = Number(configFields.max_members);
+            }
+          } catch (error) {
+            console.error(`Join - Error fetching config object ${field.objectId}:`, error);
+          }
+          break; // Assume only one config object
+        }
+      }
+      console.log('Join - Config after Dynamic Fields:', configValues);
+
+      // 3. Use direct fields from the circle object as a fallback (handle potential NaN)
+      if (configValues.contributionAmount === 0 && fields.contribution_amount) configValues.contributionAmount = Number(fields.contribution_amount) / 1e9;
+      if (configValues.contributionAmountUsd === 0 && fields.contribution_amount_usd) configValues.contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
+      if (configValues.securityDeposit === 0 && fields.security_deposit) configValues.securityDeposit = Number(fields.security_deposit) / 1e9;
+      if (configValues.securityDepositUsd === 0 && fields.security_deposit_usd) configValues.securityDepositUsd = Number(fields.security_deposit_usd) / 100;
+      // Fallback for cycle info only if not set by higher priority sources
+      if (configValues.cycleLength === 0 && fields.cycle_length !== undefined && !isNaN(Number(fields.cycle_length))) configValues.cycleLength = Number(fields.cycle_length);
+      if (configValues.cycleDay === 1 && fields.cycle_day !== undefined && !isNaN(Number(fields.cycle_day))) configValues.cycleDay = Number(fields.cycle_day);
+      if (configValues.maxMembers === 3 && fields.max_members !== undefined && !isNaN(Number(fields.max_members))) configValues.maxMembers = Number(fields.max_members);
+      console.log('Join - Config after Direct Fields Fallback:', configValues);
+      
+      // 4. Calculate SUI amounts from USD if SUI amount is still zero (and price is available)
+      const effectiveSuiPrice = suiPrice > 0 ? suiPrice : 1.0; // Use 1.0 as fallback price to avoid division by zero
+      if (configValues.contributionAmount === 0 && configValues.contributionAmountUsd > 0) {
+          configValues.contributionAmount = configValues.contributionAmountUsd / effectiveSuiPrice;
+          console.log(`Join - Calculated contribution SUI from USD: ${configValues.contributionAmount}`);
+      }
+      if (configValues.securityDeposit === 0 && configValues.securityDepositUsd > 0) {
+          configValues.securityDeposit = configValues.securityDepositUsd / effectiveSuiPrice;
+          console.log(`Join - Calculated security deposit SUI from USD: ${configValues.securityDeposit}`);
+      }
+
+      // --- Check Membership and Fetch Member Count (Keep existing logic) ---
+      const isAdmin = fields.admin === userAddress;
+      setIsMember(isAdmin); // Simplified check
+      if (isAdmin) {
+        toast('You are the admin of this circle.');
+        router.push(`/circle/${id}`); // Redirect admin
+        return;
+      }
+
+      let memberCount = 1; // Start with admin
+      try {
+          const joinedEvents = await client.queryEvents({
+          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::MemberJoined` },
+          limit: 1000 // Fetch enough events
+        });
+          const memberAddresses = new Set<string>();
+        memberAddresses.add(fields.admin); // Add admin
+        joinedEvents.data.forEach(event => {
+          if ((event.parsedJson as { circle_id?: string })?.circle_id === id && (event.parsedJson as { member?: string })?.member) {
+            memberAddresses.add((event.parsedJson as { member: string }).member);
+          }
+        });
+          memberCount = memberAddresses.size;
+        console.log(`Join - Final member count: ${memberCount}`);
+        // Check if current user is already a counted member
+        if (userAddress && memberAddresses.has(userAddress)) {
+             console.log('Join - User is already a member based on event query.');
+             setIsMember(true);
+             toast('You are already a member of this circle.');
+             router.push(`/circle/${id}`);
+             return;
+        }
+        } catch (error) {
+        console.error(`Join - Error fetching member count for circle ${id}:`, error);
+        memberCount = Number(fields.current_members || 1); // Fallback
+      }
         
+      // --- Final State Update ---
         setCircle({
           id: id as string,
-          name: fields.name,
-          admin: fields.admin,
-          contributionAmount: Number(fields.contribution_amount) / 1e9,
-          contributionAmountUsd: contributionAmountUsd,
-          securityDeposit: Number(fields.security_deposit) / 1e9,
-          securityDepositUsd: securityDepositUsd,
-          cycleLength: Number(fields.cycle_length),
-          cycleDay: Number(fields.cycle_day),
-          maxMembers: Number(fields.max_members),
-          currentMembers: memberCount,
-          nextPayoutTime: Number(fields.next_payout_time),
+        name: typeof fields.name === 'string' ? fields.name : '',
+        admin: typeof fields.admin === 'string' ? fields.admin : '',
+        contributionAmount: configValues.contributionAmount,
+        contributionAmountUsd: configValues.contributionAmountUsd,
+        securityDeposit: configValues.securityDeposit,
+        securityDepositUsd: configValues.securityDepositUsd,
+        cycleLength: configValues.cycleLength,
+        cycleDay: configValues.cycleDay,
+        maxMembers: configValues.maxMembers,
+        currentMembers: memberCount, // Use accurately fetched count
+        nextPayoutTime: Number(fields.next_payout_time || 0),
         });
-      }
+        
     } catch (error) {
-      console.error('Error fetching circle details:', error);
+      console.error('Join - Error fetching circle details:', error);
       toast.error('Could not load circle information');
     } finally {
       setLoading(false);

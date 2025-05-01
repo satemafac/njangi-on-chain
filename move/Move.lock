@@ -2,26 +2,45 @@
 
 [move]
 version = 3
-manifest_digest = "D170AF567D9BB96A61249609CDDD1004B79D8F34795D332889E068D823E48BAE"
-deps_digest = "F8BBB0CCB2491CA29A3DF03D6F92277A4F3574266507ACD77214D37ECA3F3082"
+manifest_digest = "6AA7F7445E5974FF3E6462FEA8A13555ED3B8D802F5E056F186FD96E16D21794"
+deps_digest = "060AD7E57DFB13104F21BE5F5C3759D03F0553FC3229247D9A7A6B45F50D03A3"
 dependencies = [
+  { id = "Pyth", name = "Pyth" },
   { id = "Sui", name = "Sui" },
+  { id = "Wormhole", name = "Wormhole" },
 ]
 
 [[move.package]]
 id = "MoveStdlib"
-source = { git = "https://github.com/MystenLabs/sui.git", rev = "framework/testnet", subdir = "crates/sui-framework/packages/move-stdlib" }
+source = { git = "https://github.com/MystenLabs/sui.git", rev = "041c5f2bae2fe52079e44b70514333532d69f4e6", subdir = "crates/sui-framework/packages/move-stdlib" }
+
+[[move.package]]
+id = "Pyth"
+source = { git = "https://github.com/pyth-network/pyth-crosschain.git", rev = "sui-contract-testnet", subdir = "target_chains/sui/contracts" }
+
+dependencies = [
+  { id = "Sui", name = "Sui" },
+  { id = "Wormhole", name = "Wormhole" },
+]
 
 [[move.package]]
 id = "Sui"
-source = { git = "https://github.com/MystenLabs/sui.git", rev = "framework/testnet", subdir = "crates/sui-framework/packages/sui-framework" }
+source = { git = "https://github.com/MystenLabs/sui.git", rev = "041c5f2bae2fe52079e44b70514333532d69f4e6", subdir = "crates/sui-framework/packages/sui-framework" }
 
 dependencies = [
   { id = "MoveStdlib", name = "MoveStdlib" },
 ]
 
+[[move.package]]
+id = "Wormhole"
+source = { git = "https://github.com/wormhole-foundation/wormhole.git", rev = "sui-upgrade-testnet", subdir = "sui/wormhole" }
+
+dependencies = [
+  { id = "Sui", name = "Sui" },
+]
+
 [move.toolchain-version]
-compiler-version = "1.44.3"
+compiler-version = "1.48.0"
 edition = "2024"
 flavor = "sui"
 
@@ -29,6 +48,6 @@ flavor = "sui"
 
 [env.testnet]
 chain-id = "4c78adac"
-original-published-id = "0x6524b5f9ec258777a6dd69f3bdb87912db0b23473d6d75bbdbc112907af5d7fd"
-latest-published-id = "0x6524b5f9ec258777a6dd69f3bdb87912db0b23473d6d75bbdbc112907af5d7fd"
+original-published-id = "0x5732b46e3b91762f945c7bc4bf0cf500d71713ffb0edef07046823553fed1c3f"
+latest-published-id = "0x5732b46e3b91762f945c7bc4bf0cf500d71713ffb0edef07046823553fed1c3f"
 published-version = "1"

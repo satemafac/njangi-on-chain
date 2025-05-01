@@ -1,4 +1,81 @@
-# Njangi Circle with Cetus DEX Integration
+# Njangi On-Chain
+
+A modular SUI Move implementation of the Njangi circle savings system.
+
+## Module Structure
+
+The codebase has been split into multiple modules for better organization:
+
+1. **njangi_core.move** - Core constants, error codes, and helper functions
+2. **njangi_circles.move** - Circle creation and management 
+3. **njangi_members.move** - Member management functionality
+4. **njangi_payments.move** - Payment and contribution functionality
+5. **njangi_custody.move** - Custody wallet functionality
+
+## Fixing Compiler Errors
+
+When compiling the split modules, you may encounter linter errors regarding unbound modules or undefined functions. This is because the modules depend on each other, but the compiler might not recognize them correctly on the first pass.
+
+### Building Order
+
+To fix these issues, build the modules in this order:
+
+1. First build `njangi_core` - it has no module dependencies
+2. Then build `njangi_custody` and `njangi_members` - they only depend on core
+3. Then build `njangi_circles` - it depends on core, custody, and members
+4. Finally build `njangi_payments` - it depends on all other modules
+
+### Common Errors
+
+#### Module Constants Access
+
+Error: `Invalid access of 'njangi::njangi_core::CONSTANT_NAME'`
+
+Fix: In modules like `njangi_custody` and `njangi_members`, make these constants public in `njangi_core` and redefine them locally:
+
+```move
+// In njangi_custody.move
+// At the top after imports but before structs
+const CUSTODY_OP_DEPOSIT: u8 = core::CUSTODY_OP_DEPOSIT;
+const CUSTODY_OP_WITHDRAWAL: u8 = core::CUSTODY_OP_WITHDRAWAL;
+const CUSTODY_OP_STABLECOIN_DEPOSIT: u8 = core::CUSTODY_OP_STABLECOIN_DEPOSIT;
+const MS_PER_DAY: u64 = core::MS_PER_DAY;
+```
+
+#### Function Visibility
+
+Error: `public(friend) is deprecated. Replace with public(package)`
+
+Fix: Update all `public(friend)` declarations to use `public(package)` instead.
+
+#### Lambda Functions
+
+Error: `Unexpected lambda type. Lambdas can only be used with 'macro' functions, as parameters or direct arguments`
+
+Fix: Refactor functions that use lambda callbacks to use concrete function references or implement a trait-like pattern.
+
+## Building the Project
+
+```bash
+cd move
+sui move build
+```
+
+## Testing
+
+```bash
+cd move
+sui move test
+```
+
+## Publishing
+
+```bash
+cd move
+sui client publish --gas-budget 200000000
+```
+
+## Njangi Circle with Cetus DEX Integration
 
 This module implements a Circle-based savings and contribution system with Cetus DEX integration for automated SUI-to-stablecoin swaps.
 
@@ -99,3 +176,36 @@ If your swap fails, check:
 1. The contract uses slippage protection to ensure users get a fair price
 2. All contracts have been updated to handle swap failures gracefully
 3. Users can customize slippage tolerance through the wallet config 
+
+## Constants Handling
+
+Since Move constants don't support visibility modifiers, this implementation uses getter functions for constants in the core module. This allows other modules to access these values without duplicating constants across modules.
+
+For example, instead of:
+```move
+public const MEMBER_STATUS_ACTIVE: u8 = 0;
+```
+
+We use:
+```move
+const MEMBER_STATUS_ACTIVE: u8 = 0;
+public fun member_status_active(): u8 { MEMBER_STATUS_ACTIVE }
+```
+
+This pattern is used throughout the codebase to maintain consistency while enabling proper module separation.
+
+## Struct Field Access
+
+For similar reasons, struct fields that need to be accessed across modules have getter functions:
+
+```move
+public struct UsdAmounts has store, drop {
+    contribution_amount: u64, 
+    security_deposit: u64,
+    target_amount: option::Option<u64>
+}
+
+public fun get_usd_contribution_amount(usd_amounts: &UsdAmounts): u64 {
+    usd_amounts.contribution_amount
+}
+``` 
