@@ -2906,66 +2906,203 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           console.log(`Creating direct USDC deposit transaction for circle ${circleId}, wallet ${walletId}, amount ${usdcAmountMicroUnits} (${Number(usdcAmountMicroUnits) / 1e6} USDC)`);
           console.log(`Operation type: ${isSecurityDeposit ? 'Security Deposit' : 'Contribution'}`);
 
-          // Execute the transaction
-          const txResult = await instance.sendTransaction(
-            session.account,
-            async (txb: Transaction) => {
-              txb.setSender(session.account!.userAddr);
-              
-              // Use SuiClient to get coins of USDC type from the user's wallet
-              const suiClient = new SuiClient({ url: getJsonRpcUrl() });
-              const coinsResponse = await suiClient.getCoins({
-                owner: session.account!.userAddr,
-                coinType: USDC_COIN_TYPE
+          // First, perform all async operations to gather the necessary data
+          const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+          
+          // Get current versions of shared objects
+          console.log(`Fetching current versions of shared objects (circle and wallet)...`);
+          const circleObject = await suiClient.getObject({
+            id: circleId,
+            options: { showOwner: true }
+          });
+          
+          const walletObject = await suiClient.getObject({
+            id: walletId,
+            options: { showOwner: true }
+          });
+          
+          // Extract shared object versions
+          let circleVersion: string | undefined;
+          let walletVersion: string | undefined;
+          
+          // Check if objects have the expected owner type of "Shared"
+          if (circleObject.data?.owner && 
+              typeof circleObject.data.owner === 'object' && 
+              'Shared' in circleObject.data.owner) {
+            circleVersion = circleObject.data.owner.Shared.initial_shared_version;
+            console.log(`Circle is a shared object with initial version ${circleVersion}`);
+          } else {
+            console.warn('Circle is not a shared object:', circleObject.data?.owner);
+            throw new Error('Circle is not a shared object');
+          }
+          
+          if (walletObject.data?.owner && 
+              typeof walletObject.data.owner === 'object' && 
+              'Shared' in walletObject.data.owner) {
+            walletVersion = walletObject.data.owner.Shared.initial_shared_version;
+            console.log(`Wallet is a shared object with initial version ${walletVersion}`);
+          } else {
+            console.warn('Wallet is not a shared object:', walletObject.data?.owner);
+            throw new Error('Wallet is not a shared object');
+          }
+          
+          // Get USDC coins from user's wallet
+          const coinsResponse = await suiClient.getCoins({
+            owner: session.account!.userAddr,
+            coinType: USDC_COIN_TYPE
+          });
+          
+          console.log(`Found ${coinsResponse.data.length} USDC coins in wallet`);
+          
+          if (coinsResponse.data.length === 0) {
+            throw new Error("No USDC coins found in wallet");
+          }
+          
+          // Calculate total available balance
+          let totalAvailable = BigInt(0);
+          for (const coin of coinsResponse.data) {
+            totalAvailable += BigInt(coin.balance);
+          }
+          
+          // Verify the exact deposit amount if it's a security deposit
+          let verifiedAmount = usdcAmountMicroUnits;
+          if (isSecurityDeposit) {
+            try {
+              console.log("Verifying security deposit amount from CircleConfig...");
+              // Get the dynamic fields of the circle to find the CircleConfig
+              const dynamicFields = await suiClient.getDynamicFields({
+                parentId: circleId
               });
               
-              console.log(`Found ${coinsResponse.data.length} USDC coins in wallet`);
-              
-              if (coinsResponse.data.length === 0) {
-                throw new Error("No USDC coins found in wallet");
+              // Find the CircleConfig field
+              let configFieldObjectId: string | null = null;
+              for (const field of dynamicFields.data) {
+                if (field.name && 
+                    typeof field.name === 'object' && 
+                    'type' in field.name && 
+                    field.name.type && 
+                    field.name.type.includes('vector<u8>') && 
+                    field.objectType && 
+                    field.objectType.includes('CircleConfig')) {
+                  
+                  configFieldObjectId = field.objectId;
+                  console.log(`Found CircleConfig dynamic field: ${configFieldObjectId}`);
+                  break;
+                }
               }
               
-              // Calculate total available balance
-              let totalAvailable = BigInt(0);
-              for (const coin of coinsResponse.data) {
-                totalAvailable += BigInt(coin.balance);
+              // Get the CircleConfig object if found
+              if (configFieldObjectId) {
+                const configObject = await suiClient.getObject({
+                  id: configFieldObjectId,
+                  options: { showContent: true }
+                });
+                
+                if (configObject.data?.content && 
+                    'fields' in configObject.data.content &&
+                    'value' in configObject.data.content.fields) {
+                  
+                  const valueField = configObject.data.content.fields.value;
+                  if (typeof valueField === 'object' && 
+                      valueField !== null && 
+                      'fields' in valueField) {
+                    
+                    // Extract the security_deposit_usd field
+                    const configFields = valueField.fields as Record<string, unknown>;
+                    const securityDepositUsd = Number(configFields.security_deposit_usd || 0);
+                    
+                    if (securityDepositUsd > 0) {
+                      // Convert cents to microUSDC (1 cent = 10,000 microUSDC)
+                      const exactDepositAmount = BigInt(Math.floor(securityDepositUsd * 10000));
+                      console.log(`Found security_deposit_usd in CircleConfig: ${securityDepositUsd} cents`);
+                      console.log(`Converted to exactly ${formatMicroUnits(exactDepositAmount)} USDC (${exactDepositAmount} microUSDC)`);
+                      
+                      if (exactDepositAmount > BigInt(0) && exactDepositAmount !== verifiedAmount) {
+                        console.log(`Adjusting deposit amount from ${verifiedAmount} to ${exactDepositAmount} microUSDC`);
+                        verifiedAmount = exactDepositAmount;
+                      }
+                    }
+                  }
+                }
               }
-              
-              console.log(`Total available: ${formatMicroUnits(totalAvailable)} USDC`);
-              console.log(`Required amount: ${formatMicroUnits(usdcAmountMicroUnits)} USDC`);
-              
-              // Ensure we have enough balance
-              if (totalAvailable < usdcAmountMicroUnits) {
-                throw new Error(`Insufficient USDC balance. Need ${formatMicroUnits(usdcAmountMicroUnits)} USDC but only have ${formatMicroUnits(totalAvailable)} USDC.`);
-              }
-              
-              // Use the first coin as primary, we'll merge others if needed
-              const primaryCoinId = coinsResponse.data[0].coinObjectId;
+            } catch (err) {
+              console.warn("Error verifying security deposit amount:", err);
+              // Continue with the original amount
+            }
+          }
+          
+          console.log(`Total available: ${formatMicroUnits(totalAvailable)} USDC`);
+          console.log(`Required amount: ${formatMicroUnits(verifiedAmount)} USDC`);
+          
+          // Ensure we have enough balance
+          if (totalAvailable < verifiedAmount) {
+            throw new Error(`Insufficient USDC balance. Need ${formatMicroUnits(verifiedAmount)} USDC but only have ${formatMicroUnits(totalAvailable)} USDC.`);
+          }
+          
+          // Use the first coin as primary
+          const primaryCoinId = coinsResponse.data[0].coinObjectId;
+          const primaryCoinBalance = BigInt(coinsResponse.data[0].balance);
+          
+          // Now execute the transaction with a synchronous transaction builder function
+          const txResult = await instance.sendTransaction(
+            session.account,
+            (txb: Transaction) => {
+              txb.setSender(session.account!.userAddr);
               
               // Call the appropriate deposit function based on operation type
               if (isSecurityDeposit) {
-                console.log(`Calling njangi_circles::member_deposit_security_deposit for USDC`);
+                console.log(`Calling njangi_circles::member_deposit_security_deposit for USDC with shared objects`);
                 
+                // Split the coin if we're using more than the exact amount
+                let depositCoin;
+                if (primaryCoinBalance > verifiedAmount) {
+                  console.log(`Splitting USDC coin to get exact amount: ${formatMicroUnits(verifiedAmount)} USDC`);
+                  // Split the coin to get the exact required amount
+                  [depositCoin] = txb.splitCoins(
+                    txb.object(primaryCoinId), 
+                    [txb.pure.u64(verifiedAmount)]
+                  );
+                } else {
+                  // Use the entire coin if it matches the required amount
+                  depositCoin = txb.object(primaryCoinId);
+                }
+                
+                // Properly reference the shared objects
                 txb.moveCall({
                   target: `${PACKAGE_ID}::njangi_circles::member_deposit_security_deposit`,
                   arguments: [
-                    txb.object(circleId),     // Arg 0: circle
-                    txb.object(walletId),     // Arg 1: wallet
-                    txb.object(primaryCoinId),// Arg 2: stablecoin (USDC Coin object)
-                    txb.object("0x6")         // Arg 3: clock
+                    txb.sharedObjectRef({ objectId: circleId, initialSharedVersion: circleVersion, mutable: true }),
+                    txb.sharedObjectRef({ objectId: walletId, initialSharedVersion: walletVersion, mutable: true }),
+                    depositCoin,               // Use the split coin with exact amount
+                    txb.object("0x6")          // System clock is a regular object
                   ],
                   typeArguments: [USDC_COIN_TYPE]
                 });
               } else {
-                console.log(`Calling njangi_circles::contribute_from_wallet for USDC`);
+                console.log(`Calling njangi_circles::contribute_from_wallet for USDC with shared objects`);
                 
+                // Split the coin if we're using more than the exact amount
+                let contributionCoin;
+                if (primaryCoinBalance > verifiedAmount) {
+                  console.log(`Splitting USDC coin to get exact amount: ${formatMicroUnits(verifiedAmount)} USDC`);
+                  // Split the coin to get the exact required amount
+                  [contributionCoin] = txb.splitCoins(
+                    txb.object(primaryCoinId), 
+                    [txb.pure.u64(verifiedAmount)]
+                  );
+                } else {
+                  // Use the entire coin if it matches the required amount
+                  contributionCoin = txb.object(primaryCoinId);
+                }
+                
+                // Properly reference the shared objects
                 txb.moveCall({
                   target: `${PACKAGE_ID}::njangi_circles::contribute_from_wallet`,
                   arguments: [
-                    txb.object(circleId),     // Arg 0: circle
-                    txb.object(walletId),     // Arg 1: wallet
-                    txb.object(primaryCoinId),// Arg 2: contribution_coin (USDC Coin object)
-                    txb.object("0x6")         // Arg 3: clock
+                    txb.sharedObjectRef({ objectId: circleId, initialSharedVersion: circleVersion, mutable: true }),
+                    txb.sharedObjectRef({ objectId: walletId, initialSharedVersion: walletVersion, mutable: true }),
+                    contributionCoin,          // Use the split coin with exact amount
+                    txb.object("0x6")          // System clock is a regular object
                   ],
                   typeArguments: [USDC_COIN_TYPE]
                 });
