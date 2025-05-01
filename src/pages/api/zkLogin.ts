@@ -1645,7 +1645,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Ensure parameters are of the correct type
           const circleId = String(req.body.circleId); // Get circleId
           const walletId = String(req.body.walletId);
-          const depositAmount = typeof req.body.depositAmount === 'number' ? 
+          let depositAmount = typeof req.body.depositAmount === 'number' ? 
             BigInt(Math.floor(req.body.depositAmount)) : 
             BigInt(req.body.depositAmount);
 
@@ -1673,6 +1673,67 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           console.log(`Creating SUI security deposit transaction for circle ${circleId}, wallet ${walletId}, amount ${depositAmount}`);
+          
+          // Let's verify the deposit amount matches what's required by the circle
+          try {
+            const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+            
+            // Find the CircleConfig
+            const dynamicFields = await suiClient.getDynamicFields({
+              parentId: circleId
+            });
+            
+            console.log('Searching for CircleConfig to validate deposit amount...');
+            
+            let configFieldObjectId: string | null = null;
+            for (const field of dynamicFields.data) {
+              if (field.name && 
+                  typeof field.name === 'object' && 
+                  'type' in field.name && 
+                  field.name.type && 
+                  field.name.type.includes('vector<u8>') && 
+                  field.objectType && 
+                  field.objectType.includes('CircleConfig')) {
+                
+                configFieldObjectId = field.objectId;
+                console.log(`Found CircleConfig dynamic field: ${configFieldObjectId}`);
+                break;
+              }
+            }
+            
+            if (configFieldObjectId) {
+              const configObject = await suiClient.getObject({
+                id: configFieldObjectId,
+                options: { showContent: true }
+              });
+              
+              if (configObject.data?.content && 
+                  'fields' in configObject.data.content &&
+                  'value' in configObject.data.content.fields) {
+                
+                const valueField = configObject.data.content.fields.value;
+                if (typeof valueField === 'object' && 
+                    valueField !== null && 
+                    'fields' in valueField) {
+                  
+                  // Extract the exact security_deposit value we need to match
+                  const configFields = valueField.fields as Record<string, unknown>;
+                  const exactSecurityDeposit = Number(configFields.security_deposit || 0);
+                  
+                  console.log(`Found security_deposit in CircleConfig: ${exactSecurityDeposit}`);
+                  console.log(`Requested deposit amount: ${depositAmount}`);
+                  
+                  // Use the exact security_deposit value from the contract
+                  if (exactSecurityDeposit > 0 && depositAmount !== BigInt(exactSecurityDeposit)) {
+                    console.log(`Adjusting deposit amount from ${depositAmount} to ${exactSecurityDeposit}`);
+                    depositAmount = BigInt(exactSecurityDeposit);
+                  }
+                }
+              }
+            }
+          } catch (error) {
+            console.warn('Error verifying security deposit amount, proceeding with original amount:', error);
+          }
 
           // Execute the transaction with zkLogin
             const txResult = await instance.sendTransaction(
@@ -1734,7 +1795,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               return res.status(400).json({ error: 'Security deposit has already been paid.' });
             }
             if (err.message.includes('EIncorrectDepositAmount')) {
-              return res.status(400).json({ error: 'Incorrect security deposit amount provided.' });
+              return res.status(400).json({ error: 'Incorrect security deposit amount provided. Please try again by refreshing the page.' });
             }
           }
 
@@ -1742,7 +1803,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             error: err instanceof Error ? err.message : 'Failed to process security deposit'
           });
         }
-        break;
 
       case 'depositStablecoin':
         if (!account) {
