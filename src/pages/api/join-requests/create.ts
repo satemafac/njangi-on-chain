@@ -26,12 +26,13 @@ export default async function handler(
       });
     }
 
-    // Create the join request
+    // Create the join request with explicit status
     const joinRequest = await joinRequestDatabase.createJoinRequest(
       circleId,
       circleName,
       userAddress,
-      userName || 'Anonymous'
+      userName || 'Anonymous',
+      'pending' // Explicitly set status to 'pending'
     );
 
     return res.status(200).json({

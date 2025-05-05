@@ -26,21 +26,22 @@ export class JoinRequestDatabase {
     circleId: string,
     circleName: string,
     userAddress: string,
-    userName: string
+    userName: string,
+    status: 'pending' | 'approved' | 'rejected' = 'pending'
   ): Promise<JoinRequest | null> {
     try {
       const result = await pool.query(
         `INSERT INTO join_requests 
-         (circle_id, circle_name, user_address, user_name) 
-         VALUES ($1, $2, $3, $4)
+         (circle_id, circle_name, user_address, user_name, status) 
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (circle_id, user_address) 
          DO UPDATE SET 
            circle_name = $2, 
            user_name = $4,
-           status = 'pending',
+           status = $5,
            updated_at = CURRENT_TIMESTAMP
          RETURNING *`,
-        [circleId, circleName, userAddress, userName]
+        [circleId, circleName, userAddress, userName, status]
       );
 
       return result.rows[0] as JoinRequest;
