@@ -10,6 +10,7 @@ import {
 import { AggregatorClient, Env } from '@cetusprotocol/aggregator-sdk';
 import BN from 'bn.js';
 import { Transaction } from '@mysten/sui/transactions';
+import * as fs from 'fs';
 
 // Add at the top with other imports
 interface RPCError extends Error {
@@ -28,8 +29,74 @@ const MIN_AGGREGATOR_SLIPPAGE = 30; // 0.3% minimum slippage to ensure transacti
 // Not using CETUS_GLOBAL_CONFIG for the direct swap method
 // const CETUS_GLOBAL_CONFIG = '0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca';
 
-// Simple in-memory session store (in production, use Redis or a proper session store)
-const sessions = new Map<string, SetupData & { account?: AccountData }>();
+// Persistent session store using localStorage (client) or an external store (server)
+// We'll use a more persistent approach than just the in-memory Map
+const sessions = (() => {
+  // Create a wrapper around Map to persist sessions between API calls
+  // In a production app, you would use Redis, a database, or other external store
+  const sessionData = new Map<string, SetupData & { account?: AccountData }>();
+
+  // Save sessions to a file on disk in development (for testing)
+  const SESSION_FILE = './zklogin-sessions.json';
+  
+  // Try to load any existing sessions from file
+  try {
+    if (process.env.NODE_ENV === 'development' && fs.existsSync(SESSION_FILE)) {
+      const savedSessions = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+      if (savedSessions && typeof savedSessions === 'object') {
+        Object.entries(savedSessions).forEach(([key, value]) => {
+          sessionData.set(key, value as SetupData & { account?: AccountData });
+        });
+        console.log(`Loaded ${sessionData.size} sessions from disk`);
+      }
+    }
+  } catch (err) {
+    console.error('Error loading sessions from disk:', err);
+  }
+
+  return {
+    get: (key: string) => sessionData.get(key),
+    set: (key: string, value: SetupData & { account?: AccountData }) => {
+      sessionData.set(key, value);
+      // In development, save to disk for persistence between API calls
+      if (process.env.NODE_ENV === 'development') {
+        try {
+          const sessionObj = Object.fromEntries(sessionData.entries());
+          fs.writeFileSync(SESSION_FILE, JSON.stringify(sessionObj, null, 2));
+        } catch (err) {
+          console.error('Error saving sessions to disk:', err);
+        }
+      }
+      return sessionData;
+    },
+    delete: (key: string) => {
+      const result = sessionData.delete(key);
+      // Update the file when we delete a session too
+      if (process.env.NODE_ENV === 'development') {
+        try {
+          const sessionObj = Object.fromEntries(sessionData.entries());
+          fs.writeFileSync(SESSION_FILE, JSON.stringify(sessionObj, null, 2));
+        } catch (err) {
+          console.error('Error saving sessions to disk:', err);
+        }
+      }
+      return result;
+    },
+    has: (key: string) => sessionData.has(key),
+    size: () => sessionData.size,
+    clear: () => {
+      sessionData.clear();
+      if (process.env.NODE_ENV === 'development') {
+        try {
+          fs.writeFileSync(SESSION_FILE, '{}');
+        } catch (err) {
+          console.error('Error clearing sessions file:', err);
+        }
+      }
+    },
+    entries: () => sessionData.entries()
+  };
+})();
 
 // Add session validation helper with better error handling
 function validateSession(sessionId: string | undefined, action: string): SetupData & { account?: AccountData } {

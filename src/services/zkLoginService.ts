@@ -21,7 +21,11 @@ const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
 const FACEBOOK_CLIENT_ID = process.env.NEXT_PUBLIC_FACEBOOK_CLIENT_ID;
 const APPLE_CLIENT_ID = process.env.NEXT_PUBLIC_APPLE_CLIENT_ID;
 const REDIRECT_URI = process.env.NEXT_PUBLIC_REDIRECT_URI;
-const SALT_SERVICE_URL = 'http://localhost:5002/get-salt'; // Local salt service endpoint
+
+// Use environment variables for service URLs with more descriptive names
+const PROVER_FRONTEND_URL = process.env.NEXT_PUBLIC_PROVER_FRONTEND_URL || 'https://zklogin-frontend-fix3-e9578d3d8fdb.herokuapp.com';
+const SALT_SERVICE_URL = process.env.NEXT_PUBLIC_SALT_SERVICE_URL || 'https://zklogin-salt-service-545adc326c28.herokuapp.com/get-salt';
+
 const MAX_EPOCH = 2; // keep ephemeral keys active for this many Sui epochs from now (1 epoch ~= 24h)
 const GRAPHQL_URL = 'https://sui-testnet.mystenlabs.com/graphql';
 
@@ -343,7 +347,7 @@ export class ZkLoginService {
     };
 
     // Get and validate the zero-knowledge proof
-    const proofResponse = await fetch('http://localhost:5003/v1', {
+    const proofResponse = await fetch(`${PROVER_FRONTEND_URL}/v1`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(proofRequest)

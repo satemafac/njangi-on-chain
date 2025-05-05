@@ -1,0 +1,16 @@
+{
+  "name": "zklogin-services-manager",
+  "version": "1.0.0",
+  "description": "Utilities for managing zkLogin services on Heroku",
+  "type": "module",
+  "scripts": {
+    "update-config": "node update-zklogin-config.js",
+    "check": "bash heroku-zklogin-services.sh check",
+    "wake": "bash heroku-zklogin-services.sh wake",
+    "restart": "bash heroku-zklogin-services.sh restart",
+    "config": "bash heroku-zklogin-services.sh config"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+} 
