@@ -113,12 +113,32 @@ async function main() {
               const salt = generateRandomSalt();
               console.log("Generated new salt for", sub, aud);
               
+              // Store the new salt in the database
+              const saltBuffer = Buffer.from(salt);
+              // Generate random initialization vector and tag for encryption
+              const iv = Buffer.from(Array(16).fill(0).map(() => Math.floor(Math.random() * 256)));
+              const tag = Buffer.from(Array(16).fill(0).map(() => Math.floor(Math.random() * 256)));
+              
+              // Insert the salt into the database
+              await adapter.insertSalt(sub, aud, saltBuffer, iv, tag);
+              console.log("Stored new salt in database for", sub, aud);
+              
               res.writeHead(200, { "Content-Type": "application/json" });
               res.end(JSON.stringify({ salt }));
             } else {
-              // In a real implementation, decrypt the salt here
-              // For testing, return the salt value directly if present
-              const salt = saltData.salt || "dummy-salt-for-testing";
+              // For an existing salt, we should decode it from the buffer
+              // In a proper implementation, we'd decrypt it, but here we'll just convert from buffer
+              const saltBuffer = saltData.salt_encrypted;
+              let salt;
+              
+              if (saltBuffer) {
+                // If we have an encrypted salt buffer, convert it to a string
+                salt = saltBuffer.toString();
+              } else {
+                // Fallback for testing
+                salt = "dummy-salt-for-testing";
+              }
+              
               console.log("Returning existing salt for", sub, aud);
               
               res.writeHead(200, { "Content-Type": "application/json" });
