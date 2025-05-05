@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 import { SuiClient, SuiEvent } from '@mysten/sui/client';
@@ -683,17 +683,37 @@ export default function ManageCircle() {
     }
   };
 
-  const fetchPendingRequests = async () => {
+  const fetchPendingRequests = useCallback(async () => {
+    if (!id) return;
+    
     try {
-      // Get pending requests from the service
-      if (!id) return;
-      const requests = await joinRequestService.getPendingRequestsByCircleId(id as string);
-      setPendingRequests(requests);
-    } catch (error: unknown) {
-      console.error('Error fetching pending requests:', error);
-      toast.error('Failed to load join requests');
+      setLoading(true);
+      console.log('[ManagePage] Fetching pending join requests for circle:', id);
+      
+      const response = await fetch(`/api/join-requests/pending/${id}`);
+      
+      if (!response.ok) {
+        console.error('[ManagePage] Error response from API:', response.status, response.statusText);
+        return;
+      }
+      
+      const data = await response.json();
+      console.log('[ManagePage] API response for pending requests:', data);
+      
+      if (data.success && Array.isArray(data.data)) {
+        console.log(`[ManagePage] Received ${data.data.length} pending requests`);
+        setPendingRequests(data.data);
+      } else {
+        console.error('[ManagePage] Invalid response format:', data);
+        setPendingRequests([]);
+      }
+    } catch (error) {
+      console.error('[ManagePage] Failed to fetch pending requests:', error);
+      setPendingRequests([]);
+    } finally {
+      setLoading(false);
     }
-  };
+  }, [id]);
 
   // Call the admin_approve_member function on the blockchain
   const callAdminApproveMember = async (circleId: string, memberAddress: string): Promise<boolean> => {
@@ -849,64 +869,89 @@ export default function ManageCircle() {
 
   const handleJoinRequest = async (request: JoinRequest, approve: boolean) => {
     try {
+      console.log(`[ManagePage] ${approve ? 'Approving' : 'Rejecting'} join request for user ${request.user_address} in circle ${request.circle_id}`);
+      
       // If approving, first try to approve on blockchain
       if (approve) {
+        const blockchainToastId = 'blockchain-approve-member';
+        toast.loading(`Approving ${shortenAddress(request.user_address)} on blockchain...`, { id: blockchainToastId });
+        
         const blockchainSuccess = await callAdminApproveMember(
           request.circle_id,
           request.user_address
         );
         
         if (!blockchainSuccess) {
-          toast.error('Failed to approve member on blockchain. Please try again.');
+          console.error(`[ManagePage] Failed to approve member ${request.user_address} on blockchain`);
+          toast.error('Failed to approve member on blockchain. Please try again.', { id: blockchainToastId, duration: 5000 });
           return;
         }
+        toast.success(`Member approved on blockchain!`, { id: blockchainToastId });
       }
       
-      // Update request status using the service
-      const success = await joinRequestService.updateJoinRequestStatus(
-        request.circle_id,
-        request.user_address,
-        approve ? 'approved' : 'rejected'
+      // Update request status using the API
+      console.log(`[ManagePage] Updating join request status in database to ${approve ? 'approved' : 'rejected'}`);
+      const databaseToastId = 'database-update-request';
+      toast.loading(`Updating request status...`, { id: databaseToastId });
+      
+      const response = await fetch(`/api/join-requests/${request.circle_id}/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userAddress: request.user_address,
+          status: approve ? 'approved' : 'rejected'
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok || !result.success) {
+        console.error(`[ManagePage] Failed to update request status in database:`, result);
+        toast.error('Failed to update request in database. Please try again.', { id: databaseToastId, duration: 5000 });
+        return;
+      }
+      
+      toast.success(`Request ${approve ? 'approved' : 'rejected'} successfully!`, { id: databaseToastId });
+      
+      // Update UI to remove the request
+      console.log(`[ManagePage] Updating UI to remove the request`);
+      setPendingRequests(prev => 
+        prev.filter(req => 
+          !(req.circle_id === request.circle_id && 
+            req.user_address === request.user_address)
+        )
       );
       
-      if (success) {
-        // Update UI to remove the request
-        setPendingRequests(prev => 
-          prev.filter(req => 
-            !(req.circle_id === request.circle_id && 
-              req.user_address === request.user_address)
-          )
-        );
+      // If approved, add to members list
+      if (approve) {
+        // Use current timestamp from blockchain transaction for join date
+        const currentTimestamp = Date.now(); // Get the current time as a fallback
         
-        // If approved, add to members list
-        if (approve) {
-          // Use current timestamp from blockchain transaction for join date
-          const currentTimestamp = Date.now(); // Get the current time as a fallback
-          
-          setMembers(prev => [
-            ...prev,
-            {
-              address: request.user_address,
-              joinDate: currentTimestamp, // We would ideally get this from the blockchain event
-              status: 'active'
-            }
-          ]);
-          
-          // Also update current members count
-          if (circle) {
-            setCircle({
-              ...circle,
-              currentMembers: circle.currentMembers + 1
-            });
+        setMembers(prev => [
+          ...prev,
+          {
+            address: request.user_address,
+            joinDate: currentTimestamp, // We would ideally get this from the blockchain event
+            status: 'active'
           }
-          
-          toast.success(`Approved ${shortenAddress(request.user_address)} to join the circle`);
-        } else {
-          toast.success(`Rejected join request from ${shortenAddress(request.user_address)}`);
+        ]);
+        
+        // Also update current members count
+        if (circle) {
+          setCircle({
+            ...circle,
+            currentMembers: circle.currentMembers + 1
+          });
         }
+        
+        toast.success(`Approved ${shortenAddress(request.user_address)} to join the circle`);
       } else {
-        toast.error('Failed to process join request');
+        toast.success(`Rejected join request from ${shortenAddress(request.user_address)}`);
       }
+      
+      // Refresh the pending requests
+      fetchPendingRequests();
+      
     } catch (error: unknown) {
       console.error('Error handling join request:', error);
       toast.error('Failed to process join request');
@@ -2595,84 +2640,91 @@ export default function ManageCircle() {
                   {/* Pending Join Requests Section */}
                   {pendingRequests.length > 0 && (
                     <div className="mt-8 px-2">
-                      <div className="flex justify-between items-center mb-4">
-                        <h3 className="text-lg font-medium text-gray-900 border-l-4 border-blue-500 pl-3">
-                          Pending Join Requests 
-                          <span className="ml-2 bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
-                            {pendingRequests.length}
-                          </span>
-                        </h3>
-                        <button
-                          onClick={handleBulkApprove}
-                          disabled={isApproving || pendingRequests.length === 0}
-                          className={`px-4 py-2 rounded-lg text-white text-sm font-medium shadow-sm flex items-center ${
-                            isApproving || pendingRequests.length === 0
-                              ? 'bg-gray-400 cursor-not-allowed'
-                              : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
-                          }`}
-                        >
-                          <Check className="w-4 h-4 mr-1" />
-                          Approve All ({pendingRequests.length})
-                        </button>
-                      </div>
-                      <div className="overflow-hidden shadow-sm rounded-xl border border-gray-200">
-                        <table className="min-w-full divide-y divide-gray-200">
-                          <thead className="bg-gray-50">
-                            <tr>
-                              <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">
-                                User
-                              </th>
-                              <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
-                                Requested On
-                              </th>
-                              <th scope="col" className="relative py-3.5 pl-3 pr-4 sm:pr-6">
-                                <span className="sr-only">Actions</span>
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-200 bg-white">
-                            {pendingRequests.map((request) => (
-                              <tr key={`${request.circle_id}-${request.user_address}`} className="hover:bg-gray-50 transition-colors">
-                                <td className="px-6 py-4 whitespace-nowrap">
-                                  <div className="flex items-center">
-                                    <div className="font-medium text-gray-900">{request.user_name || 'Unknown User'}</div>
-                                    <div className="text-gray-500">{shortenAddress(request.user_address)}</div>
-                                  </div>
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                  {formatDate(request.created_at)}
-                                </td>
-                                <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
-                                  <div className="flex justify-end space-x-3">
-                                    <button
-                                      onClick={() => handleJoinRequest(request, true)}
-                                      className={`${isApproving ? 'opacity-50 cursor-not-allowed' : ''} text-white bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 transition-all flex items-center px-4 py-2 rounded-lg shadow-sm font-medium`}
-                                      disabled={isApproving}
-                                    >
-                                      {isApproving ? (
-                                        <svg className="animate-spin h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                        </svg>
-                                      ) : (
-                                        <Check className="w-4 h-4 mr-2" />
-                                      )}
-                                      Approve
-                                    </button>
-                                    <button
-                                      onClick={() => handleJoinRequest(request, false)}
-                                      className="text-white bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 transition-all flex items-center px-4 py-2 rounded-lg shadow-sm font-medium"
-                                      disabled={isApproving}
-                                    >
-                                      <X className="w-4 h-4 mr-2" />
-                                      Reject
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                      <div className="border-2 border-blue-200 rounded-xl overflow-hidden bg-blue-50">
+                        <div className="bg-blue-100 px-5 py-4 border-b border-blue-200 flex justify-between items-center">
+                          <div>
+                            <h3 className="text-lg font-semibold text-blue-900">
+                              Pending Join Requests
+                              <span className="ml-2 bg-blue-600 text-white text-xs font-medium px-2.5 py-0.5 rounded-full">
+                                {pendingRequests.length}
+                              </span>
+                            </h3>
+                            <p className="text-sm text-blue-700 mt-1">These users want to join your circle</p>
+                          </div>
+                          <button
+                            onClick={handleBulkApprove}
+                            disabled={isApproving || pendingRequests.length === 0}
+                            className={`px-4 py-2 rounded-lg text-white text-sm font-medium shadow-sm flex items-center ${
+                              isApproving || pendingRequests.length === 0
+                                ? 'bg-gray-400 cursor-not-allowed'
+                                : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
+                            }`}
+                          >
+                            <Check className="w-4 h-4 mr-1" />
+                            Approve All ({pendingRequests.length})
+                          </button>
+                        </div>
+                        <div className="p-4">
+                          <div className="overflow-hidden shadow-sm rounded-lg border border-blue-200 bg-white">
+                            <table className="min-w-full divide-y divide-gray-200">
+                              <thead className="bg-gray-50">
+                                <tr>
+                                  <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">
+                                    User
+                                  </th>
+                                  <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                                    Requested On
+                                  </th>
+                                  <th scope="col" className="relative py-3.5 pl-3 pr-4 sm:pr-6">
+                                    <span className="sr-only">Actions</span>
+                                  </th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-200 bg-white">
+                                {pendingRequests.map((request) => (
+                                  <tr key={`${request.circle_id}-${request.user_address}`} className="hover:bg-gray-50 transition-colors">
+                                    <td className="px-6 py-4 whitespace-nowrap">
+                                      <div className="flex items-center">
+                                        <div className="font-medium text-gray-900">{request.user_name || 'Unknown User'}</div>
+                                        <span className="ml-2 text-gray-500 text-sm">{shortenAddress(request.user_address)}</span>
+                                      </div>
+                                    </td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                      {formatDate(request.created_at || new Date())}
+                                    </td>
+                                    <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
+                                      <div className="flex justify-end space-x-3">
+                                        <button
+                                          onClick={() => handleJoinRequest(request, true)}
+                                          className={`${isApproving ? 'opacity-50 cursor-not-allowed' : ''} text-white bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 transition-all flex items-center px-4 py-2 rounded-lg shadow-sm font-medium`}
+                                          disabled={isApproving}
+                                        >
+                                          {isApproving ? (
+                                            <svg className="animate-spin h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                            </svg>
+                                          ) : (
+                                            <Check className="w-4 h-4 mr-2" />
+                                          )}
+                                          Approve
+                                        </button>
+                                        <button
+                                          onClick={() => handleJoinRequest(request, false)}
+                                          className="text-white bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 transition-all flex items-center px-4 py-2 rounded-lg shadow-sm font-medium"
+                                          disabled={isApproving}
+                                        >
+                                          <X className="w-4 h-4 mr-2" />
+                                          Reject
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   )}
