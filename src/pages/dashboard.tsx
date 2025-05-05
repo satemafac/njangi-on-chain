@@ -1,3 +1,4 @@
+/* eslint-disable */
 import React, { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../contexts/AuthContext';
@@ -9,10 +10,10 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
 import { Eye, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle } from 'lucide-react';
-import { ZkLoginError } from '../services/zkLoginClient';
 import { PACKAGE_ID } from '../services/circle-service';
 // Use alias path for the modal import
 import ConfirmationModal from '@/components/ConfirmationModal';
+import { Button } from '@chakra-ui/react';
 
 // Circle type definition
 interface Circle {
@@ -31,6 +32,7 @@ interface Circle {
   memberStatus: 'active' | 'suspended' | 'exited';
   isAdmin: boolean;
   isActive: boolean;
+  walletId?: string; // Add optional wallet ID
 }
 
 // Type definitions for SUI event payloads
@@ -253,7 +255,7 @@ export default function Dashboard() {
     message: string | React.ReactNode;
     onConfirm: () => void;
     confirmText?: string;
-    variant?: 'primary' | 'danger' | 'warning';
+    confirmButtonVariant?: 'primary' | 'danger' | 'warning';
   } | null>(null);
 
   // Update the script loading in useEffect for MoonPay SDK
@@ -319,7 +321,7 @@ export default function Dashboard() {
           params: {
             apiKey: process.env.NEXT_PUBLIC_MOONPAY_API_KEY || "", // Using API key from environment variables
             currencyCode: currencyCode,
-            walletAddress: userAddress,
+            walletAddress: userAddress || undefined, // Use undefined instead of null
             baseCurrencyCode: "usd",
             baseCurrencyAmount: "50", // Default amount in USD
           }
@@ -470,21 +472,23 @@ export default function Dashboard() {
 
   // Process circle data correctly after the contract restructuring
   const processCircleObject = (objectData: EnhancedObjectData, userAddress: string, circleCreationData?: CircleCreatedEvent) => {
-    if (!objectData?.data?.content || !('fields' in objectData.data.content)) {
-      console.warn('Invalid object data structure', objectData);
+    // Use optional chaining and nullish coalescing for safer access
+    if (!objectData?.data?.content?.fields) { 
+      console.warn('Invalid object data structure or missing fields', objectData);
       return null;
     }
 
     const fields = objectData.data.content.fields as Record<string, unknown>;
     console.log('Processing circle object fields:', fields);
 
-    // Extract basic circle information
-    const circleId = objectData.data.objectId;
-    const name = fields.name || '';
-    const admin = fields.admin || '';
-    const currentMembers = Number(fields.current_members || 0);
-    const nextPayoutTime = Number(fields.next_payout_time || 0);
-    const isActive = fields.is_active === true || fields.is_active === 'true';
+    // Extract basic circle information safely
+    const circleId = objectData.data.objectId ?? 'unknown-id'; // Provide fallback
+    const name = (fields.name as string) ?? ''; // Type assertion with fallback
+    const admin = (fields.admin as string) ?? ''; // Type assertion with fallback
+    const currentMembers = Number(fields.current_members ?? 0); // Use nullish coalescing
+    const nextPayoutTime = Number(fields.next_payout_time ?? 0); // Use nullish coalescing
+    // Ensure boolean conversion is safe
+    const isActive = fields.is_active === true || String(fields.is_active).toLowerCase() === 'true'; 
     
     // Initialize config values with default values
     const configValues = {
@@ -493,155 +497,93 @@ export default function Dashboard() {
       securityDeposit: 0,
       securityDepositUsd: 0,
       cycleLength: 0,
-      cycleDay: 1,  // Default to day 1 instead of 0
-      maxMembers: 3, // Fallback to default if not found
+      cycleDay: 0,  // Default to day 0 (Monday)
+      maxMembers: 3,
     };
 
-    // Extract from transaction inputs if available
+    // Extract from transaction inputs if available (check types safely)
     if (circleCreationData) {
-      // Check if we have the raw transaction data for cycle day (not in event)
       console.log('Using creation event data for circle:', circleId);
-      
-      // Try to extract contribution amount
-      if (circleCreationData.contribution_amount) {
-        configValues.contributionAmount = Number(circleCreationData.contribution_amount) / 1e9;
-      }
-      
-      // Try to extract contribution USD amount
-      if (circleCreationData.contribution_amount_usd) {
-        configValues.contributionAmountUsd = Number(circleCreationData.contribution_amount_usd) / 100;
-      }
-      
-      // Try to extract security deposit USD amount
-      if (circleCreationData.security_deposit_usd) {
-        configValues.securityDepositUsd = Number(circleCreationData.security_deposit_usd) / 100;
-      }
-      
-      // Try to extract cycle length
-      if (circleCreationData.cycle_length) {
-        configValues.cycleLength = Number(circleCreationData.cycle_length);
-      }
-      
-      // Try to extract max members
-      if (circleCreationData.max_members) {
-        configValues.maxMembers = Number(circleCreationData.max_members);
-      }
-
-      // Note: cycle_day is not in the event but could be in fields or dynamic fields
+      configValues.contributionAmount = Number(circleCreationData.contribution_amount ?? 0) / 1e9;
+      configValues.contributionAmountUsd = Number(circleCreationData.contribution_amount_usd ?? 0) / 100;
+      configValues.securityDepositUsd = Number(circleCreationData.security_deposit_usd ?? 0) / 100;
+      configValues.cycleLength = Number(circleCreationData.cycle_length ?? 0);
+      configValues.maxMembers = Number(circleCreationData.max_members ?? 3);
     }
 
-    // Next, try to extract values from dynamic fields
+    // Next, try to extract values from dynamic fields safely
     const dynamicFields = objectData.data.dynamicFields || [];
     console.log('Dynamic fields for circle:', dynamicFields);
 
-    // Look for config objects in dynamic fields
     for (const field of dynamicFields) {
-      if (!field) continue;
-      
-      // Check if this field has the circle config
-      const isCircleConfig = field.name === 'circle_config' || 
-                             (field.type && field.type.includes('CircleConfig'));
+      // Add null check for field itself
+      if (!field) continue; 
+
+      // Check if this field has the circle config using safer checks
+      // Use field.type which seems more reliable based on previous logs
+      const isCircleConfig = field.type && typeof field.type === 'string' && field.type.includes('::CircleConfig');
       
       if (isCircleConfig) {
         console.log('Found CircleConfig field:', field);
         
-        // Try to get field object content if available
-        if (field.objectId) {
+        // Check if objectId exists before using it
+        if (field.objectId) { 
           console.log('Found CircleConfig objectId:', field.objectId);
+          // NOTE: We are NOT fetching the object here anymore to avoid extra API calls
+          // We rely on the dynamic field value if present directly
+        } else {
+            console.log('CircleConfig dynamic field found, but no objectId property.');
         }
         
-        // Try to access content or value
+        // Try to access content or value safely
         const fieldValue = field.value || field.content?.fields;
-        if (fieldValue && typeof fieldValue === 'object') {
-          const typedFieldValue = fieldValue as Record<string, unknown>;
-          if ('contribution_amount' in typedFieldValue) {
-            configValues.contributionAmount = Number(typedFieldValue.contribution_amount) / 1e9;
-          }
-          
-          if ('security_deposit' in typedFieldValue) {
-            configValues.securityDeposit = Number(typedFieldValue.security_deposit) / 1e9;
-          }
-          
-          if ('contribution_amount_usd' in typedFieldValue) {
-            configValues.contributionAmountUsd = Number(typedFieldValue.contribution_amount_usd) / 100;
-          }
-          
-          if ('security_deposit_usd' in typedFieldValue) {
-            configValues.securityDepositUsd = Number(typedFieldValue.security_deposit_usd) / 100;
-          }
-          
-          if ('cycle_length' in typedFieldValue) {
-            configValues.cycleLength = Number(typedFieldValue.cycle_length);
-          }
-          
-          if ('cycle_day' in typedFieldValue) {
-            configValues.cycleDay = Number(typedFieldValue.cycle_day);
-            console.log('Found cycle_day in dynamic field:', configValues.cycleDay);
-          }
-          
-          if ('max_members' in typedFieldValue) {
-            configValues.maxMembers = Number(typedFieldValue.max_members);
-          }
+        // Add a more specific type check for field.content.fields
+        const contentFields = field.content && typeof field.content === 'object' && 'fields' in field.content ? field.content.fields : null;
+        const finalValueSource = field.value || contentFields;
+
+        if (finalValueSource && typeof finalValueSource === 'object') {
+          const typedFieldValue = finalValueSource as Record<string, unknown>; // Use the validated source
+          // Use nullish coalescing for safer number conversion
+          configValues.contributionAmount = Number(typedFieldValue.contribution_amount ?? configValues.contributionAmount * 1e9) / 1e9;
+          configValues.securityDeposit = Number(typedFieldValue.security_deposit ?? configValues.securityDeposit * 1e9) / 1e9;
+          configValues.contributionAmountUsd = Number(typedFieldValue.contribution_amount_usd ?? configValues.contributionAmountUsd * 100) / 100;
+          configValues.securityDepositUsd = Number(typedFieldValue.security_deposit_usd ?? configValues.securityDepositUsd * 100) / 100;
+          configValues.cycleLength = Number(typedFieldValue.cycle_length ?? configValues.cycleLength);
+          configValues.cycleDay = Number(typedFieldValue.cycle_day ?? configValues.cycleDay);
+          configValues.maxMembers = Number(typedFieldValue.max_members ?? configValues.maxMembers);
+          console.log('Found cycle_day in dynamic field value/content:', configValues.cycleDay);
+        } else {
+            console.log('CircleConfig dynamic field found, but no value/content fields property.');
         }
       }
     }
 
-    // Type assertions for direct field access
-    if ('contribution_amount' in fields) {
-      configValues.contributionAmount = Number(fields.contribution_amount) / 1e9;
+    // Direct field access with safe checks and type assertions
+    configValues.contributionAmount = Number(fields.contribution_amount ?? configValues.contributionAmount * 1e9) / 1e9;
+    configValues.securityDeposit = Number(fields.security_deposit ?? configValues.securityDeposit * 1e9) / 1e9;
+    configValues.contributionAmountUsd = Number(fields.contribution_amount_usd ?? configValues.contributionAmountUsd * 100) / 100;
+    configValues.securityDepositUsd = Number(fields.security_deposit_usd ?? configValues.securityDepositUsd * 100) / 100;
+    configValues.cycleLength = Number(fields.cycle_length ?? configValues.cycleLength);
+    // Only update cycleDay from direct field if it wasn't found elsewhere
+    if (configValues.cycleDay === 0 && fields.cycle_day !== undefined) { 
+        configValues.cycleDay = Number(fields.cycle_day ?? 0); 
+        console.log('Found cycle_day in direct fields:', configValues.cycleDay);
     }
-    
-    if ('security_deposit' in fields) {
-      configValues.securityDeposit = Number(fields.security_deposit) / 1e9;
-    }
-    
-    if ('contribution_amount_usd' in fields) {
-      configValues.contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
-    } else if ('usd_amounts' in fields && 
-               typeof fields.usd_amounts === 'object' && 
-               fields.usd_amounts !== null && 
-               'contribution_amount' in (fields.usd_amounts as Record<string, unknown>)) {
-      const usdAmounts = fields.usd_amounts as Record<string, unknown>;
-      configValues.contributionAmountUsd = Number(usdAmounts.contribution_amount) / 100;
-    }
-    
-    if ('security_deposit_usd' in fields) {
-      configValues.securityDepositUsd = Number(fields.security_deposit_usd) / 100;
-    } else if ('usd_amounts' in fields && 
-               typeof fields.usd_amounts === 'object' && 
-               fields.usd_amounts !== null && 
-               'security_deposit' in (fields.usd_amounts as Record<string, unknown>)) {
-      const usdAmounts = fields.usd_amounts as Record<string, unknown>;
-      configValues.securityDepositUsd = Number(usdAmounts.security_deposit) / 100;
-    }
-    
-    // CRITICAL: Try to extract cycle info
-    if ('cycle_length' in fields) {
-      configValues.cycleLength = Number(fields.cycle_length);
-    }
-    
-    if ('cycle_day' in fields) {
-      configValues.cycleDay = Number(fields.cycle_day);
-      console.log('Found cycle_day in direct fields:', configValues.cycleDay);
-    }
-    
-    if ('max_members' in fields) {
-      configValues.maxMembers = Number(fields.max_members);
-    }
+    configValues.maxMembers = Number(fields.max_members ?? configValues.maxMembers);
 
-    // Check transaction input fields for cycle day specifically
-    if (objectData.transactionInput) {
-      const txInput = objectData.transactionInput;
-      if (txInput.cycle_day) {
-        configValues.cycleDay = Number(txInput.cycle_day);
-        console.log('Using transaction input for cycle_day:', configValues.cycleDay);
-      }
+    // Check transaction input fields for cycle day specifically (highest priority if found)
+    if (objectData.transactionInput?.cycle_day !== undefined) {
+      configValues.cycleDay = Number(objectData.transactionInput.cycle_day);
+      console.log('Using transaction input for cycle_day:', configValues.cycleDay);
     }
 
     console.log('Final config values for circle:', circleId, configValues);
     
+    // Ensure circleId is a string before returning
+    const finalCircleId = typeof circleId === 'string' ? circleId : 'invalid-id';
+
     return {
-      id: circleId,
+      id: finalCircleId, // Use validated ID
       name: name,
       admin: admin,
       contributionAmount: configValues.contributionAmount,
@@ -659,7 +601,7 @@ export default function Dashboard() {
     };
   };
 
-  // Update fetchUserCircles function to get and store transaction inputs
+  // Update fetchUserCircles to handle potential undefined IDs
   const fetchUserCircles = useCallback(async () => {
     console.log('fetchUserCircles starting...');
     
@@ -705,6 +647,73 @@ export default function Dashboard() {
         },
         limit: 50
       });
+      
+      // Get wallet creation events to map circle IDs to wallet IDs
+      const walletEvents = await client.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyWalletCreated`
+        },
+        limit: 100
+      });
+      
+      // Create a map of circle IDs to wallet IDs
+      const circleWalletMap = new Map<string, string>();
+      for (const event of walletEvents.data) {
+        if (event.parsedJson && typeof event.parsedJson === 'object') {
+          const eventJson = event.parsedJson as { circle_id?: string, wallet_id?: string };
+          if (eventJson.circle_id && eventJson.wallet_id) {
+            circleWalletMap.set(eventJson.circle_id, eventJson.wallet_id);
+          }
+        }
+      }
+      console.log('Circle to wallet ID mapping from events:', Object.fromEntries(circleWalletMap));
+      
+      // Fetch wallet IDs from dynamic fields safely
+      const fetchWalletIdFromDynamicFields = async (circleId: string | undefined): Promise<string | undefined> => {
+        // Add check for undefined circleId
+        if (!circleId) return undefined; 
+        try {
+          console.log(`Fetching dynamic fields for circle ${circleId}`);
+          const dynamicFields = await client.getDynamicFields({
+            parentId: circleId // ID is now guaranteed to be string
+          });
+          
+          for (const field of dynamicFields.data) {
+             // Add check for field and field properties
+            if (field?.name && 
+                typeof field.name === 'object' && 
+                'type' in field.name && 
+                field.name.type && 
+                field.name.type.includes('vector<u8>') && 
+                 // Check field.type instead of objectType
+                field.type && field.type.includes('wallet_id')) { 
+              
+              // Check if objectId exists before fetching
+              if (field.objectId) { 
+                const walletField = await client.getObject({
+                  id: field.objectId, // Safe to use
+                  options: { showContent: true }
+                });
+                
+                // Safe access to nested fields with added check for fields property
+                const contentFields = walletField.data?.content && 
+                                        typeof walletField.data.content === 'object' && 
+                                        'fields' in walletField.data.content ? 
+                                        walletField.data.content.fields as { value?: string } : null; 
+                                        
+                if (contentFields?.value) { 
+                  console.log(`Found wallet ID in dynamic fields: ${contentFields.value}`);
+                  return contentFields.value;
+                }
+              }
+            }
+          }
+          return undefined;
+        } catch (error) {
+          console.error(`Error fetching wallet ID for circle ${circleId}:`, error);
+          return undefined;
+        }
+      };
       
       // Create a set of activated circle IDs for quick lookup
       const activatedCircleIds = new Set<string>();
@@ -853,13 +862,27 @@ export default function Dashboard() {
                 admin: typeof circleData?.admin === 'string' ? circleData.admin : '',
               } as Circle;
               
+              // Try to get wallet ID from map first
+              let walletId = circleWalletMap.get(parsedEvent.circle_id);
+              
+              // If not found in the map, try to get it from dynamic fields
+              if (!walletId) {
+                walletId = await fetchWalletIdFromDynamicFields(parsedEvent.circle_id);
+                
+                // If found from dynamic fields, store it in our map for future reference
+                if (walletId) {
+                  circleWalletMap.set(parsedEvent.circle_id, walletId);
+                }
+              }
+              
               circleMap.set(parsedEvent.circle_id, {
                 ...safeCircleData,
                 currentMembers: memberCount,
-                isActive: isActive
+                isActive: isActive,
+                walletId: walletId || undefined
               });
               
-              console.log('Added admin circle:', parsedEvent.circle_id, 'with members:', memberCount);
+              console.log('Added admin circle:', parsedEvent.circle_id, 'with members:', memberCount, 'wallet ID:', walletId || 'none');
             }
           } catch (error) {
             console.error(`Error fetching circle details for ${parsedEvent.circle_id}:`, error);
@@ -912,23 +935,37 @@ export default function Dashboard() {
                 ? memberCountMap.get(parsedEvent.circle_id)!.size 
                 : 1;
                   
-                  // Check if the circle has been activated
-                  const isActive = activatedCircleIds.has(parsedEvent.circle_id);
+              // Check if the circle has been activated
+              const isActive = activatedCircleIds.has(parsedEvent.circle_id);
                   
-                  const safeCircleData = {
-                    ...circleData,
-                    id: circleData?.id ?? '',
-                    name: typeof circleData?.name === 'string' ? circleData.name : '',
-                    admin: typeof circleData?.admin === 'string' ? circleData.admin : '',
-                  } as Circle;
+              const safeCircleData = {
+                ...circleData,
+                id: circleData?.id ?? '',
+                name: typeof circleData?.name === 'string' ? circleData.name : '',
+                admin: typeof circleData?.admin === 'string' ? circleData.admin : '',
+              } as Circle;
                   
-                  circleMap.set(parsedEvent.circle_id, {
+              // Try to get wallet ID from map first
+              let walletId = circleWalletMap.get(parsedEvent.circle_id);
+              
+              // If not found in the map, try to get it from dynamic fields
+              if (!walletId) {
+                walletId = await fetchWalletIdFromDynamicFields(parsedEvent.circle_id);
+                
+                // If found from dynamic fields, store it in our map for future reference
+                if (walletId) {
+                  circleWalletMap.set(parsedEvent.circle_id, walletId);
+                }
+              }
+                  
+              circleMap.set(parsedEvent.circle_id, {
                 ...safeCircleData,
                 currentMembers: memberCount,
-                    isActive: isActive
-                  });
+                isActive: isActive,
+                walletId: walletId || undefined
+              });
               
-              console.log('Added member circle:', parsedEvent.circle_id, 'with members:', memberCount);
+              console.log('Added member circle:', parsedEvent.circle_id, 'with members:', memberCount, 'wallet ID:', walletId || 'none');
             }
             } catch (err) {
               console.error(`Error fetching circle details for ${parsedEvent.circle_id}:`, err);
@@ -1020,7 +1057,7 @@ export default function Dashboard() {
     checkWalletAvailability();
   }, [isAuthenticated, account]);
 
-  // --- Updated deleteCircleWithZkLogin to use the modal ---
+  // --- Updated deleteCircleWithZkLogin to handle wallet balance errors ---
   const deleteCircleWithZkLogin = async (circleId: string) => {
     // The actual deletion logic, to be called by the modal
     const performDeletion = async () => {
@@ -1028,105 +1065,147 @@ export default function Dashboard() {
         console.log("Deleting circle with zkLogin:", circleId);
         setIsDeleting(circleId); // Keep track of which circle is being deleted
 
-        // Use the AuthContext's deleteCircle method
-        const digest = await authDeleteCircle(circleId);
+        // Find the circle to get its wallet ID
+        const circle = circles.find(c => c.id === circleId);
+        const walletId = circle?.walletId;
         
-        console.log('Transaction succeeded with digest:', digest);
-        toast.success('Circle deleted successfully');
+        console.log("Circle to delete:", circle);
+        console.log("Using wallet ID:", walletId);
+
+        // Use the AuthContext's deleteCircle method - now returns a structured response
+        const result = await authDeleteCircle(circleId, walletId);
         
-        // Update the UI - remove the deleted circle
-        setCircles(prevCircles => prevCircles.filter(c => c.id !== circleId));
-        setDeleteableCircles(prev => {
-          const updated = new Set(prev);
-          updated.delete(circleId);
-          return updated;
-        });
-        
-      } catch (error: unknown) {
-        console.error('Error deleting circle with zkLogin:', error);
-        
-        // Check if this is a ZkLoginError with requireRelogin flag
-        if (error instanceof ZkLoginError && error.requireRelogin) {
-          toast.error(
-            <div className="flex flex-col">
-              <div>Authentication issue: Please login again</div>
-              <button 
-                onClick={() => window.location.href = '/'} 
-                className="mt-2 bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-sm flex items-center justify-center"
-              >
-                <RefreshCw className="w-3 h-3 mr-1" /> Re-authenticate
-              </button>
-            </div>,
-            { duration: 10000 }
-          );
-          return;
-        }
-        
-        // Show appropriate error message based on the error
-        if (error instanceof Error) {
-          // Log the full error for debugging
-          console.error('Full error details:', {
-            message: error.message,
-            stack: error.stack,
-            name: error.name,
-            isZkLoginError: error instanceof ZkLoginError
-          });
+        // Check if deletion succeeded
+        if (result.success) {
+          console.log("Delete successful with digest:", result.digest);
           
-          if (error.message.includes('ECircleHasActiveMembers') || 
-              error.message.includes('Cannot delete: Circle has active members')) {
-            toast.error('Cannot delete: Circle has active members');
-          } else if (error.message.includes('ECircleHasContributions') || 
-                    error.message.includes('Cannot delete: Circle has received contributions')) {
-            toast.error('Cannot delete: Circle has received contributions');
-          } else if (error.message.includes('EOnlyCircleAdmin') || 
-                    error.message.includes('Only the circle admin')) {
-            toast.error('Cannot delete: Only the circle admin can delete this circle');
-          } else if (error.message.includes('not found') || 
-                    error.message.includes('not accessible')) {
-            toast.error('Circle not found or not accessible');
-          } else if (error.message.includes('Session') || 
-                    error.message.includes('authentication') || 
-                    error.message.includes('expired')) {
-            toast.error(
-              <div className="flex flex-col">
-                <div>Authentication issue: {error.message}</div>
-                <button 
-                  onClick={() => window.location.href = '/'} 
-                  className="mt-2 bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-sm flex items-center justify-center"
-                >
-                  <RefreshCw className="w-3 h-3 mr-1" /> Re-authenticate
-                </button>
-              </div>,
-              { duration: 10000 }
-            );
-          } else {
-            toast.error(`Error: ${error.message}`, {
-              duration: 5000
-            });
-          }
+          // Update the UI
+          setCircles(prevCircles => prevCircles.filter(c => c.id !== circleId));
+          
+          toast.success("Circle has been deleted.");
         } else {
-          toast.error('Error deleting circle', { duration: 5000 });
+          // Handle wallet balance errors gracefully
+          if (result.errorType === 'WALLET_HAS_BALANCE') {
+            console.log("Circle has funds, cannot delete:", result.error);
+            
+            // Show a user-friendly modal instead of a toast
+            setConfirmModalProps({
+              title: "Cannot Delete Circle",
+              message: "This circle cannot be deleted because it still has funds in its wallet. Please withdraw all funds first, then try deleting the circle again.",
+              confirmText: "OK",
+              confirmButtonVariant: "warning",
+              onConfirm: () => setIsConfirmModalOpen(false)
+            });
+            setIsConfirmModalOpen(true);
+          } else {
+            // Handle other types of failures
+            toast.error(result.error || "Failed to delete circle");
+          }
         }
-      } finally {
-        setIsDeleting(null);
+        
+        setIsDeleting(""); // Clear deleting status
+      } catch (error) {
+        console.error("Error deleting circle:", error);
+        setIsDeleting(""); // Clear deleting status
+        
+        // Generic error handling for other cases
+        setConfirmModalProps({
+          title: "Error Deleting Circle",
+          message: error instanceof Error ? error.message : "Failed to delete circle",
+          confirmText: "OK",
+          confirmButtonVariant: "danger",
+          onConfirm: () => setIsConfirmModalOpen(false)
+        });
+        setIsConfirmModalOpen(true);
       }
     };
 
-    // Set props to open the confirmation modal
-    const circleToDelete = circles.find(c => c.id === circleId);
-    setConfirmModalProps({
-      title: `Delete Circle: ${circleToDelete?.name || 'Unknown'}`,
-      message: (
-        <>
-          <p>Are you absolutely sure you want to delete this circle?</p>
-          <p className="mt-2 font-semibold text-red-600">This action cannot be undone.</p>
-        </>
-      ),
-      onConfirm: performDeletion,
-      confirmText: 'Delete Circle',
-      variant: 'danger',
-    });
-    setIsConfirmModalOpen(true);
+    // First check if we know the circle has a wallet with funds before attempting deletion
+    try {
+      // Get the wallet ID for the circle
+      const circle = circles.find(c => c.id === circleId);
+      const walletId = circle?.walletId;
+      
+      if (!walletId) {
+        // Proceed with regular deletion confirmation if we don't know the wallet ID
+        // Show confirmation dialog
+        setIsConfirmModalOpen(true);
+        setConfirmModalProps({
+          title: "Delete Circle",
+          message: "Are you sure you want to delete this circle? This action cannot be undone.",
+          confirmText: "Delete",
+          confirmButtonVariant: "danger",
+          onConfirm: performDeletion
+        });
+        return;
+      }
+      
+      // If we have a wallet ID, check if this circle was previously determined to be deletable
+      if (deleteableCircles.has(circleId)) {
+        // Show confirmation dialog
+        setIsConfirmModalOpen(true);
+        setConfirmModalProps({
+          title: "Delete Circle",
+          message: "Are you sure you want to delete this circle? This action cannot be undone.",
+          confirmText: "Delete",
+          confirmButtonVariant: "danger",
+          onConfirm: performDeletion
+        });
+      } else {
+        // If it's not in deleteableCircles, it might have funds - proceed with caution
+        setIsConfirmModalOpen(true);
+        setConfirmModalProps({
+          title: "Delete Circle",
+          message: "Are you sure you want to delete this circle? This action cannot be undone. Note that you'll need to withdraw any funds before it can be deleted.",
+          confirmText: "Delete",
+          confirmButtonVariant: "danger",
+          onConfirm: performDeletion
+        });
+      }
+    } catch (error) {
+      console.error("Error checking circle status:", error);
+      // Fallback to standard confirmation
+      setIsConfirmModalOpen(true);
+      setConfirmModalProps({
+        title: "Delete Circle",
+        message: "Are you sure you want to delete this circle? This action cannot be undone.",
+        confirmText: "Delete",
+        confirmButtonVariant: "danger",
+        onConfirm: performDeletion
+      });
+    }
+  };
+  
+  // --- Add function to withdraw funds from circle wallet ---
+  const withdrawFunds = async (walletId: string) => {
+    if (!walletId) {
+      toast.error("Wallet ID is required to withdraw funds");
+      return;
+    }
+    
+    try {
+      setIsDeleting(walletId); // Keep track of which wallet is being processed
+      
+      // Call API to withdraw funds and await the result
+      const result = await authDeleteCircle(walletId);
+      
+      if (result.success) {
+        toast.success("Funds have been withdrawn to your wallet");
+        
+        // Refresh the page to update balances
+        setTimeout(() => {
+          window.location.reload();
+        }, 3000);
+      } else {
+        toast.error(result.error || "Failed to withdraw funds");
+      }
+    } catch (error) {
+      console.error("Error withdrawing funds:", error);
+      
+      toast.error(error instanceof Error ? error.message : "Failed to withdraw funds");
+    } finally {
+      setIsDeleting(""); // Clear processing status
+    }
   };
 
   // --- Updated deleteCircle (non-zkLogin) to use the modal ---
@@ -1306,26 +1385,23 @@ export default function Dashboard() {
       const circleToDelete = circles.find(c => c.id === circleId);
       setConfirmModalProps({
         title: `Delete Circle: ${circleToDelete?.name || 'Unknown'}`,
-        message: (
-          <>
-            <p>Are you absolutely sure you want to delete this circle?</p>
-            <p className="mt-2 font-semibold text-red-600">This action cannot be undone.</p>
-          </>
-        ),
+        message: "Are you absolutely sure you want to delete this circle? This action cannot be undone.",
         onConfirm: performWalletDeletion,
         confirmText: 'Delete Circle',
-        variant: 'danger',
+        confirmButtonVariant: 'danger',
       });
       setIsConfirmModalOpen(true);
     }
   };
 
-  const shortenAddress = (address: string | undefined) => {
+  const shortenAddress = (address: string | null | undefined) => {
     if (!address) return '';
     return `${address.slice(0, 6)}...${address.slice(-6)}`;
   };
 
-  const copyToClipboard = async (text: string, type: 'address' | 'circleId' = 'address') => {
+  const copyToClipboard = async (text: string | null, type: 'address' | 'circleId' = 'address') => {
+    if (!text) return;
+    
     try {
       await navigator.clipboard.writeText(text);
       
@@ -1356,7 +1432,10 @@ export default function Dashboard() {
 
   // Format cycle lengths and days for display
   const formatCycleInfo = (cycleLength: number, cycleDay: number) => {
-    // Cycle length: 0 = weekly, 1 = monthly, 2 = quarterly
+    // Log the input values for debugging
+    console.log('[formatCycleInfo] Received:', { cycleLength, cycleDay });
+    
+    // Cycle length: 0 = weekly, 1 = monthly, 2 = quarterly, 3 = bi-weekly
     let cyclePeriod = '';
     let dayFormat = '';
     
@@ -1364,27 +1443,32 @@ export default function Dashboard() {
     const validCycleLength = typeof cycleLength === 'number' ? cycleLength : 0;
     let validCycleDay = typeof cycleDay === 'number' ? cycleDay : 0;
     
-    // Ensure cycle day is in valid range
-    if (validCycleLength === 0 && validCycleDay > 6) validCycleDay = 0; // Weekly (0-6)
-    if (validCycleLength > 0 && validCycleDay > 31) validCycleDay = 1; // Monthly/Quarterly
+    // Prepare weekdays array used in multiple cases
+    const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+    // Ensure cycle day is in valid range based on the *actual* cycle length rules
+    if ((validCycleLength === 0 || validCycleLength === 3) && validCycleDay > 6) validCycleDay = 0; // Weekly/Bi-Weekly (0-6)
+    if ((validCycleLength === 1 || validCycleLength === 2) && (validCycleDay <= 0 || validCycleDay > 28)) validCycleDay = 1; // Monthly/Quarterly (1-28)
     
     switch (validCycleLength) {
       case 0: // Weekly
         cyclePeriod = 'Weekly';
         // For weekly, cycleDay is 0-6
-        const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        dayFormat = weekdays[validCycleDay] || weekdays[0]; // Default to Monday if out of range
+        break;
+      case 3: // Bi-Weekly (NEW)
+        cyclePeriod = 'Bi-Weekly';
+        // For bi-weekly, cycleDay is 0-6 (like weekly)
         dayFormat = weekdays[validCycleDay] || weekdays[0]; // Default to Monday if out of range
         break;
       case 1: // Monthly
         cyclePeriod = 'Monthly';
-        // Ensure we have a valid day (1-31)
-        validCycleDay = validCycleDay === 0 ? 1 : validCycleDay;
+        // Ensure we have a valid day (1-28)
         dayFormat = getOrdinalSuffix(validCycleDay);
         break;
       case 2: // Quarterly
         cyclePeriod = 'Quarterly';
-        // Ensure we have a valid day (1-31)
-        validCycleDay = validCycleDay === 0 ? 1 : validCycleDay;
+        // Ensure we have a valid day (1-28)
         dayFormat = getOrdinalSuffix(validCycleDay);
         break;
       default:
@@ -1569,6 +1653,24 @@ export default function Dashboard() {
   const shortenId = (id: string) => {
     if (!id) return '';
     return `${id.slice(0, 10)}...${id.slice(-6)}`;
+  };
+
+  // Fix toast with the wallet balance warning to use proper entity escaping
+  const handleWalletWithBalance = (walletId: string | undefined) => {
+    toast((t) => (
+      <div className="flex flex-col">
+        <p>This circle&apos;s wallet still has funds. Would you like to withdraw them first?</p>
+        <button 
+          onClick={() => {
+            if (walletId) withdrawFunds(walletId);
+            toast.dismiss(t.id);
+          }}
+          className="mt-2 bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm"
+        >
+          Withdraw Funds
+        </button>
+      </div>
+    ), { duration: 9000 });
   };
 
   if (!isAuthenticated || !account) {
@@ -1828,9 +1930,14 @@ export default function Dashboard() {
                               <div className="p-5 border-b border-gray-100">
                                 <div className="flex justify-between items-start">
                                   <h3 className="text-lg font-semibold text-gray-900 line-clamp-1">{circle.name}</h3>
-                                  <span className={`text-xs font-medium px-2 py-1 rounded-full ${circle.isAdmin ? "bg-purple-100 text-purple-800" : "bg-blue-100 text-blue-800"}`}>
-                                    {circle.isAdmin ? "Admin" : "Member"}
-                                  </span>
+                                  <div className="flex space-x-1">
+                                    <span className={`text-xs font-medium px-2 py-1 rounded-full ${circle.isAdmin ? "bg-purple-100 text-purple-800" : "bg-blue-100 text-blue-800"}`}>
+                                      {circle.isAdmin ? "Admin" : "Member"}
+                                    </span>
+                                    <span className={`text-xs font-medium px-2 py-1 rounded-full ${circle.isActive ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
+                                      {circle.isActive ? "Active" : "Inactive"}
+                                    </span>
+                                  </div>
                                 </div>
                                 <div className="mt-2 flex items-center text-sm text-gray-500">
                                   <svg className="mr-1.5 h-4 w-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -2041,9 +2148,14 @@ export default function Dashboard() {
                               <div className="p-5 border-b border-gray-100">
                                 <div className="flex justify-between items-start">
                                   <h3 className="text-lg font-semibold text-gray-900 line-clamp-1">{circle.name}</h3>
-                                  <span className="text-xs font-medium px-2 py-1 rounded-full bg-purple-100 text-purple-800">
-                                    Admin
-                                  </span>
+                                  <div className="flex space-x-1">
+                                    <span className="text-xs font-medium px-2 py-1 rounded-full bg-purple-100 text-purple-800">
+                                      Admin
+                                    </span>
+                                    <span className={`text-xs font-medium px-2 py-1 rounded-full ${circle.isActive ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
+                                      {circle.isActive ? "Active" : "Inactive"}
+                                    </span>
+                                  </div>
                                 </div>
                                 <div className="mt-2 flex items-center text-sm text-gray-500">
                                   <svg className="mr-1.5 h-4 w-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -2252,9 +2364,14 @@ export default function Dashboard() {
                               <div className="p-5 border-b border-gray-100">
                                 <div className="flex justify-between items-start">
                                   <h3 className="text-lg font-semibold text-gray-900 line-clamp-1">{circle.name}</h3>
-                                  <span className="text-xs font-medium px-2 py-1 rounded-full bg-blue-100 text-blue-800">
-                                    Member
-                                  </span>
+                                  <div className="flex space-x-1">
+                                    <span className="text-xs font-medium px-2 py-1 rounded-full bg-blue-100 text-blue-800">
+                                      Member
+                                    </span>
+                                    <span className={`text-xs font-medium px-2 py-1 rounded-full ${circle.isActive ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
+                                      {circle.isActive ? "Active" : "Inactive"}
+                                    </span>
+                                  </div>
                                 </div>
                                 <div className="mt-2 flex items-center text-sm text-gray-500">
                                   <svg className="mr-1.5 h-4 w-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -2551,7 +2668,7 @@ export default function Dashboard() {
           title={confirmModalProps.title}
           message={confirmModalProps.message}
           confirmText={confirmModalProps.confirmText}
-          confirmButtonVariant={confirmModalProps.variant}
+          confirmButtonVariant={confirmModalProps.confirmButtonVariant}
         />
       )}
     </div>

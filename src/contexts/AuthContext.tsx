@@ -20,30 +20,68 @@ interface CircleData {
   verification_required: boolean;
 }
 
+// Define the interface for the context
 interface AuthContextType {
-  account: AccountData | null;
   isAuthenticated: boolean;
-  userAddress: string;
-  error: string | null;
+  isLoading: boolean; 
   login: (provider: OAuthProvider) => Promise<void>;
+  userAddress: string | null;
   logout: () => void;
+  account: AccountData | null;
+  error: string | null;
+  pendingAction: string | null;
+  setPendingAction: (action: string | null) => void;
+  isLocalDevMode: boolean;
+  setLocalDevMode: (mode: boolean) => void;
+  deleteCircle: (circleId: string, walletId?: string) => Promise<{ 
+    success: boolean; 
+    digest?: string; 
+    error?: string; 
+    errorType?: string; 
+    walletId?: string 
+  }>;
+  withdrawWalletFunds: (walletId: string, amount?: string) => Promise<string>;
   handleCallback: (jwt: string) => Promise<AccountData>;
   sendTransaction: (circleData: CircleData) => Promise<string>;
-  deleteCircle: (circleId: string) => Promise<string>;
   setUserAddress: (address: string) => void;
   setIsAuthenticated: (value: boolean) => void;
-  setError: (error: string) => void;
+  setError: (error: string | null) => void;
   resetIdleTimer: () => void;
   activateCircle: (circleId: string) => Promise<string>;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+// Create the context with default values
+const AuthContext = createContext<AuthContextType>({
+  isAuthenticated: false,
+  isLoading: false,
+  login: async () => {},
+  userAddress: null,
+  logout: () => {},
+  account: null,
+  error: null,
+  pendingAction: null,
+  setPendingAction: () => {},
+  isLocalDevMode: false,
+  setLocalDevMode: () => {},
+  deleteCircle: async () => ({ success: false, error: 'Not implemented' }),
+  withdrawWalletFunds: async () => '',
+  handleCallback: async () => ({} as AccountData),
+  sendTransaction: async () => '',
+  setUserAddress: () => {},
+  setIsAuthenticated: () => {},
+  setError: () => {},
+  resetIdleTimer: () => {},
+  activateCircle: async () => ''
+});
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [account, setAccount] = useState<AccountData | null>(null);
+export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [account, setAccount] = useState<AccountData | null>(null);
   const [userAddress, setUserAddress] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [isLocalDevMode, setIsLocalDevMode] = useState(false);
   const zkLogin = ZkLoginClient.getInstance();
 
   const handleAutoLogout = () => {
@@ -101,6 +139,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (provider: OAuthProvider) => {
     try {
+      setIsLoading(true);
       const { loginUrl } = await zkLogin.beginLogin(provider);
       if (!loginUrl) {
         throw new Error('No login URL returned');
@@ -109,6 +148,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.error('Login error:', err);
       setError(err instanceof Error ? err.message : 'Failed to start login process');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -140,7 +181,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return digest;
   };
 
-  const deleteCircle = async (circleId: string) => {
+  const deleteCircle = async (circleId: string, walletId?: string) => {
     if (!account) throw new Error('Not logged in');
     // Reset idle timer on transaction
     resetIdleTimerWithLogging();
@@ -154,7 +195,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ 
           action: 'deleteCircle', 
           account,
-          circleId
+          circleId,
+          walletId
         })
       });
       
@@ -162,11 +204,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const responseData = await response.json();
       console.log('AuthContext: Delete circle response:', responseData);
       
-      // If response is not ok, throw a detailed error
+      // If response is not ok, handle differently based on error type
       if (!response.ok) {
         // Check for specific errors from the API
         if (response.status === 400 && responseData.error) {
-          // Business logic error (like cannot delete due to active members)
+          // Special handling for wallet balance errors to make them consistently detectable
+          if (responseData.error.includes('wallet has') || 
+              responseData.error.includes('coins') || 
+              responseData.error.includes('funds') ||
+              responseData.error.includes('EWalletHas') ||
+              responseData.code === 'EWalletHasBalance' ||
+              responseData.code === 'EWalletHasStablecoin') {
+            
+            // Instead of throwing, return a structured error that the UI can handle gracefully
+            return {
+              success: false,
+              error: 'Cannot delete: The wallet has coins stored in dynamic fields. Please withdraw all funds first.',
+              errorType: 'WALLET_HAS_BALANCE',
+              walletId
+            };
+          }
+          
+          // Regular business logic errors (like cannot delete due to active members)
           throw new Error(responseData.error);
         } else if (response.status === 401) {
           // Authentication error
@@ -181,7 +240,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       
       // Success case
-      return responseData.digest;
+      return { 
+        success: true, 
+        digest: responseData.digest || '' 
+      };
     } catch (error) {
       console.error('Error in AuthContext.deleteCircle:', error);
       // Rethrow to let component handle specific error cases
@@ -210,10 +272,61 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const withdrawWalletFunds = async (walletId: string, amount?: string) => {
+    if (!account) throw new Error('Not logged in');
+    // Reset idle timer on transaction
+    resetIdleTimerWithLogging();
+    
+    console.log(`AuthContext: Sending withdraw funds request for wallet ${walletId}`);
+    
+    try {
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'withdrawWalletFunds', 
+          account,
+          walletId,
+          amount
+        })
+      });
+      
+      // Parse response data first to get error details if any
+      const responseData = await response.json();
+      console.log('AuthContext: Withdraw funds response:', responseData);
+      
+      // If response is not ok, throw a detailed error
+      if (!response.ok) {
+        // Check for specific errors from the API
+        if (response.status === 400 && responseData.error) {
+          // Business logic error (like insufficient funds)
+          throw new Error(responseData.error);
+        } else if (response.status === 401) {
+          // Authentication error
+          const message = responseData.error || 'Authentication failed. Please login again.';
+          throw new Error(message);
+        } else {
+          // Other server errors
+          const errorMessage = responseData.error || 'Failed to withdraw funds';
+          const detailsMessage = responseData.details ? `\nDetails: ${responseData.details}` : '';
+          throw new Error(`${errorMessage}${detailsMessage}`);
+        }
+      }
+      
+      // Success case
+      return responseData.digest;
+    } catch (error) {
+      console.error('Error in AuthContext.withdrawWalletFunds:', error);
+      // Rethrow to let component handle specific error cases
+      throw error;
+    }
+  };
+
   return (
     <AuthContext.Provider value={{ 
       account,
       isAuthenticated,
+      isLoading,
       userAddress,
       error,
       login,
@@ -225,7 +338,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsAuthenticated,
       setError,
       resetIdleTimer: resetIdleTimerWithLogging,
-      activateCircle
+      activateCircle,
+      pendingAction,
+      setPendingAction,
+      isLocalDevMode,
+      setLocalDevMode: setIsLocalDevMode,
+      withdrawWalletFunds
     }}>
       {children}
     </AuthContext.Provider>

@@ -749,7 +749,7 @@ module njangi::njangi_custody {
 
         if (dynamic_object_field::exists_(&wallet.id, coin_type_field)) {
             let mut existing_coin = dynamic_object_field::remove<String, Coin<CoinType>>(
-                &mut wallet.id, 
+                &mut wallet.id,
                 coin_type_field
             );
             coin::join(&mut existing_coin, stablecoin);
@@ -796,5 +796,115 @@ module njangi::njangi_custody {
             new_balance,
             timestamp: current_time,
         });
+    }
+    
+    // ----------------------------------------------------------
+    // Internal function to deposit a contribution coin (generic type)
+    // ----------------------------------------------------------
+    public(package) fun deposit_contribution_coin<CoinType>(
+        wallet: &mut CustodyWallet,
+        contribution_coin: Coin<CoinType>,
+        member_addr: address,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let amount = coin::value(&contribution_coin);
+        let current_time = clock::timestamp_ms(clock);
+
+        assert!(wallet.is_active, EWalletNotActive);
+
+        // Register the coin type if not already registered
+        let previous_balance = get_stablecoin_balance<CoinType>(wallet);
+        let coin_type_field = coin_field_name<CoinType>();
+
+        if (dynamic_object_field::exists_(&wallet.id, coin_type_field)) {
+            let mut existing_coin = dynamic_object_field::remove<String, Coin<CoinType>>(
+                &mut wallet.id,
+                coin_type_field
+            );
+            coin::join(&mut existing_coin, contribution_coin);
+            dynamic_object_field::add(&mut wallet.id, coin_type_field, existing_coin);
+        } else {
+            dynamic_object_field::add(&mut wallet.id, coin_type_field, contribution_coin);
+            register_stablecoin_type<CoinType>(wallet);
+        };
+
+        let new_balance = get_stablecoin_balance<CoinType>(wallet);
+
+        // Use CUSTODY_OP_DEPOSIT for generic contributions
+        let txn = create_transaction(
+            core::custody_op_deposit(),
+            member_addr,
+            amount,
+            current_time
+        );
+        vector::push_back(&mut wallet.transaction_history, txn);
+
+        // Determine the correct coin type string based on the type
+        let coin_type_str = if (std::type_name::get<CoinType>() == std::type_name::get<SUI>()) {
+            string::utf8(b"sui")
+        } else {
+            // Use a generic term or maybe the actual type name? Let's stick to stablecoin for now.
+            string::utf8(b"stablecoin")
+        };
+
+        // Emit CoinDeposited event - CustodyDeposited might be misleading here
+        event::emit(CoinDeposited {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            coin_type: coin_type_str,
+            amount,
+            member: member_addr,
+            previous_balance,
+            new_balance,
+            timestamp: current_time,
+        });
+    }
+    
+    // ----------------------------------------------------------
+    // Get wallet balance in raw form (keeping decimals)
+    // Checks both the main balance field and any SUI in dynamic fields
+    // ----------------------------------------------------------
+    public fun get_wallet_balance(wallet: &CustodyWallet): u64 {
+        // Get the balance from the main field
+        let main_balance = balance::value(&wallet.balance);
+        
+        // Check for any SUI stored in dynamic fields
+        let sui_in_dynamic_fields = get_stablecoin_balance<SUI>(wallet);
+        
+        // Return the combined balance
+        main_balance + sui_in_dynamic_fields
+    }
+    
+    // ----------------------------------------------------------
+    // Check if the wallet has any stablecoin balance of any type
+    // ----------------------------------------------------------
+    public fun has_any_stablecoin_balance(wallet: &CustodyWallet): bool {
+        let stablecoin_types = get_supported_stablecoin_types(wallet);
+        let len = vector::length(&stablecoin_types);
+        
+        // If we don't have any registered stablecoin types, return false
+        if (len == 0) {
+            return false
+        };
+        
+        // Check for any coin_objects field that might contain a stablecoin
+        let coin_objects_key = string::utf8(b"coin_objects");
+        
+        // If the dynamic field exists, we need to check if the balance is non-zero
+        if (dynamic_object_field::exists_(&wallet.id, coin_objects_key)) {
+            // We need to check if the actual coin has a non-zero balance
+            // This is a simplified check - in a real implementation, we would
+            // need to check each specific coin type's balance
+            
+            // Unfortunately, we cannot enumerate the specific coin types here,
+            // but if the dynamic field exists and contains a non-empty SUI coin,
+            // get_stablecoin_balance<SUI> will return a non-zero value
+            if (get_stablecoin_balance<SUI>(wallet) > 0) {
+                return true
+            }
+        };
+        
+        false
     }
 } 

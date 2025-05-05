@@ -389,7 +389,7 @@ export default function CircleDetails() {
 
   // Add formatCycleInfo function to match dashboard display
   const formatCycleInfo = (cycleLength: number, cycleDay: number) => {
-    // Cycle length: 0 = weekly, 1 = monthly, 2 = quarterly
+    // Cycle length: 0 = weekly, 1 = monthly, 2 = quarterly, 3 = bi-weekly
     let cyclePeriod = '';
     let dayFormat = '';
     
@@ -397,27 +397,32 @@ export default function CircleDetails() {
     const validCycleLength = typeof cycleLength === 'number' ? cycleLength : 0;
     let validCycleDay = typeof cycleDay === 'number' ? cycleDay : 0;
     
-    // Ensure cycle day is in valid range
-    if (validCycleLength === 0 && validCycleDay > 6) validCycleDay = 0; // Weekly (0-6)
-    if (validCycleLength > 0 && validCycleDay > 31) validCycleDay = 1; // Monthly/Quarterly
+    // Prepare weekdays array used in multiple cases
+    const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+    // Ensure cycle day is in valid range based on the *actual* cycle length rules
+    if ((validCycleLength === 0 || validCycleLength === 3) && validCycleDay > 6) validCycleDay = 0; // Weekly/Bi-Weekly (0-6)
+    if ((validCycleLength === 1 || validCycleLength === 2) && (validCycleDay <= 0 || validCycleDay > 28)) validCycleDay = 1; // Monthly/Quarterly (1-28)
     
     switch (validCycleLength) {
       case 0: // Weekly
         cyclePeriod = 'Weekly';
         // For weekly, cycleDay is 0-6
-        const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        dayFormat = weekdays[validCycleDay] || weekdays[0]; // Default to Monday if out of range
+        break;
+      case 3: // Bi-Weekly (NEW)
+        cyclePeriod = 'Bi-Weekly';
+        // For bi-weekly, cycleDay is 0-6 (like weekly)
         dayFormat = weekdays[validCycleDay] || weekdays[0]; // Default to Monday if out of range
         break;
       case 1: // Monthly
         cyclePeriod = 'Monthly';
-        // Ensure we have a valid day (1-31)
-        validCycleDay = validCycleDay === 0 ? 1 : validCycleDay;
+        // Ensure we have a valid day (1-28)
         dayFormat = getOrdinalSuffix(validCycleDay);
         break;
       case 2: // Quarterly
         cyclePeriod = 'Quarterly';
-        // Ensure we have a valid day (1-31)
-        validCycleDay = validCycleDay === 0 ? 1 : validCycleDay;
+        // Ensure we have a valid day (1-28)
         dayFormat = getOrdinalSuffix(validCycleDay);
         break;
       default:
@@ -425,7 +430,12 @@ export default function CircleDetails() {
         dayFormat = `Day ${validCycleDay === 0 ? 1 : validCycleDay}`;
     }
     
-    return `${cyclePeriod} (${dayFormat} day)`;
+    // Return string with day format only, removing " day" suffix if using ordinals
+    if (validCycleLength === 1 || validCycleLength === 2) {
+        return `${cyclePeriod} (${dayFormat.replace(' day', '')})`;
+    } else {
+        return `${cyclePeriod} (${dayFormat})`;
+    }
   };
 
   // Helper to format dates with ordinal suffix

@@ -9,7 +9,7 @@ import { priceService } from '../services/price-service';
 
 type CycleType = 'rotational' | 'smart-goal';
 type RotationStyle = 'fixed' | 'auction-based';
-type CycleLength = 'weekly' | 'monthly' | 'quarterly';
+type CycleLength = 'weekly' | 'bi-weekly' | 'monthly' | 'quarterly';
 type WeekDay = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
 
 interface CircleFormData {
@@ -43,6 +43,7 @@ const MAX_MEMBERS = 20;
 // Type conversion maps for contract interaction
 const CYCLE_LENGTH_MAP = {
   weekly: 0,
+  'bi-weekly': 3,
   monthly: 1,
   quarterly: 2,
 } as const;
@@ -59,13 +60,13 @@ const GOAL_TYPE_MAP = {
 } as const;
 
 const WEEKDAY_MAP = {
-  monday: 1,
-  tuesday: 2,
-  wednesday: 3,
-  thursday: 4,
-  friday: 5,
-  saturday: 6,
-  sunday: 7,
+  monday: 0,
+  tuesday: 1,
+  wednesday: 2,
+  thursday: 3,
+  friday: 4,
+  saturday: 5,
+  sunday: 6,
 } as const;
 
 // Validation function for form data
@@ -727,6 +728,7 @@ export default function CreateCircle() {
                   <InfoTooltip>
                     <p>How often the group meets and contributions are made</p>
                     <p className="text-gray-300 text-xs mt-1">Weekly: More frequent, smaller amounts</p>
+                    <p className="text-gray-300 text-xs mt-1">Bi-weekly: Twice a month</p>
                     <p className="text-gray-300 text-xs mt-1">Monthly: Most common option</p>
                     <p className="text-gray-300 text-xs mt-1">Quarterly: Larger amounts, less frequent</p>
                   </InfoTooltip>
@@ -736,7 +738,8 @@ export default function CreateCircle() {
                   onValueChange={(value: CycleLength) => {
                     handleInputChange('cycleLength', value);
                     // Reset cycleDay to appropriate default based on cycle length
-                    handleInputChange('cycleDay', value === 'weekly' ? 'monday' : 1);
+                    // Treat bi-weekly like weekly for day selection
+                    handleInputChange('cycleDay', (value === 'weekly' || value === 'bi-weekly') ? 'monday' : 1);
                   }}
                 >
                   <Select.Trigger
@@ -756,6 +759,15 @@ export default function CreateCircle() {
                           className="relative flex items-center px-8 py-2 text-sm text-gray-700 rounded-md hover:bg-blue-50 hover:text-blue-700 focus:bg-blue-50 focus:text-blue-700 outline-none cursor-pointer"
                         >
                           <Select.ItemText>Weekly</Select.ItemText>
+                          <Select.ItemIndicator className="absolute left-2 inline-flex items-center">
+                            <CheckIcon />
+                          </Select.ItemIndicator>
+                        </Select.Item>
+                        <Select.Item
+                          value="bi-weekly"
+                          className="relative flex items-center px-8 py-2 text-sm text-gray-700 rounded-md hover:bg-blue-50 hover:text-blue-700 focus:bg-blue-50 focus:text-blue-700 outline-none cursor-pointer"
+                        >
+                          <Select.ItemText>Bi-weekly</Select.ItemText>
                           <Select.ItemIndicator className="absolute left-2 inline-flex items-center">
                             <CheckIcon />
                           </Select.ItemIndicator>
@@ -788,14 +800,16 @@ export default function CreateCircle() {
               <div className="space-y-2">
                 <div className="flex items-center">
                   <label className="block text-sm font-medium text-gray-700">
-                    {formData.cycleLength === 'weekly' ? 'Day of Week' : 'Day of Month'}
+                    {/* Treat bi-weekly like weekly for label */} 
+                    {(formData.cycleLength === 'weekly' || formData.cycleLength === 'bi-weekly') ? 'Day of Week' : 'Day of Month'}
                   </label>
                   <InfoTooltip>
-                    {formData.cycleLength === 'weekly' ? (
-                      <p>Select which day of the week the group will meet</p>
+                    {/* Treat bi-weekly like weekly for tooltip */}
+                    {(formData.cycleLength === 'weekly' || formData.cycleLength === 'bi-weekly') ? (
+                      <p>Select which day of the week contributions are due (or meetings occur)</p>
                     ) : (
                       <>
-                        <p>Select which day of the month the group will meet</p>
+                        <p>Select which day of the month contributions are due (or meetings occur)</p>
                         <p className="text-gray-300 text-xs mt-1">Limited to days 1-28 to ensure consistency across months</p>
                       </>
                     )}
@@ -804,7 +818,8 @@ export default function CreateCircle() {
                 <Select.Root
                   value={formData.cycleDay.toString()}
                   onValueChange={(value) => {
-                    if (formData.cycleLength === 'weekly') {
+                    // Treat bi-weekly like weekly for value update
+                    if (formData.cycleLength === 'weekly' || formData.cycleLength === 'bi-weekly') {
                       handleInputChange('cycleDay', value as WeekDay);
                     } else {
                       handleInputChange('cycleDay', parseInt(value));
@@ -813,7 +828,8 @@ export default function CreateCircle() {
                 >
                   <Select.Trigger
                     className="inline-flex items-center justify-between w-full px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    aria-label={formData.cycleLength === 'weekly' ? 'Day of week' : 'Day of month'}
+                     /* Treat bi-weekly like weekly for aria-label */
+                    aria-label={(formData.cycleLength === 'weekly' || formData.cycleLength === 'bi-weekly') ? 'Day of week' : 'Day of month'}
                   >
                     <Select.Value />
                     <Select.Icon className="ml-2">
@@ -823,7 +839,8 @@ export default function CreateCircle() {
                   <Select.Portal>
                     <Select.Content className="overflow-hidden bg-white rounded-md shadow-lg">
                       <Select.Viewport className="p-1">
-                        {formData.cycleLength === 'weekly' ? (
+                         {/* Treat bi-weekly like weekly for options rendering */} 
+                        {(formData.cycleLength === 'weekly' || formData.cycleLength === 'bi-weekly') ? (
                           // Show weekday options
                           WEEKDAYS.map(({ value, label }) => (
                             <Select.Item
@@ -838,7 +855,7 @@ export default function CreateCircle() {
                             </Select.Item>
                           ))
                         ) : (
-                          // Show month day options
+                          // Show month day options (for monthly/quarterly)
                           MONTH_DAYS.map((day) => (
                             <Select.Item
                               key={day}
@@ -1393,13 +1410,28 @@ export default function CreateCircle() {
 
               {/* Action Buttons */}
               <div className="flex justify-between pt-6">
-                <button
-                  type="button"
-                  onClick={() => setCurrentStep(1)}
-                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                >
-                  Back
-                </button>
+                <Tooltip.Provider>
+                  <Tooltip.Root>
+                    <Tooltip.Trigger asChild>
+                      <button
+                        type="button"
+                        disabled
+                        className="px-4 py-2 border border-gray-200 rounded-md shadow-sm text-sm font-medium text-gray-400 bg-gray-50 cursor-not-allowed"
+                      >
+                        Back
+                      </button>
+                    </Tooltip.Trigger>
+                    <Tooltip.Portal>
+                      <Tooltip.Content
+                        className="bg-gray-900 text-white px-3 py-2 rounded text-sm"
+                        sideOffset={5}
+                      >
+                        <p>Circle already created. Going back is not allowed to prevent duplicate creation.</p>
+                        <Tooltip.Arrow className="fill-gray-900" />
+                      </Tooltip.Content>
+                    </Tooltip.Portal>
+                  </Tooltip.Root>
+                </Tooltip.Provider>
                 <button
                   type="button"
                   onClick={() => {
