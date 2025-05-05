@@ -1,0 +1,13 @@
+# Environment variables to set in Heroku
+# Use this command format: heroku config:set VARIABLE_NAME=value
+
+# Add your Sui RPC endpoint
+heroku config:set NEXT_PUBLIC_SUI_NETWORK=testnet
+heroku config:set NEXT_PUBLIC_SUI_RPC_URL=https://fullnode.testnet.sui.io:443
+
+# Node environment
+heroku config:set NODE_ENV=production
+
+# Add any other environment variables your app needs
+# heroku config:set API_KEY=your_api_key
+# heroku config:set DATABASE_URL=your_database_url 
