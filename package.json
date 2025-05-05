@@ -8,11 +8,11 @@
     "build": "next build",
     "start": "node server.js",
     "lint": "next lint",
-    "heroku-postbuild": "npm run build"
+    "heroku-postbuild": "npm install --legacy-peer-deps && npm run build"
   },
   "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=9.0.0"
+    "node": "18.x",
+    "npm": "9.x"
   },
   "dependencies": {
     "@cetusprotocol/aggregator-sdk": "^0.6.0",
