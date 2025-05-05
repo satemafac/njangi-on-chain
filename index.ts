@@ -31,8 +31,8 @@ async function main() {
       return;
     }
     
-    // Handle POST request to /get-salt endpoint
-    if (req.method === "POST" && parsedUrl.pathname === "/get-salt") {
+    // Handle POST request to /get-salt endpoint or root path
+    if (req.method === "POST" && (parsedUrl.pathname === "/get-salt" || parsedUrl.pathname === "/")) {
       let body = "";
       req.on("data", chunk => {
         body += chunk.toString();
