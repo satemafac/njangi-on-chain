@@ -28,8 +28,12 @@ export default async function handler(
       });
     }
 
+    console.log(`[DEBUG] Checking pending request for circle: ${circleId}, user: ${userAddress}`);
+
     // Check if user has a pending request
     const hasPendingRequest = await joinRequestDatabase.checkPendingRequest(circleId, userAddress);
+    
+    console.log(`[DEBUG] Pending request check result: ${hasPendingRequest}`);
 
     return res.status(200).json({
       success: true,

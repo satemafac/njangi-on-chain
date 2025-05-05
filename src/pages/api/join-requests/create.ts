@@ -26,6 +26,8 @@ export default async function handler(
       });
     }
 
+    console.log(`[DEBUG] Creating join request for circle: ${circleId}, user: ${userAddress}`);
+
     // Create the join request with explicit status
     const joinRequest = await joinRequestDatabase.createJoinRequest(
       circleId,
@@ -34,6 +36,11 @@ export default async function handler(
       userName || 'Anonymous',
       'pending' // Explicitly set status to 'pending'
     );
+
+    console.log(`[DEBUG] Join request created successfully: ${joinRequest ? `ID: ${joinRequest.id}` : 'No ID returned'}`);
+    if (joinRequest) {
+      console.log(`[DEBUG] Join request details:`, JSON.stringify(joinRequest));
+    }
 
     return res.status(200).json({
       success: true,
