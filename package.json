@@ -2,17 +2,16 @@
   "name": "njangi-on-chain",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build",
-    "start": "node server.js",
+    "start": "next start -p $PORT",
     "lint": "next lint",
-    "heroku-postbuild": "npm install --legacy-peer-deps && npm run build"
+    "heroku-postbuild": "npm run build"
   },
   "engines": {
-    "node": "18.x",
-    "npm": "9.x"
+    "node": "20.x",
+    "npm": "10.x"
   },
   "dependencies": {
     "@cetusprotocol/aggregator-sdk": "^0.6.0",
