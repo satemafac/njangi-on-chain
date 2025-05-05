@@ -1283,8 +1283,181 @@ export default function ContributeToCircle() {
     }
   };
 
+  // Add a function to check if the user has contributed for the current cycle
+  const checkUserContribution = async () => {
+    if (!circle || !circle.id || !userAddress) return;
+    
+    console.log(`[Contribution Check] Starting check for user ${userAddress} in circle ${circle.id} for cycle ${currentCycle}`);
+    
+    try {
+      const client = new SuiClient({ url: getJsonRpcUrl() });
+      let hasContributed = false;
+      
+      // 1. Check ContributionMade events
+      const contributionEvents = await client.queryEvents({
+        query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::ContributionMade` },
+        limit: 100
+      });
+      
+      console.log(`[Contribution Check] Found ${contributionEvents.data.length} ContributionMade events`);
+      
+      for (const event of contributionEvents.data) {
+        if (event.parsedJson && typeof event.parsedJson === 'object') {
+          const data = event.parsedJson as {
+            circle_id?: string;
+            member?: string;
+            cycle?: string | number;
+          };
+          
+          const eventCycle = typeof data.cycle === 'string' ? parseInt(data.cycle, 10) : data.cycle;
+          
+          if (data.circle_id === circle.id && 
+              data.member === userAddress && 
+              eventCycle === currentCycle) {
+            hasContributed = true;
+            console.log(`[Contribution Check] MATCH: Found ContributionMade for user ${userAddress} in cycle ${currentCycle}`);
+            break;
+          }
+        }
+      }
+      
+      // 2. Check StablecoinContributionMade events
+      if (!hasContributed) {
+        const stablecoinEvents = await client.queryEvents({
+          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::StablecoinContributionMade` },
+          limit: 100
+        });
+        
+        console.log(`[Contribution Check] Found ${stablecoinEvents.data.length} StablecoinContributionMade events`);
+        
+        for (const event of stablecoinEvents.data) {
+          if (event.parsedJson && typeof event.parsedJson === 'object') {
+            const data = event.parsedJson as {
+              circle_id?: string;
+              member?: string;
+              cycle?: string | number;
+            };
+            
+            const eventCycle = typeof data.cycle === 'string' ? parseInt(data.cycle, 10) : data.cycle;
+            
+            if (data.circle_id === circle.id && 
+                data.member === userAddress) {
+              // If cycle is specified, check it matches current cycle
+              if (eventCycle !== undefined) {
+                if (eventCycle === currentCycle) {
+                  hasContributed = true;
+                  console.log(`[Contribution Check] MATCH: Found StablecoinContributionMade for user ${userAddress} in cycle ${currentCycle}`);
+                  break;
+                }
+              } else {
+                // If cycle is not specified, assume it's for the current cycle
+                hasContributed = true;
+                console.log(`[Contribution Check] MATCH: Found StablecoinContributionMade for user ${userAddress} (cycle not specified)`);
+                break;
+              }
+            }
+          }
+        }
+      }
+      
+      // 3. If not found in other events, try CustodyDeposited events
+      if (!hasContributed) {
+        const custodyEvents = await client.queryEvents({
+          query: { MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited` },
+          limit: 100
+        });
+        
+        console.log(`[Contribution Check] Found ${custodyEvents.data.length} CustodyDeposited events`);
+        
+        for (const event of custodyEvents.data) {
+          if (event.parsedJson && typeof event.parsedJson === 'object') {
+            const data = event.parsedJson as {
+              circle_id?: string;
+              member?: string;
+              operation_type?: number | string;
+              timestamp?: string;
+            };
+            
+            const opType = typeof data.operation_type === 'string' 
+              ? parseInt(data.operation_type, 10) 
+              : data.operation_type;
+              
+            if (data.circle_id === circle.id && 
+                data.member === userAddress && 
+                opType === 0) { // 0 = contribution
+              
+              // Check if we can determine which cycle this belongs to
+              // For now, assume all contribution operations are for the current cycle
+              hasContributed = true;
+              console.log(`[Contribution Check] MATCH: Found CustodyDeposited with operation_type=0 for user ${userAddress}`);
+              break;
+            }
+          }
+        }
+      }
+      
+      // 4. Check CustodyTransaction events (for maximum coverage)
+      if (!hasContributed) {
+        const txEvents = await client.queryEvents({
+          query: { MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyTransaction` },
+          limit: 100
+        });
+        
+        console.log(`[Contribution Check] Found ${txEvents.data.length} CustodyTransaction events`);
+        
+        for (const event of txEvents.data) {
+          if (event.parsedJson && typeof event.parsedJson === 'object') {
+            const txData = event.parsedJson as {
+              operation_type?: number | string;
+              user?: string;
+              circle_id?: string;
+            };
+            
+            const opType = typeof txData.operation_type === 'string'
+              ? parseInt(txData.operation_type, 10)
+              : txData.operation_type;
+            
+            // Check if this is a contribution transaction
+            if (txData.user === userAddress && opType === 0) {
+              // If circle_id is present, check it matches, otherwise assume it does
+              if (txData.circle_id === undefined || txData.circle_id === circle.id) {
+                hasContributed = true;
+                console.log(`[Contribution Check] MATCH: Found CustodyTransaction with operation_type=0 for user ${userAddress}`);
+                break;
+              }
+            }
+          }
+        }
+      }
+      
+      console.log(`[Contribution Check] Final result for user ${userAddress}: ${hasContributed ? 'HAS contributed' : 'has NOT contributed'}`);
+      setUserHasContributed(hasContributed);
+      
+      // Return the result for immediate use
+      return hasContributed;
+    } catch (error) {
+      console.error("Error checking user contributions:", error);
+      return false;
+    }
+  };
+
+  // Call this function when circle data or userAddress changes
+  useEffect(() => {
+    if (circle && userAddress) {
+      checkUserContribution();
+    }
+  }, [circle, userAddress, currentCycle]);
+
+  // Update the handleContribute function to double-check contribution status before proceeding
   const handleContribute = async () => {
     if (!circle || !userAddress) return;
+    
+    // Double-check if user has already contributed for this cycle
+    const alreadyContributed = await checkUserContribution();
+    if (alreadyContributed) {
+      toast.error('You have already contributed for this cycle.');
+      return;
+    }
     
     setIsProcessing(true);
     try {
@@ -1828,6 +2001,13 @@ export default function ContributeToCircle() {
   const handleDirectUsdcDeposit = async () => {
     if (!circle || !userAddress || !userUsdcBalance) return;
     
+    // Double-check if user has already contributed for this cycle
+    const alreadyContributed = await checkUserContribution();
+    if (alreadyContributed) {
+      toast.error('You have already contributed for this cycle.');
+      return;
+    }
+    
     setDirectDepositProcessing(true);
     
     try {
@@ -1900,83 +2080,6 @@ export default function ContributeToCircle() {
     }
   };
 
-  // Add a function to check if the user has contributed for the current cycle
-  const checkUserContribution = async () => {
-    if (!circle || !circle.id || !userAddress) return;
-    
-    try {
-      const client = new SuiClient({ url: getJsonRpcUrl() });
-      let hasContributed = false;
-      
-      // Check ContributionMade events
-      const contributionEvents = await client.queryEvents({
-        query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::ContributionMade` },
-        limit: 100
-      });
-      
-      for (const event of contributionEvents.data) {
-        if (event.parsedJson && typeof event.parsedJson === 'object') {
-          const data = event.parsedJson as {
-            circle_id?: string;
-            member?: string;
-            cycle?: string | number;
-          };
-          
-          const eventCycle = typeof data.cycle === 'string' ? parseInt(data.cycle, 10) : data.cycle;
-          
-          if (data.circle_id === circle.id && 
-              data.member === userAddress && 
-              eventCycle === currentCycle) {
-            hasContributed = true;
-            console.log("User has already contributed for this cycle");
-            break;
-          }
-        }
-      }
-      
-      // If not found in ContributionMade, try CustodyDeposited events
-      if (!hasContributed) {
-        const custodyEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited` },
-          limit: 100
-        });
-        
-        for (const event of custodyEvents.data) {
-          if (event.parsedJson && typeof event.parsedJson === 'object') {
-            const data = event.parsedJson as {
-              circle_id?: string;
-              member?: string;
-              operation_type?: number | string;
-            };
-            
-            const opType = typeof data.operation_type === 'string' 
-              ? parseInt(data.operation_type, 10) 
-              : data.operation_type;
-              
-            if (data.circle_id === circle.id && 
-                data.member === userAddress && 
-                opType === 0) { // 0 = contribution
-              hasContributed = true;
-              console.log("User has already contributed for this cycle (found in CustodyDeposited)");
-              break;
-            }
-          }
-        }
-      }
-      
-      setUserHasContributed(hasContributed);
-    } catch (error) {
-      console.error("Error checking user contributions:", error);
-    }
-  };
-
-  // Call this function when circle data or userAddress changes
-  useEffect(() => {
-    if (circle && userAddress) {
-      checkUserContribution();
-    }
-  }, [circle, userAddress, currentCycle]);
-
   // Modify the renderContributionOptions function
   const renderContributionOptions = () => {
     return (
@@ -2029,7 +2132,9 @@ export default function ContributeToCircle() {
                 <div className="mt-3">
                   <button
                     onClick={handleDirectUsdcDeposit}
-                    disabled={directDepositProcessing || (userDepositPaid && !circle?.isActive)}
+                    disabled={directDepositProcessing || 
+                            (userDepositPaid && !circle?.isActive) || 
+                            userHasContributed}
                     className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
                   >
                     {directDepositProcessing ? (
@@ -2042,6 +2147,8 @@ export default function ContributeToCircle() {
                       </span>
                     ) : !userDepositPaid ? (
                       `Deposit ${circle?.securityDepositUsd?.toFixed(2)} USDC as Security Deposit`
+                    ) : userHasContributed ? (
+                      `Already Contributed`
                     ) : (
                       `Contribute ${circle?.contributionAmountUsd?.toFixed(2)} USDC Directly`
                     )}
