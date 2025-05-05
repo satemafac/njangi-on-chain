@@ -10,6 +10,7 @@ const nextConfig = {
     dangerouslyAllowSVG: true,
     contentDispositionType: 'attachment',
     contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
+    unoptimized: process.env.NODE_ENV === 'production', // Use unoptimized images in production
   },
   // Handle CORS for API routes
   async headers() {
@@ -25,7 +26,11 @@ const nextConfig = {
         ]
       }
     ]
-  }
+  },
+  // Handle trailing slash for Heroku
+  trailingSlash: false,
+  // Disable sourcemaps in production
+  productionBrowserSourceMaps: false,
 };
 
 module.exports = nextConfig; 
