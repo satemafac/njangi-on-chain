@@ -90,7 +90,7 @@ ENV USE_POSTGRES=true
 ENV ENCRYPTION_KEY="dW1teV9lbmNyeXB0aW9uX2tleQ=="
 
 # Create a simple entry point file
-RUN echo 'import { getDatabaseAdapter } from "./src/services/postgres-adapter";\n\n// Initialize the database\nasync function main() {\n  const adapter = await getDatabaseAdapter();\n  await adapter.setup();\n  console.log("Salt service database initialized");\n}\n\nmain().catch(console.error);' > index.ts
+RUN echo 'import { getDatabaseAdapter } from "./src/services/postgres-adapter";\nimport * as http from "http";\n\n// Initialize the database\nasync function main() {\n  const adapter = await getDatabaseAdapter();\n  await adapter.setup();\n  console.log("Salt service database initialized");\n  \n  // Create a minimal HTTP server to keep the process running\n  const server = http.createServer((req, res) => {\n    res.writeHead(200, { "Content-Type": "text/plain" });\n    res.end("Salt service is running");\n  });\n  \n  const port = process.env.PORT || 5002;\n  server.listen(port, () => {\n    console.log(`Salt service running on port ${port}`);\n  });\n}\n\nmain().catch(console.error);' > index.ts
 
 # Start the service with transpile-only to ignore TypeScript errors
 CMD ["npx", "ts-node", "--transpile-only", "index.ts"] 
