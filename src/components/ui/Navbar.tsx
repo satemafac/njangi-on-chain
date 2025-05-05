@@ -6,7 +6,6 @@ import { Bell } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useRouter } from 'next/router';
 import type { JoinRequest } from '@/services/database-service';
-import joinRequestService from '@/services/join-request-service';
 
 export const Navbar: React.FC = () => {
   const { logout, account } = useAuth();
@@ -22,7 +21,7 @@ export const Navbar: React.FC = () => {
     
     try {
       setLoading(true);
-      console.log('Fetching join requests...');
+      console.log('[Navbar] Fetching join requests...');
       
       // Get only admin circles from localStorage
       const storedCircles = localStorage.getItem('adminCircles');
@@ -32,11 +31,11 @@ export const Navbar: React.FC = () => {
         try {
           adminCircleIds = JSON.parse(storedCircles);
         } catch (e) {
-          console.error('Error parsing stored admin circles:', e);
+          console.error('[Navbar] Error parsing stored admin circles:', e);
         }
       }
       
-      console.log('Admin circle IDs:', adminCircleIds);
+      console.log('[Navbar] Admin circle IDs:', adminCircleIds);
       
       // Only fetch requests for circles where the user is an admin
       const allRequests: JoinRequest[] = [];
@@ -45,22 +44,49 @@ export const Navbar: React.FC = () => {
       if (adminCircleIds.length > 0) {
         for (const circleId of adminCircleIds) {
           try {
-            console.log(`Fetching requests for admin circle: ${circleId}`);
-            const requests = await joinRequestService.getPendingRequestsByCircleId(circleId);
-            console.log(`Received ${requests.length} requests for circle ${circleId}`);
-            allRequests.push(...requests);
+            console.log(`[Navbar] Fetching requests for admin circle: ${circleId}`);
+            const response = await fetch(`/api/join-requests/pending/${circleId}`);
+            if (!response.ok) {
+              console.error(`[Navbar] Error response from API for circle ${circleId}:`, response.status, response.statusText);
+              continue;
+            }
+            
+            const data = await response.json();
+            console.log(`[Navbar] API response for circle ${circleId}:`, data);
+            
+            if (data.success && Array.isArray(data.data)) {
+              console.log(`[Navbar] Received ${data.data.length} requests for circle ${circleId}`);
+              allRequests.push(...data.data);
+            } else {
+              console.error(`[Navbar] Invalid response format for circle ${circleId}:`, data);
+            }
           } catch (error) {
-            console.error(`Failed to fetch requests for circle ${circleId}:`, error);
+            console.error(`[Navbar] Failed to fetch requests for circle ${circleId}:`, error);
           }
         }
       } 
       // Fallback approach: Try to use the circle ID from the URL ONLY if we're on a circle management page
       else if (router.pathname.includes('/circle') && router.pathname.includes('/manage') && router.query.id && typeof router.query.id === 'string') {
         const circleId = router.query.id;
-        console.log(`Fallback: Fetching requests for circle from URL: ${circleId}`);
-        const requests = await joinRequestService.getPendingRequestsByCircleId(circleId);
-        console.log(`Received ${requests.length} requests for circle ${circleId}`);
-        allRequests.push(...requests);
+        console.log(`[Navbar] Fallback: Fetching requests for circle from URL: ${circleId}`);
+        try {
+          const response = await fetch(`/api/join-requests/pending/${circleId}`);
+          if (!response.ok) {
+            console.error(`[Navbar] Error response from API for circle ${circleId}:`, response.status, response.statusText);
+          } else {
+            const data = await response.json();
+            console.log(`[Navbar] API response for circle ${circleId}:`, data);
+            
+            if (data.success && Array.isArray(data.data)) {
+              console.log(`[Navbar] Received ${data.data.length} requests for circle ${circleId}`);
+              allRequests.push(...data.data);
+            } else {
+              console.error(`[Navbar] Invalid response format for circle ${circleId}:`, data);
+            }
+          }
+        } catch (error) {
+          console.error(`[Navbar] Failed to fetch requests for circle ${circleId}:`, error);
+        }
       }
       
       // Sort by request date, newest first
@@ -69,11 +95,11 @@ export const Navbar: React.FC = () => {
         const dateB = new Date(b.created_at || 0).getTime();
         return dateB - dateA;
       });
-      console.log('Final pending requests:', allRequests);
+      console.log('[Navbar] Final pending requests:', allRequests);
       setPendingRequests(allRequests);
       
     } catch (error) {
-      console.error('Failed to fetch pending requests:', error);
+      console.error('[Navbar] Failed to fetch pending requests:', error);
     } finally {
       setLoading(false);
     }

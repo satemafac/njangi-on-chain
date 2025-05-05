@@ -30,6 +30,8 @@ export class JoinRequestDatabase {
     status: 'pending' | 'approved' | 'rejected' = 'pending'
   ): Promise<JoinRequest | null> {
     try {
+      console.log(`[DB] Creating join request: circle=${circleId}, user=${userAddress}, status=${status}`);
+      
       const result = await pool.query(
         `INSERT INTO join_requests 
          (circle_id, circle_name, user_address, user_name, status) 
@@ -44,9 +46,15 @@ export class JoinRequestDatabase {
         [circleId, circleName, userAddress, userName, status]
       );
 
+      if (result.rows[0]) {
+        console.log(`[DB] Successfully created/updated join request with ID: ${result.rows[0].id}`);
+      } else {
+        console.log(`[DB] No rows returned after join request creation/update`);
+      }
+
       return result.rows[0] as JoinRequest;
     } catch (error) {
-      console.error('Error creating join request:', error);
+      console.error('[DB] Error creating join request:', error);
       return null;
     }
   }
@@ -54,6 +62,8 @@ export class JoinRequestDatabase {
   // Get all pending requests for a circle
   async getPendingRequestsByCircleId(circleId: string): Promise<JoinRequest[]> {
     try {
+      console.log(`[DB] Fetching pending requests for circle: ${circleId}`);
+      
       const result = await pool.query(
         `SELECT * FROM join_requests 
          WHERE circle_id = $1 AND status = 'pending'
@@ -61,9 +71,11 @@ export class JoinRequestDatabase {
         [circleId]
       );
 
+      console.log(`[DB] Found ${result.rows.length} pending requests for circle: ${circleId}`);
+      
       return result.rows as JoinRequest[];
     } catch (error) {
-      console.error('Error getting pending requests:', error);
+      console.error('[DB] Error getting pending requests:', error);
       return [];
     }
   }
@@ -71,15 +83,20 @@ export class JoinRequestDatabase {
   // Check if a user has a pending request for a circle
   async checkPendingRequest(circleId: string, userAddress: string): Promise<boolean> {
     try {
+      console.log(`[DB] Checking pending request for circle: ${circleId}, user: ${userAddress}`);
+      
       const result = await pool.query(
         `SELECT id FROM join_requests 
          WHERE circle_id = $1 AND user_address = $2 AND status = 'pending'`,
         [circleId, userAddress]
       );
 
-      return result.rows.length > 0;
+      const hasPending = result.rows.length > 0;
+      console.log(`[DB] Pending request check result for ${userAddress}: ${hasPending}`);
+      
+      return hasPending;
     } catch (error) {
-      console.error('Error checking pending request:', error);
+      console.error('[DB] Error checking pending request:', error);
       return false;
     }
   }

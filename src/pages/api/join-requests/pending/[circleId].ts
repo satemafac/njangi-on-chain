@@ -26,8 +26,15 @@ export default async function handler(
       });
     }
 
+    console.log(`[DEBUG] Fetching pending requests for circle ID: ${circleId}`);
+    
     // Get only pending requests for this circle ID
     const requests = await joinRequestDatabase.getPendingRequestsByCircleId(circleId);
+    
+    console.log(`[DEBUG] Found ${requests.length} pending requests for circle ${circleId}`);
+    if (requests.length > 0) {
+      console.log(`[DEBUG] Request sample:`, JSON.stringify(requests[0]));
+    }
 
     // Return the pending requests
     return res.status(200).json({
