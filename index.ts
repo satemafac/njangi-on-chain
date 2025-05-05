@@ -151,13 +151,20 @@ async function main() {
 
 // Helper function to generate a random salt
 function generateRandomSalt() {
-  const length = 32; // 256 bits
-  const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let result = "";
-  const charactersLength = characters.length;
-  for (let i = 0; i < length; i++) {
-    result += characters.charAt(Math.floor(Math.random() * charactersLength));
+  // Generate a random number between 0 and 2^128-1
+  const bytes = new Uint8Array(16); // 16 bytes = 128 bits
+  
+  // Generate random bytes
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = Math.floor(Math.random() * 256);
   }
+  
+  // Convert to a decimal string
+  let result = "0";
+  for (let i = 0; i < bytes.length; i++) {
+    result = (BigInt(result) * 256n + BigInt(bytes[i])).toString();
+  }
+  
   return result;
 }
 
