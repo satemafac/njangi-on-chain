@@ -55,14 +55,41 @@ async function main() {
           
           console.log("Parsed request data:", data);
           
-          // Look for sub/aud in various places
-          const sub = data.sub || data.subject || data.id || 
-                     (data.payload && data.payload.sub) || 
-                     (data.jwt && data.jwt.sub);
-                     
-          const aud = data.aud || data.audience || data.clientId || 
-                     (data.payload && data.payload.aud) || 
-                     (data.jwt && data.jwt.aud);
+          // Extract sub and aud from the data
+          let sub, aud;
+          
+          // Check if the request contains a JWT token
+          if (data.token) {
+            try {
+              // Extract payload from JWT token (without verification)
+              const tokenParts = data.token.split('.');
+              if (tokenParts.length === 3) {
+                // Decode the payload (middle part)
+                const payloadJson = Buffer.from(tokenParts[1], 'base64').toString('utf8');
+                const payload = JSON.parse(payloadJson);
+                console.log("Extracted JWT payload:", payload);
+                
+                // Extract sub and aud from JWT payload
+                sub = payload.sub;
+                aud = payload.aud || payload.client_id || data.client_id;
+              }
+            } catch (tokenError) {
+              console.error("Error extracting JWT payload:", tokenError);
+            }
+          }
+          
+          // If not found in JWT token, look in other common locations
+          if (!sub) {
+            sub = data.sub || data.subject || data.id || 
+                 (data.payload && data.payload.sub) || 
+                 (data.jwt && data.jwt.sub);
+          }
+          
+          if (!aud) {
+            aud = data.aud || data.audience || data.clientId || 
+                 (data.payload && data.payload.aud) || 
+                 (data.jwt && data.jwt.aud);
+          }
           
           console.log("Extracted sub:", sub, "aud:", aud);
           
