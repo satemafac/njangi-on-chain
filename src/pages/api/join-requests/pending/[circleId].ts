@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import joinRequestDatabase, { JoinRequest } from '../../../services/join-request-database';
+import joinRequestDatabase, { JoinRequest } from '../../../../services/join-request-database';
 
 type ResponseData = {
   success: boolean;
@@ -26,19 +26,19 @@ export default async function handler(
       });
     }
 
-    // Get all requests for this circle ID
-    const requests = await joinRequestDatabase.getRequestsByCircleId(circleId);
+    // Get only pending requests for this circle ID
+    const requests = await joinRequestDatabase.getPendingRequestsByCircleId(circleId);
 
-    // Return the requests
+    // Return the pending requests
     return res.status(200).json({
       success: true,
       data: requests
     });
   } catch (error) {
-    console.error('Error fetching join requests:', error);
+    console.error('Error fetching pending join requests:', error);
     return res.status(500).json({
       success: false,
-      message: 'Failed to fetch join requests'
+      message: 'Failed to fetch pending join requests'
     });
   }
 } 

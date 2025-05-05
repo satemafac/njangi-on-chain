@@ -11,35 +11,34 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ResponseData>
 ) {
-  const { userAddress } = req.query;
-
-  if (!userAddress || typeof userAddress !== 'string') {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'Invalid user address' 
-    });
+  if (req.method !== 'GET') {
+    return res.status(405).json({ success: false, message: 'Method not allowed' });
   }
 
-  if (req.method === 'GET') {
-    try {
-      // Get all requests for this user
-      const requests = await joinRequestDatabase.getRequestsByUserAddress(userAddress);
-      
-      return res.status(200).json({
-        success: true,
-        data: requests
-      });
-    } catch (error) {
-      console.error('API error getting user join requests:', error);
-      return res.status(500).json({
+  try {
+    const { userAddress } = req.query;
+
+    // Validate required parameter
+    if (!userAddress || typeof userAddress !== 'string') {
+      return res.status(400).json({
         success: false,
-        message: 'Internal server error'
+        message: 'Missing or invalid user address'
       });
     }
-  } else {
-    return res.status(405).json({ 
-      success: false, 
-      message: 'Method not allowed' 
+
+    // Get all requests for this user
+    const requests = await joinRequestDatabase.getRequestsByUserAddress(userAddress);
+
+    // Return the requests
+    return res.status(200).json({
+      success: true,
+      data: requests
+    });
+  } catch (error) {
+    console.error('Error fetching user join requests:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch user join requests'
     });
   }
 } 
