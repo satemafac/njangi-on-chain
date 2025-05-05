@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import joinRequestDatabase, { JoinRequest } from '../../../../services/join-request-database';
+import joinRequestDatabase, { JoinRequest } from '../../../services/join-request-database';
 
 type ResponseData = {
   success: boolean;
@@ -11,26 +11,26 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ResponseData>
 ) {
-  const { userAddress } = req.query;
+  const { circleId } = req.query;
 
-  if (!userAddress || typeof userAddress !== 'string') {
+  if (!circleId || typeof circleId !== 'string') {
     return res.status(400).json({ 
       success: false, 
-      message: 'Invalid user address' 
+      message: 'Invalid circle ID' 
     });
   }
 
   if (req.method === 'GET') {
     try {
-      // Get all requests for this user
-      const requests = await joinRequestDatabase.getRequestsByUserAddress(userAddress);
+      // Get all pending requests for this circle
+      const requests = await joinRequestDatabase.getPendingRequestsByCircleId(circleId);
       
       return res.status(200).json({
         success: true,
         data: requests
       });
     } catch (error) {
-      console.error('API error getting user join requests:', error);
+      console.error('API error getting join requests:', error);
       return res.status(500).json({
         success: false,
         message: 'Internal server error'

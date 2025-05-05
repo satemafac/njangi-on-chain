@@ -63,6 +63,18 @@ export class PostgresAdapter implements DatabaseAdapter {
             FOREIGN KEY(salt_id) 
             REFERENCES salts(id)
         );
+
+        CREATE TABLE IF NOT EXISTS join_requests (
+          id SERIAL PRIMARY KEY,
+          circle_id TEXT NOT NULL,
+          circle_name TEXT NOT NULL,
+          user_address TEXT NOT NULL,
+          user_name TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(circle_id, user_address)
+        );
       `);
 
       console.log('PostgreSQL database initialized');

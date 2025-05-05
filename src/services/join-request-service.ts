@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { JoinRequest } from './database-service';
+import { JoinRequest } from './join-request-database';
 
 class JoinRequestService {
   // Create a new join request
@@ -46,7 +46,7 @@ class JoinRequestService {
   async checkPendingRequest(circleId: string, userAddress: string): Promise<boolean> {
     try {
       const requests = await this.getPendingRequestsByCircleId(circleId);
-      return requests.some(req => req.userAddress === userAddress && req.status === 'pending');
+      return requests.some(req => req.user_address === userAddress && req.status === 'pending');
     } catch (error) {
       console.error('Error checking pending request:', error);
       return false;
