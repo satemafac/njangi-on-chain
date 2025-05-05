@@ -6,7 +6,6 @@ import { toast } from 'react-hot-toast';
 import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
-import joinRequestService from '../../../../services/join-request-service';
 import { JoinRequest } from '../../../../services/database-service';
 import { PACKAGE_ID } from '../../../../services/circle-service';
 import StablecoinSwapForm from '../../../../components/StablecoinSwapForm';
@@ -968,36 +967,59 @@ export default function ManageCircle() {
       title: 'Approve All Pending Requests',
       message: `Are you sure you want to approve all ${pendingRequests.length} pending join requests? This will add all these members to your circle.`,
       onConfirm: async () => {
+        const bulkApproveToastId = 'bulk-approve-toast';
         try {
+          toast.loading('Processing bulk approval...', { id: bulkApproveToastId });
           // Extract all the member addresses from pending requests
           const memberAddresses = pendingRequests.map(req => req.user_address);
           
-          // Call the bulk approval method
+          // Call the bulk approval method on the blockchain
+          console.log(`[ManagePage] Calling blockchain bulk approve for ${memberAddresses.length} members`);
           const blockchainSuccess = await callAdminApproveMembers(
             pendingRequests[0].circle_id, // All requests are for the same circle
             memberAddresses
           );
           
           if (!blockchainSuccess) {
-            toast.error('Failed to approve members on blockchain. Please try again.');
+            console.error('[ManagePage] Blockchain bulk approval failed');
+            toast.error('Failed to approve members on blockchain. Please try again.', { id: bulkApproveToastId });
             return;
           }
+          console.log('[ManagePage] Blockchain bulk approval successful');
           
-          // Update all requests in the database
-          let allSuccessful = true;
+          // Update all requests in the database via API
+          let allDbUpdatesSuccessful = true;
+          console.log(`[ManagePage] Starting database updates for ${pendingRequests.length} requests`);
           for (const request of pendingRequests) {
-            const success = await joinRequestService.updateJoinRequestStatus(
-              request.circle_id,
-              request.user_address,
-              'approved'
-            );
-            
-            if (!success) {
-              allSuccessful = false;
+            console.log(`[ManagePage] Updating status for user ${request.user_address} to 'approved'`);
+            try {
+              // *** USE API CALL INSTEAD OF SERVICE ***
+              const response = await fetch(`/api/join-requests/${request.circle_id}/update`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  userAddress: request.user_address,
+                  status: 'approved'
+                })
+              });
+              
+              const result = await response.json();
+              
+              if (!response.ok || !result.success) {
+                console.error(`[ManagePage] Failed DB update for ${request.user_address}:`, result);
+                allDbUpdatesSuccessful = false;
+                // Continue trying other requests even if one fails
+              } else {
+                console.log(`[ManagePage] Successfully updated DB status for ${request.user_address}`);
+              }
+            } catch (apiError) {
+              console.error(`[ManagePage] API error updating status for ${request.user_address}:`, apiError);
+              allDbUpdatesSuccessful = false;
             }
           }
           
-          if (allSuccessful) {
+          if (allDbUpdatesSuccessful) {
+            console.log('[ManagePage] All database updates successful. Updating UI.');
             // Add all members to the UI
             const currentTimestamp = Date.now();
             const newMembers = pendingRequests.map(req => ({
@@ -1016,18 +1038,19 @@ export default function ManageCircle() {
               });
             }
             
-            // Clear all pending requests
+            // Clear all pending requests from UI
             setPendingRequests([]);
             
-            toast.success(`Successfully approved all ${pendingRequests.length} member requests`);
+            toast.success(`Successfully approved all ${pendingRequests.length} member requests`, { id: bulkApproveToastId });
           } else {
+            console.warn('[ManagePage] Some DB updates failed. Refreshing pending list.');
             // Refresh the pending requests to get the current state
             await fetchPendingRequests();
-            toast.error('Some requests could not be updated in the database. Please refresh to see current status.');
+            toast.error('Some requests could not be updated. Please check the list.', { id: bulkApproveToastId, duration: 5000 });
           }
         } catch (error: unknown) {
-          console.error('Error handling bulk approval:', error);
-          toast.error('Failed to process bulk approval');
+          console.error('[ManagePage] Error handling bulk approval:', error);
+          toast.error('Failed to process bulk approval', { id: bulkApproveToastId });
         }
       },
       confirmText: 'Approve All',

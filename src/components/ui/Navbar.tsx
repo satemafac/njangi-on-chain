@@ -198,7 +198,7 @@ export const Navbar: React.FC = () => {
                           {pendingRequests.map((request) => (
                             <div 
                               key={`${request.circle_id}-${request.user_address}`}
-                              className="cursor-pointer p-4 hover:bg-gray-50 dark:hover:bg-gray-700"
+                              className="cursor-pointer p-4 hover:bg-gray-50 dark:hover:bg-gray-600"
                               onClick={() => {
                                 router.push(`/circle/${request.circle_id}`);
                                 setShowNotifications(false);
