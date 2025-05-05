@@ -4,8 +4,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { ArrowLeft, AlertCircle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { SuiClient } from '@mysten/sui/client';
-import { priceService } from '../../../../services/price-service';
-import joinRequestService from '../../../../services/join-request-service';
+import { priceService } from '@/services/price-service';
 import { PACKAGE_ID } from '../../../../services/circle-service';
 
 // Define Circle type
@@ -66,10 +65,10 @@ export default function JoinCircle() {
   const { isAuthenticated, userAddress, account } = useAuth();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
-  const [isJoining, setIsJoining] = useState(false);
   const [isMember, setIsMember] = useState(false);
-  const [requestSent, setRequestSent] = useState(false);
   const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
+  const [hasPendingRequest, setHasPendingRequest] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -350,39 +349,80 @@ export default function JoinCircle() {
     if (!id || !userAddress) return;
     
     try {
-      // Check if this user has a pending request for this circle using the service
-      const hasRequest = await joinRequestService.checkPendingRequest(id as string, userAddress);
-      setRequestSent(hasRequest);
-    } catch (error: unknown) {
-      console.error('Error checking pending requests:', error);
+      console.log(`[JoinPage] Checking if user ${userAddress} has pending request for circle ${id}`);
+      
+      const response = await fetch(`/api/join-requests/check?circleId=${id}&userAddress=${userAddress}`);
+      
+      if (!response.ok) {
+        console.error('[JoinPage] Failed to check pending request:', response.status, response.statusText);
+        return;
+      }
+      
+      const data = await response.json();
+      console.log('[JoinPage] Pending request check response:', data);
+      
+      if (data.success && data.data && data.data.hasPendingRequest) {
+        console.log('[JoinPage] User has a pending request, updating UI');
+        setHasPendingRequest(true);
+      } else {
+        console.log('[JoinPage] User does not have a pending request');
+        setHasPendingRequest(false);
+      }
+    } catch (error) {
+      console.error('[JoinPage] Error checking pending request:', error);
     }
   };
 
-  const handleJoinCircle = async () => {
-    if (!circle || !userAddress) return;
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     
-    setIsJoining(true);
+    if (!id || !userAddress || !account) {
+      return;
+    }
+
+    console.log(`[JoinPage] Submitting join request for circle ${id} and user ${userAddress}`);
+    
     try {
-      // Send join request using the service
-      const result = await joinRequestService.createJoinRequest(
-        circle.id,
-        circle.name,
-        userAddress,
-        account?.name || 'Unknown User'
-      );
+      // Show submitting state
+      setIsSubmitting(true);
+      toast.loading('Submitting join request...', {id: 'submit-request'});
       
-      if (result) {
-        // Update UI to show request was sent
-        setRequestSent(true);
-        toast.success('Your request to join has been sent to the admin!');
-      } else {
-        toast.error('Failed to send join request');
+      // Make API call to create join request
+      const response = await fetch('/api/join-requests/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          circleId: id,
+          circleName: circle?.name || 'Unknown Circle',
+          userAddress: userAddress,
+          userName: account.name || 'Anonymous',
+        }),
+      });
+      
+      if (!response.ok) {
+        console.error('[JoinPage] Failed to create join request:', response.status, response.statusText);
+        toast.error('Failed to submit join request. Please try again.', {id: 'submit-request'});
+        return;
       }
-    } catch (error: unknown) {
-      console.error('Error sending join request:', error);
-      toast.error('Failed to send join request');
+      
+      const data = await response.json();
+      console.log('[JoinPage] Join request creation response:', data);
+      
+      if (data.success) {
+        // Update UI state
+        setHasPendingRequest(true);
+        toast.success('Join request submitted successfully', {id: 'submit-request'});
+        
+        // Recheck pending request status to confirm
+        setTimeout(checkPendingRequest, 1000);
+      } else {
+        toast.error(data.message || 'Failed to submit join request', {id: 'submit-request'});
+      }
+    } catch (error) {
+      console.error('[JoinPage] Error submitting join request:', error);
+      toast.error('An error occurred. Please try again.', {id: 'submit-request'});
     } finally {
-      setIsJoining(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -561,7 +601,7 @@ export default function JoinCircle() {
                       </p>
                     </div>
                     
-                    {requestSent ? (
+                    {hasPendingRequest ? (
                       <div className="bg-blue-50 p-4 rounded-md mb-6 flex items-start">
                         <AlertCircle className="w-5 h-5 text-blue-500 mr-2 flex-shrink-0 mt-0.5" />
                         <div>
@@ -574,11 +614,11 @@ export default function JoinCircle() {
                       </div>
                     ) : (
                       <button
-                        onClick={handleJoinCircle}
-                        disabled={isJoining || isMember || requestSent}
-                        className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all ${(isJoining || isMember || requestSent) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                        onClick={handleSubmit}
+                        disabled={isSubmitting || isMember || hasPendingRequest}
+                        className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all ${(isSubmitting || isMember || hasPendingRequest) ? 'opacity-70 cursor-not-allowed' : ''}`}
                       >
-                        {isJoining ? 'Sending Request...' : isMember ? 'Already a Member' : 'Request to Join Circle'}
+                        {isSubmitting ? 'Submitting Request...' : isMember ? 'Already a Member' : 'Request to Join Circle'}
                       </button>
                     )}
                   </div>

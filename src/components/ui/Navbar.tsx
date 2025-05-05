@@ -213,9 +213,9 @@ export const Navbar: React.FC = () => {
                                   className="rounded-full"
                                 />
                                 <div className="ml-3">
-                                  <p className="font-medium text-sm text-gray-900 dark:text-white">
-                                    {request.user_name} wants to join
-                                    <span className="font-bold"> {request.circle_name}</span>
+                                  <p className="font-medium text-sm text-gray-900">
+                                    <span className="font-semibold text-blue-600">{request.user_name}</span> wants to join
+                                    <span className="font-bold text-gray-800"> {request.circle_name}</span>
                                   </p>
                                   <div className="mt-2 text-xs text-gray-500">
                                     {new Date(request.created_at || 0).toLocaleDateString('en-US', {
