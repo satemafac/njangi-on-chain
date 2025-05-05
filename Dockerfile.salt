@@ -8,19 +8,50 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy package.json and package-lock.json
-COPY package*.json ./
+# Create minimal package.json for salt service dependencies
+RUN echo '{ \
+  "name": "zklogin-salt-service", \
+  "version": "1.0.0", \
+  "private": true, \
+  "dependencies": { \
+    "better-sqlite3": "^11.8.1", \
+    "cors": "^2.8.5", \
+    "express": "^4.18.3", \
+    "jose": "^5.2.3", \
+    "pg": "^8.11.3", \
+    "ts-node": "^10.9.2", \
+    "typescript": "^5.4.2" \
+  } \
+}' > package.json
 
 # Install dependencies
 RUN npm install
 
+# Create necessary directories
+RUN mkdir -p src/services
+
 # Copy source files
-COPY tsconfig.json ./
 COPY src/services/postgres-adapter.ts ./src/services/
 COPY src/services/persistent-salt-service.ts ./src/services/
 
+# Create tsconfig.json
+RUN echo '{ \
+  "compilerOptions": { \
+    "target": "ES2020", \
+    "module": "CommonJS", \
+    "esModuleInterop": true, \
+    "skipLibCheck": true, \
+    "forceConsistentCasingInFileNames": true, \
+    "strict": true \
+  } \
+}' > tsconfig.json
+
 # Expose the port
-EXPOSE $PORT
+EXPOSE ${PORT:-5002}
+
+# Set environment variables
+ENV NODE_ENV=production
+ENV USE_POSTGRES=true
 
 # Start the service
 CMD ["node", "--require", "ts-node/register", "src/services/persistent-salt-service.ts"] 
