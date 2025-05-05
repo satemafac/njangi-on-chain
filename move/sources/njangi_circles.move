@@ -13,26 +13,32 @@ module njangi::njangi_circles {
     use std::vector;
     use std::option::{Self, Option};
     use std::type_name;
+    use std::ascii;
     
     use njangi::njangi_core::{Self as core};
     use njangi::njangi_members::{Self as members, Member};
-    use njangi::njangi_custody::{Self as custody, CustodyWallet};
-    use njangi::njangi_circle_config as config;
+    use njangi::njangi_custody::{Self as custody, CustodyWallet, CoinDeposited, CustodyDeposited};
+    use njangi::njangi_circle_config::{Self as config};
+    use njangi::njangi_milestones::{Self as milestones, MilestoneData};
     
     use pyth::price_info::PriceInfoObject;
     use njangi::njangi_price_validator as price_validator;
     
     // ----------------------------------------------------------
-    // Error codes specific to circles
+    // Error codes
     // ----------------------------------------------------------
-    const ECircleNotActive: u64 = 60;
-    const ECircleHasActiveMembers: u64 = 37;
-    const ECircleHasContributions: u64 = 38;
-    const EPendingMembersExist: u64 = 41;
-    const EWalletCircleMismatch: u64 = 46;
-    const EMemberAlreadyExists: u64 = 55;
-    const ENotCircleMember: u64 = 61;
+    const ECircleFull: u64 = 5;
+    const EInsufficientDeposit: u64 = 6;
     const ENotAdmin: u64 = 7;
+    const EWalletCircleMismatch: u64 = 46;
+    const ECircleNotActive: u64 = 54;
+    // Define constants locally based on values from other modules
+    const EInvalidContributionAmount: u64 = 1; // From core
+    const ENotMember: u64 = 8;                 // From core
+    const EMemberNotActive: u64 = 14;          // From members
+    const EMemberSuspended: u64 = 13;          // From members
+    const EDepositAlreadyPaid: u64 = 21;       // From members
+    const EIncorrectDepositAmount: u64 = 2;    // From core
     
     // ----------------------------------------------------------
     // Main Circle struct
@@ -122,6 +128,15 @@ module njangi::njangi_circles {
         deposit_amount: u64,
     }
 
+    // Event struct defined within this module
+    public struct StablecoinContributionMade has copy, drop {
+        circle_id: ID,
+        member: address,
+        amount: u64, // Amount in stablecoin micro-units
+        cycle: u64,
+        coin_type: String, // Added coin type
+    }
+
     // ----------------------------------------------------------
     // Create Circle
     // ----------------------------------------------------------
@@ -161,11 +176,12 @@ module njangi::njangi_circles {
         assert!(max_members >= core::get_min_members() && max_members <= core::get_max_members(), 0);
         assert!(contribution_amount_scaled > 0, 1);
         assert!(security_deposit_scaled >= core::min_security_deposit(contribution_amount_scaled), 2);
-        assert!(cycle_length <= 2, 3);
+        assert!(cycle_length <= 3, 3); // Allow up to 3 (bi-weekly)
         assert!(
-            (cycle_length == 0 && cycle_day < 7)   // weekly
-            || (cycle_length > 0 && cycle_day < 28), // monthly/quarterly up to 28
-            4
+            (cycle_length == 0 && cycle_day < 7)   // weekly (weekday 0-6)
+            || (cycle_length == 3 && cycle_day < 7)   // bi-weekly (weekday 0-6)
+            || ((cycle_length == 1 || cycle_length == 2) && cycle_day > 0 && cycle_day <= 28), // monthly/quarterly (day 1-28)
+            4 // EInvalidCycleDay
         );
 
         // Get admin address
@@ -224,6 +240,14 @@ module njangi::njangi_circles {
         // Create the circle's custody wallet
         let circle_id = object::uid_to_inner(&circle.id);
         custody::create_custody_wallet(circle_id, current_time, ctx);
+        
+        // Wait for the CustodyWalletCreated event to occur
+        // In a real application, we would query for the wallet ID here
+        // Since we can't, the frontend will need to use events to get the wallet ID
+        
+        // We'll create a dynamic field with a known key to access the wallet ID later
+        // This field will be populated by wallet_id_updater or other modules
+        dynamic_field::add(&mut circle.id, string::utf8(b"wallet_id"), circle_id);
 
         // Automatically add the admin as a member
         let admin_member = members::create_member(
@@ -285,11 +309,29 @@ module njangi::njangi_circles {
         // Check if admin has paid deposit
         if (table::contains(&circle.members, circle.admin)) {
             let admin_member = table::borrow(&circle.members, circle.admin);
-            assert!(members::get_deposit_balance(admin_member) >= security_deposit, 21);
+            // Check the deposit_paid flag instead of balance
+            assert!(members::has_paid_deposit(admin_member), 21);
         };
         
-        // Check other members using our member checking helper function
-        check_all_members_have_security_deposit(circle);
+        // --- Check all other members directly using rotation_order --- 
+        let rotation = &circle.rotation_order;
+        let len = vector::length(rotation);
+        let mut i = 0;
+        while (i < len) {
+            let member_addr = *vector::borrow(rotation, i);
+            
+            // Skip the admin (already checked) and placeholder addresses
+            if (member_addr != circle.admin && member_addr != @0x0) {
+                // Ensure member exists in the table (should always be true if rotation_order is correct)
+                assert!(table::contains(&circle.members, member_addr), 8); 
+                
+                let member = table::borrow(&circle.members, member_addr);
+                // Assert that the member has paid the required security deposit using the flag
+                assert!(members::has_paid_deposit(member), 21);
+            };
+            i = i + 1;
+        };
+        // --- End of deposit check --- 
         
         // Set the circle to active
         circle.is_active = true;
@@ -312,35 +354,6 @@ module njangi::njangi_circles {
             circle_id: object::uid_to_inner(&circle.id),
             activated_by: sender,
         });
-    }
-    
-    // Helper function to check if all members have paid their security deposit
-    fun check_all_members_have_security_deposit(circle: &Circle): bool {
-        // Since we can't directly iterate through table entries in Move,
-        // we'll use a sample approach to check members
-        
-        let known_addresses = core::get_sample_addresses();
-        let len = vector::length(&known_addresses);
-        
-        // Get security deposit from config
-        let security_deposit = config::get_security_deposit(&circle.id);
-        
-        let mut i = 0;
-        while (i < len) {
-            let addr = *vector::borrow(&known_addresses, i);
-            if (table::contains(&circle.members, addr) && addr != circle.admin) {
-                let member = table::borrow(&circle.members, addr);
-                // Check if member has paid security deposit
-                if (members::get_deposit_balance(member) < security_deposit) {
-                    // Found a member who hasn't paid deposit
-                    assert!(false, 21);
-                }
-            };
-            i = i + 1;
-        };
-        
-        // If we got here, all checked members have paid their deposits
-        true
     }
     
     // ----------------------------------------------------------
@@ -426,7 +439,7 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     // Check if a circle is eligible for deletion by admin
     // ----------------------------------------------------------
-    public fun can_delete_circle(circle: &Circle, admin_addr: address): bool {
+    public fun can_delete_circle(circle: &Circle, wallet: &CustodyWallet, admin_addr: address): bool {
         // Only admin can delete
         if (circle.admin != admin_addr) {
             return false
@@ -441,6 +454,26 @@ module njangi::njangi_circles {
         if (balance::value(&circle.contributions) > 0) {
             return false
         };
+
+        // No deposits allowed (security deposits should be returned to members first)
+        if (balance::value(&circle.deposits) > 0) {
+            return false
+        };
+        
+        // Ensure the wallet belongs to this circle
+        if (custody::get_circle_id(wallet) != object::uid_to_inner(&circle.id)) {
+            return false
+        };
+        
+        // Ensure the custody wallet has no SUI balance
+        if (custody::get_wallet_balance(wallet) > 0) {
+            return false
+        };
+        
+        // Check for any stablecoin balances in the wallet
+        if (custody::has_any_stablecoin_balance(wallet)) {
+            return false
+        };
         
         true
     }
@@ -450,16 +483,37 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     public entry fun delete_circle(
         mut circle: Circle,
+        wallet: &CustodyWallet,
         ctx: &mut TxContext
     ) {
         // Only admin can delete the circle
         assert!(tx_context::sender(ctx) == circle.admin, 7);
         
         // Ensure there are no members other than the admin (current_members starts from 0)
-        assert!(circle.current_members <= 1, ECircleHasActiveMembers);
+        assert!(circle.current_members <= 1, ECircleFull);
         
         // Ensure no money has been contributed
-        assert!(balance::value(&circle.contributions) == 0, ECircleHasContributions);
+        assert!(balance::value(&circle.contributions) == 0, ECircleFull);
+
+        // Ensure no security deposits remain in the circle
+        assert!(balance::value(&circle.deposits) == 0, ECircleFull);
+        
+        // Ensure the wallet belongs to this circle - check by ID value, not dynamic field relation
+        // This is to avoid the dynamic_field::borrow_child_object error
+        assert!(custody::get_circle_id(wallet) == object::uid_to_inner(&circle.id), EWalletCircleMismatch);
+        
+        // Ensure the custody wallet has no SUI balance
+        assert!(custody::get_wallet_balance(wallet) == 0, EInsufficientDeposit);
+        
+        // Check for any stablecoin balances in the wallet
+        assert!(!custody::has_any_stablecoin_balance(wallet), EInsufficientDeposit);
+        
+        // Get the wallet_id link in the circle dynamic fields - we'll clean this up
+        let wallet_id_key = string::utf8(b"wallet_id");
+        if (dynamic_field::exists_(&circle.id, wallet_id_key)) {
+            // If the wallet ID field exists, remove it to clean up
+            let _: ID = dynamic_field::remove(&mut circle.id, wallet_id_key);
+        };
         
         // Return any deposits to the admin if they joined as a member
         if (circle.current_members == 1 && table::contains(&circle.members, circle.admin)) {
@@ -943,7 +997,7 @@ module njangi::njangi_circles {
         assert!(sender == circle.admin, 7);
         
         // Ensure the member isn't already part of the circle
-        assert!(!is_member(circle, member_addr), EMemberAlreadyExists);
+        assert!(!is_member(circle, member_addr), ECircleFull);
         
         // Ensure the circle isn't at max capacity
         assert!(circle.current_members < config::get_max_members(&circle.id), 29);
@@ -1088,6 +1142,7 @@ module njangi::njangi_circles {
 
         // --- Update Member State --- 
         members::set_deposit_balance(member, amount);
+        members::set_deposit_paid(member, true);
 
         // --- Call Custody to Store Coin --- 
         custody::internal_store_security_deposit_without_validation<CoinType>(
@@ -1117,7 +1172,7 @@ module njangi::njangi_circles {
         assert!(circle.is_active, ECircleNotActive);
         
         // Verify the sender is a member of the circle
-        assert!(table::contains(&circle.members, sender), ENotCircleMember);
+        assert!(table::contains(&circle.members, sender), ENotMember);
         
         // If we're using custom validation requirements
         if (required_amount == 0) {
@@ -1210,4 +1265,103 @@ module njangi::njangi_circles {
         true
     }
 
+    // ----------------------------------------------------------
+    // Update wallet ID for the circle - for admin use
+    // ----------------------------------------------------------
+    public entry fun update_wallet_id(
+        circle: &mut Circle,
+        wallet_id: ID,
+        ctx: &mut TxContext
+    ) {
+        // Only the admin can update the wallet ID
+        assert!(tx_context::sender(ctx) == circle.admin, ENotAdmin);
+        
+        // Update or create the wallet_id dynamic field
+        let key = string::utf8(b"wallet_id");
+        if (dynamic_field::exists_(&circle.id, key)) {
+            *dynamic_field::borrow_mut(&mut circle.id, key) = wallet_id;
+        } else {
+            dynamic_field::add(&mut circle.id, key, wallet_id);
+        };
+    }
+    
+    // ----------------------------------------------------------
+    // Get the wallet ID for the circle (if set)
+    // ----------------------------------------------------------
+    public fun get_wallet_id(circle: &Circle): Option<ID> {
+        let key = string::utf8(b"wallet_id");
+        if (dynamic_field::exists_(&circle.id, key)) {
+            option::some(*dynamic_field::borrow(&circle.id, key))
+        } else {
+            option::none()
+        }
+    }
+
+    // ----------------------------------------------------------
+    // Member Entry function to deposit stablecoin contribution
+    // ----------------------------------------------------------
+    public entry fun contribute_stablecoin<CoinType>(
+        circle: &mut Circle,
+        wallet: &mut custody::CustodyWallet,
+        payment: Coin<CoinType>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        let amount = coin::value(&payment);
+
+        // --- Basic Assertions --- 
+        // Must be a circle member
+        assert!(is_member(circle, sender), ENotMember); // Use local error code
+        // Circle must be active to accept contributions
+        assert!(is_circle_active(circle), ECircleNotActive);
+        // Verify custody wallet belongs to this circle
+        assert!(custody::get_circle_id(wallet) == get_id(circle), EWalletCircleMismatch);
+        // Get member and assert status is active and not suspended
+        let member = get_member(circle, sender);
+        // Use local error codes
+        assert!(members::get_status(member) == core::member_status_active(), EMemberNotActive); 
+        assert!(option::is_none(&members::get_suspension_end_time(member)), EMemberSuspended); 
+
+        // --- Amount Validation --- 
+        // Get required contribution amount in USD cents from config
+        let required_contribution_usd_cents = config::get_contribution_amount_usd(&circle.id);
+        // Convert required USD cents to micro-units of the stablecoin (assuming 6 decimals for stablecoins like USDC)
+        // 1 cent = 10,000 micro-units
+        let required_stablecoin_amount = required_contribution_usd_cents * 10000;
+
+        // Validate the payment amount against the required stablecoin amount
+        // Allow slightly more for potential rounding, but not less
+        assert!(amount >= required_stablecoin_amount, EInvalidContributionAmount); // Use local error code
+
+        // --- Process Contribution --- 
+        // Record the contribution for the member
+        let member_mut = get_member_mut(circle, sender);
+        // Use the *required* amount for recording, not the potentially larger payment amount
+        members::record_contribution(member_mut, required_stablecoin_amount, clock::timestamp_ms(clock));
+
+        // Deposit the actual payment coin into the custody wallet
+        custody::deposit_contribution_coin<CoinType>(
+            wallet,
+            payment,
+            sender,
+            clock,
+            ctx
+        );
+
+        // TODO: Update circle's overall contribution tracking if needed for stablecoins
+        // circles::add_to_contributions(circle, ...); // Current function expects Balance<SUI>
+
+        // Emit the locally defined StablecoinContributionMade event
+        event::emit(StablecoinContributionMade {
+            circle_id: get_id(circle),
+            member: sender,
+            // Report the required amount, consistent with member stats
+            amount: required_stablecoin_amount, 
+            cycle: get_current_cycle(circle),
+            // Add coin type info using imported type_name and String
+            // Convert ascii::String to string::String
+            coin_type: string::utf8(ascii::into_bytes(type_name::into_string(type_name::get<CoinType>()))) 
+        });
+    }
 } 

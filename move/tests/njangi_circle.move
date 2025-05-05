@@ -78,6 +78,7 @@ module njangi::njangi_circle {
     const ECircleNotActive: u64 = 54;
     const ENO_SECURITY_DEPOSIT: u64 = 21;
     const EMINIMUM_MEMBERS_REQUIRED: u64 = 22;
+    const ECircleHasSecurity: u64 = 55;
     
     // Time constants (all in milliseconds)
     const MS_PER_DAY: u64 = 86_400_000;       // 24 * 60 * 60 * 1000
@@ -1314,6 +1315,11 @@ module njangi::njangi_circle {
             return false
         };
         
+        // No deposits allowed (security deposits should be returned to members first)
+        if (balance::value(&circle.deposits) > 0) {
+            return false
+        };
+        
         true
     }
 
@@ -2380,6 +2386,9 @@ module njangi::njangi_circle {
         
         // Ensure no money has been contributed
         assert!(balance::value(&circle.contributions) == 0, ECircleHasContributions);
+        
+        // Ensure no security deposits remain in the circle
+        assert!(balance::value(&circle.deposits) == 0, ECircleHasSecurity);
         
         // Return any deposits to the admin if they joined as a member
         if (circle.current_members == 1 && table::contains(&circle.members, circle.admin)) {

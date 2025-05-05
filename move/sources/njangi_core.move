@@ -32,9 +32,11 @@ module njangi::njangi_core {
     // Time constants (all in milliseconds)
     const MS_PER_DAY: u64 = 86_400_000;       // 24 * 60 * 60 * 1000
     const MS_PER_WEEK: u64 = 604_800_000;     // 7  * 24 * 60 * 60 * 1000
+    const MS_PER_BI_WEEK: u64 = 1_209_600_000;  // 14 * 24 * 60 * 60 * 1000
     const MS_PER_MONTH: u64 = 2_419_200_000;   // 28 * 24 * 60 * 60 * 1000
     public fun ms_per_day(): u64 { MS_PER_DAY }
     public fun ms_per_week(): u64 { MS_PER_WEEK }
+    public fun ms_per_bi_week(): u64 { MS_PER_BI_WEEK }
     public fun ms_per_month(): u64 { MS_PER_MONTH }
 
     // Day constants (as u64 for consistent % operations)
@@ -234,6 +236,9 @@ module njangi::njangi_core {
         if (cycle_length == 0) {
             // weekly
             cycle_day < DAYS_IN_WEEK
+        } else if (cycle_length == 3) { // NEW: Treat bi-weekly like weekly
+            // bi-weekly
+            cycle_day < DAYS_IN_WEEK
         } else if (cycle_length == 1) {
             // monthly
             cycle_day > 0 && cycle_day <= DAYS_IN_MONTH
@@ -293,6 +298,36 @@ module njangi::njangi_core {
             
             // Get timestamp for the target day of next month/current month (always in the future)
             date_to_timestamp(next_year, next_month, cycle_day)
+        } else if (cycle_length == 3) {
+            // Bi-weekly payouts - handle like weekly but advance by 14 days
+            let weekday = get_weekday(current_time);
+            let days_until = if (cycle_day > weekday) {
+                // Selected day is later this week
+                (cycle_day - weekday) as u64
+            } else if (cycle_day < weekday || (cycle_day == weekday && day_ms > 0)) {
+                // Selected day is earlier than today, so schedule for the next cycle (in 1 or 2 weeks)
+                (DAYS_IN_WEEK - weekday + cycle_day) as u64
+            } else {
+                // Selected day is today with no time elapsed
+                0
+            };
+
+            // Calculate the base timestamp for the next occurrence of the target day
+            let next_occurrence_base_ts = current_time + (days_until * MS_PER_DAY) - day_ms;
+
+            // Refined simple approach:
+            // If target weekday is later this week -> schedule it.
+            // If target weekday is today or earlier -> schedule it + 14 days from start of that day.
+            if (days_until == 0 && day_ms == 0) {
+               // Target is exactly now, return current time
+               current_time
+            } else if (cycle_day <= weekday) { // Target day is today (after 00:00) or has passed this week
+                // Schedule 14 days after the *start* of the calculated next occurrence day
+                next_occurrence_base_ts + MS_PER_BI_WEEK
+            } else { // Target day is later this week
+                // Schedule for the upcoming day this week
+                next_occurrence_base_ts
+            }
         } else {
             // Quarterly payouts - always set future date
             let mut next_month = month;

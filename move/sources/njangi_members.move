@@ -59,6 +59,7 @@ module njangi::njangi_members {
         unpaid_penalties: u64,    // in SUI decimals
         warnings_with_penalties: vector<u64>, // Timestamps of each warning with penalty
         activated_at: Option<u64>, // Timestamp when the member was activated
+        deposit_paid: bool,
     }
     
     // ----------------------------------------------------------
@@ -128,6 +129,7 @@ module njangi::njangi_members {
             unpaid_penalties: 0,
             warnings_with_penalties: vector::empty(),
             activated_at: option::none(),
+            deposit_paid: false,
         }
     }
     
@@ -440,5 +442,13 @@ module njangi::njangi_members {
     
     public fun set_activated_at(member: &mut Member, timestamp: u64) {
         member.activated_at = option::some(timestamp);
+    }
+    
+    public fun set_deposit_paid(member: &mut Member, paid: bool) {
+        member.deposit_paid = paid;
+    }
+    
+    public fun has_paid_deposit(member: &Member): bool {
+        member.deposit_paid
     }
 } 
