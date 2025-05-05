@@ -1,12 +1,13 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
+import { JoinRequest } from './join-request-database';
 
 // Define database path
 const DB_PATH = path.join(process.cwd(), 'join-requests.db');
 
-// Create JoinRequest interface
-export interface JoinRequest {
+// Local interface for backward compatibility
+interface LocalJoinRequest {
   id?: number;
   circleId: string;
   circleName: string;
@@ -15,6 +16,9 @@ export interface JoinRequest {
   requestDate: number;
   status: 'pending' | 'approved' | 'rejected';
 }
+
+// Re-export the JoinRequest type
+export { JoinRequest } from './join-request-database';
 
 class DatabaseService {
   private db: Database.Database;
@@ -56,8 +60,35 @@ class DatabaseService {
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_join_requests_status ON join_requests(status)`);
   }
 
-  // Create a new join request
-  createJoinRequest(request: JoinRequest): JoinRequest | null {
+  // Helper to convert from local format to database format
+  private convertToDbFormat(request: LocalJoinRequest): JoinRequest {
+    return {
+      id: request.id || 0,
+      circle_id: request.circleId,
+      circle_name: request.circleName,
+      user_address: request.userAddress,
+      user_name: request.userName,
+      status: request.status,
+      created_at: new Date(request.requestDate),
+      updated_at: new Date(request.requestDate)
+    };
+  }
+
+  // Helper to convert from database format to local format
+  private convertFromDbFormat(request: JoinRequest): LocalJoinRequest {
+    return {
+      id: request.id,
+      circleId: request.circle_id,
+      circleName: request.circle_name,
+      userAddress: request.user_address,
+      userName: request.user_name,
+      requestDate: request.created_at.getTime(),
+      status: request.status
+    };
+  }
+
+  // Update create method to handle conversion
+  createJoinRequest(request: LocalJoinRequest): LocalJoinRequest | null {
     try {
       const stmt = this.db.prepare(`
         INSERT INTO join_requests (circleId, circleName, userAddress, userName, requestDate, status)
