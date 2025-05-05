@@ -18,7 +18,7 @@ interface LocalJoinRequest {
 }
 
 // Re-export the JoinRequest type
-export { JoinRequest } from './join-request-database';
+export type { JoinRequest } from './join-request-database';
 
 class DatabaseService {
   private db: Database.Database;
