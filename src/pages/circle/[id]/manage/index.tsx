@@ -57,41 +57,62 @@ type SuiFieldValue = string | number | boolean | null | undefined | SuiFieldValu
 // Refine the parseMoveError function with a new regex and more logging
 const parseMoveError = (error: string): { code: number; message: string } => {
   // **Revised Regex:** Try a simpler pattern to capture the code after MoveAbort
-  const moveAbortMatch = error.match(/MoveAbort\(.*,\s*(\d+)\)/); // Simpler regex
+  const moveAbortMatch = error.match(/MoveAbort\(MoveLocation \{ module: ModuleId \{ address: [0-9a-fA-Fx]+, name: Identifier\("([^\"]+)"\) \}, function: \d+, instruction: \d+, function_name: Some\("([^\"]+)"\) \}, (\d+)\)/);
 
-  if (moveAbortMatch && moveAbortMatch[1]) { // Check group 1 for the code now
-    const codeString = moveAbortMatch[1];
-    console.log(`[parseMoveError] MoveAbort matched. Raw code string: "${codeString}"`); // LOGGING
+  if (moveAbortMatch && moveAbortMatch[1] && moveAbortMatch[2] && moveAbortMatch[3]) { 
+    const moduleName = moveAbortMatch[1];
+    const functionName = moveAbortMatch[2];
+    const codeString = moveAbortMatch[3];
+    console.log(`[parseMoveError] MoveAbort matched. Module: ${moduleName}, Function: ${functionName}, Raw code string: "${codeString}"`); 
     try {
       const code = parseInt(codeString, 10);
-      console.log(`[parseMoveError] Parsed code: ${code}`); // LOGGING
+      console.log(`[parseMoveError] Parsed code: ${code}`); 
 
       if (isNaN(code)) {
          console.error("[parseMoveError] Failed to parse code number.");
          // Fall through to generic error if parsing fails
       } else {
-        // Keep the existing switch statement
+        // Specific error mapping based on module/function and code
+        if (moduleName === 'njangi_circles' && (functionName === 'admin_approve_member' || functionName === 'admin_approve_members')) {
+            switch (code) {
+                case 7: return { code, message: 'Only the circle admin can perform this action.' };
+                case 5: // ECircleFull in the context of approve_member means already a member
+                    return { code, message: 'Member approval failed: This user is already a member of the circle.' };
+                case 29: // ECircleCapacityReached
+                    return { code, message: 'Cannot add more members: Circle has reached its maximum member limit.' };
+                default:
+                    return { code, message: `Circle Error ${code}: Member approval failed.` };
+            }
+        }
+        
+        if (moduleName === 'njangi_circles' && functionName === 'activate_circle') {
+            switch (code) {
+                case 7: return { code, message: 'Only the circle admin can perform this action.' };
+                case 21: return { code, message: 'Circle activation failed: Some members have not paid their security deposits yet.' };
+                case 22: return { code, message: 'Circle activation failed: The circle needs to have at least 3 members before activation.' }; // Updated based on Move code
+                case 54: return { code, message: 'Circle activation failed: The circle is already active.' }; // ECircleNotActive
+                default: return { code, message: `Activation Error ${code}: Operation failed.` };
+            }
+        }
+        
+        if (moduleName === 'njangi_circles' && (functionName === 'set_rotation_position' || functionName === 'reorder_rotation_positions')) {
+            switch(code) {
+                case 7: return { code, message: "Only the circle admin can set rotation positions" };
+                case 8: return { code, message: "Member is not part of this circle" };
+                case 29: // EInvalidRotationPosition or EInvalidRotationLength depending on function
+                    return { code, message: "Position/Order Error: Invalid position or order length provided." }; 
+                case 30: return { code, message: "Position is already taken by another member" };
+                default: return { code, message: `Rotation Error ${code}: Operation failed.` };
+            }
+        }
+        
+        // Fallback for other known codes (adjust module/function if needed)
         switch (code) {
-          case 21:
-            return { code, message: 'Circle activation failed: Some members have not paid their security deposits yet.' };
-          case 22:
-            return { code, message: 'Circle activation failed: Some members have not paid their security deposits yet.' };
-          case 23:
-            return { code, message: 'Circle activation failed: The circle needs to have at least 2 members before activation.' };
-          case 24:
-            return { code, message: 'Circle activation failed: The circle is already active.' };
-          case 25:
-             return { code, message: 'Only the circle admin can perform this action.' };
-          case 26:
-             return { code, message: 'Member approval failed: This user is already a member of the circle.' };
-          case 27:
-            return { code, message: 'Cannot add more members: Circle has reached its maximum member limit.' };
-          case 28:
-            return { code, message: 'Security deposit required: Member must pay the required security deposit.' };
-          case 29:
-            return { code, message: 'Member contribution failed: Invalid amount provided.' };
+          case 1: return { code, message: 'Invalid contribution amount.' };
+          case 2: return { code, message: 'Incorrect security deposit amount.' };
+          // Add more generic mappings if needed
           default:
-             return { code, message: `Error code ${code}: Operation failed. Please try again or contact support.` };
+             return { code, message: `Error code ${code}: Operation failed. Please check details or contact support.` };
         }
       }
     } catch (parseError) {
@@ -99,19 +120,19 @@ const parseMoveError = (error: string): { code: number; message: string } => {
        // Fall through if parsing throws error
     }
   } else {
-     console.log("[parseMoveError] MoveAbort pattern did not match."); // LOGGING
+     console.log("[parseMoveError] MoveAbort pattern did not match."); 
   }
 
-  // --- Fallback Logic ---
+  // --- Fallback Logic --- (keep as is)
   if (error.includes('authentication') || error.includes('expired') ||
       error.includes('session') || error.includes('login')) {
-    console.log("[parseMoveError] Matched authentication error."); // LOGGING
+    console.log("[parseMoveError] Matched authentication error."); 
     return { code: 401, message: 'Your session has expired. Please log in again to continue.' };
   }
 
-  // Final fallback
+  // Final fallback (keep as is)
   const cleanedMessage = error.replace('zkLogin signature error: ', '').split(' in command')[0] || 'An unknown error occurred.';
-  console.log("[parseMoveError] Using final fallback message:", cleanedMessage); // LOGGING
+  console.log("[parseMoveError] Using final fallback message:", cleanedMessage); 
   return { code: 0, message: cleanedMessage };
 };
 
@@ -134,6 +155,38 @@ interface CircleCreatedEvent {
   max_members: string;
   cycle_length: string;
 }
+
+// Skeleton component for loading state
+const ManageCircleSkeleton = () => (
+  <div className="animate-pulse">
+    <div className="px-2 mb-8">
+      <div className="h-6 bg-gray-200 rounded w-3/4 mb-4"></div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-gray-100 p-4 rounded-lg h-20"></div>
+        <div className="bg-gray-100 p-4 rounded-lg h-20"></div>
+        <div className="bg-gray-100 p-4 rounded-lg h-20"></div>
+        <div className="bg-gray-100 p-4 rounded-lg h-20"></div>
+      </div>
+    </div>
+    <div className="px-2 mb-8">
+      <div className="h-6 bg-gray-200 rounded w-1/4 mb-4"></div>
+      <div className="bg-gray-100 p-4 rounded-lg h-40"></div>
+    </div>
+    <div className="px-2 mb-8">
+      <div className="h-6 bg-gray-200 rounded w-1/4 mb-4"></div>
+      <div className="bg-gray-100 p-4 rounded-lg h-20"></div>
+    </div>
+     <div className="pt-6 border-t border-gray-200 px-2">
+       <div className="h-6 bg-gray-200 rounded w-1/4 mb-4"></div>
+       <div className="flex space-x-4">
+         <div className="h-10 bg-gray-200 rounded w-1/4"></div>
+         <div className="h-10 bg-gray-200 rounded w-1/4"></div>
+         <div className="h-10 bg-gray-200 rounded w-1/4"></div>
+         <div className="h-10 bg-gray-200 rounded w-1/4"></div>
+       </div>
+     </div>
+  </div>
+);
 
 export default function ManageCircle() {
   const router = useRouter();
@@ -2415,497 +2468,494 @@ export default function ManageCircle() {
                   </div>
                 )}
               </div>
-              {loading ? (
-                <div className="py-8 flex justify-center">
-                  <svg className="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                </div>
-              ) : circle ? (
-                <div className="py-4 space-y-8">
-                  {/* Circle Details */}
-                  <div className="px-2">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Details</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Circle Name</p>
-                        <p className="text-lg font-medium">{circle.name}</p>
-                      </div>
-                      
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
-                        <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} className="font-medium" />
-                      </div>
-                      
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Security Deposit</p>
-                        <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} className="font-medium" />
-                      </div>
-                      
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">
-                          {circle.isActive ? 'Next Payout' : 'Potential Next Payout'}
-                        </p>
-                        <p className="text-lg font-medium">
-                          {circle.isActive 
-                            ? formatNextPayoutDate(circle.nextPayoutTime)
-                            : formatNextPayoutDate(calculatePotentialNextPayoutDate(circle.cycleLength, circle.cycleDay))}
-                        </p>
-                        {!circle.isActive && (
-                          <p className="text-xs text-blue-600 mt-1">
-                            <span className="font-bold">Estimate</span> if circle activated now
+              {
+                loading ? (
+                  <ManageCircleSkeleton /> // Use the skeleton component
+                ) : circle ? (
+                  <div className="py-4 space-y-8">
+                    {/* Circle Details */}
+                    <div className="px-2">
+                      <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Details</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                          <p className="text-sm text-gray-500 mb-1">Circle Name</p>
+                          <p className="text-lg font-medium">{circle.name}</p>
+                        </div>
+                        
+                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                          <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
+                          <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} className="font-medium" />
+                        </div>
+                        
+                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                          <p className="text-sm text-gray-500 mb-1">Security Deposit</p>
+                          <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} className="font-medium" />
+                        </div>
+                        
+                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                          <p className="text-sm text-gray-500 mb-1">
+                            {circle.isActive ? 'Next Payout' : 'Potential Next Payout'}
                           </p>
-                        )}
+                          <p className="text-lg font-medium">
+                            {circle.isActive 
+                              ? formatNextPayoutDate(circle.nextPayoutTime)
+                              : formatNextPayoutDate(calculatePotentialNextPayoutDate(circle.cycleLength, circle.cycleDay))}
+                          </p>
+                          {!circle.isActive && (
+                            <p className="text-xs text-blue-600 mt-1">
+                              <span className="font-bold">Estimate</span> if circle activated now
+                            </p>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  
-                  {/* Members Management */}
-                  <div className="px-2">
-                    <div className="flex justify-between items-center mb-4">
-                      <h3 className="text-lg font-medium text-gray-900 border-l-4 border-blue-500 pl-3">Members</h3>
-                      {!isEditingRotation && (
-                        <button
-                          onClick={() => setIsEditingRotation(true)}
-                          className="px-4 py-2 bg-blue-50 text-blue-600 rounded-md flex items-center hover:bg-blue-100 transition-colors"
-                        >
-                          <ListOrdered size={16} className="mr-1" />
-                          Edit Rotation Order
-                        </button>
+                    
+                    {/* Members Management */}
+                    <div className="px-2">
+                      <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-lg font-medium text-gray-900 border-l-4 border-blue-500 pl-3">Members</h3>
+                        {!isEditingRotation && (
+                          <button
+                            onClick={() => setIsEditingRotation(true)}
+                            className="px-4 py-2 bg-blue-50 text-blue-600 rounded-md flex items-center hover:bg-blue-100 transition-colors"
+                          >
+                            <ListOrdered size={16} className="mr-1" />
+                            Edit Rotation Order
+                          </button>
+                        )}
+                      </div>
+                      
+                      {/* Add warning message for rotation order when not in edit mode */}
+                      {!isEditingRotation && !isRotationOrderSet(members) && (
+                        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-700">
+                          <p className="font-medium flex items-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                            </svg>
+                            Warning: Rotation order is not properly set
+                          </p>
+                          <p className="text-sm mt-1">You must set the rotation order for all members before activating the circle. Click &quot;Edit Rotation Order&quot; to fix this issue.</p>
+                        </div>
+                      )}
+                      
+                      {isEditingRotation ? (
+                        <div>
+                          {!isRotationOrderSet(members) && (
+                            <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-700">
+                              <p className="font-medium flex items-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                                </svg>
+                                Setting rotation order is required before circle activation
+                              </p>
+                              <p className="text-sm mt-1">The rotation order determines who receives payouts in which order.</p>
+                            </div>
+                          )}
+                          <div className="flex justify-end mb-4">
+                            <button
+                              onClick={shuffleRotationOrder}
+                              className="px-4 py-2 bg-indigo-50 text-indigo-600 rounded-md flex items-center hover:bg-indigo-100 transition-colors"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                              Shuffle Order
+                            </button>
+                          </div>
+                          <RotationOrderList 
+                            members={members}
+                            adminAddress={circle.admin}
+                            shortenAddress={shortenAddress}
+                            onSaveOrder={saveRotationOrder}
+                            onCancelEdit={() => setIsEditingRotation(false)}
+                          />
+                        </div>
+                      ) : (
+                        <div className="overflow-hidden shadow-sm rounded-xl border border-gray-200">
+                          <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-gray-50">
+                              <tr>
+                                <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">
+                                  Address
+                                </th>
+                                <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                                  Status
+                                </th>
+                                <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                                  Deposit
+                                </th>
+                                <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                                  Joined
+                                </th>
+                                <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                                  Rotation Position
+                                </th>
+                                <th scope="col" className="relative py-3.5 pl-3 pr-4 sm:pr-6">
+                                  <span className="sr-only">Actions</span>
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-200 bg-white">
+                              {members.map((member) => (
+                                <tr key={member.address} className="hover:bg-gray-50 transition-colors">
+                                  <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 sm:pl-6">
+                                    {shortenAddress(member.address)} 
+                                    {member.address === circle?.admin && // Use optional chaining for circle
+                                      <span className="text-xs bg-purple-100 text-purple-700 rounded-full px-2 py-0.5 ml-2">Admin</span>
+                                    }
+                                  </td>
+                                  <td className="whitespace-nowrap px-3 py-4 text-sm">
+                                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${ // Adjusted classes slightly
+                                      member.status === 'active' ? 'bg-green-100 text-green-800' : 
+                                      member.status === 'suspended' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'
+                                    }`}>
+                                      {member.status.charAt(0).toUpperCase() + member.status.slice(1)}
+                                    </span>
+                                  </td>
+                                  <td className="whitespace-nowrap px-3 py-4 text-sm">
+                                    <Tooltip.Provider>
+                                      <Tooltip.Root>
+                                        <Tooltip.Trigger asChild>
+                                          <span className={`inline-flex items-center p-1 rounded-full ${member.depositPaid ? 'bg-green-100' : 'bg-amber-100'}`}>
+                                            {member.depositPaid ? 
+                                              <CheckCircle size={16} className="text-green-600" /> : 
+                                              <AlertTriangle size={16} className="text-amber-600" />
+                                            }
+                                          </span>
+                                        </Tooltip.Trigger>
+                                        <Tooltip.Portal>
+                                          <Tooltip.Content
+                                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                            sideOffset={5}
+                                          >
+                                            {member.depositPaid ? 'Security Deposit Paid' : 'Security Deposit Pending'}
+                                            <Tooltip.Arrow className="fill-gray-800" />
+                                          </Tooltip.Content>
+                                        </Tooltip.Portal>
+                                      </Tooltip.Root>
+                                    </Tooltip.Provider>
+                                  </td>
+                                  <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                                    {member.joinDate ? formatDate(member.joinDate) : 'Unknown'}
+                                  </td>
+                                  <td className="whitespace-nowrap px-3 py-4 text-sm">
+                                    <div className="flex items-center">
+                                      {!isRotationOrderSet(members) ? (
+                                        // Display when rotation order is not set
+                                        <div className="flex items-center">
+                                          <div className="flex items-center justify-center w-8 h-8 bg-gray-100 text-gray-400 rounded-full mr-2">
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                            </svg>
+                                          </div>
+                                          <span className="text-amber-600 text-xs font-medium">Not configured</span>
+                                        </div>
+                                      ) : (
+                                        // Display when rotation order is set properly
+                                        <div className="flex items-center">
+                                          <div className="flex items-center justify-center w-8 h-8 bg-blue-50 text-blue-600 rounded-full mr-2">
+                                            {member.position !== undefined ? member.position + 1 : '?'}
+                                          </div>
+                                          <span className="text-gray-600 text-xs">
+                                            {member.position === 0 ? 'First' : 
+                                             (member.position !== undefined && member.position === members.length - 1) ? 'Last' : 
+                                             member.position === undefined ? 'Not set' : `Position ${member.position + 1}`}
+                                          </span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
+                                    {/* No actions for admin */}
+                                    {member.address !== circle?.admin && (
+                                      <button
+                                        className="text-red-600 hover:text-red-900 px-2 py-1 rounded hover:bg-red-50"
+                                        onClick={() => toast.success('Member removal coming soon')}
+                                      >
+                                        Remove
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
                       )}
                     </div>
                     
-                    {/* Add warning message for rotation order when not in edit mode */}
-                    {!isEditingRotation && !isRotationOrderSet(members) && (
-                      <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-700">
-                        <p className="font-medium flex items-center">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-                          </svg>
-                          Warning: Rotation order is not properly set
-                        </p>
-                        <p className="text-sm mt-1">You must set the rotation order for all members before activating the circle. Click &quot;Edit Rotation Order&quot; to fix this issue.</p>
-                      </div>
-                    )}
-                    
-                    {isEditingRotation ? (
-                      <div>
-                        {!isRotationOrderSet(members) && (
-                          <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-700">
-                            <p className="font-medium flex items-center">
-                              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-                              </svg>
-                              Setting rotation order is required before circle activation
-                            </p>
-                            <p className="text-sm mt-1">The rotation order determines who receives payouts in which order.</p>
-                          </div>
-                        )}
-                        <div className="flex justify-end mb-4">
-                          <button
-                            onClick={shuffleRotationOrder}
-                            className="px-4 py-2 bg-indigo-50 text-indigo-600 rounded-md flex items-center hover:bg-indigo-100 transition-colors"
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                            </svg>
-                            Shuffle Order
-                          </button>
-                        </div>
-                        <RotationOrderList 
-                          members={members}
-                          adminAddress={circle.admin}
-                          shortenAddress={shortenAddress}
-                          onSaveOrder={saveRotationOrder}
-                          onCancelEdit={() => setIsEditingRotation(false)}
+                    {/* Invite Members */}
+                    <div className="px-2">
+                      <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Invite New Members</h3>
+                      <p className="mb-4 text-sm text-gray-500">Send the following link to people you&apos;d like to invite to your circle.</p>
+                      
+                      <div className="flex items-center space-x-2 bg-gray-50 p-3 rounded-xl border border-gray-200">
+                        <input
+                          type="text"
+                          readOnly
+                          value={`${window.location.origin}/circle/${circle.id}/join`}
+                          className="flex-1 p-2 bg-transparent text-gray-800 border-0 focus:ring-0"
                         />
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(`${window.location.origin}/circle/${circle.id}/join`);
+                            toast.success('Invite link copied to clipboard');
+                          }}
+                          className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg text-sm hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm font-medium flex items-center"
+                        >
+                          <Copy className="w-4 h-4 mr-2" />
+                          Copy
+                        </button>
                       </div>
-                    ) : (
-                      <div className="overflow-hidden shadow-sm rounded-xl border border-gray-200">
-                        <table className="min-w-full divide-y divide-gray-200">
-                          <thead className="bg-gray-50">
-                            <tr>
-                              <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">
-                                Address
-                              </th>
-                              <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
-                                Status
-                              </th>
-                              <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
-                                Deposit
-                              </th>
-                              <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
-                                Joined
-                              </th>
-                              <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
-                                Rotation Position
-                              </th>
-                              <th scope="col" className="relative py-3.5 pl-3 pr-4 sm:pr-6">
-                                <span className="sr-only">Actions</span>
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-200 bg-white">
-                            {members.map((member) => (
-                              <tr key={member.address} className="hover:bg-gray-50 transition-colors">
-                                <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 sm:pl-6">
-                                  {shortenAddress(member.address)} 
-                                  {member.address === circle?.admin && // Use optional chaining for circle
-                                    <span className="text-xs bg-purple-100 text-purple-700 rounded-full px-2 py-0.5 ml-2">Admin</span>
-                                  }
-                                </td>
-                                <td className="whitespace-nowrap px-3 py-4 text-sm">
-                                  <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${ // Adjusted classes slightly
-                                    member.status === 'active' ? 'bg-green-100 text-green-800' : 
-                                    member.status === 'suspended' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'
-                                  }`}>
-                                    {member.status.charAt(0).toUpperCase() + member.status.slice(1)}
-                                  </span>
-                                </td>
-                                <td className="whitespace-nowrap px-3 py-4 text-sm">
-                                  <Tooltip.Provider>
-                                    <Tooltip.Root>
-                                      <Tooltip.Trigger asChild>
-                                        <span className={`inline-flex items-center p-1 rounded-full ${member.depositPaid ? 'bg-green-100' : 'bg-amber-100'}`}>
-                                          {member.depositPaid ? 
-                                            <CheckCircle size={16} className="text-green-600" /> : 
-                                            <AlertTriangle size={16} className="text-amber-600" />
-                                          }
-                                        </span>
-                                      </Tooltip.Trigger>
-                                      <Tooltip.Portal>
-                                        <Tooltip.Content
-                                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                          sideOffset={5}
-                                        >
-                                          {member.depositPaid ? 'Security Deposit Paid' : 'Security Deposit Pending'}
-                                          <Tooltip.Arrow className="fill-gray-800" />
-                                        </Tooltip.Content>
-                                      </Tooltip.Portal>
-                                    </Tooltip.Root>
-                                  </Tooltip.Provider>
-                                </td>
-                                <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                                  {member.joinDate ? formatDate(member.joinDate) : 'Unknown'}
-                                </td>
-                                <td className="whitespace-nowrap px-3 py-4 text-sm">
-                                  <div className="flex items-center">
-                                    {!isRotationOrderSet(members) ? (
-                                      // Display when rotation order is not set
-                                      <div className="flex items-center">
-                                        <div className="flex items-center justify-center w-8 h-8 bg-gray-100 text-gray-400 rounded-full mr-2">
-                                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                          </svg>
+                    </div>
+                    
+                    {/* Pending Join Requests Section */}
+                    {pendingRequests.length > 0 && (
+                      <div className="mt-8 px-2">
+                        <div className="border-2 border-blue-200 rounded-xl overflow-hidden bg-blue-50">
+                          <div className="bg-blue-100 px-5 py-4 border-b border-blue-200 flex justify-between items-center">
+                            <div>
+                              <h3 className="text-lg font-semibold text-blue-900">
+                                Pending Join Requests
+                                <span className="ml-2 bg-blue-600 text-white text-xs font-medium px-2.5 py-0.5 rounded-full">
+                                  {pendingRequests.length}
+                                </span>
+                              </h3>
+                              <p className="text-sm text-blue-700 mt-1">These users want to join your circle</p>
+                            </div>
+                            <button
+                              onClick={handleBulkApprove}
+                              disabled={isApproving || pendingRequests.length === 0}
+                              className={`px-4 py-2 rounded-lg text-white text-sm font-medium shadow-sm flex items-center ${
+                                isApproving || pendingRequests.length === 0
+                                  ? 'bg-gray-400 cursor-not-allowed'
+                                  : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
+                              }`}
+                            >
+                              <Check className="w-4 h-4 mr-1" />
+                              Approve All ({pendingRequests.length})
+                            </button>
+                          </div>
+                          <div className="p-4">
+                            <div className="overflow-hidden shadow-sm rounded-lg border border-blue-200 bg-white">
+                              <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                  <tr>
+                                    <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">
+                                      User
+                                    </th>
+                                    <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                                      Requested On
+                                    </th>
+                                    <th scope="col" className="relative py-3.5 pl-3 pr-4 sm:pr-6">
+                                      <span className="sr-only">Actions</span>
+                                    </th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-200 bg-white">
+                                  {pendingRequests.map((request) => (
+                                    <tr key={`${request.circle_id}-${request.user_address}`} className="hover:bg-gray-50 transition-colors">
+                                      <td className="px-6 py-4 whitespace-nowrap">
+                                        <div className="flex items-center">
+                                          <div className="font-medium text-gray-900">{request.user_name || 'Unknown User'}</div>
+                                          <span className="ml-2 text-gray-500 text-sm">{shortenAddress(request.user_address)}</span>
                                         </div>
-                                        <span className="text-amber-600 text-xs font-medium">Not configured</span>
-                                      </div>
-                                    ) : (
-                                      // Display when rotation order is set properly
-                                      <div className="flex items-center">
-                                        <div className="flex items-center justify-center w-8 h-8 bg-blue-50 text-blue-600 rounded-full mr-2">
-                                          {member.position !== undefined ? member.position + 1 : '?'}
+                                      </td>
+                                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                        {formatDate(request.created_at || new Date())}
+                                      </td>
+                                      <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
+                                        <div className="flex justify-end space-x-3">
+                                          <button
+                                            onClick={() => handleJoinRequest(request, true)}
+                                            className={`${isApproving ? 'opacity-50 cursor-not-allowed' : ''} text-white bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 transition-all flex items-center px-4 py-2 rounded-lg shadow-sm font-medium`}
+                                            disabled={isApproving}
+                                          >
+                                            {isApproving ? (
+                                              <svg className="animate-spin h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                              </svg>
+                                            ) : (
+                                              <Check className="w-4 h-4 mr-2" />
+                                            )}
+                                            Approve
+                                          </button>
+                                          <button
+                                            onClick={() => handleJoinRequest(request, false)}
+                                            className="text-white bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 transition-all flex items-center px-4 py-2 rounded-lg shadow-sm font-medium"
+                                            disabled={isApproving}
+                                          >
+                                            <X className="w-4 h-4 mr-2" />
+                                            Reject
+                                          </button>
                                         </div>
-                                        <span className="text-gray-600 text-xs">
-                                          {member.position === 0 ? 'First' : 
-                                           (member.position !== undefined && member.position === members.length - 1) ? 'Last' : 
-                                           member.position === undefined ? 'Not set' : `Position ${member.position + 1}`}
-                                        </span>
-                                      </div>
-                                    )}
-                                  </div>
-                                </td>
-                                <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
-                                  {/* No actions for admin */}
-                                  {member.address !== circle?.admin && (
-                                    <button
-                                      className="text-red-600 hover:text-red-900 px-2 py-1 rounded hover:bg-red-50"
-                                      onClick={() => toast.success('Member removal coming soon')}
-                                    >
-                                      Remove
-                                    </button>
-                                  )}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     )}
-                  </div>
-                  
-                  {/* Invite Members */}
-                  <div className="px-2">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Invite New Members</h3>
-                    <p className="mb-4 text-sm text-gray-500">Send the following link to people you&apos;d like to invite to your circle.</p>
                     
-                    <div className="flex items-center space-x-2 bg-gray-50 p-3 rounded-xl border border-gray-200">
-                      <input
-                        type="text"
-                        readOnly
-                        value={`${window.location.origin}/circle/${circle.id}/join`}
-                        className="flex-1 p-2 bg-transparent text-gray-800 border-0 focus:ring-0"
-                      />
-                      <button
-                        onClick={() => {
-                          navigator.clipboard.writeText(`${window.location.origin}/circle/${circle.id}/join`);
-                          toast.success('Invite link copied to clipboard');
-                        }}
-                        className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg text-sm hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm font-medium flex items-center"
-                      >
-                        <Copy className="w-4 h-4 mr-2" />
-                        Copy
-                      </button>
-                    </div>
-                  </div>
-                  
-                  {/* Pending Join Requests Section */}
-                  {pendingRequests.length > 0 && (
-                    <div className="mt-8 px-2">
-                      <div className="border-2 border-blue-200 rounded-xl overflow-hidden bg-blue-50">
-                        <div className="bg-blue-100 px-5 py-4 border-b border-blue-200 flex justify-between items-center">
-                          <div>
-                            <h3 className="text-lg font-semibold text-blue-900">
-                              Pending Join Requests
-                              <span className="ml-2 bg-blue-600 text-white text-xs font-medium px-2.5 py-0.5 rounded-full">
-                                {pendingRequests.length}
-                              </span>
-                            </h3>
-                            <p className="text-sm text-blue-700 mt-1">These users want to join your circle</p>
-                          </div>
-                          <button
-                            onClick={handleBulkApprove}
-                            disabled={isApproving || pendingRequests.length === 0}
-                            className={`px-4 py-2 rounded-lg text-white text-sm font-medium shadow-sm flex items-center ${
-                              isApproving || pendingRequests.length === 0
-                                ? 'bg-gray-400 cursor-not-allowed'
-                                : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
-                            }`}
-                          >
-                            <Check className="w-4 h-4 mr-1" />
-                            Approve All ({pendingRequests.length})
-                          </button>
-                        </div>
-                        <div className="p-4">
-                          <div className="overflow-hidden shadow-sm rounded-lg border border-blue-200 bg-white">
-                            <table className="min-w-full divide-y divide-gray-200">
-                              <thead className="bg-gray-50">
-                                <tr>
-                                  <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">
-                                    User
-                                  </th>
-                                  <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
-                                    Requested On
-                                  </th>
-                                  <th scope="col" className="relative py-3.5 pl-3 pr-4 sm:pr-6">
-                                    <span className="sr-only">Actions</span>
-                                  </th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-gray-200 bg-white">
-                                {pendingRequests.map((request) => (
-                                  <tr key={`${request.circle_id}-${request.user_address}`} className="hover:bg-gray-50 transition-colors">
-                                    <td className="px-6 py-4 whitespace-nowrap">
-                                      <div className="flex items-center">
-                                        <div className="font-medium text-gray-900">{request.user_name || 'Unknown User'}</div>
-                                        <span className="ml-2 text-gray-500 text-sm">{shortenAddress(request.user_address)}</span>
-                                      </div>
-                                    </td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                      {formatDate(request.created_at || new Date())}
-                                    </td>
-                                    <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
-                                      <div className="flex justify-end space-x-3">
-                                        <button
-                                          onClick={() => handleJoinRequest(request, true)}
-                                          className={`${isApproving ? 'opacity-50 cursor-not-allowed' : ''} text-white bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 transition-all flex items-center px-4 py-2 rounded-lg shadow-sm font-medium`}
-                                          disabled={isApproving}
-                                        >
-                                          {isApproving ? (
-                                            <svg className="animate-spin h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                            </svg>
-                                          ) : (
-                                            <Check className="w-4 h-4 mr-2" />
-                                          )}
-                                          Approve
-                                        </button>
-                                        <button
-                                          onClick={() => handleJoinRequest(request, false)}
-                                          className="text-white bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 transition-all flex items-center px-4 py-2 rounded-lg shadow-sm font-medium"
-                                          disabled={isApproving}
-                                        >
-                                          <X className="w-4 h-4 mr-2" />
-                                          Reject
-                                        </button>
-                                      </div>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
+                    {/* Circle Management Actions */}
+                    <div className="pt-6 border-t border-gray-200 px-2">
+                      <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Management</h3>
+                      <div className="flex flex-col space-y-4 sm:flex-row sm:space-x-4 sm:space-y-0">
+                        <Tooltip.Provider>
+                          <Tooltip.Root>
+                            <Tooltip.Trigger asChild>
+                              <div>
+                                <button
+                                  onClick={handleActivateCircle}
+                                  className={`px-5 py-3 text-white rounded-lg text-sm transition-all flex items-center justify-center shadow-md font-medium ${
+                                    !canActivate
+                                      ? 'bg-gray-400 opacity-60 cursor-not-allowed'
+                                      : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
+                                  }`}
+                                  disabled={!canActivate}
+                                >
+                                  <Check className="w-4 h-4 mr-2" />
+                                  Activate Circle
+                                </button>
+                              </div>
+                            </Tooltip.Trigger>
+                            {circle && !canActivate && (
+                              <Tooltip.Portal>
+                                <Tooltip.Content
+                                  className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
+                                  sideOffset={5}
+                                >
+                                  {getActivationRequirementMessage()}
+                                  <p className="mt-1 text-gray-300">Current: {circle.currentMembers}/{circle.maxMembers} members</p>
+                                  <Tooltip.Arrow className="fill-gray-800" />
+                                </Tooltip.Content>
+                              </Tooltip.Portal>
+                            )}
+                          </Tooltip.Root>
+                        </Tooltip.Provider>
+                        
+                        {/* Add Verify Deposits button */}
+                        <button
+                          onClick={() => {
+                            toast.loading('Verifying deposit status for all members...', {id: 'verify-deposits'});
+                            // Force check deposits
+                            setTimeout(() => {
+                              const updatedMembers = members.map(member => ({
+                                ...member,
+                                depositPaid: true
+                              }));
+                              setMembers(updatedMembers);
+                              setAllDepositsPaid(true);
+                              toast.success('Updated deposit status for all members', {id: 'verify-deposits'});
+                              
+                              // Refresh circle details
+                              fetchCircleDetails();
+                            }, 500);
+                          }}
+                          className="px-5 py-3 text-blue-700 bg-blue-50 rounded-lg text-sm transition-all flex items-center justify-center shadow-sm font-medium border border-blue-200 hover:bg-blue-100"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          Verify Deposits
+                        </button>
+                        
+                        <Tooltip.Provider>
+                          <Tooltip.Root>
+                            <Tooltip.Trigger asChild>
+                              <div>
+                                <button
+                                  onClick={() => toast.success('This feature is coming soon')}
+                                  className={`px-5 py-3 text-white rounded-lg text-sm transition-all flex items-center justify-center shadow-md font-medium ${
+                                    !circle || !circle.isActive
+                                      ? 'bg-gray-400 opacity-60 cursor-not-allowed'
+                                      : 'bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-600 hover:to-yellow-700'
+                                  }`}
+                                  disabled={!circle || !circle.isActive}
+                                >
+                                  <Pause className="w-4 h-4 mr-2" />
+                                  Pause Contributions
+                                </button>
+                              </div>
+                            </Tooltip.Trigger>
+                            {circle && !circle.isActive && (
+                              <Tooltip.Portal>
+                                <Tooltip.Content
+                                  className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
+                                  sideOffset={5}
+                                >
+                                  <p>Cannot pause contributions: The circle is not active yet.</p>
+                                  <p className="mt-1 text-gray-300">Activate the circle first before pausing contributions.</p>
+                                  <Tooltip.Arrow className="fill-gray-800" />
+                                </Tooltip.Content>
+                              </Tooltip.Portal>
+                            )}
+                          </Tooltip.Root>
+                        </Tooltip.Provider>
+                        
+                        <Tooltip.Provider>
+                          <Tooltip.Root>
+                            <Tooltip.Trigger asChild>
+                              <div>
+                                <button
+                                  onClick={() => toast.success('This feature is coming soon')}
+                                  className={`px-5 py-3 text-white rounded-lg text-sm transition-all flex items-center justify-center shadow-md font-medium ${
+                                    circle && circle.currentMembers > 1 
+                                      ? 'bg-gray-400 opacity-60 cursor-not-allowed'
+                                      : 'bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700'
+                                  }`}
+                                  disabled={circle && circle.currentMembers > 1}
+                                >
+                                  <X className="w-4 h-4 mr-2" />
+                                  Delete Circle
+                                </button>
+                              </div>
+                            </Tooltip.Trigger>
+                            {circle && circle.currentMembers > 1 && (
+                              <Tooltip.Portal>
+                                <Tooltip.Content
+                                  className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
+                                  sideOffset={5}
+                                >
+                                  <p>Cannot delete: The circle has {circle.currentMembers - 1} member(s) besides the admin.</p>
+                                  <p className="mt-1 text-gray-300">Remove all members first before deleting.</p>
+                                  <Tooltip.Arrow className="fill-gray-800" />
+                                </Tooltip.Content>
+                              </Tooltip.Portal>
+                            )}
+                          </Tooltip.Root>
+                        </Tooltip.Provider>
                       </div>
                     </div>
-                  )}
-                  
-                  {/* Circle Management Actions */}
-                  <div className="pt-6 border-t border-gray-200 px-2">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Management</h3>
-                    <div className="flex flex-col space-y-4 sm:flex-row sm:space-x-4 sm:space-y-0">
-                      <Tooltip.Provider>
-                        <Tooltip.Root>
-                          <Tooltip.Trigger asChild>
-                            <div>
-                              <button
-                                onClick={handleActivateCircle}
-                                className={`px-5 py-3 text-white rounded-lg text-sm transition-all flex items-center justify-center shadow-md font-medium ${
-                                  !canActivate
-                                    ? 'bg-gray-400 opacity-60 cursor-not-allowed'
-                                    : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
-                                }`}
-                                disabled={!canActivate}
-                              >
-                                <Check className="w-4 h-4 mr-2" />
-                                Activate Circle
-                              </button>
-                            </div>
-                          </Tooltip.Trigger>
-                          {circle && !canActivate && (
-                            <Tooltip.Portal>
-                              <Tooltip.Content
-                                className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
-                                sideOffset={5}
-                              >
-                                {getActivationRequirementMessage()}
-                                <p className="mt-1 text-gray-300">Current: {circle.currentMembers}/{circle.maxMembers} members</p>
-                                <Tooltip.Arrow className="fill-gray-800" />
-                              </Tooltip.Content>
-                            </Tooltip.Portal>
-                          )}
-                        </Tooltip.Root>
-                      </Tooltip.Provider>
-                      
-                      {/* Add Verify Deposits button */}
+                    
+                    {/* Stablecoin Auto-Swap Configuration */}
+                    <div className="pt-6 border-t border-gray-200 px-2 mt-6">
+                      {circle && <StablecoinSettings circle={circle} />}
+                    </div>
+
+                    {/* Add this after the existing admin action buttons */}
+                    <div className="mt-4">
                       <button
-                        onClick={() => {
-                          toast.loading('Verifying deposit status for all members...', {id: 'verify-deposits'});
-                          // Force check deposits
-                          setTimeout(() => {
-                            const updatedMembers = members.map(member => ({
-                              ...member,
-                              depositPaid: true
-                            }));
-                            setMembers(updatedMembers);
-                            setAllDepositsPaid(true);
-                            toast.success('Updated deposit status for all members', {id: 'verify-deposits'});
-                            
-                            // Refresh circle details
-                            fetchCircleDetails();
-                          }, 500);
-                        }}
-                        className="px-5 py-3 text-blue-700 bg-blue-50 rounded-lg text-sm transition-all flex items-center justify-center shadow-sm font-medium border border-blue-200 hover:bg-blue-100"
+                        onClick={() => router.push(`/circle/${id}/manage/swap-settings`)}
+                        className="w-full py-2 px-4 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors flex items-center justify-center gap-2 shadow-sm border border-indigo-200"
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                         </svg>
-                        Verify Deposits
+                        Configure Stablecoin Auto-Swap
                       </button>
-                      
-                      <Tooltip.Provider>
-                        <Tooltip.Root>
-                          <Tooltip.Trigger asChild>
-                            <div>
-                              <button
-                                onClick={() => toast.success('This feature is coming soon')}
-                                className={`px-5 py-3 text-white rounded-lg text-sm transition-all flex items-center justify-center shadow-md font-medium ${
-                                  !circle || !circle.isActive
-                                    ? 'bg-gray-400 opacity-60 cursor-not-allowed'
-                                    : 'bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-600 hover:to-yellow-700'
-                                }`}
-                                disabled={!circle || !circle.isActive}
-                              >
-                                <Pause className="w-4 h-4 mr-2" />
-                                Pause Contributions
-                              </button>
-                            </div>
-                          </Tooltip.Trigger>
-                          {circle && !circle.isActive && (
-                            <Tooltip.Portal>
-                              <Tooltip.Content
-                                className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
-                                sideOffset={5}
-                              >
-                                <p>Cannot pause contributions: The circle is not active yet.</p>
-                                <p className="mt-1 text-gray-300">Activate the circle first before pausing contributions.</p>
-                                <Tooltip.Arrow className="fill-gray-800" />
-                              </Tooltip.Content>
-                            </Tooltip.Portal>
-                          )}
-                        </Tooltip.Root>
-                      </Tooltip.Provider>
-                      
-                      <Tooltip.Provider>
-                        <Tooltip.Root>
-                          <Tooltip.Trigger asChild>
-                            <div>
-                              <button
-                                onClick={() => toast.success('This feature is coming soon')}
-                                className={`px-5 py-3 text-white rounded-lg text-sm transition-all flex items-center justify-center shadow-md font-medium ${
-                                  circle && circle.currentMembers > 1 
-                                    ? 'bg-gray-400 opacity-60 cursor-not-allowed'
-                                    : 'bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700'
-                                }`}
-                                disabled={circle && circle.currentMembers > 1}
-                              >
-                                <X className="w-4 h-4 mr-2" />
-                                Delete Circle
-                              </button>
-                            </div>
-                          </Tooltip.Trigger>
-                          {circle && circle.currentMembers > 1 && (
-                            <Tooltip.Portal>
-                              <Tooltip.Content
-                                className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
-                                sideOffset={5}
-                              >
-                                <p>Cannot delete: The circle has {circle.currentMembers - 1} member(s) besides the admin.</p>
-                                <p className="mt-1 text-gray-300">Remove all members first before deleting.</p>
-                                <Tooltip.Arrow className="fill-gray-800" />
-                              </Tooltip.Content>
-                            </Tooltip.Portal>
-                          )}
-                        </Tooltip.Root>
-                      </Tooltip.Provider>
                     </div>
                   </div>
-                  
-                  {/* Stablecoin Auto-Swap Configuration */}
-                  <div className="pt-6 border-t border-gray-200 px-2 mt-6">
-                    {circle && <StablecoinSettings circle={circle} />}
+                ) : (
+                  <div className="py-8 text-center">
+                    <p className="text-gray-500">Circle not found or you don&apos;t have permission to view it.</p>
                   </div>
-
-                  {/* Add this after the existing admin action buttons */}
-                  <div className="mt-4">
-                    <button
-                      onClick={() => router.push(`/circle/${id}/manage/swap-settings`)}
-                      className="w-full py-2 px-4 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors flex items-center justify-center gap-2 shadow-sm border border-indigo-200"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-                      </svg>
-                      Configure Stablecoin Auto-Swap
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="py-8 text-center">
-                  <p className="text-gray-500">Circle not found</p>
-                </div>
-              )}
+                )
+              }
             </div>
           </div>
         </div>
