@@ -1,0 +1,26 @@
+FROM node:20-slim
+
+WORKDIR /app
+
+# Install dependencies for better-sqlite3
+RUN apt-get update && \
+    apt-get install -y build-essential python3 git && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy package.json and package-lock.json
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy source files
+COPY tsconfig.json ./
+COPY src/services/postgres-adapter.ts ./src/services/
+COPY src/services/persistent-salt-service.ts ./src/services/
+
+# Expose the port
+EXPOSE $PORT
+
+# Start the service
+CMD ["node", "--require", "ts-node/register", "src/services/persistent-salt-service.ts"] 
