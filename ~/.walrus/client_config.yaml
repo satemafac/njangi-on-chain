@@ -1,0 +1,14 @@
+---
+# This file is the default configuration for the Walrus client
+default_context: testnet
+
+# Contexts provide wallet and node configuration for different networks
+contexts:
+  testnet:
+    # The URL to connect to a Sui Full Node. If not provided, the CLI will look for it in the Sui wallet configuration.
+    # rpc_url: https://fullnode.testnet.sui.io:443
+    wallet_config: ~/.sui/sui_config/client.yaml
+    # The Sui object ID of the Walrus instance we use
+    walrus_obj: "0xa7e1641602218f29b3eec88e1ea8b61c87cd94bf38ed72a302465ae41bd22e65"
+    # The Sui package ID of the Walrus instance
+    walrus_package: "0x7a2391c38bf8377163e76baeb20ec35f5e571f957268da2015208812b4b2bf12" 

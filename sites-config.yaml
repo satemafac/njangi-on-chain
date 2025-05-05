@@ -1,0 +1,9 @@
+---
+default_context: testnet
+
+contexts:
+  testnet:
+    gas_budget: 50000000
+    wallet_config: "~/.sui/sui_config/client.yaml"
+    walrus_binary: "walrus"
+    walrus_config: "./client_config.yaml" 
