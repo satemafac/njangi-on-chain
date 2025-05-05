@@ -97,7 +97,7 @@ export class JoinRequestDatabase {
         [circleId, userAddress, status]
       );
 
-      return result.rowCount > 0;
+      return result && result.rowCount ? result.rowCount > 0 : false;
     } catch (error) {
       console.error('Error updating join request status:', error);
       return false;
