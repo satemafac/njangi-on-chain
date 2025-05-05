@@ -145,11 +145,24 @@ export class PostgresAdapter implements DatabaseAdapter {
   }
 }
 
+// Define interfaces for SQLite types to avoid using 'any'
+interface SQLiteStatement {
+  get(...params: unknown[]): Record<string, unknown> | undefined;
+  run(...params: unknown[]): { lastInsertRowid: number | bigint };
+}
+
+interface SQLiteDatabase {
+  exec(sql: string): void;
+  prepare(sql: string): SQLiteStatement;
+  close(): void;
+}
+
+// SQLite adapter with more specific type definitions
 export class SQLiteAdapter implements DatabaseAdapter {
-  private db: Database;
+  private db: SQLiteDatabase;
   private DB_PATH: string;
 
-  constructor(dbPath: string, Database: typeof import('better-sqlite3')) {
+  constructor(dbPath: string, Database: new (path: string) => SQLiteDatabase) {
     this.DB_PATH = dbPath;
     this.db = new Database(this.DB_PATH);
   }
@@ -184,8 +197,7 @@ export class SQLiteAdapter implements DatabaseAdapter {
 
   async getSalt(sub: string, aud: string): Promise<SaltData> {
     const stmt = this.db.prepare('SELECT id, salt_encrypted, iv, tag FROM salts WHERE sub = ? AND aud = ?');
-    const row = stmt.get(sub, aud);
-    
+    const row = stmt.get(sub, aud) as SaltData | undefined;
     return row || {};
   }
 
@@ -195,7 +207,7 @@ export class SQLiteAdapter implements DatabaseAdapter {
     );
     
     const result = stmt.run(sub, aud, saltEncrypted, iv, tag);
-    return result.lastInsertRowid;
+    return Number(result.lastInsertRowid);
   }
 
   async insertRecoveryCode(saltId: number, codeHash: string): Promise<void> {
@@ -208,7 +220,7 @@ export class SQLiteAdapter implements DatabaseAdapter {
 
   async getSaltId(sub: string, aud: string): Promise<number | null> {
     const stmt = this.db.prepare('SELECT id FROM salts WHERE sub = ? AND aud = ?');
-    const row = stmt.get(sub, aud);
+    const row = stmt.get(sub, aud) as { id: number } | undefined;
     
     return row ? row.id : null;
   }
@@ -218,7 +230,7 @@ export class SQLiteAdapter implements DatabaseAdapter {
       'SELECT id FROM recovery_codes WHERE salt_id = ? AND code_hash = ? AND used_at IS NULL'
     );
     
-    const row = stmt.get(saltId, codeHash);
+    const row = stmt.get(saltId, codeHash) as { id: number } | undefined;
     return row || null;
   }
 
@@ -235,10 +247,6 @@ export class SQLiteAdapter implements DatabaseAdapter {
   }
 }
 
-// Avoid TypeScript errors by using dynamic import
-type Database = any;
-type BetterSqlite3 = any;
-
 // Factory function to get the appropriate database adapter
 export async function getDatabaseAdapter(): Promise<DatabaseAdapter> {
   if (process.env.USE_POSTGRES === 'true') {
@@ -246,9 +254,16 @@ export async function getDatabaseAdapter(): Promise<DatabaseAdapter> {
     return new PostgresAdapter();
   } else {
     console.log('Using SQLite adapter');
-    // Dynamically import better-sqlite3 to avoid issues on platforms where it's not available
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const Database = require('better-sqlite3');
-    return new SQLiteAdapter('./salt-database.db', Database);
+    try {
+      // Use dynamic import for better-sqlite3
+      // This avoids ESM/CJS interop issues while still following ESM standards
+      const BetterSqlite3 = await import('better-sqlite3');
+      const Database = BetterSqlite3.default;
+      
+      return new SQLiteAdapter('./salt-database.db', Database);
+    } catch (error) {
+      console.error('Failed to load SQLite adapter:', error);
+      throw new Error('SQLite adapter failed to initialize');
+    }
   }
 } 
