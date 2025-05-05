@@ -64,7 +64,11 @@ export const Navbar: React.FC = () => {
       }
       
       // Sort by request date, newest first
-      allRequests.sort((a, b) => b.requestDate - a.requestDate);
+      allRequests.sort((a, b) => {
+        const dateA = new Date(a.created_at || 0).getTime();
+        const dateB = new Date(b.created_at || 0).getTime();
+        return dateB - dateA;
+      });
       console.log('Final pending requests:', allRequests);
       setPendingRequests(allRequests);
       
@@ -166,49 +170,45 @@ export const Navbar: React.FC = () => {
                       ) : pendingRequests.length > 0 ? (
                         <div className="divide-y divide-gray-100">
                           {pendingRequests.map((request) => (
-                            <div key={`${request.circleId}-${request.userAddress}`} className="p-4 hover:bg-gray-50">
+                            <div 
+                              key={`${request.circle_id}-${request.user_address}`}
+                              className="cursor-pointer p-4 hover:bg-gray-50 dark:hover:bg-gray-700"
+                              onClick={() => {
+                                router.push(`/circle/${request.circle_id}`);
+                                setShowNotifications(false);
+                              }}
+                            >
                               <div className="flex items-start">
-                                <div className="flex-shrink-0">
-                                  <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center">
-                                    <svg
-                                      className="h-4 w-4 text-blue-600"
-                                      xmlns="http://www.w3.org/2000/svg"
-                                      viewBox="0 0 24 24"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      strokeWidth="2"
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                    >
-                                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                                      <circle cx="9" cy="7" r="4"></circle>
-                                      <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-                                      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-                                    </svg>
-                                  </div>
-                                </div>
-                                <div className="ml-4 flex-1">
-                                  <p className="text-sm font-medium text-gray-900">
-                                    New Join Request
-                                  </p>
-                                  <p className="text-sm text-gray-500 mt-1">
-                                    {request.userName || 'Unknown User'} wants to join {request.circleName}
+                                <Image
+                                  src="/njangi-on-chain-logo.png"
+                                  alt="Circle Logo"
+                                  width={40}
+                                  height={40}
+                                  className="rounded-full"
+                                />
+                                <div className="ml-3">
+                                  <p className="font-medium text-sm text-gray-900 dark:text-white">
+                                    {request.user_name} wants to join
+                                    <span className="font-bold"> {request.circle_name}</span>
                                   </p>
                                   <div className="mt-2 text-xs text-gray-500">
-                                    {new Date(request.requestDate).toLocaleDateString('en-US', {
+                                    {new Date(request.created_at || 0).toLocaleDateString('en-US', {
                                       year: 'numeric',
                                       month: 'short',
                                       day: 'numeric',
-                                      hour: '2-digit',
-                                      minute: '2-digit'
                                     })}
                                   </div>
-                                  <div className="mt-3 flex space-x-2">
+                                  
+                                  <div className="mt-2 flex space-x-2">
                                     <button
-                                      onClick={() => router.push(`/circle/${request.circleId}/manage`)}
-                                      className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-full shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        router.push(`/circle/${request.circle_id}/manage`);
+                                        setShowNotifications(false);
+                                      }}
+                                      className="px-3 py-1 text-xs rounded font-medium bg-blue-100 text-blue-700 hover:bg-blue-200"
                                     >
-                                      Review Request
+                                      Review
                                     </button>
                                   </div>
                                 </div>
