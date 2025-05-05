@@ -852,8 +852,8 @@ export default function ManageCircle() {
       // If approving, first try to approve on blockchain
       if (approve) {
         const blockchainSuccess = await callAdminApproveMember(
-          request.circleId,
-          request.userAddress
+          request.circle_id,
+          request.user_address
         );
         
         if (!blockchainSuccess) {
@@ -864,8 +864,8 @@ export default function ManageCircle() {
       
       // Update request status using the service
       const success = await joinRequestService.updateJoinRequestStatus(
-        request.circleId,
-        request.userAddress,
+        request.circle_id,
+        request.user_address,
         approve ? 'approved' : 'rejected'
       );
       
@@ -873,8 +873,8 @@ export default function ManageCircle() {
         // Update UI to remove the request
         setPendingRequests(prev => 
           prev.filter(req => 
-            !(req.circleId === request.circleId && 
-              req.userAddress === request.userAddress)
+            !(req.circle_id === request.circle_id && 
+              req.user_address === request.user_address)
           )
         );
         
@@ -886,7 +886,7 @@ export default function ManageCircle() {
           setMembers(prev => [
             ...prev,
             {
-              address: request.userAddress,
+              address: request.user_address,
               joinDate: currentTimestamp, // We would ideally get this from the blockchain event
               status: 'active'
             }
@@ -900,9 +900,9 @@ export default function ManageCircle() {
             });
           }
           
-          toast.success(`Approved ${shortenAddress(request.userAddress)} to join the circle`);
+          toast.success(`Approved ${shortenAddress(request.user_address)} to join the circle`);
         } else {
-          toast.success(`Rejected join request from ${shortenAddress(request.userAddress)}`);
+          toast.success(`Rejected join request from ${shortenAddress(request.user_address)}`);
         }
       } else {
         toast.error('Failed to process join request');
@@ -925,11 +925,11 @@ export default function ManageCircle() {
       onConfirm: async () => {
         try {
           // Extract all the member addresses from pending requests
-          const memberAddresses = pendingRequests.map(req => req.userAddress);
+          const memberAddresses = pendingRequests.map(req => req.user_address);
           
           // Call the bulk approval method
           const blockchainSuccess = await callAdminApproveMembers(
-            pendingRequests[0].circleId, // All requests are for the same circle
+            pendingRequests[0].circle_id, // All requests are for the same circle
             memberAddresses
           );
           
@@ -942,8 +942,8 @@ export default function ManageCircle() {
           let allSuccessful = true;
           for (const request of pendingRequests) {
             const success = await joinRequestService.updateJoinRequestStatus(
-              request.circleId,
-              request.userAddress,
+              request.circle_id,
+              request.user_address,
               'approved'
             );
             
@@ -956,7 +956,7 @@ export default function ManageCircle() {
             // Add all members to the UI
             const currentTimestamp = Date.now();
             const newMembers = pendingRequests.map(req => ({
-              address: req.userAddress,
+              address: req.user_address,
               joinDate: currentTimestamp,
               status: 'active' as const
             }));
@@ -992,10 +992,12 @@ export default function ManageCircle() {
   };
 
   // Format timestamp to readable date
-  const formatDate = (timestamp: number) => {
+  const formatDate = (timestamp: number | Date) => {
     if (!timestamp) return 'Not set';
     
-    const date = new Date(timestamp);
+    const date = typeof timestamp === 'number' 
+      ? new Date(timestamp) 
+      : timestamp instanceof Date ? timestamp : new Date();
     
     // For display purposes, always show in local timezone but format differently
     return date.toLocaleDateString('en-US', {
@@ -2630,13 +2632,15 @@ export default function ManageCircle() {
                           </thead>
                           <tbody className="divide-y divide-gray-200 bg-white">
                             {pendingRequests.map((request) => (
-                              <tr key={`${request.circleId}-${request.userAddress}`} className="hover:bg-gray-50 transition-colors">
-                                <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm sm:pl-6">
-                                  <div className="font-medium text-gray-900">{request.userName || 'Unknown User'}</div>
-                                  <div className="text-gray-500">{shortenAddress(request.userAddress)}</div>
+                              <tr key={`${request.circle_id}-${request.user_address}`} className="hover:bg-gray-50 transition-colors">
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  <div className="flex items-center">
+                                    <div className="font-medium text-gray-900">{request.user_name || 'Unknown User'}</div>
+                                    <div className="text-gray-500">{shortenAddress(request.user_address)}</div>
+                                  </div>
                                 </td>
-                                <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                                  {formatDate(request.requestDate)}
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                  {formatDate(request.created_at)}
                                 </td>
                                 <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
                                   <div className="flex justify-end space-x-3">
