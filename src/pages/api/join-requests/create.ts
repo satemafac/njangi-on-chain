@@ -4,7 +4,7 @@ import joinRequestDatabase from '../../../services/join-request-database';
 type ResponseData = {
   success: boolean;
   message?: string;
-  data?: any;
+  data?: Record<string, unknown>;
 };
 
 export default async function handler(
@@ -31,25 +31,18 @@ export default async function handler(
       circleId,
       circleName,
       userAddress,
-      userName || 'Unknown User'
+      userName || 'Anonymous'
     );
 
-    if (joinRequest) {
-      return res.status(200).json({
-        success: true,
-        data: joinRequest
-      });
-    } else {
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to create join request'
-      });
-    }
+    return res.status(200).json({
+      success: true,
+      data: joinRequest ? { id: joinRequest.id } : { id: 0 }
+    });
   } catch (error) {
-    console.error('API error creating join request:', error);
+    console.error('Error creating join request:', error);
     return res.status(500).json({
       success: false,
-      message: 'Internal server error'
+      message: 'Failed to create join request'
     });
   }
 } 
