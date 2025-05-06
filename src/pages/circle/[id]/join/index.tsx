@@ -252,7 +252,10 @@ export default function JoinCircle() {
               if (configFields.security_deposit_usd !== undefined) configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
               if (configFields.cycle_length !== undefined) configValues.cycleLength = Number(configFields.cycle_length);
               if (configFields.cycle_day !== undefined) configValues.cycleDay = Number(configFields.cycle_day);
-              if (configFields.max_members !== undefined) configValues.maxMembers = Number(configFields.max_members);
+              if (configFields.max_members !== undefined) {
+                configValues.maxMembers = Number(configFields.max_members);
+                console.log('Join - Found max_members in config object:', configValues.maxMembers);
+              }
             }
           } catch (error) {
             console.error(`Join - Error fetching config object ${field.objectId}:`, error);
@@ -270,7 +273,6 @@ export default function JoinCircle() {
       // Fallback for cycle info only if not set by higher priority sources
       if (configValues.cycleLength === 0 && fields.cycle_length !== undefined && !isNaN(Number(fields.cycle_length))) configValues.cycleLength = Number(fields.cycle_length);
       if (configValues.cycleDay === 1 && fields.cycle_day !== undefined && !isNaN(Number(fields.cycle_day))) configValues.cycleDay = Number(fields.cycle_day);
-      if (configValues.maxMembers === 3 && fields.max_members !== undefined && !isNaN(Number(fields.max_members))) configValues.maxMembers = Number(fields.max_members);
       console.log('Join - Config after Direct Fields Fallback:', configValues);
       
       // 4. Calculate SUI amounts from USD if SUI amount is still zero (and price is available)
