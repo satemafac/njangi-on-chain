@@ -258,6 +258,9 @@ export default function Dashboard() {
     confirmButtonVariant?: 'primary' | 'danger' | 'warning';
   } | null>(null);
 
+  // Define a constant for default values
+  const DEFAULT_MAX_MEMBERS = 3;
+
   // Update the script loading in useEffect for MoonPay SDK
   useEffect(() => {
     // Load MoonPay SDK script
@@ -497,8 +500,9 @@ export default function Dashboard() {
       securityDeposit: 0,
       securityDepositUsd: 0,
       cycleLength: 0,
-      cycleDay: 0,  // Default to day 0 (Monday)
-      maxMembers: 3,
+      cycleDay: 1,
+      maxMembers: DEFAULT_MAX_MEMBERS, // Using named constant instead of hardcoded 3
+      autoSwapEnabled: false, // Initial default
     };
 
     // Extract from transaction inputs if available (check types safely)
@@ -508,7 +512,7 @@ export default function Dashboard() {
       configValues.contributionAmountUsd = Number(circleCreationData.contribution_amount_usd ?? 0) / 100;
       configValues.securityDepositUsd = Number(circleCreationData.security_deposit_usd ?? 0) / 100;
       configValues.cycleLength = Number(circleCreationData.cycle_length ?? 0);
-      configValues.maxMembers = Number(circleCreationData.max_members ?? 3);
+      configValues.maxMembers = Number(circleCreationData.max_members ?? DEFAULT_MAX_MEMBERS);
     }
 
     // Next, try to extract values from dynamic fields safely
@@ -550,7 +554,7 @@ export default function Dashboard() {
           configValues.securityDepositUsd = Number(typedFieldValue.security_deposit_usd ?? configValues.securityDepositUsd * 100) / 100;
           configValues.cycleLength = Number(typedFieldValue.cycle_length ?? configValues.cycleLength);
           configValues.cycleDay = Number(typedFieldValue.cycle_day ?? configValues.cycleDay);
-          configValues.maxMembers = Number(typedFieldValue.max_members ?? configValues.maxMembers);
+          if (configValues.maxMembers === DEFAULT_MAX_MEMBERS && fields.max_members !== undefined) configValues.maxMembers = Number(fields.max_members);
           console.log('Found cycle_day in dynamic field value/content:', configValues.cycleDay);
         } else {
             console.log('CircleConfig dynamic field found, but no value/content fields property.');
