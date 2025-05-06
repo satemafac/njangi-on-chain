@@ -174,27 +174,95 @@ export default function CircleDetails() {
 
       // 2. Look for config in dynamic fields
       for (const field of dynamicFieldsResult.data) {
-         if ((field.name && typeof field.name === 'object' && 'value' in field.name && field.name.value === 'circle_config') ||
-             (field.type && typeof field.type === 'string' && field.type.includes('CircleConfig'))) {
+        // Find the CircleConfig dynamic field
+        if ((field.name && typeof field.name === 'object' && 'value' in field.name && field.name.value === 'circle_config') ||
+            (field.type && typeof field.type === 'string' && field.type.includes('CircleConfig')) ||
+            (field.objectType && typeof field.objectType === 'string' && field.objectType.includes('CircleConfig'))) {
+          
           console.log('Details - Found CircleConfig dynamic field:', field);
+          
           if (field.objectId) {
             try {
+              // Fetch the complete CircleConfig object
               const configData = await client.getObject({
                 id: field.objectId,
-                options: { showContent: true }
+                options: { 
+                  showContent: true,
+                  showDisplay: false,
+                  showType: true
+                }
               });
-              console.log('Details - Config object data:', configData);
+              
+              console.log('Details - Fetched complete CircleConfig object:', configData);
+              
+              // Process the object data to access the deeply nested max_members value
               if (configData.data?.content && 'fields' in configData.data.content) {
-                const configFields = configData.data.content.fields as Record<string, SuiFieldValue>;
-                if (configFields.contribution_amount) configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
-                if (configFields.contribution_amount_usd) configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
-                if (configFields.security_deposit) configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
-                if (configFields.security_deposit_usd) configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
-                if (configFields.cycle_length !== undefined) configValues.cycleLength = Number(configFields.cycle_length);
-                if (configFields.cycle_day !== undefined) configValues.cycleDay = Number(configFields.cycle_day);
-                if (configFields.max_members !== undefined) {
-                  configValues.maxMembers = Number(configFields.max_members);
-                  console.log('Details - Found max_members in config object:', configValues.maxMembers);
+                const contentFields = configData.data.content.fields as Record<string, unknown>;
+                console.log('Details - CircleConfig content fields:', contentFields);
+                
+                // Check if we have direct access to the config values
+                if ('contribution_amount' in contentFields) {
+                  configValues.contributionAmount = Number(contentFields.contribution_amount) / 1e9;
+                }
+                if ('contribution_amount_usd' in contentFields) {
+                  configValues.contributionAmountUsd = Number(contentFields.contribution_amount_usd) / 100;
+                }
+                if ('security_deposit' in contentFields) {
+                  configValues.securityDeposit = Number(contentFields.security_deposit) / 1e9;
+                }
+                if ('security_deposit_usd' in contentFields) {
+                  configValues.securityDepositUsd = Number(contentFields.security_deposit_usd) / 100;
+                }
+                if ('cycle_length' in contentFields) {
+                  configValues.cycleLength = Number(contentFields.cycle_length);
+                }
+                if ('cycle_day' in contentFields) {
+                  configValues.cycleDay = Number(contentFields.cycle_day);
+                }
+                if ('max_members' in contentFields) {
+                  configValues.maxMembers = Number(contentFields.max_members);
+                  console.log('Details - Extracted max_members directly:', configValues.maxMembers);
+                }
+                
+                // Check for the deep nested structure at value.fields path
+                if ('value' in contentFields && 
+                    contentFields.value && 
+                    typeof contentFields.value === 'object') {
+                  
+                  const valueObj = contentFields.value as Record<string, unknown>;
+                  console.log('Details - CircleConfig value object:', valueObj);
+                  
+                  if ('fields' in valueObj && 
+                      valueObj.fields && 
+                      typeof valueObj.fields === 'object') {
+                    
+                    const configFields = valueObj.fields as Record<string, unknown>;
+                    console.log('Details - CircleConfig nested fields:', configFields);
+                    
+                    // Extract all config values from the deeply nested structure
+                    if ('max_members' in configFields) {
+                      configValues.maxMembers = Number(configFields.max_members);
+                      console.log('Details - Successfully extracted max_members:', configValues.maxMembers);
+                    }
+                    if ('contribution_amount' in configFields) {
+                      configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
+                    }
+                    if ('contribution_amount_usd' in configFields) {
+                      configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
+                    }
+                    if ('security_deposit' in configFields) {
+                      configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
+                    }
+                    if ('security_deposit_usd' in configFields) {
+                      configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
+                    }
+                    if ('cycle_length' in configFields) {
+                      configValues.cycleLength = Number(configFields.cycle_length);
+                    }
+                    if ('cycle_day' in configFields) {
+                      configValues.cycleDay = Number(configFields.cycle_day);
+                    }
+                  }
                 }
               }
             } catch (error) {
@@ -213,6 +281,7 @@ export default function CircleDetails() {
       // Fallback for cycle info if not found earlier
       if (configValues.cycleLength === 0 && fields.cycle_length !== undefined) configValues.cycleLength = Number(fields.cycle_length);
       if (configValues.cycleDay === 1 && fields.cycle_day !== undefined) configValues.cycleDay = Number(fields.cycle_day);
+      if (configValues.maxMembers === 3 && fields.max_members !== undefined) configValues.maxMembers = Number(fields.max_members);
 
       console.log('Details - Final Config Values:', configValues);
 
