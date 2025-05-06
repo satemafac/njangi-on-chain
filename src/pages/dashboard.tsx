@@ -519,65 +519,64 @@ export default function Dashboard() {
       // Add null check for field itself
       if (!field) continue; 
 
-      // Check if this field has the circle config using safer checks
-      // Use field.type which seems more reliable based on previous logs
-      const isCircleConfig = field.type && typeof field.type === 'string' && field.type.includes('::CircleConfig');
+      // Updated check: Look for the specific dynamic field TYPE for CircleConfig
+      const isCircleConfigField = field.type === `0x2::dynamic_field::Field<vector<u8>, ${PACKAGE_ID}::njangi_circle_config::CircleConfig>`;
       
-      if (isCircleConfig) {
-        console.log('Found CircleConfig field:', field);
+      if (isCircleConfigField) {
+        console.log('Found CircleConfig dynamic field by TYPE:', field);
         
-        // Check if objectId exists before using it
-        if (field.objectId) { 
-          console.log('Found CircleConfig objectId:', field.objectId);
-          // NOTE: We are NOT fetching the object here anymore to avoid extra API calls
-          // We rely on the dynamic field value if present directly
-        } else {
-            console.log('CircleConfig dynamic field found, but no objectId property.');
-        }
-        
-        // Try to access content or value safely
-        const fieldValue = field.value || field.content?.fields;
-        // Add a more specific type check for field.content.fields
-        const contentFields = field.content && typeof field.content === 'object' && 'fields' in field.content ? field.content.fields : null;
-        const finalValueSource = field.value || contentFields;
+        // Access the nested 'value' field which contains the actual CircleConfig fields
+        const configFieldValue = field.value as { fields?: Record<string, SuiValue> };
 
-        if (finalValueSource && typeof finalValueSource === 'object') {
-          const typedFieldValue = finalValueSource as Record<string, unknown>; // Use the validated source
-          // Use nullish coalescing for safer number conversion
-          configValues.contributionAmount = Number(typedFieldValue.contribution_amount ?? configValues.contributionAmount * 1e9) / 1e9;
-          configValues.securityDeposit = Number(typedFieldValue.security_deposit ?? configValues.securityDeposit * 1e9) / 1e9;
-          configValues.contributionAmountUsd = Number(typedFieldValue.contribution_amount_usd ?? configValues.contributionAmountUsd * 100) / 100;
-          configValues.securityDepositUsd = Number(typedFieldValue.security_deposit_usd ?? configValues.securityDepositUsd * 100) / 100;
-          configValues.cycleLength = Number(typedFieldValue.cycle_length ?? configValues.cycleLength);
-          configValues.cycleDay = Number(typedFieldValue.cycle_day ?? configValues.cycleDay);
-          // *** Ensure max_members from dynamic field takes precedence ***
-          if (typedFieldValue.max_members !== undefined) {
-            configValues.maxMembers = Number(typedFieldValue.max_members);
-            console.log('Found max_members in dynamic field value/content:', configValues.maxMembers);
+        if (configFieldValue?.fields) {
+          const configFields = configFieldValue.fields;
+          console.log('Extracted CircleConfig fields from dynamic field:', configFields);
+          
+          // Override config values with those from the dynamic field
+          // Use nullish coalescing and explicit checks for potentially missing fields
+          if (configFields.contribution_amount !== undefined) {
+            configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
           }
-          console.log('Found cycle_day in dynamic field value/content:', configValues.cycleDay);
+          if (configFields.security_deposit !== undefined) {
+            configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
+          }
+          if (configFields.contribution_amount_usd !== undefined) {
+            configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
+          }
+          if (configFields.security_deposit_usd !== undefined) {
+            configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
+          }
+          if (configFields.cycle_length !== undefined) {
+            configValues.cycleLength = Number(configFields.cycle_length);
+          }
+          if (configFields.cycle_day !== undefined) {
+            configValues.cycleDay = Number(configFields.cycle_day);
+          }
+          if (configFields.max_members !== undefined) {
+            configValues.maxMembers = Number(configFields.max_members);
+            console.log('Updated max_members from dynamic field:', configValues.maxMembers);
+          }          
         } else {
-            console.log('CircleConfig dynamic field found, but no value/content fields property.');
+            console.log('CircleConfig dynamic field found, but missing nested value.fields structure.');
         }
+        // Important: Break after finding the correct dynamic field to avoid overrides from other fields
+        break; 
       }
     }
 
-    // Direct field access with safe checks and type assertions
-    // *** REMOVE max_members fallback from direct fields ***
-    configValues.contributionAmount = Number(fields.contribution_amount ?? configValues.contributionAmount * 1e9) / 1e9;
-    configValues.securityDeposit = Number(fields.security_deposit ?? configValues.securityDeposit * 1e9) / 1e9;
-    configValues.contributionAmountUsd = Number(fields.contribution_amount_usd ?? configValues.contributionAmountUsd * 100) / 100;
-    configValues.securityDepositUsd = Number(fields.security_deposit_usd ?? configValues.securityDepositUsd * 100) / 100;
-    configValues.cycleLength = Number(fields.cycle_length ?? configValues.cycleLength);
-    // Only update cycleDay from direct field if it wasn't found elsewhere
-    if (configValues.cycleDay === 0 && fields.cycle_day !== undefined) { 
-        configValues.cycleDay = Number(fields.cycle_day ?? 0); 
-        console.log('Found cycle_day in direct fields:', configValues.cycleDay);
-    }
-    // Remove max_members fallback here to prioritize dynamic field
-    // configValues.maxMembers = Number(fields.max_members ?? configValues.maxMembers);
+    // *** REMOVE ALL FALLBACKS FROM DIRECT FIELDS for config values ***
+    // We now rely solely on the creation event and the dynamic field for config
+    // configValues.contributionAmount = Number(fields.contribution_amount ?? configValues.contributionAmount * 1e9) / 1e9;
+    // configValues.securityDeposit = Number(fields.security_deposit ?? configValues.securityDeposit * 1e9) / 1e9;
+    // configValues.contributionAmountUsd = Number(fields.contribution_amount_usd ?? configValues.contributionAmountUsd * 100) / 100;
+    // configValues.securityDepositUsd = Number(fields.security_deposit_usd ?? configValues.securityDepositUsd * 100) / 100;
+    // configValues.cycleLength = Number(fields.cycle_length ?? configValues.cycleLength);
+    // if (configValues.cycleDay === 0 && fields.cycle_day !== undefined) { 
+    //     configValues.cycleDay = Number(fields.cycle_day ?? 0); 
+    //     console.log('Found cycle_day in direct fields:', configValues.cycleDay);
+    // }
 
-    // Check transaction input fields for cycle day specifically (highest priority if found)
+    // Check transaction input fields for cycle day specifically (can still be useful)
     if (objectData.transactionInput?.cycle_day !== undefined) {
       configValues.cycleDay = Number(objectData.transactionInput.cycle_day);
       console.log('Using transaction input for cycle_day:', configValues.cycleDay);
@@ -906,7 +905,8 @@ export default function Dashboard() {
               const objectData = await client.getObject({
                 id: parsedEvent.circle_id,
               options: { 
-                showContent: true
+                showContent: true,
+                showType: true // Added to ensure we can check dynamic fields reliably
               }
             });
             

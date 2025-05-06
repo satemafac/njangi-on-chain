@@ -23,6 +23,9 @@ interface Circle {
   nextPayoutTime: number;
 }
 
+// Define SuiValue type (similar to dashboard)
+type SuiValue = string | number | boolean | null | undefined | SuiValue[] | Record<string, unknown>;
+
 // Define CircleFields type
 interface CircleFields {
   name: string;
@@ -228,52 +231,59 @@ export default function JoinCircle() {
       // 2. Look for config in dynamic fields (e.g., 'circle_config')
       for (const field of dynamicFields) {
         if (!field) continue;
-        let isConfigField = false;
-        // Check by name or type depending on how dynamic field was added
-         if ((field.name && typeof field.name === 'object' && 'value' in field.name && field.name.value === 'circle_config') ||
-             (field.type && typeof field.type === 'string' && field.type.includes('CircleConfig'))) {
-             isConfigField = true;
-         }
+        // Check by type for the specific dynamic field holding the CircleConfig
+        const isCircleConfigField = field.type === `0x2::dynamic_field::Field<vector<u8>, ${PACKAGE_ID}::njangi_circle_config::CircleConfig>`;
 
-        if (isConfigField && field.objectId) {
-          console.log('Join - Found CircleConfig dynamic field object:', field.objectId);
+        if (isCircleConfigField && field.objectId) {
+          console.log('Join - Found CircleConfig dynamic field object ID:', field.objectId);
           try {
-            const configData = await client.getObject({
+            // Fetch the dynamic field object itself to get its nested value
+            const configFieldObject = await client.getObject({
               id: field.objectId,
               options: { showContent: true }
             });
-            console.log('Join - Config object content:', configData);
-            if (configData.data?.content && 'fields' in configData.data.content) {
-              const configFields = configData.data.content.fields as Record<string, unknown>;
-              // Override with values from the config object
-              if (configFields.contribution_amount !== undefined) configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
-              if (configFields.contribution_amount_usd !== undefined) configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
-              if (configFields.security_deposit !== undefined) configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
-              if (configFields.security_deposit_usd !== undefined) configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
-              if (configFields.cycle_length !== undefined) configValues.cycleLength = Number(configFields.cycle_length);
-              if (configFields.cycle_day !== undefined) configValues.cycleDay = Number(configFields.cycle_day);
-              if (configFields.max_members !== undefined) {
-                configValues.maxMembers = Number(configFields.max_members);
-                console.log('Join - Found max_members in config object:', configValues.maxMembers);
+            console.log('Join - Fetched CircleConfig dynamic field object content:', configFieldObject);
+
+            // Access the nested 'value' which holds the CircleConfig fields
+            if (configFieldObject.data?.content && 'fields' in configFieldObject.data.content) {
+              const outerFields = configFieldObject.data.content.fields as { value?: { fields?: Record<string, SuiValue> } };
+              
+              if (outerFields.value?.fields) {
+                const configFields = outerFields.value.fields;
+                console.log('Join - Extracted CircleConfig fields from nested value:', configFields);
+                
+                // Override config values with those from the dynamic field object
+                if (configFields.contribution_amount !== undefined) configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
+                if (configFields.contribution_amount_usd !== undefined) configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
+                if (configFields.security_deposit !== undefined) configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
+                if (configFields.security_deposit_usd !== undefined) configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
+                if (configFields.cycle_length !== undefined) configValues.cycleLength = Number(configFields.cycle_length);
+                if (configFields.cycle_day !== undefined) configValues.cycleDay = Number(configFields.cycle_day);
+                if (configFields.max_members !== undefined) {
+                  configValues.maxMembers = Number(configFields.max_members);
+                  console.log('Join - Updated max_members from dynamic field object:', configValues.maxMembers);
+                }
+              } else {
+                  console.log('Join - CircleConfig dynamic field object found, but missing nested value.fields structure.');
               }
             }
           } catch (error) {
-            console.error(`Join - Error fetching config object ${field.objectId}:`, error);
+            console.error(`Join - Error fetching CircleConfig dynamic field object ${field.objectId}:`, error);
           }
-          break; // Assume only one config object
+          // Important: Break after finding the correct dynamic field
+          break; 
         }
       }
       console.log('Join - Config after Dynamic Fields:', configValues);
 
-      // 3. Use direct fields from the circle object as a fallback (handle potential NaN)
-      if (configValues.contributionAmount === 0 && fields.contribution_amount) configValues.contributionAmount = Number(fields.contribution_amount) / 1e9;
-      if (configValues.contributionAmountUsd === 0 && fields.contribution_amount_usd) configValues.contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
-      if (configValues.securityDeposit === 0 && fields.security_deposit) configValues.securityDeposit = Number(fields.security_deposit) / 1e9;
-      if (configValues.securityDepositUsd === 0 && fields.security_deposit_usd) configValues.securityDepositUsd = Number(fields.security_deposit_usd) / 100;
-      // Fallback for cycle info only if not set by higher priority sources
-      if (configValues.cycleLength === 0 && fields.cycle_length !== undefined && !isNaN(Number(fields.cycle_length))) configValues.cycleLength = Number(fields.cycle_length);
-      if (configValues.cycleDay === 1 && fields.cycle_day !== undefined && !isNaN(Number(fields.cycle_day))) configValues.cycleDay = Number(fields.cycle_day);
-      console.log('Join - Config after Direct Fields Fallback:', configValues);
+      // *** REMOVE ALL FALLBACKS FROM DIRECT FIELDS for config values ***
+      // if (configValues.contributionAmount === 0 && fields.contribution_amount) configValues.contributionAmount = Number(fields.contribution_amount) / 1e9;
+      // if (configValues.contributionAmountUsd === 0 && fields.contribution_amount_usd) configValues.contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
+      // if (configValues.securityDeposit === 0 && fields.security_deposit) configValues.securityDeposit = Number(fields.security_deposit) / 1e9;
+      // if (configValues.securityDepositUsd === 0 && fields.security_deposit_usd) configValues.securityDepositUsd = Number(fields.security_deposit_usd) / 100;
+      // if (configValues.cycleLength === 0 && fields.cycle_length !== undefined && !isNaN(Number(fields.cycle_length))) configValues.cycleLength = Number(fields.cycle_length);
+      // if (configValues.cycleDay === 1 && fields.cycle_day !== undefined && !isNaN(Number(fields.cycle_day))) configValues.cycleDay = Number(fields.cycle_day);
+      console.log('Join - Config after Direct Fields Fallback (now removed):', configValues);
       
       // 4. Calculate SUI amounts from USD if SUI amount is still zero (and price is available)
       const effectiveSuiPrice = suiPrice > 0 ? suiPrice : 1.0; // Use 1.0 as fallback price to avoid division by zero
