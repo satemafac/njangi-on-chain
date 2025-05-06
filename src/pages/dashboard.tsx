@@ -11,6 +11,8 @@ import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
 import { Eye, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle } from 'lucide-react';
 import { PACKAGE_ID } from '../services/circle-service';
+// Add debugging for package ID
+console.log('CURRENT PACKAGE_ID:', PACKAGE_ID, 'ENV VAR:', process.env.NEXT_PUBLIC_PACKAGE_ID);
 // Use alias path for the modal import
 import ConfirmationModal from '@/components/ConfirmationModal';
 import { Button } from '@chakra-ui/react';
@@ -604,6 +606,8 @@ export default function Dashboard() {
   // Update fetchUserCircles to handle potential undefined IDs
   const fetchUserCircles = useCallback(async () => {
     console.log('fetchUserCircles starting...');
+    console.log('Current package ID (from import):', PACKAGE_ID);
+    console.log('Environment variable value:', process.env.NEXT_PUBLIC_PACKAGE_ID);
     
     if (!userAddress) {
       console.log('No user address, skipping fetch');
@@ -621,21 +625,33 @@ export default function Dashboard() {
         url: 'https://fullnode.testnet.sui.io:443'
       });
       
-      // Log package ID for debugging
-      console.log('Using package ID:', PACKAGE_ID);
+      // Force-use the environment variable directly to avoid any cached imports
+      const currentPackageId = process.env.NEXT_PUBLIC_PACKAGE_ID || PACKAGE_ID;
+      console.log('Using package ID for API calls:', currentPackageId);
       
       // Get Circle Created events for admin of circles
       const circleEvents = await client.queryEvents({
         query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleCreated`
+          MoveEventType: `${currentPackageId}::njangi_circles::CircleCreated`
         },
         limit: 100
       });
       
+      console.log(`Found ${circleEvents.data.length} circle created events using package ID:`, currentPackageId);
+      
+      // Log the circle IDs from events to debug
+      const circleIds = circleEvents.data.map(event => {
+        if (event.parsedJson && typeof event.parsedJson === 'object' && 'circle_id' in event.parsedJson) {
+          return event.parsedJson.circle_id || 'unknown';
+        }
+        return 'unknown';
+      });
+      console.log('Circle IDs from events:', circleIds);
+      
       // Get Member Joined events
       const memberEvents = await client.queryEvents({
         query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circles::MemberJoined`
+          MoveEventType: `${currentPackageId}::njangi_circles::MemberJoined`
         },
         limit: 100
       });
@@ -643,7 +659,7 @@ export default function Dashboard() {
       // Get circle activation events
       const activationEvents = await client.queryEvents({
         query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleActivated`
+          MoveEventType: `${currentPackageId}::njangi_circles::CircleActivated`
         },
         limit: 50
       });
@@ -651,7 +667,7 @@ export default function Dashboard() {
       // Get wallet creation events to map circle IDs to wallet IDs
       const walletEvents = await client.queryEvents({
         query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyWalletCreated`
+          MoveEventType: `${currentPackageId}::njangi_custody::CustodyWalletCreated`
         },
         limit: 100
       });
