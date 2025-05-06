@@ -32,6 +32,8 @@ module njangi::njangi_circles {
     const ENotAdmin: u64 = 7;
     const EWalletCircleMismatch: u64 = 46;
     const ECircleNotActive: u64 = 54;
+    const ECircleIsActive: u64 = 55;
+    const EInvalidMaxMembersLimit: u64 = 56;
     // Define constants locally based on values from other modules
     const EInvalidContributionAmount: u64 = 1; // From core
     const ENotMember: u64 = 8;                 // From core
@@ -135,6 +137,13 @@ module njangi::njangi_circles {
         amount: u64, // Amount in stablecoin micro-units
         cycle: u64,
         coin_type: String, // Added coin type
+    }
+
+    public struct CircleMaxMembersUpdated has copy, drop {
+        circle_id: ID,
+        admin: address,
+        old_max_members: u64,
+        new_max_members: u64,
     }
 
     // ----------------------------------------------------------
@@ -1362,6 +1371,41 @@ module njangi::njangi_circles {
             // Add coin type info using imported type_name and String
             // Convert ascii::String to string::String
             coin_type: string::utf8(ascii::into_bytes(type_name::into_string(type_name::get<CoinType>()))) 
+        });
+    }
+
+    // ----------------------------------------------------------
+    // Admin function to set maximum members for an inactive circle
+    // ----------------------------------------------------------
+    public entry fun admin_set_max_members(
+        circle: &mut Circle,
+        new_max_members: u64,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        
+        // Only admin can update max members
+        assert!(sender == circle.admin, ENotAdmin);
+        
+        // Circle must not be active
+        assert!(!circle.is_active, ECircleIsActive);
+        
+        // Must be at least the minimum required members (3) and not less than current members
+        assert!(new_max_members >= core::get_min_members(), EInvalidMaxMembersLimit);
+        assert!(new_max_members >= circle.current_members, EInvalidMaxMembersLimit);
+        
+        // Get the old max_members value for the event
+        let old_max_members = config::get_max_members(&circle.id);
+        
+        // Update the config
+        config::set_max_members(&mut circle.id, new_max_members);
+        
+        // Emit event
+        event::emit(CircleMaxMembersUpdated {
+            circle_id: object::uid_to_inner(&circle.id),
+            admin: sender,
+            old_max_members,
+            new_max_members,
         });
     }
 } 
