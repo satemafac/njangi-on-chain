@@ -320,7 +320,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { action, jwt, account, provider, circleData } = req.body;
+    const { action, jwt, account, provider, circleData, circleId, newMaxMembers } = req.body; // Add newMaxMembers
     let sessionId = req.cookies['session-id'];
 
     // Always log the current session state for debugging
@@ -3825,6 +3825,99 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             details: err instanceof Error ? err.message : String(err) 
           });
         }
+
+      case 'adminSetMaxMembers': {
+        try {
+          // Validate required parameters
+          if (!account) {
+            return res.status(400).json({ error: 'Account data is required' });
+          }
+          if (!circleId) {
+            return res.status(400).json({ error: 'Circle ID is required' });
+          }
+          if (typeof newMaxMembers !== 'number' || newMaxMembers < 3) { // Basic validation
+            return res.status(400).json({ error: 'Invalid new maximum members value. Must be a number >= 3.' });
+          }
+
+          // Validate session
+          if (!sessionId) {
+            return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+          }
+          const session = validateSession(sessionId, 'sendTransaction');
+          if (!session.account) {
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({
+              error: 'Invalid session: No account data found. Please authenticate first.',
+              requireRelogin: true
+            });
+          }
+
+          console.log(`Setting max members for circle ${circleId} to ${newMaxMembers}`);
+
+          // Send the transaction
+          const txResult = await instance.sendTransaction(
+            session.account,
+            (txb: Transaction) => {
+              txb.setSender(session.account!.userAddr);
+              txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_circles::admin_set_max_members`,
+                arguments: [
+                  txb.object(circleId),
+                  txb.pure.u64(newMaxMembers),
+                ],
+              });
+            },
+            { gasBudget: 50000000 } // Standard gas budget should be sufficient
+          );
+
+          console.log('Set max members transaction successful:', txResult);
+          return res.status(200).json({
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+
+        } catch (error) {
+          console.error('Error setting max members:', error);
+
+          // Handle authentication errors
+          if (error instanceof Error &&
+              (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired') ||
+              error.message.includes('re-authenticate'))) {
+
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+
+          // Handle specific contract errors
+          if (error instanceof Error) {
+            if (error.message.includes('ENotAdmin') || error.message.includes('ENotCircleAdmin') || error.message.includes(', 7)')) {
+              return res.status(403).json({ error: 'Only the circle admin can perform this action.' });
+            }
+            if (error.message.includes('ECircleIsActive') || error.message.includes(', 55)')) {
+              return res.status(400).json({ error: 'Cannot change max members: The circle is already active.' });
+            }
+            if (error.message.includes('EInvalidMaxMembersLimit') || error.message.includes(', 56)')) {
+              return res.status(400).json({ error: 'Invalid maximum member limit. Ensure it is at least 3 and not less than the current number of members.' });
+            }
+          }
+
+          // Generic error
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to set maximum members',
+            details: error instanceof Error ? error.stack : String(error),
+            requireRelogin: false
+          });
+        }
+      } // End case 'adminSetMaxMembers'
 
       default:
         return res.status(400).json({ error: 'Unknown action' });

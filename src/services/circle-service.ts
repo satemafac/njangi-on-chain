@@ -8,8 +8,8 @@ const isClient = typeof window !== 'undefined';
 
 // Get package ID from environment variable, or fall back to a default value
 export const PACKAGE_ID = isClient 
-  ? process.env.NEXT_PUBLIC_PACKAGE_ID || "0xeac7874017ce913fc3d9e0eac94416ea5841ccf56b18620d4670cd50c469a335"
-  : process.env.NEXT_PUBLIC_PACKAGE_ID || "0xeac7874017ce913fc3d9e0eac94416ea5841ccf56b18620d4670cd50c469a335";
+  ? process.env.NEXT_PUBLIC_PACKAGE_ID || "0xd530bfd7511ac2d343646a8ca4e2e14ffb89e1ec69a38ff8fb99c415706d6154"
+  : process.env.NEXT_PUBLIC_PACKAGE_ID || "0xd530bfd7511ac2d343646a8ca4e2e14ffb89e1ec69a38ff8fb99c415706d6154";
 
 // Constants from Move contract
 const CIRCLE_TYPE_ROTATIONAL = 0;

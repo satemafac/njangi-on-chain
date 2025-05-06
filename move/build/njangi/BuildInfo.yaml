@@ -7,7 +7,7 @@ compiled_package_info:
     std: "0000000000000000000000000000000000000000000000000000000000000001"
     sui: "0000000000000000000000000000000000000000000000000000000000000002"
     wormhole: f47329f4344f3bf0f8e436e2f7b485466cff300f12a166563995d3888c296a94
-  source_digest: ECC2F29197851140429B3C1F7F05064ADB9E541C53BBDEEA18014E21BB092E50
+  source_digest: 90D1948C21F1D2ACC98AB1A09E9CD8C88A5A60E1B55E40C953411D1CE84AEAD6
   build_flags:
     dev_mode: false
     test_mode: false
@@ -34,7 +34,7 @@ compiled_package_info:
           kind:
             Git:
               git_url: "https://github.com/MystenLabs/sui.git"
-              git_rev: e54b798790ed
+              git_rev: fbb68879cbd1
               subdir: crates/sui-framework/packages/bridge
           subst: ~
           digest: ~
@@ -44,7 +44,7 @@ compiled_package_info:
           kind:
             Git:
               git_url: "https://github.com/MystenLabs/sui.git"
-              git_rev: e54b798790ed
+              git_rev: fbb68879cbd1
               subdir: crates/sui-framework/packages/move-stdlib
           subst: ~
           digest: ~
@@ -54,7 +54,7 @@ compiled_package_info:
           kind:
             Git:
               git_url: "https://github.com/MystenLabs/sui.git"
-              git_rev: e54b798790ed
+              git_rev: fbb68879cbd1
               subdir: crates/sui-framework/packages/sui-framework
           subst: ~
           digest: ~
@@ -64,7 +64,7 @@ compiled_package_info:
           kind:
             Git:
               git_url: "https://github.com/MystenLabs/sui.git"
-              git_rev: e54b798790ed
+              git_rev: fbb68879cbd1
               subdir: crates/sui-framework/packages/sui-system
           subst: ~
           digest: ~

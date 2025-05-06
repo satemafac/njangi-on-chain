@@ -212,6 +212,12 @@ module njangi::njangi_circle_config {
         config.auto_swap_enabled = enabled;
     }
 
+    // Set maximum members limit
+    public fun set_max_members(obj: &mut UID, new_max_members: u64) {
+        let config = get_circle_config_mut(obj);
+        config.max_members = new_max_members;
+    }
+
     // Get target amount from milestone config
     public fun get_target_amount(obj: &UID): Option<u64> {
         let config = get_milestone_config(obj);

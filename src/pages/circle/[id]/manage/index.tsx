@@ -3,7 +3,7 @@ import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 import { SuiClient, SuiEvent } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
-import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle, Save, Edit3 } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
@@ -217,6 +217,11 @@ export default function ManageCircle() {
   const [usdcContributionBalance, setUsdcContributionBalance] = useState<number | null>(null);
   const [fetchingUsdcBalance, setFetchingUsdcBalance] = useState(false);
   const [fetchingSuiBalance, setFetchingSuiBalance] = useState(false);
+
+  // Add state variables for max members editing
+  const [isEditingMaxMembers, setIsEditingMaxMembers] = useState(false);
+  const [newMaxMembersValue, setNewMaxMembersValue] = useState<number | string>('');
+  const [isSavingMaxMembers, setIsSavingMaxMembers] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -2336,6 +2341,107 @@ export default function ManageCircle() {
     }
   }, [members, allDepositsPaid, circle]);
 
+  // Add function to handle saving max members
+  const handleSaveMaxMembers = async () => {
+    if (!circle || isSavingMaxMembers) return;
+    
+    // Validate input
+    const maxMembersNum = Number(newMaxMembersValue);
+    if (isNaN(maxMembersNum) || maxMembersNum < 3) {
+      toast.error("Maximum members must be a number and at least 3");
+      return;
+    }
+    
+    if (maxMembersNum < circle.currentMembers) {
+      toast.error(`Maximum members cannot be less than the current number of members (${circle.currentMembers})`);
+      return;
+    }
+    
+    if (maxMembersNum === circle.maxMembers) {
+      setIsEditingMaxMembers(false);
+      return; // No change
+    }
+    
+    // Show confirmation modal
+    setConfirmationModal({
+      isOpen: true,
+      title: 'Update Maximum Members',
+      message: (
+        <div>
+          <p>Are you sure you want to change the maximum members from {circle.maxMembers} to {maxMembersNum}?</p>
+          <p className="mt-2 text-sm text-gray-600">This will determine the maximum number of people who can join this circle.</p>
+          {maxMembersNum > 15 && (
+            <p className="mt-2 text-sm text-amber-600">
+              <AlertTriangle className="inline-block mr-1 h-4 w-4" />
+              Large circles may take longer to complete all rotation cycles.
+            </p>
+          )}
+        </div>
+      ),
+      onConfirm: async () => {
+        setIsSavingMaxMembers(true);
+        const toastId = 'max-members-update';
+        
+        try {
+          toast.loading('Updating maximum members...', { id: toastId });
+          
+          if (!account) {
+            toast.error('User account not available. Please log in again.', { id: toastId });
+            return;
+          }
+          
+          // Call the backend API
+          const response = await fetch('/api/zkLogin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'adminSetMaxMembers',
+              account,
+              circleId: circle.id,
+              newMaxMembers: maxMembersNum
+            }),
+          });
+          
+          const result = await response.json();
+          
+          if (!response.ok) {
+            console.error('Failed to update max members:', result);
+            
+            // Parse the error
+            const errorDetail = parseMoveError(result.error || '');
+            toast.error(errorDetail.message, { id: toastId });
+            return;
+          }
+          
+          // Update local state
+          setCircle(prevCircle => prevCircle ? { ...prevCircle, maxMembers: maxMembersNum } : null);
+          setIsEditingMaxMembers(false);
+          
+          toast.success(`Maximum members updated to ${maxMembersNum}`, { id: toastId });
+          
+          // Refresh circle details to make sure everything is up to date
+          fetchCircleDetails();
+          
+        } catch (error) {
+          console.error('Error updating max members:', error);
+          toast.error('Failed to update maximum members', { id: toastId });
+        } finally {
+          setIsSavingMaxMembers(false);
+        }
+      },
+      confirmText: 'Update',
+      cancelText: 'Cancel',
+      confirmButtonVariant: 'primary',
+    });
+  };
+
+  // Update fetchCircleDetails to initialize newMaxMembersValue
+  useEffect(() => {
+    if (circle) {
+      setNewMaxMembersValue(circle.maxMembers);
+    }
+  }, [circle]);
+
   if (!isAuthenticated || !account) {
     return null;
   }
@@ -2505,6 +2611,69 @@ export default function ManageCircle() {
                             <p className="text-xs text-blue-600 mt-1">
                               <span className="font-bold">Estimate</span> if circle activated now
                             </p>
+                          )}
+                        </div>
+                        
+                        {/* Maximum Members - Now Editable for Inactive Circles */}
+                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm col-span-1 md:col-span-2">
+                          <div className="flex justify-between items-center">
+                            <div>
+                              <p className="text-sm text-gray-500 mb-1">Maximum Members</p>
+                              {isEditingMaxMembers ? (
+                                <div className="flex items-center space-x-2">
+                                  <input
+                                    type="number"
+                                    value={newMaxMembersValue}
+                                    onChange={(e) => setNewMaxMembersValue(e.target.value)}
+                                    min={Math.max(3, circle.currentMembers)}
+                                    className="w-20 px-2 py-1 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-lg font-medium"
+                                    disabled={isSavingMaxMembers}
+                                  />
+                                  <button
+                                    onClick={handleSaveMaxMembers}
+                                    disabled={isSavingMaxMembers || Number(newMaxMembersValue) === circle.maxMembers}
+                                    className={`p-1.5 rounded-md ${isSavingMaxMembers ? 'bg-gray-200 cursor-not-allowed' : 'bg-green-100 text-green-600 hover:bg-green-200'}`}
+                                  >
+                                    {isSavingMaxMembers ? (
+                                      <svg className="animate-spin h-4 w-4 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                      </svg>
+                                    ) : (
+                                      <Save size={16} />
+                                    )}
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setIsEditingMaxMembers(false);
+                                      setNewMaxMembersValue(circle.maxMembers);
+                                    }}
+                                    disabled={isSavingMaxMembers}
+                                    className="p-1.5 rounded-md bg-red-100 text-red-600 hover:bg-red-200 disabled:opacity-50"
+                                  >
+                                    <X size={16} />
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center">
+                                  <p className="text-lg font-medium">
+                                    {circle.currentMembers} / {circle.maxMembers} members
+                                  </p>
+                                  {!circle.isActive && (
+                                    <button
+                                      onClick={() => setIsEditingMaxMembers(true)}
+                                      className="ml-3 text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 py-1 px-2 rounded flex items-center transition-colors"
+                                    >
+                                      <Edit3 size={12} className="mr-1" />
+                                      Edit Limit
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          {circle.isActive && (
+                            <p className="text-xs text-gray-400 mt-1">Capacity cannot be changed for active circles.</p>
                           )}
                         </div>
                       </div>
