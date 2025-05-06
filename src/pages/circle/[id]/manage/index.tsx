@@ -50,7 +50,6 @@ interface Member {
 
 // Constants for time calculations
 const MS_PER_DAY = 86400000; // 24 * 60 * 60 * 1000
-const DEFAULT_MAX_MEMBERS = 3; // Default maximum members count
 
 // Define types for SUI object field values
 type SuiFieldValue = string | number | boolean | null | undefined | SuiFieldValue[] | Record<string, unknown>;
@@ -380,7 +379,7 @@ export default function ManageCircle() {
         securityDepositUsd: 0,
         cycleLength: 0,
         cycleDay: 1,
-        maxMembers: DEFAULT_MAX_MEMBERS, // Using named constant instead of hardcoded 3
+        maxMembers: 3,
         autoSwapEnabled: false, // Initial default
       };
       console.log('[fetchCircleDetails] Initial configValues:', JSON.stringify(configValues));
@@ -394,7 +393,7 @@ export default function ManageCircle() {
       }
       if (circleCreationEventData) {
           if (circleCreationEventData.cycle_length) configValues.cycleLength = Number(circleCreationEventData.cycle_length);
-          if (circleCreationEventData.max_members) configValues.maxMembers = Number(circleCreationEventData.max_members ?? DEFAULT_MAX_MEMBERS);
+          if (circleCreationEventData.max_members) configValues.maxMembers = Number(circleCreationEventData.max_members);
           // Security deposit SUI amount might not be in event/tx, look in fields/dynamic
       }
       console.log('[fetchCircleDetails] Config after Tx/Event:', JSON.stringify(configValues));

@@ -40,9 +40,6 @@ interface CircleCreatedEvent {
   cycle_length: string;
 }
 
-// Define a constant for default values
-const DEFAULT_MAX_MEMBERS = 3;
-
 export default function CircleDetails() {
   const router = useRouter();
   const { id } = router.query;
@@ -159,7 +156,7 @@ export default function CircleDetails() {
         securityDepositUsd: 0,
         cycleLength: 0,
         cycleDay: 1,
-        maxMembers: DEFAULT_MAX_MEMBERS, // Using named constant instead of hardcoded 3
+        maxMembers: 3,
       };
 
       // 1. Use values from transaction/event first
@@ -213,7 +210,7 @@ export default function CircleDetails() {
       // Fallback for cycle info if not found earlier
       if (configValues.cycleLength === 0 && fields.cycle_length !== undefined) configValues.cycleLength = Number(fields.cycle_length);
       if (configValues.cycleDay === 1 && fields.cycle_day !== undefined) configValues.cycleDay = Number(fields.cycle_day);
-      if (configValues.maxMembers === DEFAULT_MAX_MEMBERS && fields.max_members !== undefined) configValues.maxMembers = Number(fields.max_members);
+      if (configValues.maxMembers === 3 && fields.max_members !== undefined) configValues.maxMembers = Number(fields.max_members);
 
       console.log('Details - Final Config Values:', configValues);
 
