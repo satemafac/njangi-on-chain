@@ -23,9 +23,6 @@ interface Circle {
   nextPayoutTime: number;
 }
 
-// Define SuiValue type (similar to dashboard)
-type SuiValue = string | number | boolean | null | undefined | SuiValue[] | Record<string, unknown>;
-
 // Define CircleFields type
 interface CircleFields {
   name: string;
@@ -231,59 +228,116 @@ export default function JoinCircle() {
       // 2. Look for config in dynamic fields (e.g., 'circle_config')
       for (const field of dynamicFields) {
         if (!field) continue;
-        // Check by type for the specific dynamic field holding the CircleConfig
-        const isCircleConfigField = field.type === `0x2::dynamic_field::Field<vector<u8>, ${PACKAGE_ID}::njangi_circle_config::CircleConfig>`;
+        
+        // Find the CircleConfig dynamic field
+        const isConfigField = 
+          (field.name && typeof field.name === 'object' && 'value' in field.name && field.name.value === 'circle_config') ||
+          (field.type && typeof field.type === 'string' && field.type.includes('CircleConfig')) ||
+          (field.objectType && typeof field.objectType === 'string' && field.objectType.includes('CircleConfig'));
 
-        if (isCircleConfigField && field.objectId) {
-          console.log('Join - Found CircleConfig dynamic field object ID:', field.objectId);
+        if (isConfigField && field.objectId) {
+          console.log('Join - Found CircleConfig dynamic field object:', field.objectId);
           try {
-            // Fetch the dynamic field object itself to get its nested value
-            const configFieldObject = await client.getObject({
+            // Fetch the complete CircleConfig object
+            const configData = await client.getObject({
               id: field.objectId,
-              options: { showContent: true }
+              options: { 
+                showContent: true,
+                showDisplay: false,
+                showType: true
+              }
             });
-            console.log('Join - Fetched CircleConfig dynamic field object content:', configFieldObject);
-
-            // Access the nested 'value' which holds the CircleConfig fields
-            if (configFieldObject.data?.content && 'fields' in configFieldObject.data.content) {
-              const outerFields = configFieldObject.data.content.fields as { value?: { fields?: Record<string, SuiValue> } };
+            
+            console.log('Join - Fetched complete CircleConfig object:', configData);
+            
+            // Process the object data to access potentially nested values
+            if (configData.data?.content && 'fields' in configData.data.content) {
+              const contentFields = configData.data.content.fields as Record<string, unknown>;
+              console.log('Join - CircleConfig content fields:', contentFields);
               
-              if (outerFields.value?.fields) {
-                const configFields = outerFields.value.fields;
-                console.log('Join - Extracted CircleConfig fields from nested value:', configFields);
+              // Check if we have direct access to the config values
+              if ('contribution_amount' in contentFields) {
+                configValues.contributionAmount = Number(contentFields.contribution_amount) / 1e9;
+              }
+              if ('contribution_amount_usd' in contentFields) {
+                configValues.contributionAmountUsd = Number(contentFields.contribution_amount_usd) / 100;
+              }
+              if ('security_deposit' in contentFields) {
+                configValues.securityDeposit = Number(contentFields.security_deposit) / 1e9;
+              }
+              if ('security_deposit_usd' in contentFields) {
+                configValues.securityDepositUsd = Number(contentFields.security_deposit_usd) / 100;
+              }
+              if ('cycle_length' in contentFields) {
+                configValues.cycleLength = Number(contentFields.cycle_length);
+              }
+              if ('cycle_day' in contentFields) {
+                configValues.cycleDay = Number(contentFields.cycle_day);
+              }
+              if ('max_members' in contentFields) {
+                configValues.maxMembers = Number(contentFields.max_members);
+                console.log('Join - Extracted max_members directly:', configValues.maxMembers);
+              }
+              
+              // Check for the deeper nested path: value.fields.max_members
+              if ('value' in contentFields && 
+                  contentFields.value && 
+                  typeof contentFields.value === 'object') {
                 
-                // Override config values with those from the dynamic field object
-                if (configFields.contribution_amount !== undefined) configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
-                if (configFields.contribution_amount_usd !== undefined) configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
-                if (configFields.security_deposit !== undefined) configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
-                if (configFields.security_deposit_usd !== undefined) configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
-                if (configFields.cycle_length !== undefined) configValues.cycleLength = Number(configFields.cycle_length);
-                if (configFields.cycle_day !== undefined) configValues.cycleDay = Number(configFields.cycle_day);
-                if (configFields.max_members !== undefined) {
-                  configValues.maxMembers = Number(configFields.max_members);
-                  console.log('Join - Updated max_members from dynamic field object:', configValues.maxMembers);
+                const valueObj = contentFields.value as Record<string, unknown>;
+                console.log('Join - CircleConfig value object:', valueObj);
+                
+                if ('fields' in valueObj && 
+                    valueObj.fields && 
+                    typeof valueObj.fields === 'object') {
+                  
+                  const configFields = valueObj.fields as Record<string, unknown>;
+                  console.log('Join - CircleConfig nested fields:', configFields);
+                  
+                  // Extract all config values from the deeply nested structure
+                  if ('max_members' in configFields) {
+                    configValues.maxMembers = Number(configFields.max_members);
+                    console.log('Join - Successfully extracted max_members:', configValues.maxMembers);
+                  }
+                  if ('contribution_amount' in configFields) {
+                    configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
+                  }
+                  if ('contribution_amount_usd' in configFields) {
+                    configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
+                  }
+                  if ('security_deposit' in configFields) {
+                    configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
+                  }
+                  if ('security_deposit_usd' in configFields) {
+                    configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
+                  }
+                  if ('cycle_length' in configFields) {
+                    configValues.cycleLength = Number(configFields.cycle_length);
+                  }
+                  if ('cycle_day' in configFields) {
+                    configValues.cycleDay = Number(configFields.cycle_day);
+                  }
                 }
-              } else {
-                  console.log('Join - CircleConfig dynamic field object found, but missing nested value.fields structure.');
               }
             }
           } catch (error) {
-            console.error(`Join - Error fetching CircleConfig dynamic field object ${field.objectId}:`, error);
+            console.error(`Join - Error fetching config object ${field.objectId}:`, error);
           }
-          // Important: Break after finding the correct dynamic field
-          break; 
+          break; // Assume only one config object
         }
       }
       console.log('Join - Config after Dynamic Fields:', configValues);
 
-      // *** REMOVE ALL FALLBACKS FROM DIRECT FIELDS for config values ***
-      // if (configValues.contributionAmount === 0 && fields.contribution_amount) configValues.contributionAmount = Number(fields.contribution_amount) / 1e9;
-      // if (configValues.contributionAmountUsd === 0 && fields.contribution_amount_usd) configValues.contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
-      // if (configValues.securityDeposit === 0 && fields.security_deposit) configValues.securityDeposit = Number(fields.security_deposit) / 1e9;
-      // if (configValues.securityDepositUsd === 0 && fields.security_deposit_usd) configValues.securityDepositUsd = Number(fields.security_deposit_usd) / 100;
-      // if (configValues.cycleLength === 0 && fields.cycle_length !== undefined && !isNaN(Number(fields.cycle_length))) configValues.cycleLength = Number(fields.cycle_length);
-      // if (configValues.cycleDay === 1 && fields.cycle_day !== undefined && !isNaN(Number(fields.cycle_day))) configValues.cycleDay = Number(fields.cycle_day);
-      console.log('Join - Config after Direct Fields Fallback (now removed):', configValues);
+      // 3. Use direct fields from the circle object as a fallback (handle potential NaN)
+      if (configValues.contributionAmount === 0 && fields.contribution_amount) configValues.contributionAmount = Number(fields.contribution_amount) / 1e9;
+      if (configValues.contributionAmountUsd === 0 && fields.contribution_amount_usd) configValues.contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
+      if (configValues.securityDeposit === 0 && fields.security_deposit) configValues.securityDeposit = Number(fields.security_deposit) / 1e9;
+      if (configValues.securityDepositUsd === 0 && fields.security_deposit_usd) configValues.securityDepositUsd = Number(fields.security_deposit_usd) / 100;
+      // Fallback for cycle info only if not set by higher priority sources
+      if (configValues.cycleLength === 0 && fields.cycle_length !== undefined && !isNaN(Number(fields.cycle_length))) configValues.cycleLength = Number(fields.cycle_length);
+      if (configValues.cycleDay === 1 && fields.cycle_day !== undefined && !isNaN(Number(fields.cycle_day))) configValues.cycleDay = Number(fields.cycle_day);
+      if (configValues.maxMembers === 3 && fields.max_members !== undefined && !isNaN(Number(fields.max_members))) configValues.maxMembers = Number(fields.max_members);
+      console.log('Join - Config after Direct Fields Fallback:', configValues);
       
       // 4. Calculate SUI amounts from USD if SUI amount is still zero (and price is available)
       const effectiveSuiPrice = suiPrice > 0 ? suiPrice : 1.0; // Use 1.0 as fallback price to avoid division by zero
