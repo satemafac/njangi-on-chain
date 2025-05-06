@@ -192,7 +192,7 @@ export default function ManageCircle() {
   const router = useRouter();
   const { id } = router.query;
   const { isAuthenticated, userAddress, account } = useAuth();
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true); // Start with loading as true
   const [circle, setCircle] = useState<Circle | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [pendingRequests, setPendingRequests] = useState<JoinRequest[]>([]);
@@ -231,6 +231,9 @@ export default function ManageCircle() {
   }, [isAuthenticated, router]);
 
   useEffect(() => {
+    // Set loading to true on component mount or when id changes
+    setLoading(true);
+    
     // Fetch circle details when ID is available
     if (id && userAddress) {
       fetchCircleDetails();
@@ -264,7 +267,7 @@ export default function ManageCircle() {
     if (!id || !userAddress) return;
     console.log('Manage - Fetching circle details for:', id);
     
-    setLoading(true);
+    setLoading(true); // Set loading state at start
     try {
       const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
       
@@ -277,7 +280,9 @@ export default function ManageCircle() {
       console.log('Manage - Circle object data:', objectData);
         
       if (!objectData.data?.content || !('fields' in objectData.data.content)) {
-        throw new Error('Invalid circle object data received');
+        console.error('Invalid circle object data received');
+        // Don't set loading to false here, let it be handled in the finally block
+        return;
       }
         
       const fields = objectData.data.content.fields as Record<string, SuiFieldValue>;
@@ -735,8 +740,12 @@ export default function ManageCircle() {
     } catch (error) {
       console.error('Manage - Error fetching circle details:', error);
       toast.error('Could not load circle information');
+      // Don't set loading to false here, let it be handled in the finally block
     } finally {
-      setLoading(false);
+      // Small delay to avoid flickering if loading is very fast
+      setTimeout(() => {
+        setLoading(false);
+      }, 300);
     }
   };
 
@@ -3120,9 +3129,7 @@ export default function ManageCircle() {
                     </div>
                   </div>
                 ) : (
-                  <div className="py-8 text-center">
-                    <p className="text-gray-500">Circle not found or you don&apos;t have permission to view it.</p>
-                  </div>
+                  <ManageCircleSkeleton /> // Use the skeleton for "Circle not found" cases too
                 )
               }
             </div>
