@@ -3,7 +3,7 @@ import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 import { SuiClient, SuiEvent } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
-import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle, Save, Edit3 } from 'lucide-react';
+import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle, Edit3, Users } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
@@ -222,6 +222,21 @@ export default function ManageCircle() {
   const [isEditingMaxMembers, setIsEditingMaxMembers] = useState(false);
   const [newMaxMembersValue, setNewMaxMembersValue] = useState<number | string>('');
   const [isSavingMaxMembers, setIsSavingMaxMembers] = useState(false);
+
+  // Add state for member count visual animation
+  const [animateMembers, setAnimateMembers] = useState(false);
+  const recommendedRanges = {
+    small: { min: 3, max: 5, label: 'Small circle (3-5 members)', description: 'Faster payout cycles, easier to manage' },
+    medium: { min: 6, max: 10, label: 'Medium circle (6-10 members)', description: 'Balanced payout frequency and total pool size' },
+    large: { min: 11, max: 20, label: 'Large circle (11-20 members)', description: 'Larger pool, longer wait for payouts' }
+  };
+
+  // Get the current circle size category
+  const getCircleSizeCategory = (size: number) => {
+    if (size <= recommendedRanges.small.max) return 'small';
+    if (size <= recommendedRanges.medium.max) return 'medium';
+    return 'large';
+  };
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -2623,58 +2638,149 @@ export default function ManageCircle() {
                           )}
                         </div>
                         
-                        {/* Maximum Members - Now Editable for Inactive Circles */}
+                        {/* Maximum Members - Interactive Edition */}
                         <div className="bg-gray-50 p-4 rounded-lg shadow-sm col-span-1 md:col-span-2">
                           <div className="flex justify-between items-center">
-                            <div>
+                            <div className="w-full">
                               <p className="text-sm text-gray-500 mb-1">Maximum Members</p>
                               {isEditingMaxMembers ? (
-                                <div className="flex items-center space-x-2">
-                                  <input
-                                    type="number"
-                                    value={newMaxMembersValue}
-                                    onChange={(e) => setNewMaxMembersValue(e.target.value)}
-                                    min={Math.max(3, circle.currentMembers)}
-                                    className="w-20 px-2 py-1 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-lg font-medium"
-                                    disabled={isSavingMaxMembers}
-                                  />
-                                  <button
-                                    onClick={handleSaveMaxMembers}
-                                    disabled={isSavingMaxMembers || Number(newMaxMembersValue) === circle.maxMembers}
-                                    className={`p-1.5 rounded-md ${isSavingMaxMembers ? 'bg-gray-200 cursor-not-allowed' : 'bg-green-100 text-green-600 hover:bg-green-200'}`}
-                                  >
-                                    {isSavingMaxMembers ? (
-                                      <svg className="animate-spin h-4 w-4 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                      </svg>
-                                    ) : (
-                                      <Save size={16} />
-                                    )}
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setIsEditingMaxMembers(false);
-                                      setNewMaxMembersValue(circle.maxMembers);
-                                    }}
-                                    disabled={isSavingMaxMembers}
-                                    className="p-1.5 rounded-md bg-red-100 text-red-600 hover:bg-red-200 disabled:opacity-50"
-                                  >
-                                    <X size={16} />
-                                  </button>
+                                <div className="space-y-6 mt-3 w-full">
+                                  {/* Visual member count indicators with animation */}
+                                  <div className={`flex flex-wrap gap-2 mb-4 transition-opacity duration-300 ${animateMembers ? 'animate-pulse' : ''}`}>
+                                    {[...Array(Number(newMaxMembersValue))].map((_, i) => (
+                                      <div 
+                                        key={i} 
+                                        className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                                          i < circle.currentMembers 
+                                            ? 'bg-blue-100 text-blue-600 border-2 border-blue-300' 
+                                            : 'bg-gray-100 text-gray-400 border border-gray-300'
+                                        } ${animateMembers ? 'animate-bounce' : ''}`}
+                                        style={{ animationDelay: `${i * 50}ms` }}
+                                      >
+                                        <Users size={14} />
+                                      </div>
+                                    ))}
+                                  </div>
+                                  
+                                  {/* Slider with current value display */}
+                                  <div className="space-y-2">
+                                    <div className="flex justify-between items-center">
+                                      <span className="text-sm font-medium text-gray-700">
+                                        {newMaxMembersValue} members maximum
+                                      </span>
+                                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                                        getCircleSizeCategory(Number(newMaxMembersValue)) === 'small' 
+                                          ? 'bg-green-100 text-green-800' 
+                                          : getCircleSizeCategory(Number(newMaxMembersValue)) === 'medium'
+                                            ? 'bg-blue-100 text-blue-800'
+                                            : 'bg-purple-100 text-purple-800'
+                                      }`}>
+                                        {getCircleSizeCategory(Number(newMaxMembersValue)) === 'small' 
+                                          ? 'Small Circle' 
+                                          : getCircleSizeCategory(Number(newMaxMembersValue)) === 'medium'
+                                            ? 'Medium Circle'
+                                            : 'Large Circle'}
+                                      </span>
+                                    </div>
+                                    
+                                    <div className="relative">
+                                      <input
+                                        type="range"
+                                        min={Math.max(3, circle.currentMembers)}
+                                        max={20}
+                                        value={newMaxMembersValue}
+                                        onChange={(e) => {
+                                          setNewMaxMembersValue(e.target.value);
+                                          setAnimateMembers(true);
+                                          setTimeout(() => setAnimateMembers(false), 600);
+                                        }}
+                                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                                      />
+                                      
+                                      {/* Tick marks for recommended ranges */}
+                                      <div className="flex justify-between text-xs text-gray-600 px-2 mt-1">
+                                        <span>Min: {Math.max(3, circle.currentMembers)}</span>
+                                        <span>Max: 20</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  
+                                  {/* Recommendation based on selection */}
+                                  <div className={`p-3 rounded-lg text-sm transition-colors ${
+                                    getCircleSizeCategory(Number(newMaxMembersValue)) === 'small' 
+                                      ? 'bg-green-50 text-green-800 border border-green-200' 
+                                      : getCircleSizeCategory(Number(newMaxMembersValue)) === 'medium'
+                                        ? 'bg-blue-50 text-blue-800 border border-blue-200'
+                                        : 'bg-purple-50 text-purple-800 border border-purple-200'
+                                  }`}>
+                                    <p className="font-medium">
+                                      {recommendedRanges[getCircleSizeCategory(Number(newMaxMembersValue))].label}
+                                    </p>
+                                    <p className="mt-1">
+                                      {recommendedRanges[getCircleSizeCategory(Number(newMaxMembersValue))].description}
+                                    </p>
+                                  </div>
+                                  
+                                  {/* Action buttons */}
+                                  <div className="flex space-x-3 justify-end">
+                                    <button
+                                      onClick={() => {
+                                        setIsEditingMaxMembers(false);
+                                        setNewMaxMembersValue(circle.maxMembers);
+                                      }}
+                                      disabled={isSavingMaxMembers}
+                                      className="px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 transition-colors text-sm"
+                                    >
+                                      Cancel
+                                    </button>
+                                    <button
+                                      onClick={handleSaveMaxMembers}
+                                      disabled={isSavingMaxMembers || Number(newMaxMembersValue) === circle.maxMembers}
+                                      className={`px-4 py-2 rounded-md text-white text-sm transition-colors ${
+                                        isSavingMaxMembers || Number(newMaxMembersValue) === circle.maxMembers
+                                          ? 'bg-gray-400 cursor-not-allowed'
+                                          : 'bg-blue-600 hover:bg-blue-700'
+                                      }`}
+                                    >
+                                      {isSavingMaxMembers ? (
+                                        <div className="flex items-center">
+                                          <svg className="animate-spin h-4 w-4 mr-2 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                          </svg>
+                                          Saving...
+                                        </div>
+                                      ) : 'Save Changes'}
+                                    </button>
+                                  </div>
                                 </div>
                               ) : (
                                 <div className="flex items-center">
-                                  <p className="text-lg font-medium">
-                                    {circle.currentMembers} / {circle.maxMembers} members
-                                  </p>
+                                  <div className="flex items-center">
+                                    <p className="text-lg font-medium">
+                                      {circle.currentMembers} / {circle.maxMembers} members
+                                    </p>
+                                    <span className={`ml-2 px-2 py-0.5 text-xs font-medium rounded-full ${
+                                      getCircleSizeCategory(circle.maxMembers) === 'small' 
+                                        ? 'bg-green-100 text-green-800' 
+                                        : getCircleSizeCategory(circle.maxMembers) === 'medium'
+                                          ? 'bg-blue-100 text-blue-800'
+                                          : 'bg-purple-100 text-purple-800'
+                                    }`}>
+                                      {getCircleSizeCategory(circle.maxMembers) === 'small' 
+                                        ? 'Small Circle' 
+                                        : getCircleSizeCategory(circle.maxMembers) === 'medium'
+                                          ? 'Medium Circle'
+                                          : 'Large Circle'}
+                                    </span>
+                                  </div>
                                   {!circle.isActive && (
                                     <button
                                       onClick={() => setIsEditingMaxMembers(true)}
-                                      className="ml-3 text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 py-1 px-2 rounded flex items-center transition-colors"
+                                      className="ml-3 bg-blue-50 hover:bg-blue-100 text-blue-600 py-1.5 px-3 rounded-md flex items-center transition-colors shadow-sm text-sm border border-blue-200"
                                     >
-                                      <Edit3 size={12} className="mr-1" />
-                                      Edit Limit
+                                      <Edit3 size={14} className="mr-1.5" />
+                                      Edit Max Capacity
                                     </button>
                                   )}
                                 </div>
