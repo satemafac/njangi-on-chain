@@ -550,7 +550,11 @@ export default function Dashboard() {
           configValues.securityDepositUsd = Number(typedFieldValue.security_deposit_usd ?? configValues.securityDepositUsd * 100) / 100;
           configValues.cycleLength = Number(typedFieldValue.cycle_length ?? configValues.cycleLength);
           configValues.cycleDay = Number(typedFieldValue.cycle_day ?? configValues.cycleDay);
-          configValues.maxMembers = Number(typedFieldValue.max_members ?? configValues.maxMembers);
+          // *** Ensure max_members from dynamic field takes precedence ***
+          if (typedFieldValue.max_members !== undefined) {
+            configValues.maxMembers = Number(typedFieldValue.max_members);
+            console.log('Found max_members in dynamic field value/content:', configValues.maxMembers);
+          }
           console.log('Found cycle_day in dynamic field value/content:', configValues.cycleDay);
         } else {
             console.log('CircleConfig dynamic field found, but no value/content fields property.');
@@ -559,6 +563,7 @@ export default function Dashboard() {
     }
 
     // Direct field access with safe checks and type assertions
+    // *** REMOVE max_members fallback from direct fields ***
     configValues.contributionAmount = Number(fields.contribution_amount ?? configValues.contributionAmount * 1e9) / 1e9;
     configValues.securityDeposit = Number(fields.security_deposit ?? configValues.securityDeposit * 1e9) / 1e9;
     configValues.contributionAmountUsd = Number(fields.contribution_amount_usd ?? configValues.contributionAmountUsd * 100) / 100;
@@ -569,7 +574,8 @@ export default function Dashboard() {
         configValues.cycleDay = Number(fields.cycle_day ?? 0); 
         console.log('Found cycle_day in direct fields:', configValues.cycleDay);
     }
-    configValues.maxMembers = Number(fields.max_members ?? configValues.maxMembers);
+    // Remove max_members fallback here to prioritize dynamic field
+    // configValues.maxMembers = Number(fields.max_members ?? configValues.maxMembers);
 
     // Check transaction input fields for cycle day specifically (highest priority if found)
     if (objectData.transactionInput?.cycle_day !== undefined) {
