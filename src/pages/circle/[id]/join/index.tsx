@@ -59,6 +59,9 @@ interface TransactionInputData {
   [key: string]: unknown;
 }
 
+// Define a constant for default values 
+const DEFAULT_MAX_MEMBERS = 3;
+
 export default function JoinCircle() {
   const router = useRouter();
   const { id } = router.query;
@@ -209,7 +212,7 @@ export default function JoinCircle() {
         securityDepositUsd: 0,      // USD cents / 100
         cycleLength: 0,             // 0=weekly, 1=monthly, 2=quarterly
         cycleDay: 1,                // Default to 1st day
-        maxMembers: 3,              // Default max members
+        maxMembers: DEFAULT_MAX_MEMBERS, // Using named constant instead of hardcoded value
       };
 
       // 1. Use values from transaction/event first
@@ -218,7 +221,7 @@ export default function JoinCircle() {
         if (circleCreationEventData.contribution_amount_usd) configValues.contributionAmountUsd = Number(circleCreationEventData.contribution_amount_usd) / 100;
         if (circleCreationEventData.security_deposit_usd) configValues.securityDepositUsd = Number(circleCreationEventData.security_deposit_usd) / 100;
         if (circleCreationEventData.cycle_length) configValues.cycleLength = Number(circleCreationEventData.cycle_length);
-        if (circleCreationEventData.max_members) configValues.maxMembers = Number(circleCreationEventData.max_members);
+        if (circleCreationEventData.max_members) configValues.maxMembers = Number(circleCreationEventData.max_members ?? DEFAULT_MAX_MEMBERS);
       }
       if (transactionInput?.cycle_day !== undefined) {
         configValues.cycleDay = transactionInput.cycle_day;
@@ -270,7 +273,7 @@ export default function JoinCircle() {
       // Fallback for cycle info only if not set by higher priority sources
       if (configValues.cycleLength === 0 && fields.cycle_length !== undefined && !isNaN(Number(fields.cycle_length))) configValues.cycleLength = Number(fields.cycle_length);
       if (configValues.cycleDay === 1 && fields.cycle_day !== undefined && !isNaN(Number(fields.cycle_day))) configValues.cycleDay = Number(fields.cycle_day);
-      if (configValues.maxMembers === 3 && fields.max_members !== undefined && !isNaN(Number(fields.max_members))) configValues.maxMembers = Number(fields.max_members);
+      if (configValues.maxMembers === DEFAULT_MAX_MEMBERS && fields.max_members !== undefined && !isNaN(Number(fields.max_members))) configValues.maxMembers = Number(fields.max_members);
       console.log('Join - Config after Direct Fields Fallback:', configValues);
       
       // 4. Calculate SUI amounts from USD if SUI amount is still zero (and price is available)
