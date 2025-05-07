@@ -2,7 +2,7 @@ import React, { useRef, useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
-import { Bell } from 'lucide-react';
+import { Bell, User } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useRouter } from 'next/router';
 import type { JoinRequest } from '@/services/database-service';
@@ -146,6 +146,45 @@ export const Navbar: React.FC = () => {
           
           {account && (
             <div className="flex items-center space-x-4">
+              {/* User Profile Picture */}
+              <Tooltip.Provider>
+                <Tooltip.Root>
+                  <Tooltip.Trigger asChild>
+                    <div 
+                      className="w-8 h-8 rounded-full overflow-hidden cursor-pointer hover:ring-2 hover:ring-blue-300 transition-all"
+                      onClick={() => router.push('/dashboard')}
+                    >
+                      {account.picture ? (
+                        <Image
+                          src={account.picture}
+                          alt="Profile"
+                          width={32}
+                          height={32}
+                          className="object-cover"
+                          priority={true}
+                          onError={() => {
+                            console.error('Error loading profile picture');
+                          }}
+                        />
+                      ) : (
+                        <div className="w-full h-full bg-blue-100 flex items-center justify-center">
+                          <User className="w-5 h-5 text-blue-600" />
+                        </div>
+                      )}
+                    </div>
+                  </Tooltip.Trigger>
+                  <Tooltip.Portal>
+                    <Tooltip.Content
+                      className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                      sideOffset={5}
+                    >
+                      {account.name || 'My Profile'}
+                      <Tooltip.Arrow className="fill-gray-800" />
+                    </Tooltip.Content>
+                  </Tooltip.Portal>
+                </Tooltip.Root>
+              </Tooltip.Provider>
+
               {/* Notifications Panel */}
               <div className="relative" ref={notificationsRef}>
                 <button
@@ -198,7 +237,7 @@ export const Navbar: React.FC = () => {
                           {pendingRequests.map((request) => (
                             <div 
                               key={`${request.circle_id}-${request.user_address}`}
-                              className="cursor-pointer p-4 hover:bg-gray-50 dark:hover:bg-gray-600"
+                              className="cursor-pointer p-4 hover:bg-gray-50 dark:hover:bg-blue-800/20"
                               onClick={() => {
                                 router.push(`/circle/${request.circle_id}`);
                                 setShowNotifications(false);
