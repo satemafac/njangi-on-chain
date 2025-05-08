@@ -7,6 +7,7 @@ import { SuiClient } from '@mysten/sui/client';
 import { priceService } from '@/services/price-service';
 import { PACKAGE_ID } from '../../../../services/circle-service';
 import Head from 'next/head';
+import { LoginButton } from '@/components/LoginButton';
 
 // Define Circle type
 interface Circle {
@@ -63,7 +64,11 @@ interface TransactionInputData {
 export default function JoinCircle() {
   const router = useRouter();
   const { id } = router.query;
-  const { isAuthenticated, userAddress, account, login } = useAuth();
+  const { 
+    isAuthenticated, 
+    userAddress, 
+    account 
+  } = useAuth();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
   const [isMember, setIsMember] = useState(false);
@@ -466,7 +471,7 @@ export default function JoinCircle() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!id || !userAddress || !account) {
+    if (!id || !userAddress) {
       return;
     }
 
@@ -485,7 +490,7 @@ export default function JoinCircle() {
           circleId: id,
           circleName: circle?.name || 'Unknown Circle',
           userAddress: userAddress,
-          userName: account.name || 'Anonymous',
+          userName: account?.name || 'Anonymous',
         }),
       });
       
@@ -514,16 +519,6 @@ export default function JoinCircle() {
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  // Handle login button click
-  const handleLoginClick = () => {
-    // Store the current URL to redirect back after login
-    const currentUrl = window.location.href;
-    localStorage.setItem('redirectAfterLogin', currentUrl);
-    
-    // Trigger login with Google provider
-    login('Google');
   };
 
   // Format cycle info
@@ -773,12 +768,7 @@ export default function JoinCircle() {
                             <p className="text-sm text-blue-700 mb-4">
                               You need to log in to join this circle.
                             </p>
-                            <button
-                              onClick={handleLoginClick}
-                              className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md transition-colors"
-                            >
-                              Log In to Continue
-                            </button>
+                            <LoginButton />
                           </div>
                         </div>
                       ) : hasPendingRequest ? (

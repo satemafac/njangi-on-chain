@@ -232,5 +232,111 @@
       "picture": "https://lh3.googleusercontent.com/a/ACg8ocLJAZ-gxxVWIvGhhHt-ZPC8RQNHbTmUpC8gKWlfqa--8_4VSzFdzg=s96-c",
       "name": "Stalanic Anu"
     }
+  },
+  "59ae6f12-19a0-41a1-a482-1d38d38b56fc": {
+    "provider": "Facebook",
+    "maxEpoch": 728,
+    "randomness": "103390332361728654661405899821605680432",
+    "ephemeralPrivateKey": "suiprivkey1qzjhwj5csvfptz9yg8yvh3yeejm5hncqqqze8a48laznfh0xuwu7u36t05f"
+  },
+  "5cbe3891-4570-4547-bd08-fd4c9794d19c": {
+    "provider": "Google",
+    "maxEpoch": 728,
+    "randomness": "64587186618847180849988035214957946648",
+    "ephemeralPrivateKey": "suiprivkey1qqwzm02j90u8juv85f696tksddpz6hl6envjxg9qmfgvmqqma46ejtujqmf",
+    "account": {
+      "provider": "Google",
+      "userAddr": "0x31ff4834c37ffb9176283426609a0b0285eea566d634e7f8010dee8b16240bbe",
+      "zkProofs": {
+        "proofPoints": {
+          "a": [
+            "10515407876519254192050517780993310575404781917486383275692943495872655352000",
+            "7855507941776705025255049159813177264973173640449981875036984311072366293150",
+            "1"
+          ],
+          "b": [
+            [
+              "16232997318699521331716212657698037732326401396385298037816202320624438213213",
+              "20601518415182626869366179332693452630735895570244153790078546846800598242446"
+            ],
+            [
+              "5218326082807042357427286762559045082766017952104755481168331347825228420109",
+              "11996423017927450884018740072047395192621015246958435854485247229087998553774"
+            ],
+            [
+              "1",
+              "0"
+            ]
+          ],
+          "c": [
+            "5465953051971596740077347888802892132062970371057851414730896155054955766221",
+            "19959571846234985933041426924460440398622836781780135927719707235275510272833",
+            "1"
+          ]
+        },
+        "issBase64Details": {
+          "value": "yJpc3MiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20iLC",
+          "indexMod4": 1
+        },
+        "headerBase64": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjA3YjgwYTM2NTQyODUyNWY4YmY3Y2QwODQ2ZDc0YThlZTRlZjM2MjUiLCJ0eXAiOiJKV1QifQ"
+      },
+      "ephemeralPrivateKey": "suiprivkey1qqwzm02j90u8juv85f696tksddpz6hl6envjxg9qmfgvmqqma46ejtujqmf",
+      "userSalt": "339578119692609542424889298092651683106",
+      "sub": "106930572881995346479",
+      "aud": "764148930901-d211mn3rj8nhm28dd4o0vk833kk2srdf.apps.googleusercontent.com",
+      "maxEpoch": 728,
+      "picture": "https://lh3.googleusercontent.com/a/ACg8ocLJAZ-gxxVWIvGhhHt-ZPC8RQNHbTmUpC8gKWlfqa--8_4VSzFdzg=s96-c",
+      "name": "Stalanic Anu"
+    }
+  },
+  "e8273bcb-fcbc-4a78-b6d4-434683155eb2": {
+    "provider": "Facebook",
+    "maxEpoch": 729,
+    "randomness": "253307686958469197700641551366201158246",
+    "ephemeralPrivateKey": "suiprivkey1qr0hydl0xtn08urwtvp3tr77vqlca3jmvct94vhxktgy2crjjqd7saq8l5m",
+    "account": {
+      "provider": "Facebook",
+      "userAddr": "0xbda6681b1d312167d8ce5f4eff667eb8edb25de9f35cde986d40233ca6d5db78",
+      "zkProofs": {
+        "proofPoints": {
+          "a": [
+            "10280147705617632286472473112037084051471259570303329376397143584611919535543",
+            "11257663295879588928657503437811863575730912962375850838069168136254251743555",
+            "1"
+          ],
+          "b": [
+            [
+              "2899525089498604220619172694769212865304782930847388959753671394782301200864",
+              "15421857177154106410387238686356407402910879222750300964425359243548205485375"
+            ],
+            [
+              "6673446730499316893829989442110700651271160066109126465836321487281551148986",
+              "18117267891073191136238860985843824976730822338535868911897809129358626837634"
+            ],
+            [
+              "1",
+              "0"
+            ]
+          ],
+          "c": [
+            "18669022281036304350769685395000021497386614029050126049822113993043510739576",
+            "18657229621778539393538757144359655305281989284515916223007560805525649862276",
+            "1"
+          ]
+        },
+        "issBase64Details": {
+          "value": "yJpc3MiOiJodHRwczpcL1wvd3d3LmZhY2Vib29rLmNvbSIs",
+          "indexMod4": 1
+        },
+        "headerBase64": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImFmNmVjYTYzODIzMDQxZjI2ZmY5ZmQxNTk4MWUzZWMxZTVkMmNhZjEifQ"
+      },
+      "ephemeralPrivateKey": "suiprivkey1qr0hydl0xtn08urwtvp3tr77vqlca3jmvct94vhxktgy2crjjqd7saq8l5m",
+      "userSalt": "48611004956617777264738660651470622339",
+      "sub": "579132001552277",
+      "aud": "899445742032049",
+      "maxEpoch": 729,
+      "picture": "https://platform-lookaside.fbsbx.com/platform/profilepic/?asid=579132001552277&height=100&width=100&ext=1749180865&hash=AbYWY5UNCUNEhlxi_3YXuLAp",
+      "name": "Stalanic Anu"
+    }
   }
 }
