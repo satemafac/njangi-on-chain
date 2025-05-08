@@ -346,46 +346,71 @@ export default function JoinCircle() {
           console.log(`Join - Calculated security deposit SUI from USD: ${configValues.securityDeposit}`);
       }
 
-      // --- Check Membership and Fetch Member Count (Keep existing logic) ---
-      const isAdmin = fields.admin === userAddress;
-      setIsMember(isAdmin); // Simplified check
-      if (isAdmin) {
-        toast('You are the admin of this circle.');
-        router.push(`/circle/${id}`); // Redirect admin
-        return;
-      }
-
+      // --- Check Membership and Fetch Member Count only if user is authenticated ---
+      let isUserAdmin = false;
       let memberCount = 1; // Start with admin
+      const memberAddresses = new Set<string>();
+      
       try {
-          const joinedEvents = await client.queryEvents({
+        // Only add admin to member set
+        memberAddresses.add(fields.admin); // Add admin
+        
+        // Fetch all members from join events
+        const joinedEvents = await client.queryEvents({
           query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::MemberJoined` },
           limit: 1000 // Fetch enough events
         });
-          const memberAddresses = new Set<string>();
-        memberAddresses.add(fields.admin); // Add admin
+        
         joinedEvents.data.forEach(event => {
-          if ((event.parsedJson as { circle_id?: string })?.circle_id === id && (event.parsedJson as { member?: string })?.member) {
+          if ((event.parsedJson as { circle_id?: string })?.circle_id === id && 
+              (event.parsedJson as { member?: string })?.member) {
             memberAddresses.add((event.parsedJson as { member: string }).member);
           }
         });
-          memberCount = memberAddresses.size;
+        
+        memberCount = memberAddresses.size;
         console.log(`Join - Final member count: ${memberCount}`);
-        // Check if current user is already a counted member
-        if (userAddress && memberAddresses.has(userAddress)) {
-             console.log('Join - User is already a member based on event query.');
-             setIsMember(true);
-             toast('You are already a member of this circle.');
-             router.push(`/circle/${id}`);
-             return;
+        
+        // If user is authenticated, check membership
+        if (userAddress) {
+          console.log('Join - Checking if user is admin or member');
+          isUserAdmin = fields.admin === userAddress;
+          
+          // Set member status based on admin status or event membership
+          const isUserMember = isUserAdmin || memberAddresses.has(userAddress);
+          setIsMember(isUserMember);
+          
+          // Show toast and redirect IF user is authenticated AND is admin/member
+          if (isUserAdmin) {
+            console.log('Join - User is the admin of this circle');
+            toast('You are the admin of this circle.');
+            router.push(`/circle/${id}`); // Redirect admin
+            return; // Exit early
+          } else if (isUserMember) {
+            console.log('Join - User is already a member based on event query');
+            toast('You are already a member of this circle.');
+            router.push(`/circle/${id}`); // Redirect member
+            return; // Exit early
+          }
+        } else {
+          console.log('Join - User not authenticated, skipping membership checks');
         }
-        } catch (error) {
-        console.error(`Join - Error fetching member count for circle ${id}:`, error);
+      } catch (error) {
+        console.error(`Join - Error processing membership for circle ${id}:`, error);
         memberCount = Number(fields.current_members || 1); // Fallback
       }
         
       // --- Final State Update ---
-        setCircle({
-          id: id as string,
+      console.log('Join - Setting circle state with data:', {
+        id,
+        name: fields.name,
+        contributionAmount: configValues.contributionAmount,
+        contributionAmountUsd: configValues.contributionAmountUsd,
+        memberCount
+      });
+      
+      setCircle({
+        id: id as string,
         name: typeof fields.name === 'string' ? fields.name : '',
         admin: typeof fields.admin === 'string' ? fields.admin : '',
         contributionAmount: configValues.contributionAmount,
@@ -397,11 +422,13 @@ export default function JoinCircle() {
         maxMembers: configValues.maxMembers,
         currentMembers: memberCount, // Use accurately fetched count
         nextPayoutTime: Number(fields.next_payout_time || 0),
-        });
+      });
         
     } catch (error) {
       console.error('Join - Error fetching circle details:', error);
       toast.error('Could not load circle information');
+      // Set a minimal circle object to prevent UI failures
+      setCircle(null);
     } finally {
       setLoading(false);
     }
@@ -603,8 +630,28 @@ export default function JoinCircle() {
     );
   };
 
-  if (!isAuthenticated || !account) {
-    return null;
+  // Update the component's return statement to safely check auth state
+  if (!id) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+          <div className="px-4 py-6 sm:px-0">
+            <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100 p-6">
+              <div className="text-center py-8">
+                <p className="text-gray-500">Invalid circle ID</p>
+                <button
+                  onClick={() => router.push('/dashboard')}
+                  className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow-sm text-sm font-medium"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                  Go to Dashboard
+                </button>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
   }
 
   return (
@@ -613,11 +660,11 @@ export default function JoinCircle() {
         <div className="px-4 py-6 sm:px-0">
           <div className="mb-6">
             <button
-              onClick={() => router.push('/dashboard')}
+              onClick={() => router.push(isAuthenticated ? '/dashboard' : '/')}
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm text-sm text-gray-700 font-medium"
             >
               <ArrowLeft className="w-4 h-4" />
-              Back to Dashboard
+              {isAuthenticated ? 'Back to Dashboard' : 'Back to Home'}
             </button>
           </div>
 
@@ -626,6 +673,8 @@ export default function JoinCircle() {
               <h2 className="text-2xl font-bold text-gray-900">
                 Join Circle
               </h2>
+
+              {/* Show loading state */}
               {loading ? (
                 <div className="py-8 flex justify-center">
                   <svg className="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -713,7 +762,8 @@ export default function JoinCircle() {
                 </div>
               ) : (
                 <div className="py-8 text-center">
-                  <p className="text-gray-500">Circle not found</p>
+                  <p className="text-gray-500">Circle information could not be loaded</p>
+                  <p className="text-sm text-gray-400 mt-2">Please try refreshing the page</p>
                 </div>
               )}
             </div>
