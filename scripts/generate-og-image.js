@@ -35,18 +35,42 @@ async function createOgImage() {
     ctx.fill();
     ctx.globalAlpha = 1.0;
     
-    // Load and draw logo
+    // Load logo
     const logoPath = path.join(__dirname, '../public/njangi-on-chain-logo.png');
     const logo = await loadImage(logoPath);
     
     // Draw white circle for logo background
+    const circleRadius = 140;
+    const circleCenterX = 600;
+    const circleCenterY = 200;
+    
     ctx.fillStyle = 'white';
     ctx.beginPath();
-    ctx.arc(600, 200, 140, 0, Math.PI * 2);
+    ctx.arc(circleCenterX, circleCenterY, circleRadius, 0, Math.PI * 2);
     ctx.fill();
     
-    // Draw logo
-    ctx.drawImage(logo, 460, 60, 280, 280);
+    // Calculate logo dimensions to maintain aspect ratio
+    const logoAspectRatio = logo.width / logo.height;
+    let logoWidth, logoHeight;
+    
+    const maxLogoSize = circleRadius * 1.6; // 80% of circle diameter
+    
+    if (logoAspectRatio > 1) {
+      // Logo is wider than tall
+      logoWidth = maxLogoSize;
+      logoHeight = logoWidth / logoAspectRatio;
+    } else {
+      // Logo is taller than wide or square
+      logoHeight = maxLogoSize;
+      logoWidth = logoHeight * logoAspectRatio;
+    }
+    
+    // Center the logo in the circle
+    const logoX = circleCenterX - (logoWidth / 2);
+    const logoY = circleCenterY - (logoHeight / 2);
+    
+    // Draw logo with preserved aspect ratio
+    ctx.drawImage(logo, logoX, logoY, logoWidth, logoHeight);
     
     // Add title text
     ctx.fillStyle = 'white';
