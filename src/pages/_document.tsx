@@ -22,6 +22,10 @@ export default function Document() {
         <meta property="og:title" content="Njangi On-Chain - Community Savings Circles" />
         <meta property="og:description" content="Join secure, transparent savings circles powered by SUI blockchain. Create and manage your community savings with automated payouts and full transparency." />
         <meta property="og:image" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/og-image.png" />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta property="og:image:alt" content="Njangi On-Chain logo with the text 'Community Savings Circles on SUI Blockchain'" />
+        <meta property="og:site_name" content="Njangi On-Chain" />
         
         {/* Twitter */}
         <meta property="twitter:card" content="summary_large_image" />
@@ -29,6 +33,7 @@ export default function Document() {
         <meta property="twitter:title" content="Njangi On-Chain - Community Savings Circles" />
         <meta property="twitter:description" content="Join secure, transparent savings circles powered by SUI blockchain. Create and manage your community savings with automated payouts and full transparency." />
         <meta property="twitter:image" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/og-image.png" />
+        <meta name="twitter:image:alt" content="Njangi On-Chain logo with the text 'Community Savings Circles on SUI Blockchain'" />
         
         {/* Web App capabilities */}
         <meta name="theme-color" content="#3B82F6" /> {/* Blue-600 color */}
