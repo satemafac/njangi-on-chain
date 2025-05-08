@@ -42,10 +42,10 @@ async function createOgImage() {
     
     // Load logo
     const logoPath = path.join(__dirname, '../public/njangi-on-chain-logo.png');
-    const logo = await loadImage(logoPath);
+    const logo = await loadImage(logoPath); // logo.width, logo.height are dimensions of this file
     
     // Draw white circle for logo background
-    const circleRadius = 140;
+    const circleRadius = 140; // This is the radius of the white background circle
     const circleCenterX = 600;
     const circleCenterY = 200;
     
@@ -54,27 +54,34 @@ async function createOgImage() {
     ctx.arc(circleCenterX, circleCenterY, circleRadius, 0, Math.PI * 2);
     ctx.fill();
     
-    // Calculate logo dimensions
-    let logoWidth, logoHeight;
+    // --- New scaling logic for the logo ---
+    // Assume the actual circular artwork in 'njangi-on-chain-logo.png'
+    // has a diameter equal to the height of the logo file, as the logo artwork is constrained by height.
+    const artworkOriginalDiameter = logo.height;
     
-    // Use 85% of the circle diameter for logo size to ensure it fits well
-    const maxLogoSize = circleRadius * 1.7; 
+    // We want this artwork to perfectly fill the white circle
+    const targetArtworkDiameter = circleRadius * 2;
     
-    // Square-like treatment for the logo regardless of aspect ratio
-    // This ensures it appears uniformly within the circle
-    logoWidth = maxLogoSize;
-    logoHeight = maxLogoSize;
+    const scaleFactor = targetArtworkDiameter / artworkOriginalDiameter;
     
-    // Center the logo in the circle
-    const logoX = circleCenterX - (logoWidth / 2);
-    const logoY = circleCenterY - (logoHeight / 2);
+    const drawWidth = logo.width * scaleFactor;
+    const drawHeight = logo.height * scaleFactor; // This will be targetArtworkDiameter after scaling
     
-    // Draw logo in circle (using circular clipping path for clean appearance)
+    // Calculate top-left (logoX, logoY) to center the scaled logo
+    // such that the artwork within it (which is assumed to be centered in the original logo file)
+    // is centered in the white circle.
+    const logoX = circleCenterX - drawWidth / 2;
+    const logoY = circleCenterY - drawHeight / 2;
+    
+    // Clipping path remains the white circle itself
     ctx.save();
     ctx.beginPath();
-    ctx.arc(circleCenterX, circleCenterY, circleRadius * 0.85, 0, Math.PI * 2);
+    ctx.arc(circleCenterX, circleCenterY, circleRadius, 0, Math.PI * 2); // Clip to the exact white circle
     ctx.clip();
-    ctx.drawImage(logo, logoX, logoY, logoWidth, logoHeight);
+    
+    // Draw the scaled logo file
+    // The artwork within this scaled file should now perfectly align with the clipping circle
+    ctx.drawImage(logo, logoX, logoY, drawWidth, drawHeight);
     ctx.restore();
     
     // Add title text

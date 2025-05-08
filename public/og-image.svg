@@ -11,12 +11,17 @@
   
   <!-- Clipped Logo -->
   <clipPath id="circleClip">
-    <circle cx="600" cy="200" r="119" /> <!-- 85% of circle radius for clipping -->
+    <circle cx="600" cy="200" r="140" /> <!-- 100% of background circle radius (140) -->
   </clipPath>
   
-  <!-- Apply larger image with clipping -->
+  <!-- Apply image with aspect ratio preservation -->
   <g clip-path="url(#circleClip)">
-    <image xlink:href="/njangi-on-chain-logo.png" x="362" y="-38" width="476" height="476" preserveAspectRatio="xMidYMid slice" />
+    <image xlink:href="/njangi-on-chain-logo.png"
+           x="460" <!-- circleCenterX (600) - clipRadius (140) -->
+           y="60"  <!-- circleCenterY (200) - clipRadius (140) -->
+           width="280" <!-- diameter of the circle -->
+           height="280" <!-- diameter of the circle -->
+           preserveAspectRatio="xMidYMid slice" /> <!-- Ensures the image covers the area, centered, and crops excess -->
   </g>
   
   <!-- Main Title -->
