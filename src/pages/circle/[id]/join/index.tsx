@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
-import { ArrowLeft, AlertCircle } from 'lucide-react';
+import { ArrowLeft, AlertCircle, LogIn } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { SuiClient } from '@mysten/sui/client';
 import { priceService } from '@/services/price-service';
@@ -62,20 +62,13 @@ interface TransactionInputData {
 export default function JoinCircle() {
   const router = useRouter();
   const { id } = router.query;
-  const { isAuthenticated, userAddress, account } = useAuth();
+  const { isAuthenticated, userAddress, account, login } = useAuth();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
   const [isMember, setIsMember] = useState(false);
   const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
   const [hasPendingRequest, setHasPendingRequest] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  useEffect(() => {
-    if (!isAuthenticated) {
-      router.push('/');
-      return;
-    }
-  }, [isAuthenticated, router]);
 
   useEffect(() => {
     // Fetch the current SUI price
@@ -97,7 +90,7 @@ export default function JoinCircle() {
 
   useEffect(() => {
     // Fetch circle details when ID is available
-    if (id && userAddress) {
+    if (id) {
       fetchCircleDetails();
     }
   }, [id, userAddress]);
@@ -113,24 +106,27 @@ export default function JoinCircle() {
     if (id) {
       fetchCircleDetails();
       
-      // Store this circle ID in localStorage for notifications
-      try {
-        const existingCircleIds = localStorage.getItem('viewedCircles');
-        let circleIds: string[] = [];
-        
-        if (existingCircleIds) {
-          circleIds = JSON.parse(existingCircleIds);
+      // Only store viewed circles for authenticated users
+      if (isAuthenticated) {
+        // Store this circle ID in localStorage for notifications
+        try {
+          const existingCircleIds = localStorage.getItem('viewedCircles');
+          let circleIds: string[] = [];
+          
+          if (existingCircleIds) {
+            circleIds = JSON.parse(existingCircleIds);
+          }
+          
+          if (!circleIds.includes(id as string)) {
+            circleIds.push(id as string);
+            localStorage.setItem('viewedCircles', JSON.stringify(circleIds));
+          }
+        } catch (error) {
+          console.error('Error storing circle ID in localStorage:', error);
         }
-        
-        if (!circleIds.includes(id as string)) {
-          circleIds.push(id as string);
-          localStorage.setItem('viewedCircles', JSON.stringify(circleIds));
-        }
-      } catch (error) {
-        console.error('Error storing circle ID in localStorage:', error);
       }
     }
-  }, [id, userAddress]);
+  }, [id, userAddress, isAuthenticated]);
 
   const fetchCircleDetails = async () => {
     if (!id) return;
@@ -492,6 +488,16 @@ export default function JoinCircle() {
     }
   };
 
+  // Handle login button click
+  const handleLoginClick = () => {
+    // Store the current URL to redirect back after login
+    const currentUrl = window.location.href;
+    localStorage.setItem('redirectAfterLogin', currentUrl);
+    
+    // Trigger login with Google provider
+    login('Google');
+  };
+
   // Format cycle info
   const formatCycleInfo = (cycleLength: number, cycleDay: number) => {
     // Cycle length: 0 = weekly, 1 = monthly, 2 = quarterly, 3 = bi-weekly
@@ -667,7 +673,23 @@ export default function JoinCircle() {
                       </p>
                     </div>
                     
-                    {hasPendingRequest ? (
+                    {!isAuthenticated ? (
+                      <div className="bg-blue-50 p-4 rounded-md mb-6">
+                        <div className="flex flex-col items-center text-center">
+                          <LogIn className="w-6 h-6 text-blue-600 mb-2" />
+                          <h4 className="text-lg font-medium text-blue-800 mb-2">Login Required</h4>
+                          <p className="text-sm text-blue-700 mb-4">
+                            You need to log in to join this circle.
+                          </p>
+                          <button
+                            onClick={handleLoginClick}
+                            className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md transition-colors"
+                          >
+                            Log In to Continue
+                          </button>
+                        </div>
+                      </div>
+                    ) : hasPendingRequest ? (
                       <div className="bg-blue-50 p-4 rounded-md mb-6 flex items-start">
                         <AlertCircle className="w-5 h-5 text-blue-500 mr-2 flex-shrink-0 mt-0.5" />
                         <div>
