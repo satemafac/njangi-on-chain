@@ -161,6 +161,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.removeItem('account');
     localStorage.removeItem('isAuthenticated');
     localStorage.removeItem('userAddress');
+    
+    // Redirect to home page after logout
+    window.location.href = '/';
   };
 
   const handleCallback = async (jwt: string) => {
