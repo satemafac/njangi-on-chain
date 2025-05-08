@@ -74,8 +74,17 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
   // Add missing state variable
   const [highVolatilityDetected, setHighVolatilityDetected] = useState<boolean>(false);
 
+  // Add state to track current deposit status that can change during usage
+  const [currentDepositPaid, setCurrentDepositPaid] = useState<boolean>(securityDepositPaid);
+
   // Determine the required amount based on whether security deposit is paid
-  const paymentType = securityDepositPaid ? 'contribution' : 'security deposit';
+  const paymentType = currentDepositPaid ? 'contribution' : 'security deposit';
+
+  // Update the currentDepositPaid state whenever securityDepositPaid prop changes
+  useEffect(() => {
+    setCurrentDepositPaid(securityDepositPaid);
+    console.log(`[SimplifiedSwapUI] Updated deposit status: ${securityDepositPaid ? 'PAID' : 'NOT PAID'}`);
+  }, [securityDepositPaid]);
 
   // Constants for this form
   const SUI_COIN_TYPE = '0x2::sui::SUI';
@@ -186,7 +195,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
           if (suiPrice) {
             // Apply the conservative estimation factor
             let estimationFactor = 0.97; // 3% reduction as baseline
-            if (!securityDepositPaid) {
+            if (!currentDepositPaid) {
               estimationFactor = 0.95; // 5% reduction for security deposits
             }
             if (newSuggestedAmount < 0.2) {
@@ -215,7 +224,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
     }
 
     // For security deposits, we need exact amounts to avoid contract errors
-    const isSecurityDeposit = !securityDepositPaid;
+    const isSecurityDeposit = !currentDepositPaid;
     
     // Calculate USDC equivalent (this is what we're aiming for)
     const targetUsdcAmount = baseAmount * price;
@@ -306,7 +315,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
         // For exact values like security deposits, be more conservative
         let estimationFactor = 0.97; // 3% reduction as baseline
         
-        if (!securityDepositPaid && requiredAmount > 0) {
+        if (!currentDepositPaid && requiredAmount > 0) {
           // For security deposits, be more conservative
           estimationFactor = 0.95; // 5% reduction
         }
@@ -335,7 +344,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
         setEffectiveRate(suiPrice * estimationFactor);
         
         // Display a warning if this likely won't be enough for a security deposit
-        if (!securityDepositPaid && requiredAmount > 0) {
+        if (!currentDepositPaid && requiredAmount > 0) {
           const requiredUsdc = requiredAmount * suiPrice;
           if (conservativeUsdcAmount < requiredUsdc && !processing) {
             // Toast warning about insufficient amount for security deposit
@@ -527,7 +536,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
       let effectiveSlippage = slippage;
       
       // If this is for a security deposit, calculate minimum USDC needed
-      if (!securityDepositPaid && requiredAmount > 0 && suiPrice !== null && suiPrice > 0) {
+      if (!currentDepositPaid && requiredAmount > 0 && suiPrice !== null && suiPrice > 0) {
         // Calculate the actual minimum needed in USDC for the security deposit
         const requiredUsdcMicrounits = requiredAmount * suiPrice * 1e6;
         console.log(`For security deposit: Required minimum USDC: ${requiredUsdcMicrounits / 1e6} USDC (${requiredUsdcMicrounits} microunits)`);
@@ -803,71 +812,59 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
         throw new Error('USDC coin not found. The blockchain might still be processing the swap transaction. Please wait a moment and try again.');
       }
 
-      // Now, fetch the exact required deposit amount from the circle
-      let requiredDepositUsd = 0;
+      // Fetch the user's current deposit status before making the deposit
+      let currentDepositStatus = currentDepositPaid;
       
       try {
-        // First get the dynamic fields to find the config object
-        const dynamicFields = await suiClient.getDynamicFields({
-          parentId: circleId
+        // Get the circle object
+        const circleData = await suiClient.getObject({
+          id: circleId,
+          options: { showContent: true }
         });
         
-        console.log('Looking for CircleConfig in dynamic fields...');
-        
-        // Find the CircleConfig field
-        let configFieldObjectId = null;
-        for (const field of dynamicFields.data) {
-          if (field.name && 
-              typeof field.name === 'object' && 
-              'type' in field.name && 
-              field.name.type && 
-              field.name.type.includes('vector<u8>') && 
-              field.objectType && 
-              field.objectType.includes('CircleConfig')) {
-            
-            configFieldObjectId = field.objectId;
-            console.log(`Found CircleConfig dynamic field: ${configFieldObjectId}`);
-            break;
-          }
-        }
-        
-        // Get the CircleConfig object if found
-        if (configFieldObjectId) {
-          const configObject = await suiClient.getObject({
-            id: configFieldObjectId,
-            options: { showContent: true }
-          });
+        if (circleData.data?.content && 'fields' in circleData.data.content) {
+          const circleFields = circleData.data.content.fields as {
+            members?: { fields?: { id?: { id: string } } } // Check if members table exists
+          };
           
-          if (configObject.data?.content && 
-              'fields' in configObject.data.content &&
-              'value' in configObject.data.content.fields) {
+          if (circleFields.members?.fields?.id?.id) {
+            const membersTableId = circleFields.members.fields.id.id;
+            console.log(`Fetching Member object for deposit status using key ${account.userAddr} from table ${membersTableId}`);
             
-            const valueField = configObject.data.content.fields.value;
-            if (typeof valueField === 'object' && 
-                valueField !== null && 
-                'fields' in valueField) {
-              
-              // Extract the security_deposit_usd field for security deposits
-              // or contribution_amount_usd for regular contributions
-              const configFields = valueField.fields as Record<string, unknown>;
-              if (!securityDepositPaid) {
-                requiredDepositUsd = Number(configFields.security_deposit_usd || 0);
-                console.log('Found security_deposit_usd:', requiredDepositUsd);
-              } else {
-                requiredDepositUsd = Number(configFields.contribution_amount_usd || 0);
-                console.log('Found contribution_amount_usd:', requiredDepositUsd);
+            // Get the dynamic field representing the Member object within the Table
+            const memberField = await suiClient.getDynamicFieldObject({
+              parentId: membersTableId,
+              name: {
+                type: 'address', // The key type for the members table is address
+                value: account.userAddr
               }
+            });
+            
+            if (memberField.data?.content && 'fields' in memberField.data.content) {
+              const memberFields = memberField.data.content.fields as {
+                value?: { fields?: { deposit_paid?: boolean, [key: string]: unknown } } // Access nested value.fields
+              };
               
-              // Note: The USD amounts are in CENTS, 
-              // so 20 = $0.20, 2000 = $20.00
+              if (memberFields.value?.fields?.deposit_paid !== undefined) {
+                currentDepositStatus = Boolean(memberFields.value.fields.deposit_paid);
+                console.log(`Deposit status found in Member struct before deposit: ${currentDepositStatus}`);
+                
+                // If status has changed, update our local state
+                if (currentDepositStatus !== currentDepositPaid) {
+                  console.log('Deposit status has changed since component mounted, updating local state');
+                  // This will update the UI to reflect the actual deposit status
+                  // and ensure we use the correct deposit function
+                  setCurrentDepositPaid(currentDepositStatus);
+                }
+              }
             }
           }
         }
-      } catch (error) {
-        console.error('Error fetching circle config details:', error);
+      } catch (err) {
+        console.warn('Could not fetch latest deposit status, using existing value:', err);
       }
 
-      // Make the deposit call with the extra required deposit information
+      // Make the deposit call with the updated deposit status
       const depositResponse = await fetch('/api/zkLogin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -878,7 +875,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
           walletId,
           coinObjectId: swappedCoinId,
           stablecoinType: USDC_COIN_TYPE,
-          requiredDepositUsd // Include the USD amount for server-side handling
+          depositIsPaid: currentDepositStatus, // Renamed from isContribution for clarity
         }),
       });
       
@@ -943,15 +940,21 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
             { id: 'deposit-step', duration: 5000 }
           );
           
+          // UPDATE: If we get EDepositAlreadyPaid, update our state to reflect that
+          if (!currentDepositStatus) {
+            console.log('Security deposit status was out of sync, updating to PAID');
+            setCurrentDepositPaid(true);
+            
+            // Also notify parent about state change via onComplete
+            if (onComplete) {
+              setTimeout(() => {
+                onComplete();
+              }, 1000);
+            }
+          }
+          
           // Notify of success since the user's goal is already achieved
           setTransactionStep('complete');
-          
-          // Reset form and notify parent after completion
-          setTimeout(() => {
-            if (onComplete) {
-              onComplete();
-            }
-          }, 3000);
           
           setDepositProcessing(false);
           return;
@@ -962,12 +965,18 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
       
       // Success path
       toast.success(
-        !securityDepositPaid 
-          ? 'Security deposit paid successfully!' 
-          : 'Contribution made successfully!', 
+        currentDepositStatus 
+          ? 'Contribution made successfully!' 
+          : 'Security deposit paid successfully!', 
         { id: 'deposit-step' }
       );
       console.log('Deposit transaction executed with digest:', result.digest);
+      
+      // If this was a successful security deposit, update our state
+      if (!currentDepositStatus) {
+        console.log('Updating security deposit status to PAID after successful deposit');
+        setCurrentDepositPaid(true);
+      }
       
       // Move to the complete step
       setTransactionStep('complete');
@@ -1109,7 +1118,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
     }
     
     if (transactionStep === 'deposit' && swapTxDigest) {
-      return "Complete Deposit";
+      return currentDepositPaid ? "Complete Contribution" : "Complete Security Deposit";
     }
     
     // Not enough SUI error
@@ -1121,7 +1130,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
       return "Enter Amount";
     }
     
-    if (securityDepositPaid) {
+    if (currentDepositPaid) {
       return "Swap & Contribute";
     } else {
       return "Swap & Pay Security Deposit";
@@ -1139,7 +1148,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
           <div>
             <h3 className="font-medium text-green-400">Transaction Complete!</h3>
             <p className="text-sm text-green-300">
-              {securityDepositPaid 
+              {currentDepositPaid 
                 ? 'Your contribution was successfully processed.' 
                 : 'Your security deposit was successfully processed.'}
             </p>
@@ -1198,7 +1207,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
       }
       
       // For security deposits, always use higher slippage to ensure success
-      if (!securityDepositPaid) {
+      if (!currentDepositPaid) {
         recommendation = Math.max(recommendation, 12.0);
       }
       
@@ -1236,7 +1245,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
     if (requiredAmount > 0 && suiPrice) {
       checkPoolConditionsAndUpdateSlippage();
     }
-  }, [requiredAmount, securityDepositPaid]);
+  }, [requiredAmount, currentDepositPaid]);
   
   // Improve the suggested amount button to force update the input value
   // and make it more obvious when it's clicked
@@ -1254,7 +1263,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
       // Update the receive amount with the conservative estimate
       if (suiPrice) {
         let estimationFactor = 0.97; // 3% reduction as baseline
-        if (!securityDepositPaid) {
+        if (!currentDepositPaid) {
           estimationFactor = 0.95; // 5% reduction for security deposits
         }
         if (suggestedAmount < 0.2) {
@@ -1417,7 +1426,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
                         // Update the receive amount estimation
                         if (suiPrice) {
                           let estimationFactor = 0.97; // 3% reduction as baseline
-                          if (!securityDepositPaid) {
+                          if (!currentDepositPaid) {
                             estimationFactor = 0.95; // 5% reduction for security deposits
                           }
                           if (newSuggestedAmount < 0.2) {
@@ -1459,7 +1468,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
       )}
 
       {/* Step-specific info banners */}
-      {transactionStep === 'swap' && !securityDepositPaid && (
+      {transactionStep === 'swap' && !currentDepositPaid && (
         <div className="bg-[#1E1E2E] border border-blue-600/30 rounded-lg p-3 mb-3 text-sm">
           <div className="flex items-start space-x-2">
             <Info size={16} className="text-blue-400 flex-shrink-0 mt-0.5" />
@@ -1472,7 +1481,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
         <div className="bg-[#1E1E2E] border border-blue-600/30 rounded-lg p-3 mb-3 text-sm">
           <div className="flex items-start space-x-2">
             <Info size={16} className="text-blue-400 flex-shrink-0 mt-0.5" />
-            <span>Step 2: Deposit the swapped USDC to the circle&apos;s custody wallet as {securityDepositPaid ? 'your contribution' : 'security deposit'}.</span>
+            <span>Step 2: Deposit the swapped USDC to the circle&apos;s custody wallet as {currentDepositPaid ? 'your contribution' : 'security deposit'}.</span>
           </div>
         </div>
       )}

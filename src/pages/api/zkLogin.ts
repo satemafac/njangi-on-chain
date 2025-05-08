@@ -1258,6 +1258,94 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
+          // *** NEW: Check if user has already paid security deposit ***
+          const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+          let userDepositPaid = false;
+          
+          try {
+            console.log(`Checking deposit status for user ${session.account.userAddr} in circle ${circleId}`);
+            
+            // Get the circle object
+            const circleObject = await suiClient.getObject({
+              id: circleId,
+              options: { showContent: true }
+            });
+            
+            if (circleObject.data?.content && 'fields' in circleObject.data.content) {
+              const circleFields = circleObject.data.content.fields as {
+                members?: { fields?: { id?: { id: string } } } // Check if members table exists
+              };
+              
+              if (circleFields.members?.fields?.id?.id) {
+                const membersTableId = circleFields.members.fields.id.id;
+                console.log(`Attempting to fetch Member object using key ${session.account.userAddr} from table ${membersTableId}`);
+                
+                // Get the dynamic field representing the Member object within the Table
+                const memberField = await suiClient.getDynamicFieldObject({
+                  parentId: membersTableId,
+                  name: {
+                    type: 'address', // The key type for the members table is address
+                    value: session.account.userAddr
+                  }
+                });
+                
+                if (memberField.data?.content && 'fields' in memberField.data.content) {
+                  const memberFields = memberField.data.content.fields as {
+                    value?: { fields?: { deposit_paid?: boolean, [key: string]: unknown } } // Access nested value.fields
+                  };
+                  
+                  if (memberFields.value?.fields?.deposit_paid !== undefined) {
+                    userDepositPaid = Boolean(memberFields.value.fields.deposit_paid);
+                    console.log(`Deposit status found directly in Member struct: ${userDepositPaid}`);
+                  }
+                }
+              }
+            }
+            
+            // Fallback to checking MemberActivated events if direct fetch fails
+            if (!userDepositPaid) {
+              const memberActivatedEvents = await suiClient.queryEvents({
+                query: { MoveEventType: `${PACKAGE_ID}::njangi_members::MemberActivated` },
+                limit: 50
+              });
+              
+              userDepositPaid = memberActivatedEvents.data.some(event => {
+                const parsed = event.parsedJson as { circle_id?: string; member?: string };
+                return parsed?.circle_id === circleId && parsed?.member === session.account!.userAddr;
+              });
+              
+              if (userDepositPaid) {
+                console.log('Deposit status confirmed via MemberActivated event');
+              }
+            }
+            
+            // Additional check for CustodyDeposited events with operation_type 3 (security deposit)
+            if (!userDepositPaid) {
+              const custodyEvents = await suiClient.queryEvents({
+                query: { MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited` },
+                limit: 50
+              });
+              
+              userDepositPaid = custodyEvents.data.some(e => {
+                const p = e.parsedJson as { circle_id?: string; member?: string; operation_type?: number | string };
+                return p?.circle_id === circleId && 
+                       p?.member === session.account!.userAddr && 
+                       (p?.operation_type === 3 || p?.operation_type === "3");
+              });
+              
+              if (userDepositPaid) {
+                console.log('Deposit status confirmed via CustodyDeposited event');
+              }
+            }
+            
+            console.log(`Final user deposit status: ${userDepositPaid ? 'PAID' : 'NOT PAID'}`);
+          } catch (error) {
+            console.warn('Error checking deposit status:', error);
+            // Continue with default assumption that deposit is not paid
+            console.log('Assuming deposit is NOT paid due to error checking status');
+          }
+          // *** END NEW SECTION ***
+
           console.log(`Creating transaction for SUI to USDC swap using Cetus Aggregator`);
           console.log(`Using suiAmount (MIST): ${suiAmountMIST}`);
           console.log(`Slippage: ${effectiveSlippage} basis points (${effectiveSlippage/100}%)`);
@@ -1357,9 +1445,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 // Try direct pool swap instead
                 try {
                   const targetCoinType = USDC_COIN_TYPE;
-                  // const CETUS_PACKAGE = '0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12';
-                  // Not using CETUS_GLOBAL_CONFIG for the direct swap method
-                  // // const CETUS_GLOBAL_CONFIG = '0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca';
                   
                   // Try each valid pool in the direct pool list
                   let tried = 0;
@@ -1524,28 +1609,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 });
                 
                 // Now deposit the swapped USDC to the custody wallet
-                console.log(`Depositing swapped ${targetCoinType} as security deposit to circle ${circleId}, wallet ${walletId}`);
+                console.log(`Depositing swapped ${targetCoinType} to circle ${circleId}, wallet ${walletId}`);
                 
-                // Call the new deposit_security_deposit function with the resulting coin
-                txb.moveCall({
-                  target: `${PACKAGE_ID}::njangi_circles::member_deposit_security_deposit`,
-                  arguments: [
-                    txb.object(circleId), // Pass circleId first
-                    txb.object(walletId),
-                    stableCoinResult,     // Use the coin returned from the swap
-                    txb.object("0x6")  // Clock object
-                  ],
-                  typeArguments: [targetCoinType] // Use the coin type determined during routing
-                });
+                // CORRECTED: Choose deposit function based on user deposit status
+                if (userDepositPaid) {
+                  // User already paid security deposit, use contribute_stablecoin
+                  console.log(`User has already paid security deposit, using contribute_stablecoin function`);
+                  txb.moveCall({
+                    target: `${PACKAGE_ID}::njangi_circles::contribute_stablecoin`,
+                    arguments: [
+                      txb.object(circleId),
+                      txb.object(walletId),
+                      stableCoinResult, // Use the coin from the swap
+                      txb.object("0x6") // Clock object
+                    ],
+                    typeArguments: [targetCoinType] // Use the determined coin type
+                  });
+                } else {
+                  // User has not paid security deposit, use member_deposit_security_deposit
+                  console.log(`User has NOT paid security deposit, using member_deposit_security_deposit function`);
+                  txb.moveCall({
+                    target: `${PACKAGE_ID}::njangi_circles::member_deposit_security_deposit`,
+                    arguments: [
+                      txb.object(circleId),
+                      txb.object(walletId),
+                      stableCoinResult, // Use the coin from the swap
+                      txb.object("0x6")  // Clock object
+                    ],
+                    typeArguments: [targetCoinType] // Use the determined coin type
+                  });
+                }
               },
               { gasBudget: 100000000 } // Higher gas budget for complex swap + deposit
             );
             
-            console.log('Swap and security deposit transaction successful:', txResult);
+            console.log('Swap and deposit transaction successful:', txResult);
             return res.status(200).json({ 
               digest: txResult.digest,
               status: txResult.status,
-              gasUsed: txResult.gasUsed
+              gasUsed: txResult.gasUsed,
+              userDepositPaid // Include deposit status in response
             });
           } catch (routeError) {
             console.error('Error in swap and deposit transaction:', routeError);
@@ -1935,7 +2038,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         try {
           // Validate circle and wallet IDs
-          const { circleId, walletId, coinObjectId, stablecoinType = USDC_COIN_TYPE } = req.body;
+          const { circleId, walletId, coinObjectId, stablecoinType = USDC_COIN_TYPE, depositIsPaid } = req.body; // Read depositIsPaid from request
           
           if (!circleId || !walletId || !coinObjectId) {
             return res.status(400).json({ 
@@ -1955,69 +2058,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
           
-          // Initialize SUI client for checking member's deposit status
+          // Initialize SUI client for checking coin value
           const suiClient = new SuiClient({ url: getJsonRpcUrl() });
           
-          // First, check if the user has already paid their security deposit
-          let userDepositPaid = false;
-          try {
-            // Get the circle object
-            const circleObject = await suiClient.getObject({
-              id: circleId,
-              options: { showContent: true }
-            });
-            
-            if (circleObject.data?.content && 'fields' in circleObject.data.content) {
-              const circleFields = circleObject.data.content.fields as Record<string, unknown>;
-              
-              // Check if members field exists and get the member directly
-              if ('members' in circleFields && 
-                  typeof circleFields.members === 'object' && 
-                  circleFields.members !== null && 
-                  'fields' in circleFields.members) {
-                
-                const membersTable = circleFields.members.fields as Record<string, unknown>;
-                
-                if ('contents' in membersTable) {
-                  // This is a table of members, find the user
-                  const contentsField = membersTable.contents as Record<string, unknown>;
-                  
-                  // Look for the user in the members table
-                  for (const [addr, memberData] of Object.entries(contentsField)) {
-                    // Check if this is the current user
-                    if (addr.toLowerCase() === session.account.userAddr.toLowerCase()) {
-                      // Found the user's member record!
-                      if (typeof memberData === 'object' && 
-                          memberData !== null && 
-                          'fields' in memberData) {
-                        
-                        const fields = memberData.fields as Record<string, unknown>;
-                        
-                        // Check the deposit_paid flag first (new field)
-                        if ('deposit_paid' in fields) {
-                          userDepositPaid = Boolean(fields.deposit_paid);
-                          console.log(`Found deposit_paid status for user: ${userDepositPaid}`);
-                        }
-                        // Otherwise fallback to checking deposit_balance
-                        else if ('deposit_balance' in fields) {
-                          const depositBalance = Number(fields.deposit_balance || 0);
-                          userDepositPaid = depositBalance > 0;
-                          console.log(`Inferred deposit status from balance: ${depositBalance} -> paid=${userDepositPaid}`);
-                        }
-                        
-                        break;
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          } catch (statusError) {
-            console.warn('Error checking deposit status:', statusError);
-            // Continue with default false
-          }
-          
-          console.log(`User deposit status: ${userDepositPaid ? 'PAID' : 'NOT PAID'}`);
+          // REMOVED: Backend check for userDepositPaid - rely on frontend status
+          console.log(`Frontend reports deposit status: ${depositIsPaid ? 'PAID' : 'NOT PAID'}`);
           
           // Get the coin value to check balance/verify amount
           let coinValue = 0;
@@ -2082,7 +2127,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     // Extract the security_deposit_usd field
                     const configFields = valueField.fields as Record<string, unknown>;
                     
-                    if (userDepositPaid) {
+                    if (depositIsPaid) {
                       // If deposit is paid, get the contribution amount
                       const contributionAmountUsd = Number(configFields.contribution_amount_usd || 0);
                       console.log('Found contribution_amount_usd in CircleConfig:', contributionAmountUsd);
@@ -2118,7 +2163,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               
               if (circleObject.data?.content && 'fields' in circleObject.data.content) {
                 const circleFields = circleObject.data.content.fields as Record<string, unknown>;
-                if (userDepositPaid) {
+                if (depositIsPaid) {
                   requiredDepositAmount = Number(circleFields.contribution_amount || 0);
                 } else {
                   requiredDepositAmount = Number(circleFields.security_deposit || 0);
@@ -2130,8 +2175,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               requiredDepositAmount,
               coinValue,
               coinType: stablecoinType,
-              isSecurityDeposit: !userDepositPaid,
-              isContribution: userDepositPaid
+              isSecurityDeposit: !depositIsPaid,
+              isContribution: depositIsPaid
             });
           } catch (e) {
             console.error('Error checking circle and coin info:', e);
@@ -2153,12 +2198,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   [txb.pure.u64(BigInt(requiredDepositAmount))]
                 );
                 
-                // Execute the deposit with the split coin - choose function based on deposit status
-                if (userDepositPaid) {
+                // Execute the deposit with the split coin - choose function based on deposit status from frontend
+                if (depositIsPaid) {
                   // User already paid security deposit, this is a contribution
-                  console.log('Calling contribute function for regular contribution');
+                  console.log('Calling contribute_stablecoin based on frontend status');
                   txb.moveCall({
-                    target: `${PACKAGE_ID}::njangi_payments::contribute`,
+                    target: `${PACKAGE_ID}::njangi_circles::contribute_stablecoin`,
                     typeArguments: [stablecoinType],
                     arguments: [
                       txb.object(circleId),
@@ -2169,7 +2214,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   });
                 } else {
                   // User has not paid security deposit yet
-                  console.log('Calling member_deposit_security_deposit for security deposit');
+                  console.log('Calling member_deposit_security_deposit based on frontend status');
                   txb.moveCall({
                     target: `${PACKAGE_ID}::njangi_circles::member_deposit_security_deposit`,
                     typeArguments: [stablecoinType],
@@ -2184,11 +2229,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               } else {
                 // Just use the coin directly if it matches the required amount
                 // or if we couldn't determine the required amount
-                if (userDepositPaid) {
+                if (depositIsPaid) {
                   // User already paid security deposit, this is a contribution
-                  console.log('Calling contribute function for regular contribution (direct coin)');
+                  console.log('Calling contribute_stablecoin (direct coin) based on frontend status');
                   txb.moveCall({
-                    target: `${PACKAGE_ID}::njangi_payments::contribute`,
+                    target: `${PACKAGE_ID}::njangi_circles::contribute_stablecoin`,
                     typeArguments: [stablecoinType],
                     arguments: [
                       txb.object(circleId),
@@ -2199,7 +2244,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   });
                 } else {
                   // User has not paid security deposit yet
-                  console.log('Calling member_deposit_security_deposit for security deposit (direct coin)');
+                  console.log('Calling member_deposit_security_deposit (direct coin) based on frontend status');
                   txb.moveCall({
                     target: `${PACKAGE_ID}::njangi_circles::member_deposit_security_deposit`,
                     typeArguments: [stablecoinType],
@@ -2221,8 +2266,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             digest: txResult.digest,
             status: txResult.status,
             gasUsed: txResult.gasUsed,
-            isSecurityDeposit: !userDepositPaid,
-            isContribution: userDepositPaid
+            isSecurityDeposit: !depositIsPaid, // Use frontend status for response
+            isContribution: depositIsPaid
           });
         } catch (error) {
           console.error('Error depositing stablecoin:', error);
