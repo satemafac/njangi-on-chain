@@ -6,6 +6,7 @@ import { toast } from 'react-hot-toast';
 import { SuiClient } from '@mysten/sui/client';
 import { priceService } from '@/services/price-service';
 import { PACKAGE_ID } from '../../../../services/circle-service';
+import Head from 'next/head';
 
 // Define Circle type
 interface Circle {
@@ -630,6 +631,22 @@ export default function JoinCircle() {
     );
   };
 
+  // Generate page title & description based on circle data
+  const pageTitle = circle 
+    ? `Join ${circle.name} Circle - Njangi On-Chain`
+    : 'Join Circle - Njangi On-Chain';
+    
+  const pageDescription = circle 
+    ? `Join ${circle.name}, a savings circle with ${formatUSD(circle.contributionAmountUsd)} contribution ${formatCycleInfo(circle.cycleLength, circle.cycleDay).toLowerCase()}. Currently ${circle.currentMembers}/${circle.maxMembers} members.`
+    : 'Join a secure, transparent savings circle powered by SUI blockchain. Create and manage your community savings with automated payouts.';
+
+  // Update document title when circle data is loaded
+  useEffect(() => {
+    if (circle) {
+      document.title = pageTitle;
+    }
+  }, [circle, pageTitle]);
+
   // Update the component's return statement to safely check auth state
   if (!id) {
     return (
@@ -655,121 +672,148 @@ export default function JoinCircle() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        <div className="px-4 py-6 sm:px-0">
-          <div className="mb-6">
-            <button
-              onClick={() => router.push(isAuthenticated ? '/dashboard' : '/')}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm text-sm text-gray-700 font-medium"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              {isAuthenticated ? 'Back to Dashboard' : 'Back to Home'}
-            </button>
-          </div>
+    <>
+      <Head>
+        {/* Page title and description */}
+        <title>{pageTitle}</title>
+        <meta name="description" content={pageDescription} />
+        
+        {/* Facebook & Open Graph */}
+        <meta property="og:title" content={pageTitle} />
+        <meta property="og:description" content={pageDescription} />
+        <meta property="og:type" content="website" />
+        <meta property="og:url" content={`https://njangi-on-chain-1014e48e59ae.herokuapp.com/circle/${id}/join`} />
+        <meta property="og:image" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/og-image.png" />
+        <meta property="og:site_name" content="Njangi On-Chain" />
+        
+        {/* Twitter Card */}
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content={pageTitle} />
+        <meta name="twitter:description" content={pageDescription} />
+        <meta name="twitter:image" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/og-image.png" />
+        
+        {/* WhatsApp specific - improves preview on WhatsApp */}
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta property="og:image:alt" content={`Join ${circle?.name || 'a Njangi'} Circle`} />
+      </Head>
+      
+      <div className="min-h-screen bg-gray-50">
+        <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+          <div className="px-4 py-6 sm:px-0">
+            <div className="mb-6">
+              <button
+                onClick={() => router.push(isAuthenticated ? '/dashboard' : '/')}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm text-sm text-gray-700 font-medium"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                {isAuthenticated ? 'Back to Dashboard' : 'Back to Home'}
+              </button>
+            </div>
 
-          <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100">
-            <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
-              <h2 className="text-2xl font-bold text-gray-900">
-                Join Circle
-              </h2>
+            <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100">
+              <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
+                <h2 className="text-2xl font-bold text-gray-900">
+                  Join Circle
+                </h2>
 
-              {/* Show loading state */}
-              {loading ? (
-                <div className="py-8 flex justify-center">
-                  <svg className="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                </div>
-              ) : circle ? (
-                <div className="py-4 space-y-8">
-                  <div className="px-2">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Details</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Circle Name</p>
-                        <p className="text-lg font-medium">{circle.name}</p>
-                      </div>
-                      
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
-                        <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} />
-                      </div>
-                      
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Security Deposit</p>
-                        <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} />
-                      </div>
-                      
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Contribution Schedule</p>
-                        <p className="text-lg font-medium">{formatCycleInfo(circle.cycleLength, circle.cycleDay)}</p>
-                      </div>
-                      
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Members</p>
-                        <p className="text-lg font-medium">{circle.currentMembers} / {circle.maxMembers}</p>
-                      </div>
-                    </div>
+                {/* Show loading state */}
+                {loading ? (
+                  <div className="py-8 flex justify-center">
+                    <svg className="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
                   </div>
-                  
-                  <div className="pt-6 border-t border-gray-200 px-2">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Join Request</h3>
-                    <div className="bg-yellow-50 p-4 rounded-md mb-6">
-                      <p className="text-sm text-yellow-800">
-                        By joining this circle, you agree to contribute {formatUSD(circle.contributionAmountUsd)} ({calculateSuiAmount(circle.contributionAmountUsd).toLocaleString()} SUI) {formatCycleInfo(circle.cycleLength, circle.cycleDay).toLowerCase()}. You will also need to pay a security deposit of {formatUSD(circle.securityDepositUsd)} ({calculateSuiAmount(circle.securityDepositUsd).toLocaleString()} SUI).
-                      </p>
+                ) : circle ? (
+                  <div className="py-4 space-y-8">
+                    <div className="px-2">
+                      <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Details</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                          <p className="text-sm text-gray-500 mb-1">Circle Name</p>
+                          <p className="text-lg font-medium">{circle.name}</p>
+                        </div>
+                        
+                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                          <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
+                          <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} />
+                        </div>
+                        
+                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                          <p className="text-sm text-gray-500 mb-1">Security Deposit</p>
+                          <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} />
+                        </div>
+                        
+                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                          <p className="text-sm text-gray-500 mb-1">Contribution Schedule</p>
+                          <p className="text-lg font-medium">{formatCycleInfo(circle.cycleLength, circle.cycleDay)}</p>
+                        </div>
+                        
+                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
+                          <p className="text-sm text-gray-500 mb-1">Members</p>
+                          <p className="text-lg font-medium">{circle.currentMembers} / {circle.maxMembers}</p>
+                        </div>
+                      </div>
                     </div>
                     
-                    {!isAuthenticated ? (
-                      <div className="bg-blue-50 p-4 rounded-md mb-6">
-                        <div className="flex flex-col items-center text-center">
-                          <LogIn className="w-6 h-6 text-blue-600 mb-2" />
-                          <h4 className="text-lg font-medium text-blue-800 mb-2">Login Required</h4>
-                          <p className="text-sm text-blue-700 mb-4">
-                            You need to log in to join this circle.
-                          </p>
-                          <button
-                            onClick={handleLoginClick}
-                            className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md transition-colors"
-                          >
-                            Log In to Continue
-                          </button>
-                        </div>
+                    <div className="pt-6 border-t border-gray-200 px-2">
+                      <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Join Request</h3>
+                      <div className="bg-yellow-50 p-4 rounded-md mb-6">
+                        <p className="text-sm text-yellow-800">
+                          By joining this circle, you agree to contribute {formatUSD(circle.contributionAmountUsd)} ({calculateSuiAmount(circle.contributionAmountUsd).toLocaleString()} SUI) {formatCycleInfo(circle.cycleLength, circle.cycleDay).toLowerCase()}. You will also need to pay a security deposit of {formatUSD(circle.securityDepositUsd)} ({calculateSuiAmount(circle.securityDepositUsd).toLocaleString()} SUI).
+                        </p>
                       </div>
-                    ) : hasPendingRequest ? (
-                      <div className="bg-blue-50 p-4 rounded-md mb-6 flex items-start">
-                        <AlertCircle className="w-5 h-5 text-blue-500 mr-2 flex-shrink-0 mt-0.5" />
-                        <div>
-                          <h4 className="text-sm font-medium text-blue-800">Request Sent</h4>
-                          <p className="text-sm text-blue-700 mt-1">
-                            Your request to join this circle has been sent to the admin. 
-                            You&apos;ll be notified when your request is approved.
-                          </p>
+                      
+                      {!isAuthenticated ? (
+                        <div className="bg-blue-50 p-4 rounded-md mb-6">
+                          <div className="flex flex-col items-center text-center">
+                            <LogIn className="w-6 h-6 text-blue-600 mb-2" />
+                            <h4 className="text-lg font-medium text-blue-800 mb-2">Login Required</h4>
+                            <p className="text-sm text-blue-700 mb-4">
+                              You need to log in to join this circle.
+                            </p>
+                            <button
+                              onClick={handleLoginClick}
+                              className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md transition-colors"
+                            >
+                              Log In to Continue
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={handleSubmit}
-                        disabled={isSubmitting || isMember || hasPendingRequest}
-                        className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all ${(isSubmitting || isMember || hasPendingRequest) ? 'opacity-70 cursor-not-allowed' : ''}`}
-                      >
-                        {isSubmitting ? 'Submitting Request...' : isMember ? 'Already a Member' : 'Request to Join Circle'}
-                      </button>
-                    )}
+                      ) : hasPendingRequest ? (
+                        <div className="bg-blue-50 p-4 rounded-md mb-6 flex items-start">
+                          <AlertCircle className="w-5 h-5 text-blue-500 mr-2 flex-shrink-0 mt-0.5" />
+                          <div>
+                            <h4 className="text-sm font-medium text-blue-800">Request Sent</h4>
+                            <p className="text-sm text-blue-700 mt-1">
+                              Your request to join this circle has been sent to the admin. 
+                              You&apos;ll be notified when your request is approved.
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={handleSubmit}
+                          disabled={isSubmitting || isMember || hasPendingRequest}
+                          className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all ${(isSubmitting || isMember || hasPendingRequest) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                        >
+                          {isSubmitting ? 'Submitting Request...' : isMember ? 'Already a Member' : 'Request to Join Circle'}
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <div className="py-8 text-center">
-                  <p className="text-gray-500">Circle information could not be loaded</p>
-                  <p className="text-sm text-gray-400 mt-2">Please try refreshing the page</p>
-                </div>
-              )}
+                ) : (
+                  <div className="py-8 text-center">
+                    <p className="text-gray-500">Circle information could not be loaded</p>
+                    <p className="text-sm text-gray-400 mt-2">Please try refreshing the page</p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      </main>
-    </div>
+        </main>
+      </div>
+    </>
   );
 } 
