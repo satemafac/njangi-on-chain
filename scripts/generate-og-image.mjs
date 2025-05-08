@@ -1,6 +1,11 @@
-const fs = require('fs');
-const path = require('path');
-const { createCanvas, loadImage } = require('canvas');
+import fs from 'fs';
+import path from 'path';
+import { createCanvas, loadImage } from 'canvas';
+import { fileURLToPath } from 'url';
+
+// ES Modules equivalent to __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Function to create OG image
 async function createOgImage() {
@@ -49,28 +54,28 @@ async function createOgImage() {
     ctx.arc(circleCenterX, circleCenterY, circleRadius, 0, Math.PI * 2);
     ctx.fill();
     
-    // Calculate logo dimensions to maintain aspect ratio
-    const logoAspectRatio = logo.width / logo.height;
+    // Calculate logo dimensions
     let logoWidth, logoHeight;
     
-    const maxLogoSize = circleRadius * 1.6; // 80% of circle diameter
+    // Use 85% of the circle diameter for logo size to ensure it fits well
+    const maxLogoSize = circleRadius * 1.7; 
     
-    if (logoAspectRatio > 1) {
-      // Logo is wider than tall
-      logoWidth = maxLogoSize;
-      logoHeight = logoWidth / logoAspectRatio;
-    } else {
-      // Logo is taller than wide or square
-      logoHeight = maxLogoSize;
-      logoWidth = logoHeight * logoAspectRatio;
-    }
+    // Square-like treatment for the logo regardless of aspect ratio
+    // This ensures it appears uniformly within the circle
+    logoWidth = maxLogoSize;
+    logoHeight = maxLogoSize;
     
     // Center the logo in the circle
     const logoX = circleCenterX - (logoWidth / 2);
     const logoY = circleCenterY - (logoHeight / 2);
     
-    // Draw logo with preserved aspect ratio
+    // Draw logo in circle (using circular clipping path for clean appearance)
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(circleCenterX, circleCenterY, circleRadius * 0.85, 0, Math.PI * 2);
+    ctx.clip();
     ctx.drawImage(logo, logoX, logoY, logoWidth, logoHeight);
+    ctx.restore();
     
     // Add title text
     ctx.fillStyle = 'white';
