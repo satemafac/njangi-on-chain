@@ -1771,7 +1771,7 @@ export default function Dashboard() {
             </div>
             
             <div className="border-t border-gray-200">
-              <div className="grid grid-cols-2 divide-x divide-gray-200">
+              <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-gray-200">
                 <div className="p-6">
                   <div className="flex items-center justify-between mb-2">
                     <p className="text-sm font-medium text-gray-500">Wallet Address</p>
@@ -1855,13 +1855,13 @@ export default function Dashboard() {
           {/* Njangi Circles Section */}
           <div className="mt-8">
             <div className="bg-white shadow rounded-lg p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-lg font-medium text-gray-900">My Njangi Circles</h3>
-                <div className="flex space-x-3">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-4 sm:space-y-0 mb-6">
+                <h3 className="text-lg font-medium text-gray-900 text-center sm:text-left">My Njangi Circles</h3>
+                <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3 w-full sm:w-auto">
                   <button
                     type="button"
                     onClick={() => setIsJoinDialogOpen(true)}
-                    className="inline-flex items-center px-4 py-2 border border-blue-600 text-sm font-medium rounded-md shadow-sm text-blue-600 bg-white hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
+                    className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-blue-600 text-sm font-medium rounded-md shadow-sm text-blue-600 bg-white hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
                   >
                     <Users className="w-5 h-5 mr-2" />
                     Join Circle
@@ -1869,7 +1869,7 @@ export default function Dashboard() {
                   <button
                     type="button"
                     onClick={() => router.push('/create-circle')}
-                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
+                    className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
                   >
                     <svg
                       className="w-5 h-5 mr-2"
@@ -2040,7 +2040,7 @@ export default function Dashboard() {
                               </div>
                               
                               <div className="px-5 py-3 bg-gray-50 text-sm">
-                                <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
                                   <div>
                                     <p className="text-gray-500">Contribution</p>
                                     <p className="font-medium text-gray-900">
@@ -2256,7 +2256,7 @@ export default function Dashboard() {
                               </div>
                               
                               <div className="px-5 py-3 bg-gray-50 text-sm">
-                                <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
                                   <div>
                                     <p className="text-gray-500">Contribution</p>
                                     <p className="font-medium text-gray-900">
@@ -2449,7 +2449,7 @@ export default function Dashboard() {
                               </div>
                               
                               <div className="px-5 py-3 bg-gray-50 text-sm">
-                                <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
                                   <div>
                                     <p className="text-gray-500">Contribution</p>
                                     <p className="font-medium text-gray-900">

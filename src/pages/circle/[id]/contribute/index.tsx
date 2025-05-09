@@ -2098,8 +2098,8 @@ export default function ContributeToCircle() {
         {/* Show message if user has already contributed */}
         {userHasContributed && (
           <div className="mb-4 p-4 bg-green-50 rounded-lg border-2 border-green-200">
-            <div className="flex items-start space-x-3">
-              <div className="bg-green-100 p-1.5 rounded-full flex-shrink-0 mt-0.5">
+            <div className="flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
+              <div className="bg-green-100 p-1.5 rounded-full flex-shrink-0 self-start">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
@@ -2117,8 +2117,8 @@ export default function ContributeToCircle() {
         {/* Show direct USDC deposit option if user has sufficient USDC balance and auto-swap is enabled */}
         {showDirectDepositOption && userUsdcBalance !== null && circle?.autoSwapEnabled && (
           <div className="mb-4 p-4 bg-emerald-50 rounded-lg border-2 border-emerald-200">
-            <div className="flex items-start space-x-3">
-              <div className="bg-emerald-100 p-1.5 rounded-full flex-shrink-0 mt-0.5">
+            <div className="flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
+              <div className="bg-emerald-100 p-1.5 rounded-full flex-shrink-0 self-start">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
@@ -2135,7 +2135,7 @@ export default function ContributeToCircle() {
                     disabled={directDepositProcessing || 
                             (userDepositPaid && !circle?.isActive) || 
                             userHasContributed}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+                    className="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
                   >
                     {directDepositProcessing ? (
                       <span className="flex items-center">
@@ -2335,8 +2335,8 @@ export default function ContributeToCircle() {
             {userDepositPaid && (
               <div className="mb-4 p-3 rounded-lg border">
                 {userDepositPaid && contributionBalance !== null && circle?.contributionAmountUsd !== undefined && contributionBalance >= circle.contributionAmountUsd ? (
-                  <div className="bg-green-50 border-green-200 p-3 rounded-lg flex items-start">
-                    <div className="bg-green-100 rounded-full p-1 mr-3 mt-0.5">
+                  <div className="bg-green-50 border-green-200 p-3 rounded-lg flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
+                    <div className="bg-green-100 rounded-full p-1 self-start">
                       <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-600" viewBox="0 0 20 20" fill="currentColor">
                         <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                       </svg>
@@ -2350,8 +2350,8 @@ export default function ContributeToCircle() {
                     </div>
                   </div>
                 ) : (
-                  <div className="bg-blue-50 border-blue-200 p-3 rounded-lg flex items-start">
-                    <div className="bg-blue-100 rounded-full p-1 mr-3 mt-0.5">
+                  <div className="bg-blue-50 border-blue-200 p-3 rounded-lg flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
+                    <div className="bg-blue-100 rounded-full p-1 self-start">
                       <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-blue-600" viewBox="0 0 20 20" fill="currentColor">
                         <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
                       </svg>
@@ -2442,7 +2442,7 @@ export default function ContributeToCircle() {
                   <div className="px-2">
                     <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-green-500 pl-3">Your Wallet</h3>
                     <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg shadow-sm border border-blue-100">
-                      <div className="flex justify-between items-center">
+                      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-3 sm:space-y-0">
                         <div>
                           <p className="text-sm text-gray-600 mb-1">Available Balance:</p>
                           {fetchingBalance ? (
@@ -2457,9 +2457,9 @@ export default function ContributeToCircle() {
                             </div>
                           )}
                         </div>
-                        <div className="text-right">
+                        <div className="sm:text-right">
                           <p className="text-sm text-gray-600 mb-1">Wallet Address:</p>
-                          <p className="text-sm font-mono bg-white px-2 py-1 rounded border border-gray-200">
+                          <p className="text-sm font-mono bg-white px-2 py-1 rounded border border-gray-200 break-all sm:break-normal">
                             {userAddress ? `${userAddress.substring(0, 6)}...${userAddress.substring(userAddress.length - 4)}` : ''}
                           </p>
                         </div>
@@ -2525,12 +2525,12 @@ export default function ContributeToCircle() {
                       
                       {/* Unified Custody Wallet Balance Display */}
                       <div className="bg-gray-50 p-4 rounded-lg shadow-sm md:col-span-2">
-                        <div className="flex justify-between items-center mb-3">
+                        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-2 sm:space-y-0 mb-3">
                           <p className="text-sm font-medium text-gray-700">Custody Wallet Balances</p>
                           <button 
                             onClick={refreshData}
                             disabled={loadingStablecoinBalance || fetchingSuiBalance}
-                            className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-600 py-1 px-2 rounded flex items-center transition-colors disabled:opacity-50"
+                            className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-600 py-1 px-2 rounded flex items-center justify-center sm:justify-start transition-colors disabled:opacity-50"
                           >
                             {/* Refresh button content (unchanged) */}
                             {loadingStablecoinBalance || fetchingSuiBalance ? (
@@ -2570,19 +2570,19 @@ export default function ContributeToCircle() {
                           )}
                           {(custodySuiBalance !== null && custodySuiBalance > 0) && (
                             <div className="space-y-1 pl-2">
-                              <div className="flex items-center">
-                                <div className="w-3 h-3 bg-amber-300 rounded-sm mr-2"></div>
+                              <div className="flex flex-wrap items-center gap-1">
+                                <div className="w-3 h-3 bg-amber-300 rounded-sm mr-1"></div>
                                 <span className="text-sm text-gray-700">
                                   {suiSecurityDepositBalance !== null ? suiSecurityDepositBalance.toFixed(6) : '0.00'} SUI
                                 </span>
-                                <span className="ml-2 px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs font-medium rounded-full">Security Deposits</span>
+                                <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs font-medium rounded-full">Security Deposits</span>
                               </div>
-                              <div className="flex items-center">
-                                <div className="w-3 h-3 bg-green-300 rounded-sm mr-2"></div>
+                              <div className="flex flex-wrap items-center gap-1">
+                                <div className="w-3 h-3 bg-green-300 rounded-sm mr-1"></div>
                                 <span className="text-sm text-gray-700">
                                   {suiContributionBalance !== null ? suiContributionBalance.toFixed(6) : '0.00'} SUI
                                 </span>
-                                <span className="ml-2 px-1.5 py-0.5 bg-green-100 text-green-800 text-xs font-medium rounded-full">Available for Contributions</span>
+                                <span className="px-1.5 py-0.5 bg-green-100 text-green-800 text-xs font-medium rounded-full">Available for Contributions</span>
                               </div>
                             </div>
                           )}
@@ -2607,19 +2607,19 @@ export default function ContributeToCircle() {
                           )}
                           {(custodyStablecoinBalance !== null && custodyStablecoinBalance > 0) && (
                             <div className="space-y-1 pl-2">
-                              <div className="flex items-center">
-                                <div className="w-3 h-3 bg-amber-300 rounded-sm mr-2"></div>
+                              <div className="flex flex-wrap items-center gap-1">
+                                <div className="w-3 h-3 bg-amber-300 rounded-sm mr-1"></div>
                                 <span className="text-sm text-gray-700">
                                   ${securityDepositBalance?.toFixed(2) || '0.00'} USDC
                                 </span>
-                                <span className="ml-2 px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs font-medium rounded-full">Security Deposits</span>
+                                <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs font-medium rounded-full">Security Deposits</span>
                               </div>
-                              <div className="flex items-center">
-                                <div className="w-3 h-3 bg-green-300 rounded-sm mr-2"></div>
+                              <div className="flex flex-wrap items-center gap-1">
+                                <div className="w-3 h-3 bg-green-300 rounded-sm mr-1"></div>
                                 <span className="text-sm text-gray-700">
                                   ${contributionBalance?.toFixed(2) || '0.00'} USDC
                                 </span>
-                                <span className="ml-2 px-1.5 py-0.5 bg-green-100 text-green-800 text-xs font-medium rounded-full">Available for Contributions</span>
+                                <span className="px-1.5 py-0.5 bg-green-100 text-green-800 text-xs font-medium rounded-full">Available for Contributions</span>
                               </div>
                             </div>
                           )}

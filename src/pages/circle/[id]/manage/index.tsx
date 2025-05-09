@@ -3,7 +3,7 @@ import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 import { SuiClient, SuiEvent } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
-import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle, Edit3, Users } from 'lucide-react';
+import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
@@ -217,26 +217,6 @@ export default function ManageCircle() {
   const [usdcContributionBalance, setUsdcContributionBalance] = useState<number | null>(null);
   const [fetchingUsdcBalance, setFetchingUsdcBalance] = useState(false);
   const [fetchingSuiBalance, setFetchingSuiBalance] = useState(false);
-
-  // Add state variables for max members editing
-  const [isEditingMaxMembers, setIsEditingMaxMembers] = useState(false);
-  const [newMaxMembersValue, setNewMaxMembersValue] = useState<number | string>('');
-  const [isSavingMaxMembers, setIsSavingMaxMembers] = useState(false);
-
-  // Add state for member count visual animation
-  const [animateMembers, setAnimateMembers] = useState(false);
-  const recommendedRanges = {
-    small: { min: 3, max: 5, label: 'Small circle (3-5 members)', description: 'Faster payout cycles, easier to manage' },
-    medium: { min: 6, max: 10, label: 'Medium circle (6-10 members)', description: 'Balanced payout frequency and total pool size' },
-    large: { min: 11, max: 20, label: 'Large circle (11-20 members)', description: 'Larger pool, longer wait for payouts' }
-  };
-
-  // Get the current circle size category
-  const getCircleSizeCategory = (size: number) => {
-    if (size <= recommendedRanges.small.max) return 'small';
-    if (size <= recommendedRanges.medium.max) return 'medium';
-    return 'large';
-  };
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -2365,107 +2345,6 @@ export default function ManageCircle() {
     }
   }, [members, allDepositsPaid, circle]);
 
-  // Add function to handle saving max members
-  const handleSaveMaxMembers = async () => {
-    if (!circle || isSavingMaxMembers) return;
-    
-    // Validate input
-    const maxMembersNum = Number(newMaxMembersValue);
-    if (isNaN(maxMembersNum) || maxMembersNum < 3) {
-      toast.error("Maximum members must be a number and at least 3");
-      return;
-    }
-    
-    if (maxMembersNum < circle.currentMembers) {
-      toast.error(`Maximum members cannot be less than the current number of members (${circle.currentMembers})`);
-      return;
-    }
-    
-    if (maxMembersNum === circle.maxMembers) {
-      setIsEditingMaxMembers(false);
-      return; // No change
-    }
-    
-    // Show confirmation modal
-    setConfirmationModal({
-      isOpen: true,
-      title: 'Update Maximum Members',
-      message: (
-        <div>
-          <p>Are you sure you want to change the maximum members from {circle.maxMembers} to {maxMembersNum}?</p>
-          <p className="mt-2 text-sm text-gray-600">This will determine the maximum number of people who can join this circle.</p>
-          {maxMembersNum > 15 && (
-            <p className="mt-2 text-sm text-amber-600">
-              <AlertTriangle className="inline-block mr-1 h-4 w-4" />
-              Large circles may take longer to complete all rotation cycles.
-            </p>
-          )}
-        </div>
-      ),
-      onConfirm: async () => {
-        setIsSavingMaxMembers(true);
-        const toastId = 'max-members-update';
-        
-        try {
-          toast.loading('Updating maximum members...', { id: toastId });
-          
-          if (!account) {
-            toast.error('User account not available. Please log in again.', { id: toastId });
-            return;
-          }
-          
-          // Call the backend API
-          const response = await fetch('/api/zkLogin', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'adminSetMaxMembers',
-              account,
-              circleId: circle.id,
-              newMaxMembers: maxMembersNum
-            }),
-          });
-          
-          const result = await response.json();
-          
-          if (!response.ok) {
-            console.error('Failed to update max members:', result);
-            
-            // Parse the error
-            const errorDetail = parseMoveError(result.error || '');
-            toast.error(errorDetail.message, { id: toastId });
-            return;
-          }
-          
-          // Update local state
-          setCircle(prevCircle => prevCircle ? { ...prevCircle, maxMembers: maxMembersNum } : null);
-          setIsEditingMaxMembers(false);
-          
-          toast.success(`Maximum members updated to ${maxMembersNum}`, { id: toastId });
-          
-          // Refresh circle details to make sure everything is up to date
-          fetchCircleDetails();
-          
-        } catch (error) {
-          console.error('Error updating max members:', error);
-          toast.error('Failed to update maximum members', { id: toastId });
-        } finally {
-          setIsSavingMaxMembers(false);
-        }
-      },
-      confirmText: 'Update',
-      cancelText: 'Cancel',
-      confirmButtonVariant: 'primary',
-    });
-  };
-
-  // Update fetchCircleDetails to initialize newMaxMembersValue
-  useEffect(() => {
-    if (circle) {
-      setNewMaxMembersValue(circle.maxMembers);
-    }
-  }, [circle]);
-
   if (!isAuthenticated || !account) {
     return null;
   }
@@ -2525,354 +2404,200 @@ export default function ManageCircle() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        <div className="px-4 py-6 sm:px-0">
-          <div className="flex justify-between items-center mb-6">
-            <button
-              onClick={() => router.push('/dashboard')}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm text-sm text-gray-700 font-medium"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              Back to Dashboard
-            </button>
-            <h1 className="text-xl font-semibold text-blue-600">Manage Circle</h1>
-          </div>
+      <main className="max-w-7xl mx-auto py-4 sm:py-6 px-4 sm:px-6 lg:px-8">
+        <div className="flex justify-between items-center mb-4 sm:mb-6 flex-wrap gap-3">
+          <button
+            onClick={() => router.push('/dashboard')}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 sm:px-4 sm:py-2 rounded-full bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm text-xs sm:text-sm text-gray-700 font-medium"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            Back to Dashboard
+          </button>
+          <h1 className="text-lg sm:text-xl font-semibold text-blue-600">Manage Circle</h1>
+        </div>
 
-          <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100">
-            <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
-              <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                  {!loading && circle ? circle.name : 'Manage Circle'}
-                  {!loading && circle && (
-                    <span className="text-sm font-normal bg-blue-100 text-blue-800 py-0.5 px-2 rounded-full">
-                      {circle.currentMembers}/{circle.maxMembers} Members
-                    </span>
-                  )}
-                </h2>
+        <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100">
+          <div className="p-4 sm:p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-2 sm:mb-0">
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-900 flex flex-wrap items-center gap-2">
+                {!loading && circle ? circle.name : 'Manage Circle'}
                 {!loading && circle && (
-                  <div className="flex items-center space-x-2 text-sm">
-                    <span className="text-gray-500 bg-gray-100 py-1 px-2 rounded-md">{shortenId(id as string)}</span>
-                    <Tooltip.Provider>
-                      <Tooltip.Root>
-                        <Tooltip.Trigger asChild>
-                          <button
-                            onClick={() => copyToClipboard(id as string, 'id')}
-                            className={`text-gray-500 hover:text-blue-600 p-1.5 rounded-full hover:bg-blue-50 transition-colors duration-200 ${copiedId ? 'text-green-500 bg-green-50' : ''}`}
-                          >
-                            {copiedId ? <Check size={16} /> : <Copy size={16} />}
-                          </button>
-                        </Tooltip.Trigger>
-                        <Tooltip.Portal>
-                          <Tooltip.Content
-                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                            sideOffset={5}
-                          >
-                            {copiedId ? 'Copied!' : 'Copy Circle ID'}
-                            <Tooltip.Arrow className="fill-gray-800" />
-                          </Tooltip.Content>
-                        </Tooltip.Portal>
-                      </Tooltip.Root>
-                    </Tooltip.Provider>
-                    
-                    <Tooltip.Provider>
-                      <Tooltip.Root>
-                        <Tooltip.Trigger asChild>
-                          <button
-                            onClick={() => copyToClipboard(id as string, 'link')}
-                            className="text-gray-500 hover:text-blue-600 p-1.5 rounded-full hover:bg-blue-50 transition-colors duration-200"
-                          >
-                            <Link size={16} />
-                          </button>
-                        </Tooltip.Trigger>
-                        <Tooltip.Portal>
-                          <Tooltip.Content
-                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                            sideOffset={5}
-                          >
-                            Copy Invite Link
-                            <Tooltip.Arrow className="fill-gray-800" />
-                          </Tooltip.Content>
-                        </Tooltip.Portal>
-                      </Tooltip.Root>
-                    </Tooltip.Provider>
-                  </div>
+                  <span className="text-xs sm:text-sm font-normal bg-blue-100 text-blue-800 py-0.5 px-2 rounded-full">
+                    {circle.currentMembers}/{circle.maxMembers} Members
+                  </span>
                 )}
-              </div>
-              {
-                loading ? (
-                  <ManageCircleSkeleton /> // Use the skeleton component
-                ) : circle ? (
-                  <div className="py-4 space-y-8">
-                    {/* Circle Details */}
-                    <div className="px-2">
-                      <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Details</h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                          <p className="text-sm text-gray-500 mb-1">Circle Name</p>
-                          <p className="text-lg font-medium">{circle.name}</p>
-                        </div>
-                        
-                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                          <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
-                          <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} className="font-medium" />
-                        </div>
-                        
-                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                          <p className="text-sm text-gray-500 mb-1">Security Deposit</p>
-                          <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} className="font-medium" />
-                        </div>
-                        
-                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                          <p className="text-sm text-gray-500 mb-1">
-                            {circle.isActive ? 'Next Payout' : 'Potential Next Payout'}
-                          </p>
-                          <p className="text-lg font-medium">
-                            {circle.isActive 
-                              ? formatNextPayoutDate(circle.nextPayoutTime)
-                              : formatNextPayoutDate(calculatePotentialNextPayoutDate(circle.cycleLength, circle.cycleDay))}
-                          </p>
-                          {!circle.isActive && (
-                            <p className="text-xs text-blue-600 mt-1">
-                              <span className="font-bold">Estimate</span> if circle activated now
-                            </p>
-                          )}
-                        </div>
-                        
-                        {/* Maximum Members - Interactive Edition */}
-                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm col-span-1 md:col-span-2">
-                          <div className="flex justify-between items-center">
-                            <div className="w-full">
-                              <p className="text-sm text-gray-500 mb-1">Maximum Members</p>
-                              {isEditingMaxMembers ? (
-                                <div className="space-y-6 mt-3 w-full">
-                                  {/* Visual member count indicators with animation */}
-                                  <div className={`flex flex-wrap gap-2 mb-4 transition-opacity duration-300 ${animateMembers ? 'animate-pulse' : ''}`}>
-                                    {[...Array(Number(newMaxMembersValue))].map((_, i) => (
-                                      <div 
-                                        key={i} 
-                                        className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                                          i < circle.currentMembers 
-                                            ? 'bg-blue-100 text-blue-600 border-2 border-blue-300' 
-                                            : 'bg-gray-100 text-gray-400 border border-gray-300'
-                                        } ${animateMembers ? 'animate-bounce' : ''}`}
-                                        style={{ animationDelay: `${i * 50}ms` }}
-                                      >
-                                        <Users size={14} />
-                                      </div>
-                                    ))}
-                                  </div>
-                                  
-                                  {/* Slider with current value display */}
-                                  <div className="space-y-2">
-                                    <div className="flex justify-between items-center">
-                                      <span className="text-sm font-medium text-gray-700">
-                                        {newMaxMembersValue} members maximum
-                                      </span>
-                                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                                        getCircleSizeCategory(Number(newMaxMembersValue)) === 'small' 
-                                          ? 'bg-green-100 text-green-800' 
-                                          : getCircleSizeCategory(Number(newMaxMembersValue)) === 'medium'
-                                            ? 'bg-blue-100 text-blue-800'
-                                            : 'bg-purple-100 text-purple-800'
-                                      }`}>
-                                        {getCircleSizeCategory(Number(newMaxMembersValue)) === 'small' 
-                                          ? 'Small Circle' 
-                                          : getCircleSizeCategory(Number(newMaxMembersValue)) === 'medium'
-                                            ? 'Medium Circle'
-                                            : 'Large Circle'}
-                                      </span>
-                                    </div>
-                                    
-                                    <div className="relative">
-                                      <input
-                                        type="range"
-                                        min={Math.max(3, circle.currentMembers)}
-                                        max={20}
-                                        value={newMaxMembersValue}
-                                        onChange={(e) => {
-                                          setNewMaxMembersValue(e.target.value);
-                                          setAnimateMembers(true);
-                                          setTimeout(() => setAnimateMembers(false), 600);
-                                        }}
-                                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                                      />
-                                      
-                                      {/* Tick marks for recommended ranges */}
-                                      <div className="flex justify-between text-xs text-gray-600 px-2 mt-1">
-                                        <span>Min: {Math.max(3, circle.currentMembers)}</span>
-                                        <span>Max: 20</span>
-                                      </div>
-                                    </div>
-                                  </div>
-                                  
-                                  {/* Recommendation based on selection */}
-                                  <div className={`p-3 rounded-lg text-sm transition-colors ${
-                                    getCircleSizeCategory(Number(newMaxMembersValue)) === 'small' 
-                                      ? 'bg-green-50 text-green-800 border border-green-200' 
-                                      : getCircleSizeCategory(Number(newMaxMembersValue)) === 'medium'
-                                        ? 'bg-blue-50 text-blue-800 border border-blue-200'
-                                        : 'bg-purple-50 text-purple-800 border border-purple-200'
-                                  }`}>
-                                    <p className="font-medium">
-                                      {recommendedRanges[getCircleSizeCategory(Number(newMaxMembersValue))].label}
-                                    </p>
-                                    <p className="mt-1">
-                                      {recommendedRanges[getCircleSizeCategory(Number(newMaxMembersValue))].description}
-                                    </p>
-                                  </div>
-                                  
-                                  {/* Action buttons */}
-                                  <div className="flex space-x-3 justify-end">
-                                    <button
-                                      onClick={() => {
-                                        setIsEditingMaxMembers(false);
-                                        setNewMaxMembersValue(circle.maxMembers);
-                                      }}
-                                      disabled={isSavingMaxMembers}
-                                      className="px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 transition-colors text-sm"
-                                    >
-                                      Cancel
-                                    </button>
-                                    <button
-                                      onClick={handleSaveMaxMembers}
-                                      disabled={isSavingMaxMembers || Number(newMaxMembersValue) === circle.maxMembers}
-                                      className={`px-4 py-2 rounded-md text-white text-sm transition-colors ${
-                                        isSavingMaxMembers || Number(newMaxMembersValue) === circle.maxMembers
-                                          ? 'bg-gray-400 cursor-not-allowed'
-                                          : 'bg-blue-600 hover:bg-blue-700'
-                                      }`}
-                                    >
-                                      {isSavingMaxMembers ? (
-                                        <div className="flex items-center">
-                                          <svg className="animate-spin h-4 w-4 mr-2 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                          </svg>
-                                          Saving...
-                                        </div>
-                                      ) : 'Save Changes'}
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="flex items-center">
-                                  <div className="flex items-center">
-                                    <p className="text-lg font-medium">
-                                      {circle.currentMembers} / {circle.maxMembers} members
-                                    </p>
-                                    <span className={`ml-2 px-2 py-0.5 text-xs font-medium rounded-full ${
-                                      getCircleSizeCategory(circle.maxMembers) === 'small' 
-                                        ? 'bg-green-100 text-green-800' 
-                                        : getCircleSizeCategory(circle.maxMembers) === 'medium'
-                                          ? 'bg-blue-100 text-blue-800'
-                                          : 'bg-purple-100 text-purple-800'
-                                    }`}>
-                                      {getCircleSizeCategory(circle.maxMembers) === 'small' 
-                                        ? 'Small Circle' 
-                                        : getCircleSizeCategory(circle.maxMembers) === 'medium'
-                                          ? 'Medium Circle'
-                                          : 'Large Circle'}
-                                    </span>
-                                  </div>
-                                  {!circle.isActive && (
-                                    <button
-                                      onClick={() => setIsEditingMaxMembers(true)}
-                                      className="ml-3 bg-blue-50 hover:bg-blue-100 text-blue-600 py-1.5 px-3 rounded-md flex items-center transition-colors shadow-sm text-sm border border-blue-200"
-                                    >
-                                      <Edit3 size={14} className="mr-1.5" />
-                                      Edit Max Capacity
-                                    </button>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                          {circle.isActive && (
-                            <p className="text-xs text-gray-400 mt-1">Capacity cannot be changed for active circles.</p>
-                          )}
-                        </div>
-                      </div>
+              </h2>
+              {!loading && circle && (
+                <div className="flex items-center space-x-2 text-xs sm:text-sm">
+                  <span className="text-gray-500 bg-gray-100 py-1 px-2 rounded-md truncate max-w-[120px] sm:max-w-none">{shortenId(id as string)}</span>
+                  <Tooltip.Provider>
+                    <Tooltip.Root>
+                      <Tooltip.Trigger asChild>
+                        <button
+                          onClick={() => copyToClipboard(id as string, 'id')}
+                          className={`text-gray-500 hover:text-blue-600 p-1.5 rounded-full hover:bg-blue-50 transition-colors duration-200 ${copiedId ? 'text-green-500 bg-green-50' : ''}`}
+                        >
+                          {copiedId ? <Check size={16} /> : <Copy size={16} />}
+                        </button>
+                      </Tooltip.Trigger>
+                      <Tooltip.Portal>
+                        <Tooltip.Content
+                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                          sideOffset={5}
+                        >
+                          {copiedId ? 'Copied!' : 'Copy Circle ID'}
+                          <Tooltip.Arrow className="fill-gray-800" />
+                        </Tooltip.Content>
+                      </Tooltip.Portal>
+                    </Tooltip.Root>
+                  </Tooltip.Provider>
+                  
+                  <Tooltip.Provider>
+                    <Tooltip.Root>
+                      <Tooltip.Trigger asChild>
+                        <button
+                          onClick={() => copyToClipboard(id as string, 'link')}
+                          className="text-gray-500 hover:text-blue-600 p-1.5 rounded-full hover:bg-blue-50 transition-colors duration-200"
+                        >
+                          <Link size={16} />
+                        </button>
+                      </Tooltip.Trigger>
+                      <Tooltip.Portal>
+                        <Tooltip.Content
+                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                          sideOffset={5}
+                        >
+                          Copy Invite Link
+                          <Tooltip.Arrow className="fill-gray-800" />
+                        </Tooltip.Content>
+                      </Tooltip.Portal>
+                    </Tooltip.Root>
+                  </Tooltip.Provider>
+                </div>
+              )}
+            </div>
+            {loading ? (
+              <ManageCircleSkeleton />
+            ) : circle ? (
+              <div className="py-4 space-y-6 sm:space-y-8">
+                {/* Circle Details */}
+                <div className="px-1 sm:px-2">
+                  <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Details</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+                    <div className="bg-gray-50 p-3 sm:p-4 rounded-lg shadow-sm">
+                      <p className="text-sm text-gray-500 mb-1">Circle Name</p>
+                      <p className="text-base sm:text-lg font-medium">{circle.name}</p>
                     </div>
                     
-                    {/* Members Management */}
-                    <div className="px-2">
-                      <div className="flex justify-between items-center mb-4">
-                        <h3 className="text-lg font-medium text-gray-900 border-l-4 border-blue-500 pl-3">Members</h3>
-                        {!isEditingRotation && (
-                          <button
-                            onClick={() => setIsEditingRotation(true)}
-                            className="px-4 py-2 bg-blue-50 text-blue-600 rounded-md flex items-center hover:bg-blue-100 transition-colors"
-                          >
-                            <ListOrdered size={16} className="mr-1" />
-                            Edit Rotation Order
-                          </button>
-                        )}
-                      </div>
-                      
-                      {/* Add warning message for rotation order when not in edit mode */}
-                      {!isEditingRotation && !isRotationOrderSet(members) && (
+                    <div className="bg-gray-50 p-3 sm:p-4 rounded-lg shadow-sm">
+                      <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
+                      <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} className="font-medium" />
+                    </div>
+                    
+                    <div className="bg-gray-50 p-3 sm:p-4 rounded-lg shadow-sm">
+                      <p className="text-sm text-gray-500 mb-1">Security Deposit</p>
+                      <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} className="font-medium" />
+                    </div>
+                    
+                    <div className="bg-gray-50 p-3 sm:p-4 rounded-lg shadow-sm">
+                      <p className="text-sm text-gray-500 mb-1">
+                        {circle.isActive ? 'Next Payout' : 'Potential Next Payout'}
+                      </p>
+                      <p className="text-base sm:text-lg font-medium">
+                        {circle.isActive 
+                          ? formatNextPayoutDate(circle.nextPayoutTime)
+                          : formatNextPayoutDate(calculatePotentialNextPayoutDate(circle.cycleLength, circle.cycleDay))}
+                      </p>
+                      {!circle.isActive && (
+                        <p className="text-xs text-blue-600 mt-1">
+                          <span className="font-bold">Estimate</span> if circle activated now
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Members Management */}
+                <div className="px-1 sm:px-2">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4">
+                    <h3 className="text-lg font-medium text-gray-900 border-l-4 border-blue-500 pl-3">Members</h3>
+                    {!isEditingRotation && (
+                      <button
+                        onClick={() => setIsEditingRotation(true)}
+                        className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-50 text-blue-600 rounded-md flex items-center justify-center hover:bg-blue-100 transition-colors text-sm"
+                      >
+                        <ListOrdered size={16} className="mr-1.5" />
+                        Edit Rotation Order
+                      </button>
+                    )}
+                  </div>
+                  
+                  {/* Add warning message for rotation order when not in edit mode */}
+                  {!isEditingRotation && !isRotationOrderSet(members) && (
+                    <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-700">
+                      <p className="font-medium flex items-center text-sm">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                        </svg>
+                        Warning: Rotation order is not properly set
+                      </p>
+                      <p className="text-xs mt-1">You must set the rotation order for all members before activating the circle. Click &quot;Edit Rotation Order&quot; to fix this issue.</p>
+                    </div>
+                  )}
+                  
+                  {isEditingRotation ? (
+                    <div>
+                      {!isRotationOrderSet(members) && (
                         <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-700">
-                          <p className="font-medium flex items-center">
+                          <p className="font-medium flex items-center text-sm">
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
                               <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                             </svg>
-                            Warning: Rotation order is not properly set
+                            Setting rotation order is required before circle activation
                           </p>
-                          <p className="text-sm mt-1">You must set the rotation order for all members before activating the circle. Click &quot;Edit Rotation Order&quot; to fix this issue.</p>
+                          <p className="text-xs mt-1">The rotation order determines who receives payouts in which order.</p>
                         </div>
                       )}
-                      
-                      {isEditingRotation ? (
-                        <div>
-                          {!isRotationOrderSet(members) && (
-                            <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-700">
-                              <p className="font-medium flex items-center">
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-                                </svg>
-                                Setting rotation order is required before circle activation
-                              </p>
-                              <p className="text-sm mt-1">The rotation order determines who receives payouts in which order.</p>
-                            </div>
-                          )}
-                          <div className="flex justify-end mb-4">
-                            <button
-                              onClick={shuffleRotationOrder}
-                              className="px-4 py-2 bg-indigo-50 text-indigo-600 rounded-md flex items-center hover:bg-indigo-100 transition-colors"
-                            >
-                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                              </svg>
-                              Shuffle Order
-                            </button>
-                          </div>
-                          <RotationOrderList 
-                            members={members}
-                            adminAddress={circle.admin}
-                            shortenAddress={shortenAddress}
-                            onSaveOrder={saveRotationOrder}
-                            onCancelEdit={() => setIsEditingRotation(false)}
-                          />
-                        </div>
-                      ) : (
-                        <div className="overflow-hidden shadow-sm rounded-xl border border-gray-200">
+                      <div className="flex justify-end mb-4">
+                        <button
+                          onClick={shuffleRotationOrder}
+                          className="px-4 py-2 bg-indigo-50 text-indigo-600 rounded-md flex items-center hover:bg-indigo-100 transition-colors text-sm"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                          Shuffle Order
+                        </button>
+                      </div>
+                      <RotationOrderList 
+                        members={members}
+                        adminAddress={circle.admin}
+                        shortenAddress={shortenAddress}
+                        onSaveOrder={saveRotationOrder}
+                        onCancelEdit={() => setIsEditingRotation(false)}
+                      />
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto -mx-4 sm:mx-0">
+                      <div className="inline-block min-w-full align-middle">
+                        <div className="overflow-hidden shadow-sm rounded-lg border border-gray-200">
                           <table className="min-w-full divide-y divide-gray-200">
                             <thead className="bg-gray-50">
                               <tr>
-                                <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">
+                                <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-xs sm:text-sm font-semibold text-gray-900 sm:pl-6">
                                   Address
                                 </th>
-                                <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                                <th scope="col" className="px-3 py-3.5 text-left text-xs sm:text-sm font-semibold text-gray-900 hidden sm:table-cell">
                                   Status
                                 </th>
-                                <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                                <th scope="col" className="px-3 py-3.5 text-left text-xs sm:text-sm font-semibold text-gray-900">
                                   Deposit
                                 </th>
-                                <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                                <th scope="col" className="px-3 py-3.5 text-left text-xs sm:text-sm font-semibold text-gray-900 hidden sm:table-cell">
                                   Joined
                                 </th>
-                                <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
-                                  Rotation Position
+                                <th scope="col" className="px-3 py-3.5 text-left text-xs sm:text-sm font-semibold text-gray-900">
+                                  Position
                                 </th>
                                 <th scope="col" className="relative py-3.5 pl-3 pr-4 sm:pr-6">
                                   <span className="sr-only">Actions</span>
@@ -2882,21 +2607,23 @@ export default function ManageCircle() {
                             <tbody className="divide-y divide-gray-200 bg-white">
                               {members.map((member) => (
                                 <tr key={member.address} className="hover:bg-gray-50 transition-colors">
-                                  <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 sm:pl-6">
-                                    {shortenAddress(member.address)} 
-                                    {member.address === circle?.admin && // Use optional chaining for circle
-                                      <span className="text-xs bg-purple-100 text-purple-700 rounded-full px-2 py-0.5 ml-2">Admin</span>
-                                    }
+                                  <td className="whitespace-nowrap py-3 pl-4 pr-3 text-xs sm:text-sm font-medium text-gray-900 sm:pl-6">
+                                    <span className="flex flex-col sm:flex-row sm:items-center">
+                                      <span className="font-mono text-xs truncate max-w-[100px] sm:max-w-none">{shortenAddress(member.address)}</span>
+                                      {member.address === circle?.admin && (
+                                        <span className="text-xs bg-purple-100 text-purple-700 rounded-full px-2 py-0.5 ml-0 mt-1 sm:mt-0 sm:ml-2 inline-block">Admin</span>
+                                      )}
+                                    </span>
                                   </td>
-                                  <td className="whitespace-nowrap px-3 py-4 text-sm">
-                                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${ // Adjusted classes slightly
+                                  <td className="whitespace-nowrap px-3 py-3 text-xs hidden sm:table-cell">
+                                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
                                       member.status === 'active' ? 'bg-green-100 text-green-800' : 
                                       member.status === 'suspended' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'
                                     }`}>
                                       {member.status.charAt(0).toUpperCase() + member.status.slice(1)}
                                     </span>
                                   </td>
-                                  <td className="whitespace-nowrap px-3 py-4 text-sm">
+                                  <td className="whitespace-nowrap px-3 py-3 text-xs">
                                     <Tooltip.Provider>
                                       <Tooltip.Root>
                                         <Tooltip.Trigger asChild>
@@ -2919,28 +2646,28 @@ export default function ManageCircle() {
                                       </Tooltip.Root>
                                     </Tooltip.Provider>
                                   </td>
-                                  <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                                  <td className="whitespace-nowrap px-3 py-3 text-xs text-gray-500 hidden sm:table-cell">
                                     {member.joinDate ? formatDate(member.joinDate) : 'Unknown'}
                                   </td>
-                                  <td className="whitespace-nowrap px-3 py-4 text-sm">
+                                  <td className="whitespace-nowrap px-3 py-3 text-xs">
                                     <div className="flex items-center">
                                       {!isRotationOrderSet(members) ? (
                                         // Display when rotation order is not set
                                         <div className="flex items-center">
-                                          <div className="flex items-center justify-center w-8 h-8 bg-gray-100 text-gray-400 rounded-full mr-2">
-                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                          <div className="flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 bg-gray-100 text-gray-400 rounded-full mr-2">
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 sm:h-4 sm:w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                                             </svg>
                                           </div>
-                                          <span className="text-amber-600 text-xs font-medium">Not configured</span>
+                                          <span className="text-amber-600 text-xs">Not set</span>
                                         </div>
                                       ) : (
                                         // Display when rotation order is set properly
                                         <div className="flex items-center">
-                                          <div className="flex items-center justify-center w-8 h-8 bg-blue-50 text-blue-600 rounded-full mr-2">
+                                          <div className="flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 bg-blue-50 text-blue-600 rounded-full mr-2">
                                             {member.position !== undefined ? member.position + 1 : '?'}
                                           </div>
-                                          <span className="text-gray-600 text-xs">
+                                          <span className="text-gray-600 text-xs hidden sm:inline">
                                             {member.position === 0 ? 'First' : 
                                              (member.position !== undefined && member.position === members.length - 1) ? 'Last' : 
                                              member.position === undefined ? 'Not set' : `Position ${member.position + 1}`}
@@ -2949,14 +2676,15 @@ export default function ManageCircle() {
                                       )}
                                     </div>
                                   </td>
-                                  <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
+                                  <td className="relative whitespace-nowrap py-3 pl-3 pr-4 text-right text-xs font-medium sm:pr-6">
                                     {/* No actions for admin */}
                                     {member.address !== circle?.admin && (
                                       <button
                                         className="text-red-600 hover:text-red-900 px-2 py-1 rounded hover:bg-red-50"
                                         onClick={() => toast.success('Member removal coming soon')}
                                       >
-                                        Remove
+                                        <span className="hidden sm:inline">Remove</span>
+                                        <X className="w-4 h-4 inline sm:hidden" />
                                       </button>
                                     )}
                                   </td>
@@ -2965,73 +2693,77 @@ export default function ManageCircle() {
                             </tbody>
                           </table>
                         </div>
-                      )}
-                    </div>
-                    
-                    {/* Invite Members */}
-                    <div className="px-2">
-                      <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Invite New Members</h3>
-                      <p className="mb-4 text-sm text-gray-500">Send the following link to people you&apos;d like to invite to your circle.</p>
-                      
-                      <div className="flex items-center space-x-2 bg-gray-50 p-3 rounded-xl border border-gray-200">
-                        <input
-                          type="text"
-                          readOnly
-                          value={`${window.location.origin}/circle/${circle.id}/join`}
-                          className="flex-1 p-2 bg-transparent text-gray-800 border-0 focus:ring-0"
-                        />
-                        <button
-                          onClick={() => {
-                            navigator.clipboard.writeText(`${window.location.origin}/circle/${circle.id}/join`);
-                            toast.success('Invite link copied to clipboard');
-                          }}
-                          className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg text-sm hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm font-medium flex items-center"
-                        >
-                          <Copy className="w-4 h-4 mr-2" />
-                          Copy
-                        </button>
                       </div>
                     </div>
-                    
-                    {/* Pending Join Requests Section */}
-                    {pendingRequests.length > 0 && (
-                      <div className="mt-8 px-2">
-                        <div className="border-2 border-blue-200 rounded-xl overflow-hidden bg-blue-50">
-                          <div className="bg-blue-100 px-5 py-4 border-b border-blue-200 flex justify-between items-center">
-                            <div>
-                              <h3 className="text-lg font-semibold text-blue-900">
-                                Pending Join Requests
-                                <span className="ml-2 bg-blue-600 text-white text-xs font-medium px-2.5 py-0.5 rounded-full">
-                                  {pendingRequests.length}
-                                </span>
-                              </h3>
-                              <p className="text-sm text-blue-700 mt-1">These users want to join your circle</p>
-                            </div>
-                            <button
-                              onClick={handleBulkApprove}
-                              disabled={isApproving || pendingRequests.length === 0}
-                              className={`px-4 py-2 rounded-lg text-white text-sm font-medium shadow-sm flex items-center ${
-                                isApproving || pendingRequests.length === 0
-                                  ? 'bg-gray-400 cursor-not-allowed'
-                                  : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
-                              }`}
-                            >
-                              <Check className="w-4 h-4 mr-1" />
-                              Approve All ({pendingRequests.length})
-                            </button>
-                          </div>
-                          <div className="p-4">
+                  )}
+                </div>
+                
+                {/* Invite Members */}
+                <div className="px-1 sm:px-2">
+                  <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Invite New Members</h3>
+                  <p className="mb-4 text-sm text-gray-500">Send the following link to people you&apos;d like to invite to your circle.</p>
+                  
+                  <div className="flex flex-col sm:flex-row items-center space-y-2 sm:space-y-0 sm:space-x-2 bg-gray-50 p-3 rounded-xl border border-gray-200">
+                    <input
+                      type="text"
+                      readOnly
+                      value={`${window.location.origin}/circle/${circle.id}/join`}
+                      className="flex-1 p-2 bg-transparent text-gray-800 border-0 focus:ring-0 text-xs sm:text-sm truncate"
+                    />
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(`${window.location.origin}/circle/${circle.id}/join`);
+                        toast.success('Invite link copied to clipboard');
+                      }}
+                      className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg text-xs sm:text-sm hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm font-medium flex items-center justify-center"
+                    >
+                      <Copy className="w-4 h-4 mr-2" />
+                      Copy
+                    </button>
+                  </div>
+                </div>
+                
+                {/* Pending Join Requests Section */}
+                {pendingRequests.length > 0 && (
+                  <div className="px-1 sm:px-2">
+                    <div className="border-2 border-blue-200 rounded-xl overflow-hidden bg-blue-50">
+                      <div className="bg-blue-100 px-4 py-3 sm:px-5 sm:py-4 border-b border-blue-200 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+                        <div>
+                          <h3 className="text-base sm:text-lg font-semibold text-blue-900">
+                            Pending Join Requests
+                            <span className="ml-2 bg-blue-600 text-white text-xs font-medium px-2.5 py-0.5 rounded-full">
+                              {pendingRequests.length}
+                            </span>
+                          </h3>
+                          <p className="text-xs sm:text-sm text-blue-700 mt-1">These users want to join your circle</p>
+                        </div>
+                        <button
+                          onClick={handleBulkApprove}
+                          disabled={isApproving || pendingRequests.length === 0}
+                          className={`px-3 sm:px-4 py-2 rounded-lg text-white text-xs sm:text-sm font-medium shadow-sm flex items-center justify-center ${
+                            isApproving || pendingRequests.length === 0
+                              ? 'bg-gray-400 cursor-not-allowed'
+                              : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
+                          }`}
+                        >
+                          <Check className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1" />
+                          Approve All ({pendingRequests.length})
+                        </button>
+                      </div>
+                      <div className="p-3 sm:p-4">
+                        <div className="overflow-x-auto -mx-3 sm:mx-0">
+                          <div className="inline-block min-w-full align-middle">
                             <div className="overflow-hidden shadow-sm rounded-lg border border-blue-200 bg-white">
                               <table className="min-w-full divide-y divide-gray-200">
                                 <thead className="bg-gray-50">
                                   <tr>
-                                    <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">
+                                    <th scope="col" className="py-3 pl-4 pr-3 text-left text-xs sm:text-sm font-semibold text-gray-900 sm:pl-6">
                                       User
                                     </th>
-                                    <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                                    <th scope="col" className="px-3 py-3 text-left text-xs sm:text-sm font-semibold text-gray-900 hidden sm:table-cell">
                                       Requested On
                                     </th>
-                                    <th scope="col" className="relative py-3.5 pl-3 pr-4 sm:pr-6">
+                                    <th scope="col" className="relative py-3 pl-3 pr-4 sm:pr-6">
                                       <span className="sr-only">Actions</span>
                                     </th>
                                   </tr>
@@ -3039,39 +2771,39 @@ export default function ManageCircle() {
                                 <tbody className="divide-y divide-gray-200 bg-white">
                                   {pendingRequests.map((request) => (
                                     <tr key={`${request.circle_id}-${request.user_address}`} className="hover:bg-gray-50 transition-colors">
-                                      <td className="px-6 py-4 whitespace-nowrap">
-                                        <div className="flex items-center">
-                                          <div className="font-medium text-gray-900">{request.user_name || 'Unknown User'}</div>
-                                          <span className="ml-2 text-gray-500 text-sm">{shortenAddress(request.user_address)}</span>
+                                      <td className="px-4 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
+                                        <div className="flex flex-col sm:flex-row sm:items-center gap-1">
+                                          <div className="font-medium text-gray-900 text-xs sm:text-sm">{request.user_name || 'Unknown User'}</div>
+                                          <span className="text-gray-500 text-xs font-mono">{shortenAddress(request.user_address)}</span>
                                         </div>
                                       </td>
-                                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                      <td className="px-3 py-3 whitespace-nowrap text-xs text-gray-500 hidden sm:table-cell">
                                         {formatDate(request.created_at || new Date())}
                                       </td>
-                                      <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
-                                        <div className="flex justify-end space-x-3">
+                                      <td className="relative whitespace-nowrap py-3 pl-3 pr-4 text-right text-xs font-medium sm:pr-6">
+                                        <div className="flex justify-end space-x-2">
                                           <button
                                             onClick={() => handleJoinRequest(request, true)}
-                                            className={`${isApproving ? 'opacity-50 cursor-not-allowed' : ''} text-white bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 transition-all flex items-center px-4 py-2 rounded-lg shadow-sm font-medium`}
+                                            className={`${isApproving ? 'opacity-50 cursor-not-allowed' : ''} text-white bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 transition-all flex items-center px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg shadow-sm text-xs font-medium`}
                                             disabled={isApproving}
                                           >
                                             {isApproving ? (
-                                              <svg className="animate-spin h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                              <svg className="animate-spin h-3 w-3 sm:h-4 sm:w-4 mr-1.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                               </svg>
                                             ) : (
-                                              <Check className="w-4 h-4 mr-2" />
+                                              <Check className="w-3 h-3 sm:w-4 sm:h-4 mr-1.5" />
                                             )}
-                                            Approve
+                                            <span className="hidden sm:inline">Approve</span>
                                           </button>
                                           <button
                                             onClick={() => handleJoinRequest(request, false)}
-                                            className="text-white bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 transition-all flex items-center px-4 py-2 rounded-lg shadow-sm font-medium"
+                                            className="text-white bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 transition-all flex items-center px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg shadow-sm text-xs font-medium"
                                             disabled={isApproving}
                                           >
-                                            <X className="w-4 h-4 mr-2" />
-                                            Reject
+                                            <X className="w-3 h-3 sm:w-4 sm:h-4 mr-1.5" />
+                                            <span className="hidden sm:inline">Reject</span>
                                           </button>
                                         </div>
                                       </td>
@@ -3083,162 +2815,164 @@ export default function ManageCircle() {
                           </div>
                         </div>
                       </div>
-                    )}
-                    
-                    {/* Circle Management Actions */}
-                    <div className="pt-6 border-t border-gray-200 px-2">
-                      <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Management</h3>
-                      <div className="flex flex-col space-y-4 sm:flex-row sm:space-x-4 sm:space-y-0">
-                        <Tooltip.Provider>
-                          <Tooltip.Root>
-                            <Tooltip.Trigger asChild>
-                              <div>
-                                <button
-                                  onClick={handleActivateCircle}
-                                  className={`px-5 py-3 text-white rounded-lg text-sm transition-all flex items-center justify-center shadow-md font-medium ${
-                                    !canActivate
-                                      ? 'bg-gray-400 opacity-60 cursor-not-allowed'
-                                      : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
-                                  }`}
-                                  disabled={!canActivate}
-                                >
-                                  <Check className="w-4 h-4 mr-2" />
-                                  Activate Circle
-                                </button>
-                              </div>
-                            </Tooltip.Trigger>
-                            {circle && !canActivate && (
-                              <Tooltip.Portal>
-                                <Tooltip.Content
-                                  className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
-                                  sideOffset={5}
-                                >
-                                  {getActivationRequirementMessage()}
-                                  <p className="mt-1 text-gray-300">Current: {circle.currentMembers}/{circle.maxMembers} members</p>
-                                  <Tooltip.Arrow className="fill-gray-800" />
-                                </Tooltip.Content>
-                              </Tooltip.Portal>
-                            )}
-                          </Tooltip.Root>
-                        </Tooltip.Provider>
-                        
-                        {/* Add Verify Deposits button */}
-                        <button
-                          onClick={() => {
-                            toast.loading('Verifying deposit status for all members...', {id: 'verify-deposits'});
-                            // Force check deposits
-                            setTimeout(() => {
-                              const updatedMembers = members.map(member => ({
-                                ...member,
-                                depositPaid: true
-                              }));
-                              setMembers(updatedMembers);
-                              setAllDepositsPaid(true);
-                              toast.success('Updated deposit status for all members', {id: 'verify-deposits'});
-                              
-                              // Refresh circle details
-                              fetchCircleDetails();
-                            }, 500);
-                          }}
-                          className="px-5 py-3 text-blue-700 bg-blue-50 rounded-lg text-sm transition-all flex items-center justify-center shadow-sm font-medium border border-blue-200 hover:bg-blue-100"
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                          Verify Deposits
-                        </button>
-                        
-                        <Tooltip.Provider>
-                          <Tooltip.Root>
-                            <Tooltip.Trigger asChild>
-                              <div>
-                                <button
-                                  onClick={() => toast.success('This feature is coming soon')}
-                                  className={`px-5 py-3 text-white rounded-lg text-sm transition-all flex items-center justify-center shadow-md font-medium ${
-                                    !circle || !circle.isActive
-                                      ? 'bg-gray-400 opacity-60 cursor-not-allowed'
-                                      : 'bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-600 hover:to-yellow-700'
-                                  }`}
-                                  disabled={!circle || !circle.isActive}
-                                >
-                                  <Pause className="w-4 h-4 mr-2" />
-                                  Pause Contributions
-                                </button>
-                              </div>
-                            </Tooltip.Trigger>
-                            {circle && !circle.isActive && (
-                              <Tooltip.Portal>
-                                <Tooltip.Content
-                                  className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
-                                  sideOffset={5}
-                                >
-                                  <p>Cannot pause contributions: The circle is not active yet.</p>
-                                  <p className="mt-1 text-gray-300">Activate the circle first before pausing contributions.</p>
-                                  <Tooltip.Arrow className="fill-gray-800" />
-                                </Tooltip.Content>
-                              </Tooltip.Portal>
-                            )}
-                          </Tooltip.Root>
-                        </Tooltip.Provider>
-                        
-                        <Tooltip.Provider>
-                          <Tooltip.Root>
-                            <Tooltip.Trigger asChild>
-                              <div>
-                                <button
-                                  onClick={() => toast.success('This feature is coming soon')}
-                                  className={`px-5 py-3 text-white rounded-lg text-sm transition-all flex items-center justify-center shadow-md font-medium ${
-                                    circle && circle.currentMembers > 1 
-                                      ? 'bg-gray-400 opacity-60 cursor-not-allowed'
-                                      : 'bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700'
-                                  }`}
-                                  disabled={circle && circle.currentMembers > 1}
-                                >
-                                  <X className="w-4 h-4 mr-2" />
-                                  Delete Circle
-                                </button>
-                              </div>
-                            </Tooltip.Trigger>
-                            {circle && circle.currentMembers > 1 && (
-                              <Tooltip.Portal>
-                                <Tooltip.Content
-                                  className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
-                                  sideOffset={5}
-                                >
-                                  <p>Cannot delete: The circle has {circle.currentMembers - 1} member(s) besides the admin.</p>
-                                  <p className="mt-1 text-gray-300">Remove all members first before deleting.</p>
-                                  <Tooltip.Arrow className="fill-gray-800" />
-                                </Tooltip.Content>
-                              </Tooltip.Portal>
-                            )}
-                          </Tooltip.Root>
-                        </Tooltip.Provider>
-                      </div>
-                    </div>
-                    
-                    {/* Stablecoin Auto-Swap Configuration */}
-                    <div className="pt-6 border-t border-gray-200 px-2 mt-6">
-                      {circle && <StablecoinSettings circle={circle} />}
-                    </div>
-
-                    {/* Add this after the existing admin action buttons */}
-                    <div className="mt-4">
-                      <button
-                        onClick={() => router.push(`/circle/${id}/manage/swap-settings`)}
-                        className="w-full py-2 px-4 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors flex items-center justify-center gap-2 shadow-sm border border-indigo-200"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-                        </svg>
-                        Configure Stablecoin Auto-Swap
-                      </button>
                     </div>
                   </div>
-                ) : (
-                  <ManageCircleSkeleton /> // Use the skeleton for "Circle not found" cases too
-                )
-              }
-            </div>
+                )}
+                
+                {/* Circle Management Actions */}
+                <div className="pt-4 sm:pt-6 border-t border-gray-200 px-1 sm:px-2">
+                  <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Management</h3>
+                  <div className="flex flex-wrap gap-2 sm:gap-4">
+                    <Tooltip.Provider>
+                      <Tooltip.Root>
+                        <Tooltip.Trigger asChild>
+                          <div>
+                            <button
+                              onClick={handleActivateCircle}
+                              className={`px-3 sm:px-5 py-2 sm:py-3 text-white rounded-lg text-xs sm:text-sm transition-all flex items-center justify-center shadow-md font-medium w-full sm:w-auto ${
+                                !canActivate
+                                  ? 'bg-gray-400 opacity-60 cursor-not-allowed'
+                                  : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
+                              }`}
+                              disabled={!canActivate}
+                            >
+                              <Check className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5" />
+                              Activate Circle
+                            </button>
+                          </div>
+                        </Tooltip.Trigger>
+                        {circle && !canActivate && (
+                          <Tooltip.Portal>
+                            <Tooltip.Content
+                              className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
+                              sideOffset={5}
+                            >
+                              {getActivationRequirementMessage()}
+                              <p className="mt-1 text-gray-300">Current: {circle.currentMembers}/{circle.maxMembers} members</p>
+                              <Tooltip.Arrow className="fill-gray-800" />
+                            </Tooltip.Content>
+                          </Tooltip.Portal>
+                        )}
+                      </Tooltip.Root>
+                    </Tooltip.Provider>
+                    
+                    {/* Add Verify Deposits button */}
+                    <button
+                      onClick={() => {
+                        toast.loading('Verifying deposit status for all members...', {id: 'verify-deposits'});
+                        // Force check deposits
+                        setTimeout(() => {
+                          const updatedMembers = members.map(member => ({
+                            ...member,
+                            depositPaid: true
+                          }));
+                          setMembers(updatedMembers);
+                          setAllDepositsPaid(true);
+                          toast.success('Updated deposit status for all members', {id: 'verify-deposits'});
+                          
+                          // Refresh circle details
+                          fetchCircleDetails();
+                        }, 500);
+                      }}
+                      className="px-3 sm:px-5 py-2 sm:py-3 text-blue-700 bg-blue-50 rounded-lg text-xs sm:text-sm transition-all flex items-center justify-center shadow-sm font-medium border border-blue-200 hover:bg-blue-100 w-full sm:w-auto"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 h-3.5 sm:h-4 sm:w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Verify Deposits
+                    </button>
+                    
+                    <Tooltip.Provider>
+                      <Tooltip.Root>
+                        <Tooltip.Trigger asChild>
+                          <div>
+                            <button
+                              onClick={() => toast.success('This feature is coming soon')}
+                              className={`px-3 sm:px-5 py-2 sm:py-3 text-white rounded-lg text-xs sm:text-sm transition-all flex items-center justify-center shadow-md font-medium w-full sm:w-auto ${
+                                !circle || !circle.isActive
+                                  ? 'bg-gray-400 opacity-60 cursor-not-allowed'
+                                  : 'bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-600 hover:to-yellow-700'
+                              }`}
+                              disabled={!circle || !circle.isActive}
+                            >
+                              <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5" />
+                              Pause Contributions
+                            </button>
+                          </div>
+                        </Tooltip.Trigger>
+                        {circle && !circle.isActive && (
+                          <Tooltip.Portal>
+                            <Tooltip.Content
+                              className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
+                              sideOffset={5}
+                            >
+                              <p>Cannot pause contributions: The circle is not active yet.</p>
+                              <p className="mt-1 text-gray-300">Activate the circle first before pausing contributions.</p>
+                              <Tooltip.Arrow className="fill-gray-800" />
+                            </Tooltip.Content>
+                          </Tooltip.Portal>
+                        )}
+                      </Tooltip.Root>
+                    </Tooltip.Provider>
+                    
+                    <Tooltip.Provider>
+                      <Tooltip.Root>
+                        <Tooltip.Trigger asChild>
+                          <div>
+                            <button
+                              onClick={() => toast.success('This feature is coming soon')}
+                              className={`px-3 sm:px-5 py-2 sm:py-3 text-white rounded-lg text-xs sm:text-sm transition-all flex items-center justify-center shadow-md font-medium w-full sm:w-auto ${
+                                circle && circle.currentMembers > 1 
+                                  ? 'bg-gray-400 opacity-60 cursor-not-allowed'
+                                  : 'bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700'
+                              }`}
+                              disabled={circle && circle.currentMembers > 1}
+                            >
+                              <X className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5" />
+                              Delete Circle
+                            </button>
+                          </div>
+                        </Tooltip.Trigger>
+                        {circle && circle.currentMembers > 1 && (
+                          <Tooltip.Portal>
+                            <Tooltip.Content
+                              className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
+                              sideOffset={5}
+                            >
+                              <p>Cannot delete: The circle has {circle.currentMembers - 1} member(s) besides the admin.</p>
+                              <p className="mt-1 text-gray-300">Remove all members first before deleting.</p>
+                              <Tooltip.Arrow className="fill-gray-800" />
+                            </Tooltip.Content>
+                          </Tooltip.Portal>
+                        )}
+                      </Tooltip.Root>
+                    </Tooltip.Provider>
+                  </div>
+                </div>
+                
+                {/* Stablecoin Auto-Swap Configuration */}
+                <div className="pt-4 sm:pt-6 border-t border-gray-200 px-1 sm:px-2 mt-2 sm:mt-6">
+                  {circle && <StablecoinSettings circle={circle} />}
+                </div>
+
+                {/* Add this after the existing admin action buttons */}
+                <div className="mt-4">
+                  <button
+                    onClick={() => router.push(`/circle/${id}/manage/swap-settings`)}
+                    className="w-full py-2 px-4 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors flex items-center justify-center gap-2 shadow-sm border border-indigo-200 text-sm"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                    </svg>
+                    Configure Stablecoin Auto-Swap
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="py-4 text-center">
+                <p className="text-gray-500">Circle not found</p>
+              </div>
+            )}
           </div>
         </div>
       </main>
