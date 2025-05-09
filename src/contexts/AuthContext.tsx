@@ -162,6 +162,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.removeItem('isAuthenticated');
     localStorage.removeItem('userAddress');
     
+    // Clear sessionStorage to reset UI state between sessions
+    sessionStorage.removeItem('testnetBannerDismissed');
+    
     // Redirect to home page after logout
     window.location.href = '/';
   };
