@@ -2,7 +2,7 @@ import React, { useRef, useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
-import { Bell, User } from 'lucide-react';
+import { Bell, User, Menu, X } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useRouter } from 'next/router';
 import type { JoinRequest } from '@/services/database-service';
@@ -14,6 +14,7 @@ export const Navbar: React.FC = () => {
   const notificationsRef = useRef<HTMLDivElement>(null);
   const [pendingRequests, setPendingRequests] = useState<JoinRequest[]>([]);
   const [loading, setLoading] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Fetch pending requests
   const fetchPendingRequests = useCallback(async () => {
@@ -126,10 +127,15 @@ export const Navbar: React.FC = () => {
     };
   }, []);
 
+  // Close mobile menu when route changes
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [router.pathname]);
+
   return (
     <nav className="bg-white shadow-sm sticky top-0 z-50">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between h-16">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
+        <div className="flex justify-between h-14 sm:h-16">
           <div className="flex items-center">
             <Link href="/dashboard" className="flex items-center">
               <Image
@@ -137,15 +143,33 @@ export const Navbar: React.FC = () => {
                 alt="Njangi on-chain"
                 width={64}
                 height={64}
-                className="mr-3"
+                className="mr-2 sm:mr-3 w-12 h-12 sm:w-16 sm:h-16 object-contain"
                 priority
               />
-              <h1 className="text-xl font-semibold text-blue-600">Njangi on-chain</h1>
+              <h1 className="text-base sm:text-xl font-semibold text-blue-600">Njangi on-chain</h1>
             </Link>
           </div>
           
+          {/* Mobile menu button */}
           {account && (
-            <div className="flex items-center space-x-4">
+            <div className="flex md:hidden items-center">
+              <button
+                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                className="p-2 rounded-md text-gray-600 hover:text-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              >
+                <span className="sr-only">{mobileMenuOpen ? 'Close menu' : 'Open menu'}</span>
+                {mobileMenuOpen ? (
+                  <X className="block h-6 w-6" aria-hidden="true" />
+                ) : (
+                  <Menu className="block h-6 w-6" aria-hidden="true" />
+                )}
+              </button>
+            </div>
+          )}
+          
+          {/* Desktop nav items */}
+          {account && (
+            <div className="hidden md:flex items-center space-x-4">
               {/* User Profile Picture */}
               <Tooltip.Provider>
                 <Tooltip.Root>
@@ -201,11 +225,11 @@ export const Navbar: React.FC = () => {
 
                 {/* Notifications Dropdown */}
                 {showNotifications && (
-                  <div className="absolute right-0 mt-2 w-96 bg-white rounded-lg shadow-lg ring-1 ring-black ring-opacity-5 z-50">
-                    <div className="p-4 border-b border-gray-100 flex justify-between items-center">
+                  <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-lg shadow-lg ring-1 ring-black ring-opacity-5 z-50">
+                    <div className="p-3 sm:p-4 border-b border-gray-100 flex justify-between items-center">
                       <div>
-                        <h3 className="text-lg font-medium text-gray-900">Notifications</h3>
-                        <p className="text-sm text-gray-500">Join requests for your circles</p>
+                        <h3 className="text-base sm:text-lg font-medium text-gray-900">Notifications</h3>
+                        <p className="text-xs sm:text-sm text-gray-500">Join requests for your circles</p>
                       </div>
                       <button 
                         onClick={() => fetchPendingRequests()}
@@ -237,7 +261,7 @@ export const Navbar: React.FC = () => {
                           {pendingRequests.map((request) => (
                             <div 
                               key={`${request.circle_id}-${request.user_address}`}
-                              className="cursor-pointer p-4 hover:bg-gray-50 dark:hover:bg-blue-800/20"
+                              className="cursor-pointer p-3 sm:p-4 hover:bg-gray-50 dark:hover:bg-blue-800/20"
                               onClick={() => {
                                 router.push(`/circle/${request.circle_id}`);
                                 setShowNotifications(false);
@@ -247,16 +271,16 @@ export const Navbar: React.FC = () => {
                                 <Image
                                   src="/njangi-on-chain-logo.png"
                                   alt="Circle Logo"
-                                  width={40}
-                                  height={40}
-                                  className="rounded-full"
+                                  width={48}
+                                  height={48}
+                                  className="rounded-full w-10 h-10 sm:w-12 sm:h-12 object-contain"
                                 />
                                 <div className="ml-3">
-                                  <p className="font-medium text-sm text-gray-900">
+                                  <p className="font-medium text-xs sm:text-sm text-gray-900">
                                     <span className="font-semibold text-blue-600">{request.user_name}</span> wants to join
                                     <span className="font-bold text-gray-800"> {request.circle_name}</span>
                                   </p>
-                                  <div className="mt-2 text-xs text-gray-500">
+                                  <div className="mt-1 sm:mt-2 text-xs text-gray-500">
                                     {new Date(request.created_at || 0).toLocaleDateString('en-US', {
                                       year: 'numeric',
                                       month: 'short',
@@ -282,7 +306,7 @@ export const Navbar: React.FC = () => {
                           ))}
                         </div>
                       ) : (
-                        <div className="p-4 text-center text-gray-500 text-sm">
+                        <div className="p-4 text-center text-gray-500 text-xs sm:text-sm">
                           No pending join requests
                         </div>
                       )}
@@ -297,11 +321,11 @@ export const Navbar: React.FC = () => {
                   <Tooltip.Trigger asChild>
                     <button
                       onClick={logout}
-                      className="group relative inline-flex items-center justify-center px-4 py-2 bg-white border border-gray-200 rounded-full shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50 hover:border-red-100 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-all duration-200"
+                      className="group relative inline-flex items-center justify-center px-3 sm:px-4 py-1.5 sm:py-2 bg-white border border-gray-200 rounded-full shadow-sm text-xs sm:text-sm font-medium text-gray-700 hover:bg-gray-50 hover:border-red-100 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-all duration-200"
                     >
                       <span className="absolute inset-0 rounded-full bg-gradient-to-r from-red-50 to-red-50 opacity-0 group-hover:opacity-100 transition-opacity duration-200"></span>
                       <svg 
-                        className="w-4 h-4 mr-2 text-gray-400 group-hover:text-red-500 transition-colors duration-200" 
+                        className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1 sm:mr-2 text-gray-400 group-hover:text-red-500 transition-colors duration-200" 
                         fill="none" 
                         stroke="currentColor" 
                         viewBox="0 0 24 24"
@@ -330,6 +354,93 @@ export const Navbar: React.FC = () => {
             </div>
           )}
         </div>
+        
+        {/* Mobile menu, show/hide based on menu state */}
+        {mobileMenuOpen && account && (
+          <div className="md:hidden">
+            <div className="pt-2 pb-4 space-y-2 px-2 border-t border-gray-200">
+              {/* Mobile User Profile */}
+              <div 
+                className="flex items-center space-x-3 px-3 py-2 rounded-md hover:bg-blue-50"
+                onClick={() => {
+                  router.push('/dashboard');
+                  setMobileMenuOpen(false);
+                }}
+              >
+                <div className="flex-shrink-0 w-9 h-9 rounded-full overflow-hidden bg-blue-100">
+                  {account.picture ? (
+                    <Image
+                      src={account.picture}
+                      alt="Profile"
+                      width={36}
+                      height={36}
+                      className="object-cover"
+                      priority={true}
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <User className="w-5 h-5 text-blue-600" />
+                    </div>
+                  )}
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-sm font-medium text-gray-900">{account.name || 'My Account'}</span>
+                  <span className="text-xs text-gray-500">View dashboard</span>
+                </div>
+              </div>
+              
+              {/* Mobile Notifications */}
+              <div
+                className="flex items-center justify-between px-3 py-2 rounded-md hover:bg-blue-50"
+                onClick={(e) => {
+                  e.preventDefault();
+                  // Toggle a focused mobile view of notifications or navigate to a dedicated page
+                  if (pendingRequests.length > 0) {
+                    // Navigate to first circle with pending requests
+                    router.push(`/circle/${pendingRequests[0].circle_id}/manage`);
+                    setMobileMenuOpen(false);
+                  }
+                }}
+              >
+                <div className="flex items-center space-x-3">
+                  <div className="relative flex-shrink-0 rounded-full p-1 bg-gray-100">
+                    <Bell className="w-5 h-5 text-gray-600" />
+                    {pendingRequests.length > 0 && (
+                      <span className="absolute top-0 right-0 block h-4 w-4 rounded-full bg-red-600 text-white text-xs font-bold flex items-center justify-center transform translate-x-1/4 -translate-y-1/4">
+                        {pendingRequests.length}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-sm font-medium text-gray-900">Notifications</span>
+                </div>
+                <span className="text-xs font-medium text-blue-600">
+                  {pendingRequests.length ? `${pendingRequests.length} new` : 'None'}
+                </span>
+              </div>
+              
+              {/* Mobile Sign Out */}
+              <button
+                onClick={logout}
+                className="w-full flex items-center px-3 py-2 text-sm font-medium text-gray-900 hover:text-red-600 rounded-md hover:bg-red-50"
+              >
+                <svg 
+                  className="mr-3 h-5 w-5 text-gray-400" 
+                  fill="none" 
+                  stroke="currentColor" 
+                  viewBox="0 0 24 24"
+                >
+                  <path 
+                    strokeLinecap="round" 
+                    strokeLinejoin="round" 
+                    strokeWidth="2" 
+                    d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" 
+                  />
+                </svg>
+                Sign Out
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </nav>
   );
