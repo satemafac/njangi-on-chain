@@ -132,6 +132,12 @@ module njangi::njangi_circles {
     }
 
     // Event struct defined within this module
+    /// Event emitted when a stablecoin contribution is made to a circle
+    /// * `circle_id` - ID of the circle receiving the contribution
+    /// * `member` - Address of the contributing member
+    /// * `amount` - Contribution amount in stablecoin micro-units (varies by coin type)
+    /// * `cycle` - Current cycle number of the circle
+    /// * `coin_type` - Type of the stablecoin used for contribution
     public struct StablecoinContributionMade has copy, drop {
         circle_id: ID,
         member: address,
@@ -1361,8 +1367,9 @@ module njangi::njangi_circles {
             ctx
         );
 
-        // TODO: Update circle's overall contribution tracking if needed for stablecoins
-        // circles::add_to_contributions(circle, ...); // Current function expects Balance<SUI>
+        // Update circle's overall contribution tracking for stablecoins
+        // Add the actual payment amount to contributions counter (already has correct decimals)
+        add_to_contributions_this_cycle(circle, amount);
 
         // Emit the locally defined StablecoinContributionMade event
         event::emit(StablecoinContributionMade {
@@ -1531,7 +1538,7 @@ module njangi::njangi_circles {
         };
         
         // Calculate expected total contributions for the cycle
-        let expected_contributions = contribution_amount * active_members;
+        let expected_contributions = core::to_decimals(contribution_amount) * active_members;
         
         // Check if contributions_this_cycle meets or exceeds expected
         circle.contributions_this_cycle >= expected_contributions

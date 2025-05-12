@@ -39,6 +39,12 @@ module njangi::njangi_payments {
     // ----------------------------------------------------------
     // Events
     // ----------------------------------------------------------
+    
+    /// Event emitted when a contribution is made to a circle
+    /// * `circle_id` - ID of the circle receiving the contribution
+    /// * `member` - Address of the contributing member
+    /// * `amount` - Actual raw contribution amount in SUI (with 9 decimal places)
+    /// * `cycle` - Current cycle number of the circle
     public struct ContributionMade has copy, drop {
         circle_id: ID,
         member: address,
@@ -118,9 +124,10 @@ module njangi::njangi_payments {
         assert!(circles::is_circle_active(circle), 54);
         
         let contribution_amount = circles::get_contribution_amount(circle);
+        let payment_amount = coin::value(&payment);
         
         // Must be at least the `contribution_amount`
-        assert!(coin::value(&payment) >= contribution_amount, 1);
+        assert!(payment_amount >= contribution_amount, 1);
         // Verify custody wallet belongs to this circle
         assert!(custody::get_circle_id(wallet) == circles::get_id(circle), 46);
 
@@ -131,9 +138,6 @@ module njangi::njangi_payments {
         // Update stats
         let member_mut = circles::get_member_mut(circle, sender);
         members::record_contribution(member_mut, contribution_amount, clock::timestamp_ms(clock));
-
-        // Get payment amount
-        let payment_amount = coin::value(&payment);
         
         // Join the coin into the custody wallet's balance
         custody::deposit(wallet, payment, ctx);
@@ -142,14 +146,13 @@ module njangi::njangi_payments {
         circles::add_to_contributions(circle, balance::zero<SUI>());
         
         // Also track this contribution in the current cycle's counter
-        // The core::to_decimals function adds 9 decimal places
-        let contribution_amount_raw = core::to_decimals(contribution_amount);
-        circles::add_to_contributions_this_cycle(circle, contribution_amount_raw);
+        // Use actual payment amount (which is already in raw format with 9 decimals)
+        circles::add_to_contributions_this_cycle(circle, payment_amount);
 
         event::emit(ContributionMade {
             circle_id: circles::get_id(circle),
             member: sender,
-            amount: contribution_amount,
+            amount: payment_amount,
             cycle: circles::get_current_cycle(circle),
         });
         

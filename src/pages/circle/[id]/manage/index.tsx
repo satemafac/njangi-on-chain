@@ -188,6 +188,11 @@ const ManageCircleSkeleton = () => (
   </div>
 );
 
+// Add getJsonRpcUrl helper if not already present globally
+const getJsonRpcUrl = (): string => {
+  return process.env.NEXT_PUBLIC_SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443';
+};
+
 export default function ManageCircle() {
   const router = useRouter();
   const { id } = router.query;
@@ -216,6 +221,20 @@ export default function ManageCircle() {
   const [usdcContributionBalance, setUsdcContributionBalance] = useState<number | null>(null);
   const [fetchingUsdcBalance, setFetchingUsdcBalance] = useState(false);
   const [fetchingSuiBalance, setFetchingSuiBalance] = useState(false);
+
+  // State for contribution tracking
+  const [contributionStatus, setContributionStatus] = useState<{
+    contributedMembers: Set<string>;
+    activeMembersInRotation: string[];
+    currentCycle: number;
+    totalActiveInRotation: number;
+  }>({
+    contributedMembers: new Set<string>(),
+    activeMembersInRotation: [],
+    currentCycle: 0,
+    totalActiveInRotation: 0,
+  });
+  const [loadingContributions, setLoadingContributions] = useState(false);
 
   // Add state variables for max members editing
   const [isEditingMaxMembers, setIsEditingMaxMembers] = useState(false);
@@ -2452,6 +2471,114 @@ export default function ManageCircle() {
     });
   };
 
+  const fetchContributionStatus = useCallback(async () => {
+    if (!circle || !circle.id || !circle.isActive) {
+      setContributionStatus({ contributedMembers: new Set(), activeMembersInRotation: [], currentCycle: 0, totalActiveInRotation: 0 });
+      setLoadingContributions(false);
+      return;
+    }
+
+    console.log('[ContributionStatus] Fetching for circle:', circle.id);
+    setLoadingContributions(true);
+    const client = new SuiClient({ url: getJsonRpcUrl() });
+    let currentCycleFromServer = 0;
+    let determinedActiveMembersInRotation: string[] = [];
+
+    try {
+      const circleObjectData = await client.getObject({ id: circle.id, options: { showContent: true } });
+      if (circleObjectData.data?.content && 'fields' in circleObjectData.data.content) {
+        const cFields = circleObjectData.data.content.fields as Record<string, SuiFieldValue>;
+        currentCycleFromServer = cFields.current_cycle ? Number(cFields.current_cycle) : 0;
+        console.log('[ContributionStatus] Current cycle from server:', currentCycleFromServer);
+
+        const rotationOrderFromFields = cFields.rotation_order as string[];
+        if (Array.isArray(rotationOrderFromFields) && rotationOrderFromFields.length > 0) {
+          const membersMap = new Map(members.map(m => [m.address, m]));
+          determinedActiveMembersInRotation = rotationOrderFromFields.filter(addr => {
+            if (addr && addr !== '0x0') {
+              const memberDetail = membersMap.get(addr);
+              // Member must be in current member list, active, and have deposit paid
+              return memberDetail && memberDetail.status === 'active' && memberDetail.depositPaid;
+            }
+            return false;
+          });
+           console.log('[ContributionStatus] Active members from rotation_order:', determinedActiveMembersInRotation);
+        }
+      }
+
+      // Fallback if rotation order processing didn't yield results but we have members
+      if (determinedActiveMembersInRotation.length === 0 && members.length > 0) {
+        determinedActiveMembersInRotation = members
+          .filter(m => m.status === 'active' && m.depositPaid)
+          .map(m => m.address);
+        console.log('[ContributionStatus] Active members from members list (fallback):', determinedActiveMembersInRotation);
+      }
+      
+      if (determinedActiveMembersInRotation.length === 0 && circle.currentMembers > 0) {
+        console.warn("[ContributionStatus] Could not determine active members in rotation. Payout trigger UI might be inaccurate.");
+      }
+
+      const uniqueContributors = new Set<string>();
+      if (currentCycleFromServer > 0) {
+        const eventFetchPromises = [
+          client.queryEvents({ query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::ContributionMade` }, limit: 250 }),
+          client.queryEvents({ query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::StablecoinContributionMade` }, limit: 250 })
+        ];
+        const eventResults = await Promise.all(eventFetchPromises);
+
+        eventResults.forEach((result, index) => {
+          const eventType = index === 0 ? 'ContributionMade' : 'StablecoinContributionMade';
+          result.data.forEach(event => {
+            const data = event.parsedJson as { circle_id?: string; member?: string; cycle?: string | number; };
+            const eventCycle = typeof data.cycle === 'string' ? parseInt(data.cycle, 10) : data.cycle;
+            if (data.circle_id === circle.id && data.member && eventCycle === currentCycleFromServer) {
+              if (determinedActiveMembersInRotation.includes(data.member)) { // Only count contributions from active members in rotation
+                 uniqueContributors.add(data.member);
+              }
+            }
+          });
+          console.log(`[ContributionStatus] ${eventType} events processed. Contributors this cycle: ${uniqueContributors.size}`);
+        });
+      }
+      
+      setContributionStatus({
+        contributedMembers: uniqueContributors,
+        activeMembersInRotation: determinedActiveMembersInRotation,
+        currentCycle: currentCycleFromServer,
+        totalActiveInRotation: determinedActiveMembersInRotation.length,
+      });
+
+    } catch (error) {
+      console.error("[ContributionStatus] Error fetching contribution status:", error);
+      setContributionStatus({ contributedMembers: new Set(), activeMembersInRotation: [], currentCycle: 0, totalActiveInRotation: 0 });
+    } finally {
+      setLoadingContributions(false);
+    }
+  }, [circle, members, PACKAGE_ID]); // Added PACKAGE_ID
+
+  useEffect(() => {
+    if (circle && circle.isActive && members.length > 0) {
+      fetchContributionStatus();
+    }
+  }, [circle, members, fetchContributionStatus]); // Ensure members is a dependency too
+
+  const allContributionsMadeThisCycle = useMemo(() => {
+    if (loadingContributions || !circle || !circle.isActive) {
+      return false;
+    }
+    const { contributedMembers, totalActiveInRotation } = contributionStatus;
+    if (totalActiveInRotation === 0) return false; // Avoid division by zero or incorrect true for empty rotation
+    
+    const made = contributedMembers.size >= totalActiveInRotation;
+    console.log('[ContributionStatus] All contributions made check:', {
+        made,
+        contributedSize: contributedMembers.size,
+        totalActive: totalActiveInRotation,
+        currentCycle: contributionStatus.currentCycle
+    });
+    return made;
+  }, [contributionStatus, circle, loadingContributions]);
+
   if (!isAuthenticated || !account) {
     return null;
   }
@@ -2781,15 +2908,41 @@ export default function ManageCircle() {
                 <div className="px-1 sm:px-2">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4">
                     <h3 className="text-lg font-medium text-gray-900 border-l-4 border-blue-500 pl-3">Members</h3>
-                    {!isEditingRotation && (
-                      <button
-                        onClick={() => setIsEditingRotation(true)}
-                        className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-50 text-blue-600 rounded-md flex items-center justify-center hover:bg-blue-100 transition-colors text-sm"
-                      >
-                        <ListOrdered size={16} className="mr-1.5" />
-                        Edit Rotation Order
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {circle && circle.isActive && contributionStatus.currentCycle > 0 && (
+                        <div className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-1.5 mr-2">
+                          <p className="text-xs text-blue-700 mb-1">Contribution Progress (Cycle {contributionStatus.currentCycle})</p>
+                          <div className="flex items-center gap-2">
+                            <div className="w-32 bg-gray-200 rounded-full h-2.5">
+                              <div 
+                                className="bg-blue-600 h-2.5 rounded-full" 
+                                style={{ width: `${contributionStatus.totalActiveInRotation > 0 
+                                  ? (contributionStatus.contributedMembers.size / contributionStatus.totalActiveInRotation) * 100 
+                                  : 0}%` }}
+                              ></div>
+                            </div>
+                            <span className="text-xs font-medium text-blue-800">
+                              {contributionStatus.contributedMembers.size}/{contributionStatus.totalActiveInRotation}
+                            </span>
+                            {allContributionsMadeThisCycle && (
+                              <div className="bg-green-100 text-green-800 text-xs font-medium rounded-full px-2 py-0.5 flex items-center">
+                                <CheckCircle size={12} className="mr-1" />
+                                Complete
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      {!isEditingRotation && (
+                        <button
+                          onClick={() => setIsEditingRotation(true)}
+                          className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-50 text-blue-600 rounded-md flex items-center justify-center hover:bg-blue-100 transition-colors text-sm"
+                        >
+                          <ListOrdered size={16} className="mr-1.5" />
+                          Edit Rotation Order
+                        </button>
+                      )}
+                    </div>
                   </div>
                   
                   {/* Add warning message for rotation order when not in edit mode */}
@@ -2853,6 +3006,11 @@ export default function ManageCircle() {
                                 <th scope="col" className="px-3 py-3.5 text-left text-xs sm:text-sm font-semibold text-gray-900">
                                   Deposit
                                 </th>
+                                {circle && circle.isActive && contributionStatus.currentCycle > 0 && (
+                                  <th scope="col" className="px-3 py-3.5 text-left text-xs sm:text-sm font-semibold text-gray-900">
+                                    Contribution
+                                  </th>
+                                )}
                                 <th scope="col" className="px-3 py-3.5 text-left text-xs sm:text-sm font-semibold text-gray-900 hidden sm:table-cell">
                                   Joined
                                 </th>
@@ -2906,6 +3064,48 @@ export default function ManageCircle() {
                                       </Tooltip.Root>
                                     </Tooltip.Provider>
                                   </td>
+                                  
+                                  {/* Contribution Status Column */}
+                                  {circle && circle.isActive && contributionStatus.currentCycle > 0 && (
+                                    <td className="whitespace-nowrap px-3 py-3 text-xs">
+                                      <Tooltip.Provider>
+                                        <Tooltip.Root>
+                                          <Tooltip.Trigger asChild>
+                                            <span className={`inline-flex items-center p-1 rounded-full ${
+                                              contributionStatus.contributedMembers.has(member.address) 
+                                                ? 'bg-green-100' 
+                                                : contributionStatus.activeMembersInRotation.includes(member.address)
+                                                  ? 'bg-amber-100'
+                                                  : 'bg-gray-100'
+                                            }`}>
+                                              {contributionStatus.contributedMembers.has(member.address) ? (
+                                                <CheckCircle size={16} className="text-green-600" />
+                                              ) : contributionStatus.activeMembersInRotation.includes(member.address) ? (
+                                                <AlertTriangle size={16} className="text-amber-600" />
+                                              ) : (
+                                                <X size={16} className="text-gray-400" />
+                                              )}
+                                            </span>
+                                          </Tooltip.Trigger>
+                                          <Tooltip.Portal>
+                                            <Tooltip.Content
+                                              className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                              sideOffset={5}
+                                            >
+                                              {contributionStatus.contributedMembers.has(member.address) 
+                                                ? `Contribution made for cycle ${contributionStatus.currentCycle}`
+                                                : contributionStatus.activeMembersInRotation.includes(member.address)
+                                                  ? `Contribution pending for cycle ${contributionStatus.currentCycle}`
+                                                  : 'Member not in active rotation'
+                                              }
+                                              <Tooltip.Arrow className="fill-gray-800" />
+                                            </Tooltip.Content>
+                                          </Tooltip.Portal>
+                                        </Tooltip.Root>
+                                      </Tooltip.Provider>
+                                    </td>
+                                  )}
+                                  
                                   <td className="whitespace-nowrap px-3 py-3 text-xs text-gray-500 hidden sm:table-cell">
                                     {member.joinDate ? formatDate(member.joinDate) : 'Unknown'}
                                   </td>
@@ -3161,6 +3361,15 @@ export default function ManageCircle() {
                                     <div>
                                       <p>Are you sure you want to trigger an automatic payout for the current member in the rotation?</p>
                                       <p className="mt-2 text-sm text-gray-600">This will process a payout according to the rotation order.</p>
+                                      {/* Add warning if not all contributions are made */}
+                                      {!allContributionsMadeThisCycle && contributionStatus.currentCycle > 0 && (
+                                        <p className="mt-2 text-sm text-amber-600">
+                                          <AlertTriangle className="inline-block mr-1 h-4 w-4" />
+                                          Warning: Not all members have contributed for cycle {contributionStatus.currentCycle}.
+                                          ({contributionStatus.contributedMembers.size}/{contributionStatus.totalActiveInRotation} contributions made).
+                                          The transaction might fail on-chain if this condition isn&apos;t met by the smart contract.
+                                        </p>
+                                      )}
                                     </div>
                                   ),
                                   onConfirm: async () => {
@@ -3173,10 +3382,8 @@ export default function ManageCircle() {
                                         return;
                                       }
                                       
-                                      // Initialize ZkLoginClient
                                       const zkLoginClient = new ZkLoginClient();
                                       
-                                      // Trigger the payout
                                       const result = await zkLoginClient.adminTriggerPayout(
                                         account,
                                         circle.id,
@@ -3185,17 +3392,16 @@ export default function ManageCircle() {
                                       
                                       toast.success('Payout processed successfully!', { id: toastId });
                                       console.log('Payout transaction:', result);
-                                      
-                                      // Refresh circle details
                                       fetchCircleDetails();
-                                    } catch (error) {
+                                      fetchContributionStatus(); // Refresh contribution status
+                                    } catch (error: unknown) { 
                                       console.error('Error triggering payout:', error);
+                                      const parsedError = parseMoveError(error instanceof Error ? error.message : String(error));
                                       toast.error(
-                                        error instanceof Error ? error.message : 'Failed to process payout', 
+                                        parsedError.message || (error instanceof Error ? error.message : 'Failed to process payout'), 
                                         { id: toastId }
                                       );
                                       
-                                      // Check if we need to re-login due to session expiration
                                       if (error instanceof ZkLoginError && error.requireRelogin) {
                                         router.push('/');
                                       }
@@ -3207,31 +3413,49 @@ export default function ManageCircle() {
                                 });
                               }}
                               className={`px-3 sm:px-5 py-2 sm:py-3 text-white rounded-lg text-xs sm:text-sm transition-all flex items-center justify-center shadow-md font-medium w-full sm:w-auto ${
-                                !circle || !circle.isActive || !circle.custody?.walletId
+                                !circle || !circle.isActive || !circle.custody?.walletId || !allContributionsMadeThisCycle || loadingContributions
                                   ? 'bg-gray-400 opacity-60 cursor-not-allowed'
                                   : 'bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700'
                               }`}
-                              disabled={!circle || !circle.isActive || !circle.custody?.walletId}
+                              disabled={!circle || !circle.isActive || !circle.custody?.walletId || !allContributionsMadeThisCycle || loadingContributions}
                             >
-                              <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                              </svg>
+                              {loadingContributions ? (
+                                <svg className="animate-spin h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1.5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                              ) : (
+                                <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 sm:w-4 sm:w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                              )}
                               Trigger Payout
                             </button>
                           </div>
                         </Tooltip.Trigger>
-                        {circle && (!circle.isActive || !circle.custody?.walletId) && (
+                        {/* MODIFIED TOOLTIP LOGIC */}
+                        {(loadingContributions || (circle && (!circle.isActive || !circle.custody?.walletId || !allContributionsMadeThisCycle))) && (
                           <Tooltip.Portal>
                             <Tooltip.Content
-                              className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
+                              className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs z-50"
                               sideOffset={5}
                             >
-                              {!circle.isActive ? (
+                              {loadingContributions ? (
+                                <p>Checking contribution status...</p>
+                              ) : !circle?.isActive ? (
                                 <p>The circle must be active to trigger payouts.</p>
-                              ) : !circle.custody?.walletId ? (
+                              ) : !circle?.custody?.walletId ? (
                                 <p>Custody wallet information is not available.</p>
+                              ) : !allContributionsMadeThisCycle && contributionStatus.currentCycle > 0 ? (
+                                <p>
+                                  Cannot trigger payout: Not all active members have contributed for cycle {contributionStatus.currentCycle}.<br />
+                                  ({contributionStatus.contributedMembers.size}/{contributionStatus.totalActiveInRotation} contributions made).
+                                </p>
+                              ) : !allContributionsMadeThisCycle && circle?.isActive ? (
+                                // This case handles when cycle might be 0 or status is still being determined for an active circle
+                                <p>Contribution status for the current cycle is still loading or not yet determined. Please wait or refresh.</p>
                               ) : (
-                                <p>Cannot trigger payout at this time.</p>
+                                <p>Ready to trigger payout.</p> // Fallback, should ideally not be hit if other conditions are specific
                               )}
                               <Tooltip.Arrow className="fill-gray-800" />
                             </Tooltip.Content>
