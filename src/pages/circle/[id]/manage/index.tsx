@@ -11,7 +11,7 @@ import { PACKAGE_ID } from '../../../../services/circle-service';
 import StablecoinSwapForm from '../../../../components/StablecoinSwapForm';
 import RotationOrderList from '../../../../components/RotationOrderList';
 import ConfirmationModal from '../../../../components/ConfirmationModal';
-import { ZkLoginClient } from '../../../../services/zkLoginClient';
+import { ZkLoginClient, ZkLoginError } from '../../../../services/zkLoginClient';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -3141,6 +3141,104 @@ export default function ManageCircle() {
                       </svg>
                       Verify Deposits
                     </button>
+                    
+                    {/* Add Trigger Payout button */}
+                    <Tooltip.Provider>
+                      <Tooltip.Root>
+                        <Tooltip.Trigger asChild>
+                          <div>
+                            <button
+                              onClick={() => {
+                                if (!circle || !circle.custody?.walletId) {
+                                  toast.error('Custody wallet information not available');
+                                  return;
+                                }
+                                
+                                setConfirmationModal({
+                                  isOpen: true,
+                                  title: 'Trigger Automatic Payout',
+                                  message: (
+                                    <div>
+                                      <p>Are you sure you want to trigger an automatic payout for the current member in the rotation?</p>
+                                      <p className="mt-2 text-sm text-gray-600">This will process a payout according to the rotation order.</p>
+                                    </div>
+                                  ),
+                                  onConfirm: async () => {
+                                    const toastId = 'trigger-payout';
+                                    try {
+                                      toast.loading('Processing payout...', { id: toastId });
+                                      
+                                      if (!account) {
+                                        toast.error('User account not available. Please log in again.', { id: toastId });
+                                        return;
+                                      }
+                                      
+                                      // Initialize ZkLoginClient
+                                      const zkLoginClient = new ZkLoginClient();
+                                      
+                                      // Trigger the payout
+                                      const result = await zkLoginClient.adminTriggerPayout(
+                                        account,
+                                        circle.id,
+                                        circle.custody?.walletId || ''
+                                      );
+                                      
+                                      toast.success('Payout processed successfully!', { id: toastId });
+                                      console.log('Payout transaction:', result);
+                                      
+                                      // Refresh circle details
+                                      fetchCircleDetails();
+                                    } catch (error) {
+                                      console.error('Error triggering payout:', error);
+                                      toast.error(
+                                        error instanceof Error ? error.message : 'Failed to process payout', 
+                                        { id: toastId }
+                                      );
+                                      
+                                      // Check if we need to re-login due to session expiration
+                                      if (error instanceof ZkLoginError && error.requireRelogin) {
+                                        router.push('/');
+                                      }
+                                    }
+                                  },
+                                  confirmText: 'Trigger Payout',
+                                  cancelText: 'Cancel',
+                                  confirmButtonVariant: 'primary',
+                                });
+                              }}
+                              className={`px-3 sm:px-5 py-2 sm:py-3 text-white rounded-lg text-xs sm:text-sm transition-all flex items-center justify-center shadow-md font-medium w-full sm:w-auto ${
+                                !circle || !circle.isActive || !circle.custody?.walletId
+                                  ? 'bg-gray-400 opacity-60 cursor-not-allowed'
+                                  : 'bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700'
+                              }`}
+                              disabled={!circle || !circle.isActive || !circle.custody?.walletId}
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                              Trigger Payout
+                            </button>
+                          </div>
+                        </Tooltip.Trigger>
+                        {circle && (!circle.isActive || !circle.custody?.walletId) && (
+                          <Tooltip.Portal>
+                            <Tooltip.Content
+                              className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
+                              sideOffset={5}
+                            >
+                              {!circle.isActive ? (
+                                <p>The circle must be active to trigger payouts.</p>
+                              ) : !circle.custody?.walletId ? (
+                                <p>Custody wallet information is not available.</p>
+                              ) : (
+                                <p>Cannot trigger payout at this time.</p>
+                              )}
+                              <Tooltip.Arrow className="fill-gray-800" />
+                            </Tooltip.Content>
+                          </Tooltip.Portal>
+                        )}
+                      </Tooltip.Root>
+                    </Tooltip.Provider>
                     
                     <Tooltip.Provider>
                       <Tooltip.Root>

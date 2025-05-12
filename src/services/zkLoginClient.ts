@@ -809,4 +809,51 @@ export class ZkLoginClient {
       throw new ZkLoginError(String(error), false);
     }
   }
+
+  /**
+   * Trigger automatic payout for a circle
+   */
+  async adminTriggerPayout(
+    account: AccountData,
+    circleId: string,
+    walletId: string
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    try {
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'adminTriggerPayout',
+          account,
+          circleId,
+          walletId
+        }),
+      });
+      
+      // Check for HTTP error responses
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new ZkLoginError(
+          errorData.error || 'Failed to trigger payout',
+          errorData.requireRelogin || false
+        );
+      }
+      
+      const result = await response.json();
+      return { 
+        digest: result.digest,
+        requireRelogin: result.requireRelogin
+      };
+    } catch (error) {
+      // Handle errors that aren't HTTP errors
+      if (!(error instanceof ZkLoginError)) {
+        console.error('Error in adminTriggerPayout:', error);
+        throw new ZkLoginError(
+          error instanceof Error ? error.message : 'Unknown error triggering payout',
+          false
+        );
+      }
+      throw error;
+    }
+  }
 } 
