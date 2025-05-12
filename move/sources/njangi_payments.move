@@ -140,12 +140,90 @@ module njangi::njangi_payments {
 
         // Track in circle's contributions for accounting
         circles::add_to_contributions(circle, balance::zero<SUI>());
+        
+        // Also track this contribution in the current cycle's counter
+        // The core::to_decimals function adds 9 decimal places
+        let contribution_amount_raw = core::to_decimals(contribution_amount);
+        circles::add_to_contributions_this_cycle(circle, contribution_amount_raw);
 
         event::emit(ContributionMade {
             circle_id: circles::get_id(circle),
             member: sender,
             amount: contribution_amount,
             cycle: circles::get_current_cycle(circle),
+        });
+        
+        // Check if the circle is active and if all members have contributed for this cycle
+        if (circles::is_circle_active(circle) && circles::has_all_members_contributed(circle)) {
+            // Attempt to trigger automatic payout
+            trigger_automatic_payout(circle, wallet, clock, ctx);
+        };
+    }
+    
+    // ----------------------------------------------------------
+    // Internal function to trigger automatic payout when all members have contributed
+    // ----------------------------------------------------------
+    fun trigger_automatic_payout(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        // Get the next recipient in the rotation
+        let recipient_opt = circles::get_next_payout_recipient(circle);
+        
+        // Ensure there is a valid recipient
+        if (option::is_none(&recipient_opt)) {
+            return
+        };
+        
+        let recipient = *option::borrow(&recipient_opt);
+        
+        // Ensure recipient is a member
+        if (!circles::is_member(circle, recipient)) {
+            return
+        };
+        
+        // Get member and check they haven't already been paid
+        let member = circles::get_member(circle, recipient);
+        if (members::has_received_payout(member)) {
+            return
+        };
+        
+        // Calculate payout amount - for rotational circles, it's contribution_amount * member_count
+        // Use the standard (human-readable) contribution amount, then convert to raw amount
+        let contribution_amount = circles::get_contribution_amount(circle);
+        let member_count = circles::get_member_count(circle);
+        let payout_amount = core::to_decimals(contribution_amount) * member_count;
+        
+        // Verify custody wallet has sufficient balance for payout
+        if (custody::get_raw_balance(wallet) < payout_amount) {
+            return
+        };
+        
+        // Mark member as paid before making payment (to prevent reentrancy)
+        let member_mut = circles::get_member_mut(circle, recipient);
+        members::set_received_payout(member_mut, true);
+        
+        // Process payout from custody wallet
+        let payout_coin = custody::withdraw(wallet, payout_amount, ctx);
+        
+        // Transfer the payout to the recipient
+        transfer::public_transfer(payout_coin, recipient);
+        
+        // Reset the contributions counter for this cycle
+        circles::reset_contributions_this_cycle(circle);
+        
+        // Update rotation position and cycle if needed
+        circles::advance_rotation_position_and_cycle(circle, recipient, clock);
+        
+        // Emit payout event
+        event::emit(PayoutProcessed {
+            circle_id: circles::get_id(circle),
+            recipient,
+            amount: contribution_amount * member_count, // Use human-readable amount for the event
+            cycle: circles::get_current_cycle(circle),
+            payout_type: circles::get_goal_type(circle),
         });
     }
     
@@ -568,5 +646,110 @@ module njangi::njangi_payments {
         members::subtract_from_deposit_balance(member_mut, returnable_amount);
         
         transfer::public_transfer(deposit_coin, member_addr);
+    }
+    
+    // ----------------------------------------------------------
+    // Admin function to manually trigger the automatic payout
+    // ----------------------------------------------------------
+    public entry fun admin_trigger_payout(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        
+        // Only admin can trigger manual payout
+        assert!(sender == circles::get_admin(circle), 7);
+        
+        // Circle must be active for payouts
+        assert!(circles::is_circle_active(circle), 54);
+        
+        // Call the same function that automatic payout uses to maintain consistent logic
+        trigger_automatic_payout(circle, wallet, clock, ctx);
+    }
+    
+    // ----------------------------------------------------------
+    // Admin function to force a payout to a specific member
+    // ----------------------------------------------------------
+    public entry fun admin_force_payout(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        recipient: address,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        
+        // Only admin can force a payout
+        assert!(sender == circles::get_admin(circle), 7);
+        
+        // Circle must be active for payouts
+        assert!(circles::is_circle_active(circle), 54);
+        
+        // Verify recipient is a member
+        assert!(circles::is_member(circle, recipient), 8);
+        
+        // Get member and check they haven't already been paid
+        let member = circles::get_member(circle, recipient);
+        assert!(!members::has_received_payout(member), EPayoutAlreadyProcessed);
+        
+        // Calculate payout amount - for rotational circles, it's contribution_amount * member_count
+        let contribution_amount = circles::get_contribution_amount(circle);
+        let member_count = circles::get_member_count(circle);
+        let payout_amount = core::to_decimals(contribution_amount) * member_count;
+        
+        // Verify sufficient funds in wallet
+        assert!(custody::get_raw_balance(wallet) >= payout_amount, EInsufficientTreasuryBalance);
+        
+        // Mark member as paid before making payment (to prevent reentrancy)
+        let member_mut = circles::get_member_mut(circle, recipient);
+        members::set_received_payout(member_mut, true);
+        
+        // Process payout from custody wallet
+        let payout_coin = custody::withdraw(wallet, payout_amount, ctx);
+        
+        // Transfer the payout to the recipient
+        transfer::public_transfer(payout_coin, recipient);
+        
+        // Reset the contributions counter for this cycle
+        circles::reset_contributions_this_cycle(circle);
+        
+        // Update rotation state
+        // For forced payouts, we need to ensure the current position aligns with the paid member
+        // Find the recipient's position in the rotation order
+        let rotation_order = circles::get_rotation_order(circle);
+        let mut member_position = 0;
+        let mut found = false;
+        
+        let mut i = 0;
+        let len = vector::length(&rotation_order);
+        
+        while (i < len) {
+            let addr = *vector::borrow(&rotation_order, i);
+            if (addr == recipient) {
+                member_position = i;
+                found = true;
+                break
+            };
+            i = i + 1;
+        };
+        
+        // Set the current position to the member's position before advancing
+        if (found) {
+            // This is an internal module function that needs to be exposed as package visibility in circles module
+            circles::set_current_position(circle, member_position);
+            // Now advance to the next position
+            circles::advance_rotation_position_and_cycle(circle, recipient, clock);
+        };
+        
+        // Emit payout event
+        event::emit(PayoutProcessed {
+            circle_id: circles::get_id(circle),
+            recipient,
+            amount: contribution_amount * member_count, // Use human-readable amount for the event
+            cycle: circles::get_current_cycle(circle),
+            payout_type: circles::get_goal_type(circle),
+        });
     }
 } 

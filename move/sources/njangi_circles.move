@@ -62,6 +62,7 @@ module njangi::njangi_circles {
         current_position: u64,
         active_auction: Option<Auction>,
         is_active: bool,
+        contributions_this_cycle: u64, // Track total contributions for the current cycle
     }
     
     // ----------------------------------------------------------
@@ -215,6 +216,7 @@ module njangi::njangi_circles {
             current_position: 0,
             active_auction: option::none(),
             is_active: false,
+            contributions_this_cycle: 0, // Initialize to 0
         };
         
         // Create and attach configurations using the new module
@@ -568,6 +570,7 @@ module njangi::njangi_circles {
             active_auction: _,
             created_at: _,
             is_active: _,
+            contributions_this_cycle: _,
         } = circle;
         
         // Destroy balances and tables
@@ -1407,5 +1410,148 @@ module njangi::njangi_circles {
             old_max_members,
             new_max_members,
         });
+    }
+
+    // ----------------------------------------------------------
+    // Automatic Payout Helper Functions
+    // ----------------------------------------------------------
+    
+    // Get the current value of contributions for this cycle
+    public fun get_contributions_this_cycle(circle: &Circle): u64 {
+        circle.contributions_this_cycle
+    }
+    
+    // Add to the contributions counter for this cycle
+    public(package) fun add_to_contributions_this_cycle(circle: &mut Circle, amount: u64) {
+        circle.contributions_this_cycle = circle.contributions_this_cycle + amount;
+    }
+    
+    // Reset the contributions counter for this cycle (after a payout)
+    public(package) fun reset_contributions_this_cycle(circle: &mut Circle) {
+        circle.contributions_this_cycle = 0;
+    }
+    
+    // Reset the payout status for all members in the rotation (for a new cycle)
+    public(package) fun reset_all_members_payout_status(circle: &mut Circle) {
+        // Get all the non-zero addresses from rotation_order
+        let rotation = &circle.rotation_order;
+        let len = vector::length(rotation);
+        let mut i = 0;
+        
+        while (i < len) {
+            let member_addr = *vector::borrow(rotation, i);
+            
+            // Skip placeholder addresses
+            if (member_addr != @0x0 && table::contains(&circle.members, member_addr)) {
+                let member = table::borrow_mut(&mut circle.members, member_addr);
+                members::set_received_payout(member, false);
+            };
+            i = i + 1;
+        };
+    }
+    
+    // Advance rotation position and cycle management
+    public(package) fun advance_rotation_position_and_cycle(
+        circle: &mut Circle, 
+        paid_member_address: address,
+        clock: &Clock
+    ) {
+        // Add the paid member to rotation history
+        vector::push_back(&mut circle.rotation_history, paid_member_address);
+        
+        // Calculate next position
+        let rotation_len = vector::length(&circle.rotation_order);
+        
+        // Only advance if we have members in the rotation
+        if (rotation_len > 0) {
+            // Increment current position
+            circle.current_position = circle.current_position + 1;
+            
+            // Check if we completed a full rotation and need to start a new cycle
+            if (circle.current_position >= rotation_len) {
+                // Reset to the start of the rotation
+                circle.current_position = 0;
+                
+                // Increment cycle counter
+                circle.current_cycle = circle.current_cycle + 1;
+                
+                // Update next payout time
+                circle.next_payout_time = core::calculate_next_payout_time(
+                    config::get_cycle_length(&circle.id),
+                    config::get_cycle_day(&circle.id),
+                    clock::timestamp_ms(clock)
+                );
+                
+                // Reset all members' payout status for the new cycle
+                reset_all_members_payout_status(circle);
+            };
+        };
+    }
+    
+    // Get the next member in rotation order who should receive a payout
+    public fun get_next_payout_recipient(circle: &Circle): Option<address> {
+        let rotation = &circle.rotation_order;
+        let rotation_len = vector::length(rotation);
+        
+        // Check if rotation is empty or invalid position
+        if (rotation_len == 0 || circle.current_position >= rotation_len) {
+            return option::none()
+        };
+        
+        let recipient = *vector::borrow(rotation, circle.current_position);
+        
+        // Check if it's a placeholder address
+        if (recipient == @0x0) {
+            return option::none()
+        };
+        
+        option::some(recipient)
+    }
+    
+    // Check if all active members have contributed for the current cycle
+    public fun has_all_members_contributed(circle: &Circle): bool {
+        // Get contribution amount from config
+        let contribution_amount = config::get_contribution_amount(&circle.id);
+        
+        // Count active members in rotation
+        let mut active_members = 0;
+        let rotation = &circle.rotation_order;
+        let len = vector::length(rotation);
+        let mut i = 0;
+        
+        while (i < len) {
+            let member_addr = *vector::borrow(rotation, i);
+            if (member_addr != @0x0 && table::contains(&circle.members, member_addr)) {
+                let member = table::borrow(&circle.members, member_addr);
+                if (members::get_status(member) == core::member_status_active()) {
+                    active_members = active_members + 1;
+                };
+            };
+            i = i + 1;
+        };
+        
+        // Calculate expected total contributions for the cycle
+        let expected_contributions = contribution_amount * active_members;
+        
+        // Check if contributions_this_cycle meets or exceeds expected
+        circle.contributions_this_cycle >= expected_contributions
+    }
+
+    // ----------------------------------------------------------
+    // Set the current position in the rotation
+    // ----------------------------------------------------------
+    public(package) fun set_current_position(circle: &mut Circle, position: u64) {
+        // Ensure position is valid
+        let rotation_len = vector::length(&circle.rotation_order);
+        assert!(position < rotation_len, 29); // Use existing EInvalidRotationPosition (29)
+        
+        circle.current_position = position;
+    }
+
+    // ----------------------------------------------------------
+    // Get the current position in the rotation
+    // ----------------------------------------------------------
+    public fun get_current_position(circle: &Circle): u64 {
+        circle.current_position
     }
 } 

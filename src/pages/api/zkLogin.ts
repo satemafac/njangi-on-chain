@@ -3964,6 +3964,103 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       } // End case 'adminSetMaxMembers'
 
+      case 'adminTriggerPayout': {
+        try {
+          // Validate required parameters
+          if (!account) {
+            return res.status(400).json({ error: 'Account data is required' });
+          }
+          if (!circleId) {
+            return res.status(400).json({ error: 'Circle ID is required' });
+          }
+          if (!req.body.walletId) {
+            return res.status(400).json({ error: 'Wallet ID is required' });
+          }
+
+          // Validate session
+          if (!sessionId) {
+            return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+          }
+          const session = validateSession(sessionId, 'sendTransaction');
+          if (!session.account) {
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({
+              error: 'Invalid session: No account data found. Please authenticate first.',
+              requireRelogin: true
+            });
+          }
+
+          console.log(`Admin triggering automatic payout for circle ${circleId} with wallet ${req.body.walletId}`);
+
+          // Send the transaction
+          const txResult = await instance.sendTransaction(
+            session.account,
+            (txb: Transaction) => {
+              txb.setSender(session.account!.userAddr);
+              txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_payments::admin_trigger_payout`,
+                arguments: [
+                  txb.object(circleId),
+                  txb.object(req.body.walletId),
+                  txb.object("0x6"), // Clock object
+                ],
+              });
+            },
+            { gasBudget: 100000000 } // Higher gas budget for payout operation
+          );
+
+          console.log('Admin trigger payout transaction successful:', txResult);
+          return res.status(200).json({
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+
+        } catch (error) {
+          console.error('Error triggering payout:', error);
+
+          // Handle authentication errors
+          if (error instanceof Error &&
+              (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired') ||
+              error.message.includes('re-authenticate'))) {
+
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+
+          // Handle specific contract errors
+          if (error instanceof Error) {
+            if (error.message.includes('ENotAdmin') || error.message.includes('ENotCircleAdmin') || error.message.includes(', 7)')) {
+              return res.status(403).json({ error: 'Only the circle admin can trigger payouts.' });
+            }
+            if (error.message.includes('ECircleNotActive') || error.message.includes(', 54)')) {
+              return res.status(400).json({ error: 'Cannot trigger payout: The circle is not active.' });
+            }
+            if (error.message.includes('EPayoutAlreadyProcessed') || error.message.includes(', 23)')) {
+              return res.status(400).json({ error: 'The current member in rotation has already received a payout for this cycle.' });
+            }
+            if (error.message.includes('EInsufficientTreasuryBalance') || error.message.includes(', 25)')) {
+              return res.status(400).json({ error: 'Insufficient funds in treasury to process the payout.' });
+            }
+          }
+
+          // Generic error
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to trigger payout',
+            details: error instanceof Error ? error.stack : String(error),
+            requireRelogin: false
+          });
+        }
+      } // End case 'adminTriggerPayout'
+
       default:
         return res.status(400).json({ error: 'Unknown action' });
     }
