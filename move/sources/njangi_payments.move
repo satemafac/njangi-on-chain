@@ -197,9 +197,8 @@ module njangi::njangi_payments {
         let payout_amount = core::to_decimals(contribution_amount) * member_count;
         
         // Verify custody wallet has sufficient balance for payout
-        if (custody::get_raw_balance(wallet) < payout_amount) {
-            return
-        };
+        // Use custody::get_wallet_balance which checks both main balance and dynamic fields
+        assert!(custody::get_wallet_balance(wallet) >= payout_amount, EInsufficientTreasuryBalance);
         
         // Mark member as paid before making payment (to prevent reentrancy)
         let member_mut = circles::get_member_mut(circle, recipient);
@@ -665,6 +664,9 @@ module njangi::njangi_payments {
         // Circle must be active for payouts
         assert!(circles::is_circle_active(circle), 54);
         
+        // Check if all members have contributed for this cycle
+        assert!(circles::has_all_members_contributed(circle), 56); // Using EInvalidMaxMembersLimit as a placeholder error
+        
         // Call the same function that automatic payout uses to maintain consistent logic
         trigger_automatic_payout(circle, wallet, clock, ctx);
     }
@@ -700,7 +702,8 @@ module njangi::njangi_payments {
         let payout_amount = core::to_decimals(contribution_amount) * member_count;
         
         // Verify sufficient funds in wallet
-        assert!(custody::get_raw_balance(wallet) >= payout_amount, EInsufficientTreasuryBalance);
+        // Use custody::get_wallet_balance which checks both main balance and dynamic fields
+        assert!(custody::get_wallet_balance(wallet) >= payout_amount, EInsufficientTreasuryBalance);
         
         // Mark member as paid before making payment (to prevent reentrancy)
         let member_mut = circles::get_member_mut(circle, recipient);
