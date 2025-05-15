@@ -819,33 +819,90 @@ export class ZkLoginClient {
     walletId: string
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
     try {
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'adminTriggerPayout',
-          account,
-          circleId,
-          walletId
-        }),
-      });
+      console.log(`ZkLoginClient: Triggering payout for circle ${circleId} with wallet ${walletId}`);
       
-      // Check for HTTP error responses
-      if (!response.ok) {
+      // First try with the regular SUI payout method
+      try {
+        const response = await fetch('/api/zkLogin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'adminTriggerPayout',
+            account,
+            circleId,
+            walletId
+          }),
+        });
+        
+        // If the call succeeded, return the result
+        if (response.ok) {
+          const result = await response.json();
+          console.log('Payout succeeded with SUI method:', result);
+          return { 
+            digest: result.digest,
+            requireRelogin: result.requireRelogin
+          };
+        }
+        
+        // If we got here, there was an error with the SUI payout
         const errorData = await response.json();
+        
+        // If it's a dynamic_field borrow_child_object error, it likely means
+        // we need to use the stablecoin payout method instead
+        if (errorData.error && (
+            errorData.error.includes('dynamic_field') || 
+            errorData.error.includes('borrow_child_object') ||
+            errorData.error.includes('error code 60')
+        )) {
+          console.log('Detected dynamic_field error, likely a stablecoin-only circle. Trying USDC payout method...');
+          
+          // Try the USDC payout method instead
+          const usdcResponse = await fetch('/api/zkLogin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'adminTriggerUsdcPayout',
+              account,
+              circleId,
+              walletId
+            }),
+          });
+          
+          if (usdcResponse.ok) {
+            const usdcResult = await usdcResponse.json();
+            console.log('Payout succeeded with USDC method:', usdcResult);
+            return { 
+              digest: usdcResult.digest,
+              requireRelogin: usdcResult.requireRelogin
+            };
+          }
+          
+          // If USDC method also failed, throw the new error
+          const usdcErrorData = await usdcResponse.json();
+          throw new ZkLoginError(
+            usdcErrorData.error || 'Failed to trigger USDC payout',
+            usdcErrorData.requireRelogin || false
+          );
+        }
+        
+        // For any other error, just throw it
         throw new ZkLoginError(
           errorData.error || 'Failed to trigger payout',
           errorData.requireRelogin || false
         );
+      } catch (error) {
+        // This catches any network errors or other issues with the API call itself
+        if (!(error instanceof ZkLoginError)) {
+          console.error('Error triggering payout:', error);
+          throw new ZkLoginError(
+            error instanceof Error ? error.message : 'Unknown error triggering payout',
+            false
+          );
+        }
+        throw error;
       }
-      
-      const result = await response.json();
-      return { 
-        digest: result.digest,
-        requireRelogin: result.requireRelogin
-      };
     } catch (error) {
-      // Handle errors that aren't HTTP errors
+      // Final error handler
       if (!(error instanceof ZkLoginError)) {
         console.error('Error in adminTriggerPayout:', error);
         throw new ZkLoginError(
