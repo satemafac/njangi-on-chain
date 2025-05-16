@@ -888,21 +888,18 @@ module njangi::njangi_custody {
             return false
         };
         
-        // Check for any coin_objects field that might contain a stablecoin
+        // Simply check if the "coin_objects" dynamic field exists
+        // If types are registered and this field exists, then there's a stablecoin
         let coin_objects_key = string::utf8(b"coin_objects");
-        
-        // If the dynamic field exists, we need to check if the balance is non-zero
         if (dynamic_object_field::exists_(&wallet.id, coin_objects_key)) {
-            // We need to check if the actual coin has a non-zero balance
-            // This is a simplified check - in a real implementation, we would
-            // need to check each specific coin type's balance
-            
-            // Unfortunately, we cannot enumerate the specific coin types here,
-            // but if the dynamic field exists and contains a non-empty SUI coin,
-            // get_stablecoin_balance<SUI> will return a non-zero value
-            if (get_stablecoin_balance<SUI>(wallet) > 0) {
-                return true
-            }
+            return true
+        };
+        
+        // Check for SUI in dynamic fields as a fallback
+        // This is kept for backward compatibility
+        let sui_dynamic_field = get_stablecoin_balance<SUI>(wallet);
+        if (sui_dynamic_field > 0) {
+            return true
         };
         
         false
