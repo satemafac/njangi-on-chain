@@ -1535,12 +1535,26 @@ module njangi::njangi_circles {
         let len = vector::length(rotation);
         let mut i = 0;
         
+        // Get current recipient (member at current_position)
+        let current_recipient = if (circle.current_position < len) {
+            *vector::borrow(rotation, circle.current_position)
+        } else {
+            @0x0 // Invalid recipient address
+        };
+        
+        // Track if recipient is counted in active members
+        let mut recipient_is_active = false;
+        
         while (i < len) {
             let member_addr = *vector::borrow(rotation, i);
             if (member_addr != @0x0 && table::contains(&circle.members, member_addr)) {
                 let member = table::borrow(&circle.members, member_addr);
                 if (members::get_status(member) == core::member_status_active()) {
                     active_members = active_members + 1;
+                    // Check if this active member is the recipient
+                    if (member_addr == current_recipient) {
+                        recipient_is_active = true;
+                    };
                 };
             };
             i = i + 1;
@@ -1553,7 +1567,15 @@ module njangi::njangi_circles {
         
         // Calculate expected total contributions
         let contribution_amount = config::get_contribution_amount(&circle.id);
-        let expected_contributions = contribution_amount * active_members;
+        
+        // Adjust active_members to exclude recipient if they're active
+        let contributing_members = if (recipient_is_active) {
+            active_members - 1
+        } else {
+            active_members
+        };
+        
+        let expected_contributions = contribution_amount * contributing_members;
         
         // Compare with actual contributions this cycle
         circle.contributions_this_cycle >= expected_contributions
