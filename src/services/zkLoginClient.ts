@@ -847,14 +847,19 @@ export class ZkLoginClient {
         // If we got here, there was an error with the SUI payout
         const errorData = await response.json();
         
-        // If it's a dynamic_field borrow_child_object error, it likely means
-        // we need to use the stablecoin payout method instead
-        if (errorData.error && (
-            errorData.error.includes('dynamic_field') || 
-            errorData.error.includes('borrow_child_object') ||
-            errorData.error.includes('error code 60')
-        )) {
-          console.log('Detected dynamic_field error, likely a stablecoin-only circle. Trying USDC payout method...');
+        // Improved error detection for code 100
+        const errorMessage = errorData.error || '';
+        console.log('SUI payout failed with error:', errorMessage);
+        
+        // Check for code 100 in the exact format it appears in MoveAbort errors: ", 100)"
+        // Plus keep the existing fallback conditions
+        if (errorMessage.includes(', 100)') || 
+            errorMessage.includes('error code 100') ||
+            errorMessage.includes('dynamic_field') || 
+            errorMessage.includes('borrow_child_object') ||
+            errorMessage.includes('error code 60')) {
+          
+          console.log('Detected code 100 or other stablecoin indicator. Trying USDC payout method...');
           
           // Try the USDC payout method instead
           const usdcResponse = await fetch('/api/zkLogin', {
