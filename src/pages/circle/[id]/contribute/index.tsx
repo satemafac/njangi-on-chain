@@ -26,6 +26,7 @@ interface ContributionProgressData {
   contributedMembers: Set<string>;
   currentCycle: number;
   memberList: string[]; // Store all members in order
+  currentRecipientAddress?: string | null; // Add recipient address
 }
 
 // IMPORTANT: The values in CircleConfig are stored as follows:
@@ -109,12 +110,14 @@ const ContributionProgress: React.FC<{
   maxMembers: number;
   currentCycle: number;
   className?: string;
-}> = ({ circleId, maxMembers, currentCycle, className = '' }) => {
+  currentRecipientAddress?: string | null; // Add to props
+}> = ({ circleId, maxMembers, currentCycle, className = '', currentRecipientAddress }) => {
   const [progressData, setProgressData] = useState<ContributionProgressData>({
     totalMembers: maxMembers,
     contributedMembers: new Set<string>(),
     currentCycle: currentCycle,
-    memberList: []
+    memberList: [],
+    currentRecipientAddress: currentRecipientAddress, // Initialize from prop
   });
   const [isLoading, setIsLoading] = useState(true);
   
@@ -370,7 +373,8 @@ const ContributionProgress: React.FC<{
         totalMembers: maxMembers,
         contributedMembers,
         currentCycle,
-        memberList: sortedMemberList // Use the sorted list
+        memberList: sortedMemberList, // Use the sorted list
+        currentRecipientAddress: currentRecipientAddress, // Ensure it's set here
       });
     } catch (error) {
       console.error('Error fetching contribution events:', error);
@@ -386,14 +390,15 @@ const ContributionProgress: React.FC<{
     } else {
       console.log("[Progress] Waiting for required data:", { circleId, maxMembers, currentCycle });
     }
-  }, [circleId, maxMembers, currentCycle]);
+  // Add currentRecipientAddress to dependency array if it can change and trigger re-fetch
+  }, [circleId, maxMembers, currentCycle, currentRecipientAddress]);
 
   // Calculate progress percentage
   const contributedCount = progressData.contributedMembers.size;
-  // Use the length of the memberList for total to ensure consistency
-  const totalMembersForCalc = progressData.memberList.length;
-  const progressPercentage = totalMembersForCalc > 0 
-    ? (contributedCount / totalMembersForCalc) * 100 
+  const expectedContributors = progressData.currentRecipientAddress ? Math.max(0, progressData.totalMembers - 1) : progressData.totalMembers;
+  
+  const progressPercentage = expectedContributors > 0 
+    ? (contributedCount / expectedContributors) * 100 
     : 0;
   
   // Determine status color based on progress
@@ -462,46 +467,56 @@ const ContributionProgress: React.FC<{
         </svg>
         
         {/* Member sectors around the circle */}
-        {progressData.memberList.map((memberAddr, index) => {
-          const angle = (index / progressData.totalMembers) * Math.PI * 2 - Math.PI / 2;
-          const x = 50 + 55 * Math.cos(angle);
-          const y = 50 + 55 * Math.sin(angle);
-          const hasContributed = progressData.contributedMembers.has(memberAddr);
-          
-          return (
-            <div key={index} className="group">
-              <div 
-                className={`absolute w-3 h-3 rounded-full transform -translate-x-1/2 -translate-y-1/2 border border-white 
-                  ${hasContributed ? 'bg-green-500' : 'bg-gray-300'} 
-                  hover:scale-125 transition-all duration-200`}
-                style={{ 
-                  left: `${x}%`, 
-                  top: `${y}%`,
-                }}
-              />
-              {/* Tooltip that appears on hover */}
-              <div 
-                className="absolute hidden group-hover:block bg-gray-900 text-white text-xs rounded p-2 z-10"
-                style={{ 
-                  left: `${x}%`, 
-                  top: `${y}%`,
-                  transform: 'translate(-50%, -100%)',
-                  marginTop: '-10px',
-                }}
-              >
-                <p className="whitespace-nowrap">
-                  {formatAddress(memberAddr)}
-                  {hasContributed ? ' ✓' : ' ✘'}
-                </p>
+        {(() => {
+          // Filter out the recipient for dot visualization around the circle
+          const membersForDots = progressData.currentRecipientAddress
+            ? progressData.memberList.filter(member => member !== progressData.currentRecipientAddress)
+            : progressData.memberList;
+          const numDots = membersForDots.length;
+
+          return membersForDots.map((memberAddr, index) => {
+            const angle = numDots > 0 ? (index / numDots) * Math.PI * 2 - Math.PI / 2 : 0;
+            const x = 50 + 55 * Math.cos(angle);
+            const y = 50 + 55 * Math.sin(angle);
+            const hasContributed = progressData.contributedMembers.has(memberAddr);
+            // Recipient is filtered out, so dotColor is simpler
+            const dotColor = hasContributed ? 'bg-green-500' : 'bg-gray-300';
+            
+            return (
+              <div key={memberAddr} className="group"> {/* Use memberAddr for key due to filtering */}
+                <div 
+                  className={`absolute w-3 h-3 rounded-full transform -translate-x-1/2 -translate-y-1/2 border border-white 
+                    ${dotColor} 
+                    hover:scale-125 transition-all duration-200`}
+                  style={{ 
+                    left: `${x}%`, 
+                    top: `${y}%`,
+                  }}
+                />
+                {/* Tooltip that appears on hover */}
+                <div 
+                  className="absolute hidden group-hover:block bg-gray-900 text-white text-xs rounded p-2 z-10"
+                  style={{ 
+                    left: `${x}%`, 
+                    top: `${y}%`,
+                    transform: 'translate(-50%, -100%)',
+                    marginTop: '-10px',
+                  }}
+                >
+                  <p className="whitespace-nowrap">
+                    {formatAddress(memberAddr)}
+                    {hasContributed ? ' ✓' : ' ✘'} {/* Recipient is not in this list */}
+                  </p>
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          });
+        })()}
       </div>
       
       <div className="mt-4 text-center">
         <p className="text-sm font-medium">
-          {isLoading ? "Loading..." : `${contributedCount} of ${progressData.totalMembers} members`}
+          {isLoading ? "Loading..." : `${contributedCount} of ${expectedContributors} expected contributors`}
         </p>
         <p className="text-xs text-gray-500">
           Cycle {progressData.currentCycle} Contributions
@@ -512,14 +527,30 @@ const ContributionProgress: React.FC<{
       <div className="mt-3 grid grid-cols-1 gap-2 text-xs w-full max-w-xs">
         {progressData.memberList.map((memberAddr, index) => {
           const hasContributed = progressData.contributedMembers.has(memberAddr);
+          const isRecipient = memberAddr === progressData.currentRecipientAddress;
+          
+          let statusText = 'Pending';
+          let statusColorClass = 'text-gray-500';
+          let dotColorClass = 'bg-gray-300';
+
+          if (isRecipient) {
+            statusText = 'Receiving Payout';
+            statusColorClass = 'text-blue-600 font-medium';
+            dotColorClass = 'bg-blue-500';
+          } else if (hasContributed) {
+            statusText = 'Contributed';
+            statusColorClass = 'text-green-600 font-medium';
+            dotColorClass = 'bg-green-500';
+          }
+
           return (
             <div key={index} className="flex items-center justify-between">
               <div className="flex items-center">
-                <div className={`w-3 h-3 mr-2 rounded-full ${hasContributed ? 'bg-green-500' : 'bg-gray-300'}`}></div>
+                <div className={`w-3 h-3 mr-2 rounded-full ${dotColorClass}`}></div>
                 <span className="font-mono">{formatAddress(memberAddr)}</span>
               </div>
-              <span className={hasContributed ? 'text-green-600 font-medium' : 'text-gray-500'}>
-                {hasContributed ? 'Contributed' : 'Pending'}
+              <span className={statusColorClass}>
+                {statusText}
               </span>
             </div>
           );
@@ -572,6 +603,12 @@ export default function ContributeToCircle() {
 
   // Add a state to track if the user has already contributed for the current cycle
   const [userHasContributed, setUserHasContributed] = useState<boolean>(false);
+
+  // Add a state for tracking if user is current recipient
+  const [isCurrentRecipient, setIsCurrentRecipient] = useState<boolean>(false);
+
+  // Add state for current cycle recipient address
+  const [cycleRecipientAddress, setCycleRecipientAddress] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -1441,16 +1478,65 @@ export default function ContributeToCircle() {
     }
   };
 
-  // Call this function when circle data or userAddress changes
-  useEffect(() => {
-    if (circle && userAddress) {
-      checkUserContribution();
+  // Add new function to check if user is the current recipient
+  const checkIfUserIsCurrentRecipient = async () => {
+    if (!circle || !circle.id || !userAddress || !circle.isActive) {
+      setCycleRecipientAddress(null); // Reset if conditions not met
+      return false;
     }
-  }, [circle, userAddress, currentCycle]);
+    
+    console.log(`[Recipient Check] Checking if user ${userAddress} is the current recipient in circle ${circle.id}`);
+    
+    try {
+      const client = new SuiClient({ url: getJsonRpcUrl() });
+      const circleObject = await client.getObject({
+        id: circle.id,
+        options: { showContent: true }
+      });
+      
+      if (circleObject.data?.content && 'fields' in circleObject.data.content) {
+        const circleFields = circleObject.data.content.fields as Record<string, unknown>;
+        const currentPosition = Number(circleFields.current_position || 0);
+        const rotationOrder = circleFields.rotation_order as string[];
+        
+        console.log(`[Recipient Check] Current position: ${currentPosition}`);
+        console.log(`[Recipient Check] Rotation order:`, rotationOrder);
+        
+        if (Array.isArray(rotationOrder) && 
+            currentPosition >= 0 && 
+            currentPosition < rotationOrder.length) {
+          const recipientAddress = rotationOrder[currentPosition];
+          setCycleRecipientAddress(recipientAddress); // Set the recipient for the whole cycle
+          const isRecipient = recipientAddress === userAddress;
+          
+          console.log(`[Recipient Check] Recipient address: ${recipientAddress}`);
+          console.log(`[Recipient Check] Is user the recipient? ${isRecipient}`);
+          
+          setIsCurrentRecipient(isRecipient);
+          return isRecipient;
+        }
+      }
+      
+      setIsCurrentRecipient(false);
+      setCycleRecipientAddress(null); // Reset on failure
+      return false;
+    } catch (error) {
+      console.error("Error checking if user is current recipient:", error);
+      setIsCurrentRecipient(false);
+      setCycleRecipientAddress(null); // Reset on error
+      return false;
+    }
+  };
 
-  // Update the handleContribute function to double-check contribution status before proceeding
+  // Modify handleContribute to check if user is the current recipient
   const handleContribute = async () => {
     if (!circle || !userAddress) return;
+    
+    // Check if user is the current recipient and shouldn't contribute
+    if (isCurrentRecipient) {
+      toast.error('You are the current recipient for this cycle. You don\'t need to contribute.');
+      return;
+    }
     
     // Double-check if user has already contributed for this cycle
     const alreadyContributed = await checkUserContribution();
@@ -2001,6 +2087,12 @@ export default function ContributeToCircle() {
   const handleDirectUsdcDeposit = async () => {
     if (!circle || !userAddress || !userUsdcBalance) return;
     
+    // Check if user is current recipient
+    if (isCurrentRecipient) {
+      toast.error('You are the current recipient for this cycle. You don&apos;t need to contribute.');
+      return;
+    }
+    
     // Double-check if user has already contributed for this cycle
     const alreadyContributed = await checkUserContribution();
     if (alreadyContributed) {
@@ -2080,7 +2172,15 @@ export default function ContributeToCircle() {
     }
   };
 
-  // Modify the renderContributionOptions function
+  // Add the useEffect to call our functions when data changes
+  useEffect(() => {
+    if (circle && userAddress) {
+      checkUserContribution();
+      checkIfUserIsCurrentRecipient();
+    }
+  }, [circle, userAddress, currentCycle]);
+
+  // Modify the renderContributionOptions function to show a message when user is the current recipient
   const renderContributionOptions = () => {
     return (
       <div className="pt-6 border-t border-gray-200 px-2">
@@ -2092,6 +2192,25 @@ export default function ContributeToCircle() {
             <p className="text-sm text-blue-700">
               <strong>Auto-swap enabled:</strong> Your SUI contribution will automatically be swapped to USDC.
             </p>
+          </div>
+        )}
+
+        {/* Show message if user is current recipient */}
+        {isCurrentRecipient && (
+          <div className="mb-4 p-4 bg-green-50 rounded-lg border-2 border-green-200">
+            <div className="flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
+              <div className="bg-green-100 p-1.5 rounded-full flex-shrink-0 self-start">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <h4 className="font-medium text-green-800">You are the recipient for this cycle!</h4>
+                <p className="text-sm text-green-700 mt-1">
+                  You don&apos;t need to make a contribution for the current cycle because you are the member receiving the payout. Enjoy your payout!
+                </p>
+              </div>
+            </div>
           </div>
         )}
 
@@ -2134,7 +2253,8 @@ export default function ContributeToCircle() {
                     onClick={handleDirectUsdcDeposit}
                     disabled={directDepositProcessing || 
                             (userDepositPaid && !circle?.isActive) || 
-                            userHasContributed}
+                            userHasContributed ||
+                            isCurrentRecipient}
                     className="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
                   >
                     {directDepositProcessing ? (
@@ -2149,6 +2269,8 @@ export default function ContributeToCircle() {
                       `Deposit ${circle?.securityDepositUsd?.toFixed(2)} USDC as Security Deposit`
                     ) : userHasContributed ? (
                       `Already Contributed`
+                    ) : isCurrentRecipient ? (
+                      `You Are the Current Recipient`
                     ) : (
                       `Contribute ${circle?.contributionAmountUsd?.toFixed(2)} USDC Directly`
                     )}
@@ -2186,7 +2308,7 @@ export default function ContributeToCircle() {
                 // Check if user has contributed after completing a transaction
                 checkUserContribution();
               }}
-              disabled={userDepositPaid && (!circle?.isActive || userHasContributed)}
+              disabled={userDepositPaid && (!circle?.isActive || userHasContributed || isCurrentRecipient)}
             />
           </>
         ) : (
@@ -2376,10 +2498,14 @@ export default function ContributeToCircle() {
                       (userBalance !== null && userBalance < getRequiredContributionAmount()) || 
                       !userDepositPaid || 
                       (!circle?.isActive && userDepositPaid) ||
-                      userHasContributed} // Disable if user has contributed
+                      userHasContributed ||
+                      isCurrentRecipient} // Disable if user is current recipient
               className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all disabled:opacity-70 disabled:cursor-not-allowed`}
             >
-              {isProcessing ? 'Processing...' : userHasContributed ? 'Already Contributed' : 'Contribute Now'}
+              {isProcessing ? 'Processing...' : 
+               isCurrentRecipient ? 'You Are the Current Recipient' : 
+               userHasContributed ? 'Already Contributed' : 
+               'Contribute Now'}
             </button>
             
             <p className="mt-3 text-xs text-center text-gray-500">
@@ -2511,13 +2637,14 @@ export default function ContributeToCircle() {
                       {circle && circle.isActive && (
                         <div className="bg-gray-50 p-4 rounded-lg shadow-sm md:col-span-2 mb-6">
                           <h3 className="text-lg font-medium text-gray-800 mb-4 text-center">
-                            Contributions Made Cycle {currentCycle}/{circle.maxMembers || 5}
+                            Contributions Made Cycle {currentCycle}
                           </h3>
                           <div className="flex justify-center">
                             <ContributionProgress 
                               circleId={circle.id} 
                               maxMembers={circle.maxMembers || 5} 
-                              currentCycle={currentCycle} 
+                              currentCycle={currentCycle}
+                              currentRecipientAddress={cycleRecipientAddress} // Pass the recipient address
                             />
                           </div>
                         </div>

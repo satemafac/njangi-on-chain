@@ -3,7 +3,7 @@ import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 import { SuiClient, SuiEvent } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
-import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle, Edit3, Users } from 'lucide-react';
+import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle, Edit3, Users, Crown } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
@@ -228,6 +228,7 @@ export default function ManageCircle() {
     activeMembersInRotation: string[];
     currentCycle: number;
     totalActiveInRotation: number;
+    currentPosition?: number | null;
   }>({
     contributedMembers: new Set<string>(),
     activeMembersInRotation: [],
@@ -2473,7 +2474,7 @@ export default function ManageCircle() {
 
   const fetchContributionStatus = useCallback(async () => {
     if (!circle || !circle.id || !circle.isActive) {
-      setContributionStatus({ contributedMembers: new Set(), activeMembersInRotation: [], currentCycle: 0, totalActiveInRotation: 0 });
+      setContributionStatus({ contributedMembers: new Set(), activeMembersInRotation: [], currentCycle: 0, totalActiveInRotation: 0, currentPosition: null });
       setLoadingContributions(false);
       return;
     }
@@ -2483,13 +2484,17 @@ export default function ManageCircle() {
     const client = new SuiClient({ url: getJsonRpcUrl() });
     let currentCycleFromServer = 0;
     let determinedActiveMembersInRotation: string[] = [];
+    let currentPositionInRotation: number | null = null;
+    let memberAtCurrentPosition: string | null = null;
 
     try {
       const circleObjectData = await client.getObject({ id: circle.id, options: { showContent: true } });
       if (circleObjectData.data?.content && 'fields' in circleObjectData.data.content) {
         const cFields = circleObjectData.data.content.fields as Record<string, SuiFieldValue>;
         currentCycleFromServer = cFields.current_cycle ? Number(cFields.current_cycle) : 0;
+        currentPositionInRotation = cFields.current_position ? Number(cFields.current_position) : null;
         console.log('[ContributionStatus] Current cycle from server:', currentCycleFromServer);
+        console.log('[ContributionStatus] Current position in rotation:', currentPositionInRotation);
 
         const rotationOrderFromFields = cFields.rotation_order as string[];
         if (Array.isArray(rotationOrderFromFields) && rotationOrderFromFields.length > 0) {
@@ -2502,7 +2507,15 @@ export default function ManageCircle() {
             }
             return false;
           });
-           console.log('[ContributionStatus] Active members from rotation_order:', determinedActiveMembersInRotation);
+          console.log('[ContributionStatus] Active members from rotation_order:', determinedActiveMembersInRotation);
+          
+          // Get the member at current position if available
+          if (currentPositionInRotation !== null && 
+              currentPositionInRotation >= 0 && 
+              currentPositionInRotation < rotationOrderFromFields.length) {
+            memberAtCurrentPosition = rotationOrderFromFields[currentPositionInRotation];
+            console.log('[ContributionStatus] Member at current position:', memberAtCurrentPosition);
+          }
         }
       }
 
@@ -2546,11 +2559,12 @@ export default function ManageCircle() {
         activeMembersInRotation: determinedActiveMembersInRotation,
         currentCycle: currentCycleFromServer,
         totalActiveInRotation: determinedActiveMembersInRotation.length,
+        currentPosition: currentPositionInRotation,
       });
 
     } catch (error) {
       console.error("[ContributionStatus] Error fetching contribution status:", error);
-      setContributionStatus({ contributedMembers: new Set(), activeMembersInRotation: [], currentCycle: 0, totalActiveInRotation: 0 });
+      setContributionStatus({ contributedMembers: new Set(), activeMembersInRotation: [], currentCycle: 0, totalActiveInRotation: 0, currentPosition: null });
     } finally {
       setLoadingContributions(false);
     }
@@ -2566,14 +2580,36 @@ export default function ManageCircle() {
     if (loadingContributions || !circle || !circle.isActive) {
       return false;
     }
-    const { contributedMembers, totalActiveInRotation } = contributionStatus;
+    const { contributedMembers, totalActiveInRotation, activeMembersInRotation, currentPosition } = contributionStatus;
     if (totalActiveInRotation === 0) return false; // Avoid division by zero or incorrect true for empty rotation
     
-    const made = contributedMembers.size >= totalActiveInRotation;
+    // Get the recipient member who doesn't need to contribute
+    let recipientMember: string | null = null;
+    if (currentPosition !== null && currentPosition !== undefined) {
+      recipientMember = activeMembersInRotation[currentPosition] || null;
+    }
+    
+    // How many members should contribute = total active members - 1 (recipient)
+    const requiredContributions = recipientMember ? totalActiveInRotation - 1 : totalActiveInRotation;
+    
+    // Count how many non-recipient members have contributed
+    let validContributions = 0;
+    contributedMembers.forEach(member => {
+      // Don't count recipient's contribution
+      if (member !== recipientMember) {
+        validContributions++;
+      }
+    });
+    
+    const made = validContributions >= requiredContributions;
     console.log('[ContributionStatus] All contributions made check:', {
         made,
         contributedSize: contributedMembers.size,
+        validContributions,
+        requiredContributions,
         totalActive: totalActiveInRotation,
+        recipientMember,
+        currentPosition,
         currentCycle: contributionStatus.currentCycle
     });
     return made;
@@ -2911,18 +2947,38 @@ export default function ManageCircle() {
                     <div className="flex items-center gap-2">
                       {circle && circle.isActive && contributionStatus.currentCycle > 0 && (
                         <div className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-1.5 mr-2">
-                          <p className="text-xs text-blue-700 mb-1">Contribution Progress (Cycle {contributionStatus.currentCycle})</p>
+                          <p className="text-xs text-blue-700 mb-1">
+                            Contribution Progress (Cycle {contributionStatus.currentCycle})
+                          </p>
                           <div className="flex items-center gap-2">
                             <div className="w-32 bg-gray-200 rounded-full h-2.5">
                               <div 
                                 className="bg-blue-600 h-2.5 rounded-full" 
                                 style={{ width: `${contributionStatus.totalActiveInRotation > 0 
-                                  ? (contributionStatus.contributedMembers.size / contributionStatus.totalActiveInRotation) * 100 
+                                  ? (
+                                      (() => {
+                                        const recipient = contributionStatus.currentPosition !== null && contributionStatus.currentPosition !== undefined ? contributionStatus.activeMembersInRotation[contributionStatus.currentPosition] : null;
+                                        const expected = recipient ? Math.max(0, contributionStatus.totalActiveInRotation -1) : contributionStatus.totalActiveInRotation;
+                                        let validContributed = 0;
+                                        contributionStatus.contributedMembers.forEach(cm => {
+                                          if (cm !== recipient) validContributed++;
+                                        });
+                                        return expected > 0 ? (validContributed / expected) * 100 : 0;
+                                      })()
+                                    ) 
                                   : 0}%` }}
                               ></div>
                             </div>
                             <span className="text-xs font-medium text-blue-800">
-                              {contributionStatus.contributedMembers.size}/{contributionStatus.totalActiveInRotation}
+                              {(() => {
+                                const recipient = contributionStatus.currentPosition !== null && contributionStatus.currentPosition !== undefined ? contributionStatus.activeMembersInRotation[contributionStatus.currentPosition] : null;
+                                let validContributed = 0;
+                                contributionStatus.contributedMembers.forEach(cm => {
+                                  if (cm !== recipient) validContributed++;
+                                });
+                                const expected = recipient ? Math.max(0, contributionStatus.totalActiveInRotation - 1) : contributionStatus.totalActiveInRotation;
+                                return `${validContributed}/${expected}`;
+                              })()}
                             </span>
                             {allContributionsMadeThisCycle && (
                               <div className="bg-green-100 text-green-800 text-xs font-medium rounded-full px-2 py-0.5 flex items-center">
@@ -3023,7 +3079,13 @@ export default function ManageCircle() {
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-200 bg-white">
-                              {members.map((member) => (
+                              {members.map((member) => {
+                                const isRecipientThisCycle = contributionStatus.currentPosition !== null && 
+                                                             contributionStatus.currentPosition !== undefined && 
+                                                             contributionStatus.activeMembersInRotation[contributionStatus.currentPosition] === member.address &&
+                                                             contributionStatus.currentCycle > 0; // Only if cycle is active
+
+                                return (
                                 <tr key={member.address} className="hover:bg-gray-50 transition-colors">
                                   <td className="whitespace-nowrap py-3 pl-4 pr-3 text-xs sm:text-sm font-medium text-gray-900 sm:pl-6">
                                     <span className="flex flex-col sm:flex-row sm:items-center">
@@ -3072,13 +3134,17 @@ export default function ManageCircle() {
                                         <Tooltip.Root>
                                           <Tooltip.Trigger asChild>
                                             <span className={`inline-flex items-center p-1 rounded-full ${
-                                              contributionStatus.contributedMembers.has(member.address) 
-                                                ? 'bg-green-100' 
-                                                : contributionStatus.activeMembersInRotation.includes(member.address)
-                                                  ? 'bg-amber-100'
-                                                  : 'bg-gray-100'
+                                              isRecipientThisCycle 
+                                                ? 'bg-blue-100' 
+                                                : contributionStatus.contributedMembers.has(member.address) 
+                                                  ? 'bg-green-100' 
+                                                  : contributionStatus.activeMembersInRotation.includes(member.address)
+                                                    ? 'bg-amber-100'
+                                                    : 'bg-gray-100'
                                             }`}>
-                                              {contributionStatus.contributedMembers.has(member.address) ? (
+                                              {isRecipientThisCycle ? (
+                                                <Crown size={16} className="text-blue-600" />
+                                              ) : contributionStatus.contributedMembers.has(member.address) ? (
                                                 <CheckCircle size={16} className="text-green-600" />
                                               ) : contributionStatus.activeMembersInRotation.includes(member.address) ? (
                                                 <AlertTriangle size={16} className="text-amber-600" />
@@ -3089,14 +3155,16 @@ export default function ManageCircle() {
                                           </Tooltip.Trigger>
                                           <Tooltip.Portal>
                                             <Tooltip.Content
-                                              className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                                              className="bg-gray-800 text-white px-2 py-1 rounded text-xs z-10"
                                               sideOffset={5}
                                             >
-                                              {contributionStatus.contributedMembers.has(member.address) 
+                                              {isRecipientThisCycle
+                                                ? `Receiving Payout (Cycle ${contributionStatus.currentCycle})`
+                                                : contributionStatus.contributedMembers.has(member.address) 
                                                 ? `Contribution made for cycle ${contributionStatus.currentCycle}`
                                                 : contributionStatus.activeMembersInRotation.includes(member.address)
                                                   ? `Contribution pending for cycle ${contributionStatus.currentCycle}`
-                                                  : 'Member not in active rotation'
+                                                  : 'Member not in active rotation or deposit not paid'
                                               }
                                               <Tooltip.Arrow className="fill-gray-800" />
                                             </Tooltip.Content>
@@ -3127,11 +3195,7 @@ export default function ManageCircle() {
                                           <div className="flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 bg-blue-50 text-blue-600 rounded-full mr-2">
                                             {member.position !== undefined ? member.position + 1 : '?'}
                                           </div>
-                                          <span className="text-gray-600 text-xs hidden sm:inline">
-                                            {member.position === 0 ? 'First' : 
-                                             (member.position !== undefined && member.position === members.length - 1) ? 'Last' : 
-                                             member.position === undefined ? 'Not set' : `Position ${member.position + 1}`}
-                                          </span>
+                                          {/* Textual description of position removed as per request */}
                                         </div>
                                       )}
                                     </div>
@@ -3140,8 +3204,9 @@ export default function ManageCircle() {
                                     {/* No actions for admin */}
                                     {member.address !== circle?.admin && (
                                       <button
-                                        className="text-red-600 hover:text-red-900 px-2 py-1 rounded hover:bg-red-50"
                                         onClick={() => toast.success('Member removal coming soon')}
+                                        disabled={circle?.isActive} // Disable if circle is active
+                                        className={`px-2 py-1 rounded transition-colors ${circle?.isActive ? 'text-gray-400 bg-gray-100 cursor-not-allowed' : 'text-red-600 hover:text-red-900 hover:bg-red-50'}`}
                                       >
                                         <span className="hidden sm:inline">Remove</span>
                                         <X className="w-4 h-4 inline sm:hidden" />
@@ -3149,7 +3214,8 @@ export default function ManageCircle() {
                                     )}
                                   </td>
                                 </tr>
-                              ))}
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
@@ -3448,14 +3514,26 @@ export default function ManageCircle() {
                                 <p>Custody wallet information is not available.</p>
                               ) : !allContributionsMadeThisCycle && contributionStatus.currentCycle > 0 ? (
                                 <p>
-                                  Cannot trigger payout: Not all active members have contributed for cycle {contributionStatus.currentCycle}.<br />
-                                  ({contributionStatus.contributedMembers.size}/{contributionStatus.totalActiveInRotation} contributions made).
+                                  Cannot trigger payout: Not all expected members (excluding the recipient) have contributed for cycle {contributionStatus.currentCycle}.<br />
+                                  Progess: ({(() => {
+                                    // Recalculate for display
+                                    let recipientMember: string | null = null;
+                                    if (contributionStatus.currentPosition !== null && contributionStatus.currentPosition !== undefined && contributionStatus.activeMembersInRotation) {
+                                      recipientMember = contributionStatus.activeMembersInRotation[contributionStatus.currentPosition] || null;
+                                    }
+                                    const requiredContributions = recipientMember ? Math.max(0, contributionStatus.totalActiveInRotation - 1) : contributionStatus.totalActiveInRotation;
+                                    let validContributions = 0;
+                                    contributionStatus.contributedMembers.forEach(member => {
+                                      if (member !== recipientMember) validContributions++;
+                                    });
+                                    return `${validContributions}/${requiredContributions} contributions made`;
+                                  })()}).
                                 </p>
                               ) : !allContributionsMadeThisCycle && circle?.isActive ? (
-                                // This case handles when cycle might be 0 or status is still being determined for an active circle
+                                // This case handles when cycle might be 0 or status is still loading for an active circle
                                 <p>Contribution status for the current cycle is still loading or not yet determined. Please wait or refresh.</p>
                               ) : (
-                                <p>Ready to trigger payout.</p> // Fallback, should ideally not be hit if other conditions are specific
+                                <p>Ready to trigger payout.</p> // Fallback
                               )}
                               <Tooltip.Arrow className="fill-gray-800" />
                             </Tooltip.Content>
