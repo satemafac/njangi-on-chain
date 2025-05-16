@@ -110,6 +110,7 @@ const parseMoveError = (error: string): { code: number; message: string } => {
         switch (code) {
           case 1: return { code, message: 'Invalid contribution amount.' };
           case 2: return { code, message: 'Incorrect security deposit amount.' };
+          case 100: return { code, message: 'Switching to stablecoin payout. SUI balance insufficient but stablecoins are available.' };
           // Add more generic mappings if needed
           default:
              return { code, message: `Error code ${code}: Operation failed. Please check details or contact support.` };
@@ -3450,16 +3451,63 @@ export default function ManageCircle() {
                                       
                                       const zkLoginClient = new ZkLoginClient();
                                       
-                                      const result = await zkLoginClient.adminTriggerPayout(
-                                        account,
-                                        circle.id,
-                                        circle.custody?.walletId || ''
-                                      );
-                                      
-                                      toast.success('Payout processed successfully!', { id: toastId });
-                                      console.log('Payout transaction:', result);
-                                      fetchCircleDetails();
-                                      fetchContributionStatus(); // Refresh contribution status
+                                      try {
+                                        // First try regular SUI payout
+                                        const result = await zkLoginClient.adminTriggerPayout(
+                                          account,
+                                          circle.id,
+                                          circle.custody?.walletId || ''
+                                        );
+                                        
+                                        toast.success('Payout processed successfully!', { id: toastId });
+                                        console.log('Payout transaction:', result);
+                                        fetchCircleDetails();
+                                        fetchContributionStatus(); // Refresh contribution status
+                                      } catch (error: unknown) {
+                                        console.error('Error triggering payout:', error);
+                                        const parsedError = parseMoveError(error instanceof Error ? error.message : String(error));
+                                        
+                                        // Check for code 100 which indicates we should use USDC instead
+                                        if (parsedError.code === 100) {
+                                          toast.loading('Switching to USDC payout...', { id: toastId });
+                                          
+                                          // Try USDC payout instead
+                                          try {
+                                            const usdcResult = await fetch('/api/zkLogin', {
+                                              method: 'POST',
+                                              headers: { 'Content-Type': 'application/json' },
+                                              body: JSON.stringify({
+                                                action: 'adminTriggerUsdcPayout',
+                                                account,
+                                                circleId: circle.id,
+                                                walletId: circle.custody?.walletId || ''
+                                              }),
+                                            });
+                                            
+                                            if (usdcResult.ok) {
+                                              toast.success('USDC payout processed successfully!', { id: toastId });
+                                              fetchCircleDetails();
+                                              fetchContributionStatus();
+                                            } else {
+                                              const errorData = await usdcResult.json();
+                                              toast.error(errorData.error || 'Failed to process USDC payout', { id: toastId });
+                                            }
+                                          } catch (usdcError) {
+                                            console.error('Error processing USDC payout:', usdcError);
+                                            toast.error('Failed to process USDC payout', { id: toastId });
+                                          }
+                                        } else {
+                                          // Show original error for other error codes
+                                          toast.error(
+                                            parsedError.message || (error instanceof Error ? error.message : 'Failed to process payout'), 
+                                            { id: toastId }
+                                          );
+                                          
+                                          if (error instanceof ZkLoginError && error.requireRelogin) {
+                                            router.push('/');
+                                          }
+                                        }
+                                      }
                                     } catch (error: unknown) { 
                                       console.error('Error triggering payout:', error);
                                       const parsedError = parseMoveError(error instanceof Error ? error.message : String(error));
