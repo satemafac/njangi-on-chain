@@ -688,6 +688,11 @@ module njangi::njangi_circles {
         core::from_decimals(config::get_contribution_amount(&circle.id))
     }
 
+    // Get the raw contribution amount (with 9 decimals) directly from config
+    public fun get_contribution_amount_raw(circle: &Circle): u64 {
+        config::get_contribution_amount(&circle.id)
+    }
+
     public fun get_security_deposit(circle: &Circle): u64 {
         core::from_decimals(config::get_security_deposit(&circle.id))
     }
@@ -1353,12 +1358,8 @@ module njangi::njangi_circles {
         assert!(amount >= required_stablecoin_amount, EInvalidContributionAmount); // Use local error code
 
         // --- Process Contribution --- 
-        // Record the contribution for the member
-        let member_mut = get_member_mut(circle, sender);
-        // Use the *required* amount for recording, not the potentially larger payment amount
-        members::record_contribution(member_mut, required_stablecoin_amount, clock::timestamp_ms(clock));
-
-        // Deposit the actual payment coin into the custody wallet
+        // IMPORTANT: First deposit the payment into the custody wallet BEFORE updating counters
+        // This ensures the funds are available before any potential withdrawal attempt
         custody::deposit_contribution_coin<CoinType>(
             wallet,
             payment,
@@ -1367,9 +1368,16 @@ module njangi::njangi_circles {
             ctx
         );
 
+        // Record the contribution for the member AFTER the deposit
+        let member_mut = get_member_mut(circle, sender);
+        // Use the *required* amount for recording, not the potentially larger payment amount
+        members::record_contribution(member_mut, required_stablecoin_amount, clock::timestamp_ms(clock));
+
         // Update circle's overall contribution tracking for stablecoins
-        // Add the actual payment amount to contributions counter (already has correct decimals)
-        add_to_contributions_this_cycle(circle, amount);
+        // Get the SUI equivalent contribution amount
+        let contribution_amount = config::get_contribution_amount(&circle.id);
+        let contribution_amount_raw = core::to_decimals(contribution_amount);
+        add_to_contributions_this_cycle(circle, contribution_amount_raw);
 
         // Emit the locally defined StablecoinContributionMade event
         event::emit(StablecoinContributionMade {
@@ -1380,8 +1388,12 @@ module njangi::njangi_circles {
             cycle: get_current_cycle(circle),
             // Add coin type info using imported type_name and String
             // Convert ascii::String to string::String
-            coin_type: string::utf8(ascii::into_bytes(type_name::into_string(type_name::get<CoinType>()))) 
+            coin_type: string::utf8(ascii::into_bytes(type_name::into_string(type_name::get<CoinType>())))
         });
+
+        // NOTE: We do NOT trigger automatic payout after stablecoin contribution
+        // This avoids the race condition between contribution and withdrawal
+        // Admin must explicitly trigger payouts with admin_trigger_payout
     }
 
     // ----------------------------------------------------------
@@ -1517,9 +1529,6 @@ module njangi::njangi_circles {
     
     // Check if all active members have contributed for the current cycle
     public fun has_all_members_contributed(circle: &Circle): bool {
-        // Get contribution amount from config
-        let contribution_amount = config::get_contribution_amount(&circle.id);
-        
         // Count active members in rotation
         let mut active_members = 0;
         let rotation = &circle.rotation_order;
@@ -1537,10 +1546,16 @@ module njangi::njangi_circles {
             i = i + 1;
         };
         
-        // Calculate expected total contributions for the cycle
-        let expected_contributions = core::to_decimals(contribution_amount) * active_members;
+        // If there are no active members, the check passes (sanity check)
+        if (active_members == 0) {
+            return true
+        };
         
-        // Check if contributions_this_cycle meets or exceeds expected
+        // Calculate expected total contributions
+        let contribution_amount = config::get_contribution_amount(&circle.id);
+        let expected_contributions = contribution_amount * active_members;
+        
+        // Compare with actual contributions this cycle
         circle.contributions_this_cycle >= expected_contributions
     }
 
