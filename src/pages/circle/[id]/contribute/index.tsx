@@ -488,7 +488,7 @@ const ContributionProgress: React.FC<{
                 <div className={`w-3 h-3 mr-2 rounded-full ${dotColorClass}`}></div>
                 <span className="font-mono">{formatAddress(memberAddr)}</span>
               </div>
-              <span className={statusColorClass}>
+              <span className={`${statusColorClass} ml-4`}>
                 {statusText}
               </span>
             </div>
@@ -1286,6 +1286,30 @@ export default function ContributeToCircle() {
       const client = new SuiClient({ url: getJsonRpcUrl() });
       let hasContributed = false;
       
+      // First check for recent payout events to detect cycle/position changes
+      const payoutEvents = await client.queryEvents({
+        query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::PayoutProcessed` },
+        limit: 20
+      });
+      
+      // Find the most recent payout event for this circle
+      const recentPayoutEvents = payoutEvents.data
+        .filter(event => {
+          const parsedJson = event.parsedJson as { circle_id?: string };
+          return parsedJson?.circle_id === circle.id;
+        })
+        .sort((a, b) => {
+          // Sort by timestamp (newest first)
+          return (Number(b.timestampMs) || 0) - (Number(a.timestampMs) || 0);
+        });
+        
+      const recentPayoutEvent = recentPayoutEvents.length > 0 ? recentPayoutEvents[0] : null;
+      const payoutTimestamp = recentPayoutEvent ? Number(recentPayoutEvent.timestampMs) : 0;
+      
+      if (recentPayoutEvent) {
+        console.log(`[Contribution Check] Found recent payout event at ${new Date(payoutTimestamp).toISOString()}`);
+      }
+      
       // 1. Check ContributionMade events
       const contributionEvents = await client.queryEvents({
         query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::ContributionMade` },
@@ -1303,12 +1327,16 @@ export default function ContributeToCircle() {
           };
           
           const eventCycle = typeof data.cycle === 'string' ? parseInt(data.cycle, 10) : data.cycle;
+          const eventTimestamp = Number(event.timestampMs || 0);
           
+          // Only count contributions that match the current cycle AND happened after the most recent payout
           if (data.circle_id === circle.id && 
               data.member === userAddress && 
-              eventCycle === currentCycle) {
+              eventCycle === currentCycle &&
+              (!payoutTimestamp || eventTimestamp > payoutTimestamp)) {
+            
             hasContributed = true;
-            console.log(`[Contribution Check] MATCH: Found ContributionMade for user ${userAddress} in cycle ${currentCycle}`);
+            console.log(`[Contribution Check] MATCH: Found ContributionMade for user ${userAddress} in cycle ${currentCycle} after latest payout`);
             break;
           }
         }
@@ -1332,20 +1360,24 @@ export default function ContributeToCircle() {
             };
             
             const eventCycle = typeof data.cycle === 'string' ? parseInt(data.cycle, 10) : data.cycle;
+            const eventTimestamp = Number(event.timestampMs || 0);
             
+            // Only count contributions that match the current cycle AND happened after the most recent payout
             if (data.circle_id === circle.id && 
-                data.member === userAddress) {
+                data.member === userAddress &&
+                (!payoutTimestamp || eventTimestamp > payoutTimestamp)) {
+                
               // If cycle is specified, check it matches current cycle
               if (eventCycle !== undefined) {
                 if (eventCycle === currentCycle) {
                   hasContributed = true;
-                  console.log(`[Contribution Check] MATCH: Found StablecoinContributionMade for user ${userAddress} in cycle ${currentCycle}`);
+                  console.log(`[Contribution Check] MATCH: Found StablecoinContributionMade for user ${userAddress} in cycle ${currentCycle} after latest payout`);
                   break;
                 }
               } else {
-                // If cycle is not specified, assume it's for the current cycle
+                // If cycle is not specified, assume it's for the current cycle if after payout
                 hasContributed = true;
-                console.log(`[Contribution Check] MATCH: Found StablecoinContributionMade for user ${userAddress} (cycle not specified)`);
+                console.log(`[Contribution Check] MATCH: Found StablecoinContributionMade for user ${userAddress} (cycle not specified) after latest payout`);
                 break;
               }
             }
@@ -1375,14 +1407,17 @@ export default function ContributeToCircle() {
               ? parseInt(data.operation_type, 10) 
               : data.operation_type;
               
+            const eventTimestamp = Number(event.timestampMs || 0);
+              
             if (data.circle_id === circle.id && 
                 data.member === userAddress && 
-                opType === 0) { // 0 = contribution
+                opType === 0 && // 0 = contribution
+                (!payoutTimestamp || eventTimestamp > payoutTimestamp)) {
               
               // Check if we can determine which cycle this belongs to
               // For now, assume all contribution operations are for the current cycle
               hasContributed = true;
-              console.log(`[Contribution Check] MATCH: Found CustodyDeposited with operation_type=0 for user ${userAddress}`);
+              console.log(`[Contribution Check] MATCH: Found CustodyDeposited with operation_type=0 for user ${userAddress} after latest payout`);
               break;
             }
           }
@@ -1410,12 +1445,17 @@ export default function ContributeToCircle() {
               ? parseInt(txData.operation_type, 10)
               : (typeof txData.operation_type === 'number' ? txData.operation_type : -1); // Default to -1 if undefined
             
-            // Check if this is a contribution transaction
-            if (txData.user === userAddress && opType === 0) {
+            const eventTimestamp = Number(event.timestampMs || 0);
+              
+            // Check if this is a contribution transaction after the most recent payout
+            if (txData.user === userAddress && 
+                opType === 0 && 
+                (!payoutTimestamp || eventTimestamp > payoutTimestamp)) {
+                
               // If circle_id is present, check it matches, otherwise assume it does
               if (txData.circle_id === undefined || txData.circle_id === circle.id) {
                 hasContributed = true;
-                console.log(`[Contribution Check] MATCH: Found CustodyTransaction with operation_type=0 for user ${userAddress}`);
+                console.log(`[Contribution Check] MATCH: Found CustodyTransaction with operation_type=0 for user ${userAddress} after latest payout`);
                 break;
               }
             }
@@ -2147,11 +2187,44 @@ export default function ContributeToCircle() {
     }
   }, [circle, userAddress, currentCycle]);
 
-  // Modify the renderContributionOptions function to show a message when user is the current recipient
+  // Add this function to handle manual refresh
+  const handleRefreshContributionStatus = async () => {
+    toast.loading('Refreshing contribution status...', { id: 'refresh-status' });
+    try {
+      // Refresh the cycle information first
+      await fetchCircleDetails();
+      
+      // Refresh contribution status
+      await checkUserContribution();
+      
+      // Refresh current recipient status
+      await checkIfUserIsCurrentRecipient();
+      
+      toast.success('Contribution status refreshed', { id: 'refresh-status' });
+    } catch (error) {
+      console.error('Error refreshing status:', error);
+      toast.error('Failed to refresh status', { id: 'refresh-status' });
+    }
+  };
+
+  // Update the renderContributionOptions function to show a message when user is the current recipient
   const renderContributionOptions = () => {
     return (
       <div className="pt-6 border-t border-gray-200 px-2">
-        <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Make Contribution</h3>
+        <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-medium text-gray-900 border-l-4 border-blue-500 pl-3">Make Contribution</h3>
+           
+           {/* Add refresh button */}
+           <button
+             onClick={handleRefreshContributionStatus}
+             className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 py-1 px-2 rounded flex items-center transition-colors"
+           >
+             <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+             </svg>
+             Refresh Status
+           </button>
+         </div>
         
         {/* Show auto swap enabled notice if applicable */}
         {circle?.autoSwapEnabled && (
@@ -2605,11 +2678,15 @@ export default function ContributeToCircle() {
                         <div className="bg-gray-50 p-4 rounded-lg shadow-sm md:col-span-2 mb-6">
                           <div className="flex justify-between items-center mb-4">
                             <h3 className="text-lg font-medium text-gray-800 text-center">
-                              Contributions Made Cycle {currentCycle}
-                              {totalMembersInRotation && typeof currentPositionInCycle === 'number' && currentPositionInCycle >= 0 
-                                ? ` (Position ${currentPositionInCycle + 1} of ${totalMembersInRotation})` 
-                                : ''}
-                          </h3>
+                              <div className="flex flex-col sm:flex-row sm:items-center">
+                                <span>Contributions Made Cycle {currentCycle}</span>
+                                {totalMembersInRotation && typeof currentPositionInCycle === 'number' && currentPositionInCycle >= 0 && (
+                                  <span className="text-sm text-gray-600 mt-1 sm:mt-0 sm:ml-1">
+                                    (Position {currentPositionInCycle + 1} of {totalMembersInRotation})
+                                  </span>
+                                )}
+                              </div>
+                            </h3>
                             <button
                               onClick={() => {
                                 // Refresh cycle data
