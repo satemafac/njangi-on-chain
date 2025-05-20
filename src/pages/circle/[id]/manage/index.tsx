@@ -2099,6 +2099,13 @@ export default function ManageCircle() {
   const saveRotationOrder = async (newOrder: string[]) => {
     if (!id || !userAddress || !circle) return;
     
+    // Prevent saving rotation order if circle is active
+    if (circle.isActive) {
+      toast.error('Cannot modify rotation order for active circles');
+      setIsEditingRotation(false);
+      return;
+    }
+    
     // First, check if we have enough addresses in the order
     if (newOrder.length !== members.length) {
       toast.error(`Rotation order must include all ${members.length} members`);
@@ -3098,13 +3105,38 @@ export default function ManageCircle() {
                         </div>
                       )}
                       {!isEditingRotation && (
-                        <button
-                          onClick={() => setIsEditingRotation(true)}
-                          className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-50 text-blue-600 rounded-md flex items-center justify-center hover:bg-blue-100 transition-colors text-sm"
-                        >
-                          <ListOrdered size={16} className="mr-1.5" />
-                          Edit Rotation Order
-                        </button>
+                        <Tooltip.Provider>
+                          <Tooltip.Root>
+                            <Tooltip.Trigger asChild>
+                              <div>
+                                <button
+                                  onClick={() => !circle?.isActive && setIsEditingRotation(true)}
+                                  className={`w-full sm:w-auto px-3 sm:px-4 py-2 rounded-md flex items-center justify-center text-sm ${
+                                    circle?.isActive 
+                                      ? 'bg-gray-100 text-gray-500 cursor-not-allowed' 
+                                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors'
+                                  }`}
+                                  disabled={circle?.isActive}
+                                >
+                                  <ListOrdered size={16} className="mr-1.5" />
+                                  Edit Rotation Order
+                                </button>
+                              </div>
+                            </Tooltip.Trigger>
+                            {circle?.isActive && (
+                              <Tooltip.Portal>
+                                <Tooltip.Content
+                                  className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
+                                  sideOffset={5}
+                                >
+                                  <p>Rotation order cannot be modified after circle activation.</p>
+                                  <p className="mt-1 text-gray-300">The order is locked when the circle is active.</p>
+                                  <Tooltip.Arrow className="fill-gray-800" />
+                                </Tooltip.Content>
+                              </Tooltip.Portal>
+                            )}
+                          </Tooltip.Root>
+                        </Tooltip.Provider>
                       )}
                     </div>
                   </div>
