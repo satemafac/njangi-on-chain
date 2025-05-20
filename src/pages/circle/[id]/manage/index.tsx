@@ -2489,6 +2489,27 @@ export default function ManageCircle() {
     let memberAtCurrentPosition: string | null = null;
 
     try {
+      // Check for payout events first, to detect if a cycle has just advanced
+      const payoutEvents = await client.queryEvents({
+        query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::PayoutProcessed` },
+        limit: 20
+      });
+      
+      // Find the most recent payout event for this circle
+      const recentPayoutForCircle = payoutEvents.data
+        .filter(event => {
+          const parsedJson = event.parsedJson as { circle_id?: string };
+          return parsedJson?.circle_id === circle.id;
+        })
+        .sort((a, b) => {
+          // Sort by timestamp (newest first)
+          return (Number(b.timestampMs) || 0) - (Number(a.timestampMs) || 0);
+        })[0]; // Take the first (most recent) one
+        
+      if (recentPayoutForCircle) {
+        console.log('[ContributionStatus] Found recent payout event:', recentPayoutForCircle);
+      }
+
       const circleObjectData = await client.getObject({ id: circle.id, options: { showContent: true } });
       if (circleObjectData.data?.content && 'fields' in circleObjectData.data.content) {
         const cFields = circleObjectData.data.content.fields as Record<string, SuiFieldValue>;
@@ -2540,12 +2561,23 @@ export default function ManageCircle() {
         ];
         const eventResults = await Promise.all(eventFetchPromises);
 
+        // If we have a recent payout event, only consider contributions after that event's timestamp
+        const payoutTimestamp = recentPayoutForCircle ? Number(recentPayoutForCircle.timestampMs) : 0;
+
         eventResults.forEach((result, index) => {
           const eventType = index === 0 ? 'ContributionMade' : 'StablecoinContributionMade';
           result.data.forEach(event => {
             const data = event.parsedJson as { circle_id?: string; member?: string; cycle?: string | number; };
             const eventCycle = typeof data.cycle === 'string' ? parseInt(data.cycle, 10) : data.cycle;
-            if (data.circle_id === circle.id && data.member && eventCycle === currentCycleFromServer) {
+            const eventTimestamp = Number(event.timestampMs || 0);
+            
+            // Only count contributions that match the current cycle AND 
+            // (if there was a recent payout) happened after the payout event
+            if (data.circle_id === circle.id && 
+                data.member && 
+                eventCycle === currentCycleFromServer &&
+                (!payoutTimestamp || eventTimestamp > payoutTimestamp)) {
+              
               if (determinedActiveMembersInRotation.includes(data.member)) { // Only count contributions from active members in rotation
                  uniqueContributors.add(data.member);
               }
@@ -2581,8 +2613,8 @@ export default function ManageCircle() {
     if (loadingContributions || !circle || !circle.isActive) {
       return false;
     }
-    const { contributedMembers, totalActiveInRotation, activeMembersInRotation, currentPosition } = contributionStatus;
-    if (totalActiveInRotation === 0) return false; // Avoid division by zero or incorrect true for empty rotation
+    const { contributedMembers, totalActiveInRotation, activeMembersInRotation, currentPosition, currentCycle } = contributionStatus;
+    if (totalActiveInRotation === 0 || currentCycle === 0) return false; // Avoid division by zero or incorrect true for empty rotation
     
     // Get the recipient member who doesn't need to contribute
     let recipientMember: string | null = null;
@@ -2753,12 +2785,87 @@ export default function ManageCircle() {
               <div className="py-4 space-y-6 sm:space-y-8">
                 {/* Circle Details */}
                 <div className="px-1 sm:px-2">
-                  <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Details</h3>
+                  <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3 flex justify-between items-center">
+                    <span>Circle Details</span>
+                    {circle.isActive && (
+                      <button
+                        onClick={() => fetchContributionStatus()}
+                        disabled={loadingContributions}
+                        className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 py-1 px-2 rounded flex items-center transition-colors"
+                      >
+                        {loadingContributions ? (
+                          <svg className="animate-spin -ml-1 mr-1 h-3 w-3 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                        )}
+                        {loadingContributions ? "Refreshing..." : "Refresh Status"}
+                      </button>
+                    )}
+                  </h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                     <div className="bg-gray-50 p-3 sm:p-4 rounded-lg shadow-sm">
                       <p className="text-sm text-gray-500 mb-1">Circle Name</p>
-                      <p className="text-base sm:text-lg font-medium">{circle.name}</p>
+                      <p className="text-lg font-medium">{circle.name}</p>
                     </div>
+                    
+                    <div className="bg-gray-50 p-3 sm:p-4 rounded-lg shadow-sm">
+                      <p className="text-sm text-gray-500 mb-1">Status</p>
+                      <div className="flex items-center">
+                        <span className={`mr-2 h-2.5 w-2.5 rounded-full ${circle.isActive ? 'bg-green-500' : 'bg-amber-500'}`}></span>
+                        <p className="text-lg font-medium">
+                          {circle.isActive ? 'Active' : 'Not Active'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {circle.isActive && (
+                      <div className="bg-gray-50 p-3 sm:p-4 rounded-lg shadow-sm md:col-span-2">
+                        <p className="text-sm text-gray-500 mb-1">Contribution Progress</p>
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-6">
+                          <div className="flex-1">
+                            <div className="flex items-center justify-between mb-1">
+                              <p className="text-sm font-medium">
+                                Cycle {contributionStatus.currentCycle}
+                                {typeof contributionStatus.currentPosition === 'number' && contributionStatus.totalActiveInRotation > 0 && (
+                                  <span className="text-gray-600 ml-1">
+                                    (Position {(contributionStatus.currentPosition + 1)} of {contributionStatus.totalActiveInRotation})
+                                  </span>
+                                )}
+                              </p>
+                              <p className="text-xs text-gray-600">
+                                {loadingContributions ? 'Loading...' : (
+                                  contributionStatus.contributedMembers.size > 0 
+                                    ? `${contributionStatus.contributedMembers.size}/${contributionStatus.totalActiveInRotation - 1} contributed` 
+                                    : 'No contributions yet'
+                                )}
+                              </p>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-2.5">
+                              <div 
+                                className={`${allContributionsMadeThisCycle ? 'bg-green-500' : 'bg-blue-500'} h-2.5 rounded-full transition-all duration-500`} 
+                                style={{ 
+                                  width: `${loadingContributions ? '0' : contributionStatus.totalActiveInRotation <= 1 
+                                    ? '0' 
+                                    : `${(contributionStatus.contributedMembers.size / (contributionStatus.totalActiveInRotation - 1)) * 100}%`}`
+                                }}
+                              ></div>
+                            </div>
+                          </div>
+                          
+                          <div className="flex flex-shrink-0 items-center gap-2">
+                            <p className="text-sm">Next Payout:</p>
+                            <span className="text-sm font-medium">
+                              {formatNextPayoutDate(circle.nextPayoutTime)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     
                     <div className="bg-gray-50 p-3 sm:p-4 rounded-lg shadow-sm">
                       <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>

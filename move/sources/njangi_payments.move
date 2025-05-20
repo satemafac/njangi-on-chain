@@ -893,10 +893,9 @@ module njangi::njangi_payments {
         // Verify sufficient stablecoin balance
         let total_stablecoin_balance = custody::get_stablecoin_balance<CoinType>(wallet);
         
-        // Similar to the SUI case, we need to handle the fact that recipient doesn't contribute
-        // Calculate the expected balance from contributing members (everyone except recipient)
-        let contributing_member_count = if (member_count > 0) { member_count - 1 } else { 0 };
-        let expected_stablecoin_balance = contribution_amount_usd * stablecoin_unit_per_cent * contributing_member_count;
+        // Debug print to check current payout time
+        std::debug::print(&b"Current next_payout_time BEFORE update:");
+        std::debug::print(&circles::get_next_payout_time(circle));
         
         // Calculate security deposit amount in USDC
         let security_deposit_usd = circles::get_security_deposit_usd(circle);
@@ -912,24 +911,24 @@ module njangi::njangi_payments {
             available_balance = 0;
         };
         
-        // Check that we have at least the expected contributed amount
-        assert!(available_balance >= expected_stablecoin_balance, EInsufficientTreasuryBalance);
+        // Verify there's something to withdraw
+        assert!(available_balance > 0, EInsufficientTreasuryBalance);
         
-        // CHANGE: Use the available balance (without security deposits) for payout
-        // Cap the payout amount to the available balance
-        let mut stablecoin_amount = theoretical_payout_amount;
-        if (available_balance < theoretical_payout_amount) {
-            stablecoin_amount = available_balance;
+        // Determine actual payout amount - ensure it doesn't exceed available balance
+        let actual_payout_amount = if (theoretical_payout_amount <= available_balance) {
+            theoretical_payout_amount
+        } else {
+            available_balance
         };
         
-        // Mark member as paid before payment (prevent reentrancy)
+        // Mark member as paid before making payment (to prevent reentrancy)
         let member_mut = circles::get_member_mut(circle, recipient);
         members::set_received_payout(member_mut, true);
         
-        // Process stablecoin payout
+        // Process stablecoin payout from custody wallet
         let stablecoin = custody::withdraw_stablecoin<CoinType>(
             wallet,
-            stablecoin_amount,
+            actual_payout_amount,
             recipient,
             clock,
             ctx
@@ -943,6 +942,10 @@ module njangi::njangi_payments {
         
         // Update rotation state
         circles::advance_rotation_position_and_cycle(circle, recipient, clock);
+        
+        // Debug print to check updated payout time
+        std::debug::print(&b"Current next_payout_time AFTER update:");
+        std::debug::print(&circles::get_next_payout_time(circle));
         
         // Emit payout event (use USD amount for display)
         event::emit(PayoutProcessed {

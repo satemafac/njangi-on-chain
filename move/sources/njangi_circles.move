@@ -14,6 +14,7 @@ module njangi::njangi_circles {
     use std::option::{Self, Option};
     use std::type_name;
     use std::ascii;
+    use std::debug;
     
     use njangi::njangi_core::{Self as core};
     use njangi::njangi_members::{Self as members, Member};
@@ -41,6 +42,10 @@ module njangi::njangi_circles {
     const EMemberSuspended: u64 = 13;          // From members
     const EDepositAlreadyPaid: u64 = 21;       // From members
     const EIncorrectDepositAmount: u64 = 2;    // From core
+    
+    // Time constants (in milliseconds)
+    const THIRTY_DAYS_MS: u64 = 2_592_000_000; // 30 days in milliseconds
+    const SEVEN_DAYS_MS: u64 = 604_800_000;    // 7 days in milliseconds
     
     // ----------------------------------------------------------
     // Main Circle struct
@@ -1457,13 +1462,52 @@ module njangi::njangi_circles {
         let len = vector::length(rotation);
         let mut i = 0;
         
+        // Added clear log info
+        std::debug::print(&len);
+        std::debug::print(&b"Resetting payout status for all members");
+        
         while (i < len) {
             let member_addr = *vector::borrow(rotation, i);
             
             // Skip placeholder addresses
             if (member_addr != @0x0 && table::contains(&circle.members, member_addr)) {
                 let member = table::borrow_mut(&mut circle.members, member_addr);
+                // Make sure to set received_payout to false regardless of current value
                 members::set_received_payout(member, false);
+                
+                // Add debug output
+                std::debug::print(&member_addr);
+                std::debug::print(&b"Set payout status to false");
+            };
+            i = i + 1;
+        };
+    }
+    
+    // Reset contribution status for all members except the current recipient
+    public(package) fun reset_all_members_contribution_status(circle: &mut Circle) {
+        // Reset the contributions counter for this cycle
+        circle.contributions_this_cycle = 0;
+        std::debug::print(&b"Reset contributions counter to 0");
+        
+        // Get rotation info
+        let rotation = &circle.rotation_order;
+        let rotation_len = vector::length(rotation);
+        
+        // Reset contribution status for all members except the current recipient
+        let mut i = 0;
+        while (i < rotation_len) {
+            let member_addr = *vector::borrow(rotation, i);
+            
+            // Skip placeholder addresses
+            if (member_addr != @0x0 && table::contains(&circle.members, member_addr)) {
+                // Skip the current recipient - they don't need to contribute for this cycle
+                if (i != circle.current_position) {
+                    let member = table::borrow_mut(&mut circle.members, member_addr);
+                    // Reset contribution status
+                    members::reset_contribution_status(member);
+                    std::debug::print(&b"Reset contribution status for member:");
+                    std::debug::print(&member_addr);
+                };
             };
             i = i + 1;
         };
@@ -1481,30 +1525,49 @@ module njangi::njangi_circles {
         // Calculate next position
         let rotation_len = vector::length(&circle.rotation_order);
         
-        // Only advance if we have members in the rotation
-        if (rotation_len > 0) {
-            // Increment current position
+        // Print for debug purposes
+        std::debug::print(&b"Advancing cycle...");
+        std::debug::print(&circle.current_position);
+        std::debug::print(&rotation_len);
+        std::debug::print(&circle.current_cycle);
+        
+        // We reset all members' contribution status for the new position/cycle
+        reset_all_members_contribution_status(circle);
+        
+        // If we're at the last position in the rotation, advance to next cycle
+        if (circle.current_position + 1 >= rotation_len) {
+            // Reset position to 0 for the next cycle
+            circle.current_position = 0;
+            // Increment cycle
+            circle.current_cycle = circle.current_cycle + 1;
+            // Reset all member payout status
+            reset_all_members_payout_status(circle);
+        } else {
+            // Just move to the next position in the same cycle
             circle.current_position = circle.current_position + 1;
-            
-            // Check if we completed a full rotation and need to start a new cycle
-            if (circle.current_position >= rotation_len) {
-                // Reset to the start of the rotation
-                circle.current_position = 0;
-                
-                // Increment cycle counter
-                circle.current_cycle = circle.current_cycle + 1;
-                
-                // Update next payout time
-                circle.next_payout_time = core::calculate_next_payout_time(
-                    config::get_cycle_length(&circle.id),
-                    config::get_cycle_day(&circle.id),
-                    clock::timestamp_ms(clock)
-                );
-                
-                // Reset all members' payout status for the new cycle
-                reset_all_members_payout_status(circle);
-            };
         };
+        
+        // Always update the next payout time, regardless of new cycle or just new position
+        // Get cycle length and day from config
+        let cycle_length = config::get_cycle_length(&circle.id);
+        let cycle_day = config::get_cycle_day(&circle.id);
+        
+        // Calculate next payout time using the core helper function
+        let now = clock::timestamp_ms(clock);
+        circle.next_payout_time = core::calculate_next_payout_time(
+            cycle_length, 
+            cycle_day, 
+            now
+        );
+        
+        std::debug::print(&b"New payout time set to:");
+        std::debug::print(&circle.next_payout_time);
+        
+        // Print debug info about the new position and cycle
+        std::debug::print(&b"New position:");
+        std::debug::print(&circle.current_position);
+        std::debug::print(&b"New cycle:");
+        std::debug::print(&circle.current_cycle);
     }
     
     // Get the next member in rotation order who should receive a payout
@@ -1597,5 +1660,26 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     public fun get_current_position(circle: &Circle): u64 {
         circle.current_position
+    }
+
+    // ----------------------------------------------------------
+    // Helper to convert cycle length to milliseconds
+    // ----------------------------------------------------------
+    public fun cycle_length_in_milliseconds(circle: &Circle): u64 {
+        let cycle_length = config::get_cycle_length(&circle.id);
+        
+        // Convert cycle length to milliseconds
+        // 0 = weekly, 1 = monthly, 2 = quarterly, 3 = bi-weekly
+        if (cycle_length == 0) {
+            SEVEN_DAYS_MS // Weekly
+        } else if (cycle_length == 1) {
+            THIRTY_DAYS_MS // Monthly (30 days)
+        } else if (cycle_length == 2) {
+            THIRTY_DAYS_MS * 3 // Quarterly (90 days)
+        } else if (cycle_length == 3) {
+            SEVEN_DAYS_MS * 2 // Bi-weekly (14 days)
+        } else {
+            THIRTY_DAYS_MS // Default to monthly if unknown
+        }
     }
 } 
