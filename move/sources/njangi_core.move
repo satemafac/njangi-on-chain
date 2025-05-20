@@ -328,24 +328,31 @@ module njangi::njangi_core {
                 // Schedule for the upcoming day this week
                 next_occurrence_base_ts
             }
-        } else {
-            // Quarterly payouts - always set future date
+        } else { // Quarterly cycle_length == 2
+            // Quarterly works similar to monthly, but we need to calculate the next quarter date
             let mut next_month = month;
             let mut next_year = year;
             
-            // If today's date is greater than the selected day, move to next quarter
-            if (day > cycle_day || (day == cycle_day && day_ms > 0)) {
+            // Get current day of month
+            let day_of_month = day;
+            
+            // If current day of month is after the target day, move to next month
+            if (day_of_month > cycle_day || (day_of_month == cycle_day && day_ms > 0)) {
                 next_month = month + 3;
+                if (next_month > 12) {
+                    next_month = next_month - 12;
+                    next_year = year + 1;
+                };
+            } else {
+                // Otherwise, move to next quarter
+                next_month = month + (3 - (month - 1) % 3);
                 if (next_month > 12) {
                     next_month = next_month - 12;
                     next_year = year + 1;
                 };
             };
             
-            // We know cycle_day is always ≤ 28 and all months have at least 28 days
-            // So we don't need to check month length anymore
-            
-            // Get timestamp for the target day of next quarter's month (always in the future)
+            // Get timestamp for the target day of next quarter (always in the future)
             date_to_timestamp(next_year, next_month, cycle_day)
         }
     }

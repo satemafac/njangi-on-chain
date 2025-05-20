@@ -298,6 +298,14 @@ module njangi::njangi_members {
         member.total_contributed = member.total_contributed + amount;
     }
     
+    // Reset a member's contribution status for a new position/cycle
+    // This doesn't affect their total contributions, just resets their status
+    // for the current cycle/position
+    public(package) fun reset_contribution_status(member: &mut Member) {
+        // Reset last_contribution to indicate they need to contribute again
+        member.last_contribution = 0;
+    }
+    
     // ----------------------------------------------------------
     // Member payment verification
     // ----------------------------------------------------------

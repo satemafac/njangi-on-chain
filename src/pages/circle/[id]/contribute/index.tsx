@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../../../../contexts/AuthContext';
 import { SuiClient } from '@mysten/sui/client';
@@ -101,17 +101,36 @@ interface CircleCreatedEvent {
   cycle_length: string;
 }
 
+// Add PayoutProcessedEvent interface for cycle tracking
+interface PayoutProcessedEvent {
+  circle_id: string;
+  recipient: string;
+  amount: string;
+  cycle: string | number;
+  payout_type: string | number;
+}
+
 // Define types for SUI object field values
 type SuiFieldValue = string | number | boolean | null | undefined | SuiFieldValue[] | Record<string, unknown>;
 
 // Add ContributionProgress component
 const ContributionProgress: React.FC<{
   circleId: string;
-  maxMembers: number;
+  maxMembers: number; // This is the total capacity, might differ from active rotation
   currentCycle: number;
   className?: string;
   currentRecipientAddress?: string | null; // Add to props
-}> = ({ circleId, maxMembers, currentCycle, className = '', currentRecipientAddress }) => {
+  // currentPositionInCycle?: number | null; // REMOVED - No longer used here
+  // totalMembersInRotation?: number | null; // REMOVED - No longer used here
+}> = ({ 
+  circleId, 
+  maxMembers, 
+  currentCycle, 
+  className = '', 
+  currentRecipientAddress,
+  // currentPositionInCycle, // REMOVED
+  // totalMembersInRotation // REMOVED
+}) => {
   const [progressData, setProgressData] = useState<ContributionProgressData>({
     totalMembers: maxMembers,
     contributedMembers: new Set<string>(),
@@ -120,278 +139,197 @@ const ContributionProgress: React.FC<{
     currentRecipientAddress: currentRecipientAddress, // Initialize from prop
   });
   const [isLoading, setIsLoading] = useState(true);
+  const [currentPosition, setCurrentPosition] = useState<number | null>(null); // Internal state for fetched position, distinct from prop
+  const [lastPayoutTime, setLastPayoutTime] = useState<number | null>(null);
   
-  const fetchTransactionHistory = async () => {
+  // Track if we've already fetched data for this cycle
+  const alreadyFetchedForCycle = useRef<number | null>(null);
+  
+  // Check for payout events to detect cycle changes
+  const checkForPayoutEvents = async () => {
+    if (!circleId) return;
+
+    try {
+      const client = new SuiClient({ url: getJsonRpcUrl() });
+      
+      // Query PayoutProcessed events
+      const payoutEvents = await client.queryEvents({
+        query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::PayoutProcessed` },
+        limit: 20
+      });
+      
+      // Find the most recent payout event for this circle
+      const circlePayoutEvents = payoutEvents.data
+        .filter(event => {
+          const parsedJson = event.parsedJson as PayoutProcessedEvent;
+          return parsedJson?.circle_id === circleId;
+        })
+        .sort((a, b) => {
+          // Sort by timestamp (newest first)
+          return (Number(b.timestampMs) || 0) - (Number(a.timestampMs) || 0);
+        });
+      
+      if (circlePayoutEvents.length > 0) {
+        const latestEvent = circlePayoutEvents[0];
+        
+        // Set last payout time
+        if (latestEvent.timestampMs) {
+          const newPayoutTime = Number(latestEvent.timestampMs);
+          
+          // If we have a new payout time that's different from our last recorded one
+          if (!lastPayoutTime || newPayoutTime > lastPayoutTime) {
+            console.log(`[Progress] New payout detected at ${new Date(newPayoutTime).toISOString()}`);
+            setLastPayoutTime(newPayoutTime);
+                
+            // Force a refetch of contribution data
+            fetchTransactionHistory(true);
+            }
+          }
+        }
+      } catch (error) {
+      console.error("Error checking for payout events:", error);
+      }
+  };
+  
+  const fetchTransactionHistory = async (forceRefresh = false) => {
     if (!circleId || currentCycle <= 0) {
       setIsLoading(false);
       return;
     }
     
+    if (alreadyFetchedForCycle.current === currentCycle && !forceRefresh) {
+      console.log(`[Progress] Already fetched data for cycle ${currentCycle}, skipping...`);
+      setIsLoading(false);
+      return;
+    }
+    
     setIsLoading(true);
-    console.log(`[Progress] Fetching contributions for Cycle ${currentCycle} in circle ${circleId}`);
+    console.log(`[Progress] Fetching member contribution status for Cycle ${currentCycle} in circle ${circleId}`);
 
     try {
       const client = new SuiClient({ url: getJsonRpcUrl() });
-      
-      // Track unique contributors
       const contributedMembers = new Set<string>();
-      const allMembers: string[] = [];
-      
-      // Try to fetch all members for this circle to get the complete list
-      try {
-        // Try to get all members associated with this circle
-        const circleData = await client.getObject({
-          id: circleId,
-          options: { showContent: true }
-        });
-        
-        if (circleData.data?.content && 'fields' in circleData.data.content) {
-          // Try to extract rotation_order if present
-          const circleFields = circleData.data.content.fields as {
-            // Replace any[] with string[] for better type safety
-            rotation_order?: { fields?: { id?: string } } | string[];
-          };
-          
-          if (circleFields.rotation_order && Array.isArray(circleFields.rotation_order)) {
-            // If we have the rotation order, use it (addresses already in the right order)
-            for (const memberAddr of circleFields.rotation_order) {
-              if (typeof memberAddr === 'string' && memberAddr !== '0x0') {
-                allMembers.push(memberAddr);
-              }
-            }
-            console.log(`[Progress] Found ${allMembers.length} members in rotation_order`);
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching circle members:', error);
-      }
-      
-      // 1. Try with ContributionMade events (specific event for contributions)
-      try {
-        const contributionMadeEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::ContributionMade` },
-          limit: 200
-        });
-        
-        console.log(`[Progress] Fetched ${contributionMadeEvents.data.length} ContributionMade events`);
-        
-        for (const event of contributionMadeEvents.data) {
-          if (event.parsedJson && typeof event.parsedJson === 'object') {
-            const contributionData = event.parsedJson as {
-              circle_id?: string;
-              member?: string;
-              cycle?: string | number;
-            };
+      let memberListFromRotation: string[] = [];
+      let currentRecipient: string | null = null;
             
-            if (contributionData.circle_id === circleId && 
-                contributionData.member &&
-                contributionData.cycle !== undefined) {
-              
-              // Convert cycle to number for comparison
-              const eventCycle = typeof contributionData.cycle === 'string'
-                ? parseInt(contributionData.cycle, 10)
-                : contributionData.cycle;
-              
-              if (!isNaN(eventCycle) && eventCycle === currentCycle) {
-                console.log(`[Progress] Found contribution from ContributionMade for user ${contributionData.member} in cycle ${currentCycle}`);
-                contributedMembers.add(contributionData.member);
-                
-                // Add to all members list if not already there
-                if (!allMembers.includes(contributionData.member)) {
-                  allMembers.push(contributionData.member);
-                }
-              }
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching ContributionMade events:', error);
-      }
-      
-      // 2. Try CustodyDeposited events (which capture wallet contributions)
-      try {
-        const custodyDepositedEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited` },
-          limit: 200
-        });
-        
-        console.log(`[Progress] Fetched ${custodyDepositedEvents.data.length} CustodyDeposited events`);
-        
-        for (const event of custodyDepositedEvents.data) {
-          if (event.parsedJson && typeof event.parsedJson === 'object') {
-            const depositData = event.parsedJson as {
-              circle_id?: string;
-              member?: string;
-              operation_type?: number | string;
-            };
-            
-            // Check if this is a contribution event (operation_type=0) for this circle
-            const opType = typeof depositData.operation_type === 'string'
-              ? parseInt(depositData.operation_type, 10)
-              : depositData.operation_type;
-            
-            if (depositData.circle_id === circleId && 
-                depositData.member && 
-                opType === 0) { // operation_type 0 = contribution
-              
-              console.log(`[Progress] Found contribution from CustodyDeposited for user ${depositData.member}`);
-              contributedMembers.add(depositData.member);
-              
-              // Add to all members list if not already there
-              if (!allMembers.includes(depositData.member)) {
-                allMembers.push(depositData.member);
-              }
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching CustodyDeposited events:', error);
-      }
-      
-      // 3. Also try regular CustodyTransaction events as fallback
-      try {
-        const txEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyTransaction` },
-          limit: 200
-        });
-        
-        console.log(`[Progress] Fetched ${txEvents.data.length} CustodyTransaction events`);
-        
-        for (const event of txEvents.data) {
-          if (event.parsedJson && typeof event.parsedJson === 'object') {
-            // Check directly in parsedJson - the txData seems to be directly here
-            const txData = event.parsedJson as {
-              operation_type?: number | string;
-              user?: string;
-              circle_id?: string;
-            };
-            
-            // For these events, we need to check the operation_type and ensure it belongs to this circle
-            const opType = typeof txData.operation_type === 'string'
-              ? parseInt(txData.operation_type, 10)
-              : txData.operation_type;
-            
-            // Debug to see what values we're finding
-            if (opType === 0) {
-              console.log(`[Progress] Found CustodyTransaction with operation_type=0:`, {
-                user: txData.user,
-                circleId: txData.circle_id ? txData.circle_id : 'not present'
-              });
-            }
-            
-            if (txData.user && opType === 0) {
-              // If circle_id is present, check it matches
-              if (txData.circle_id && txData.circle_id !== circleId) {
-                continue; // Skip if this belongs to a different circle
-              }
-              
-              // If we got here, count it as a contribution
-              console.log(`[Progress] Found contribution from CustodyTransaction for user ${txData.user}`);
-              contributedMembers.add(txData.user);
-              
-              // Add to all members list if not already there
-              if (!allMembers.includes(txData.user)) {
-                allMembers.push(txData.user);
-              }
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching CustodyTransaction events:', error);
-      }
-      
-      // 4. Try StablecoinContributionMade events
-      try {
-        const stablecoinEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::StablecoinContributionMade` },
-          limit: 100
-        });
-        
-        console.log(`[Progress] Fetched ${stablecoinEvents.data.length} StablecoinContributionMade events`);
-        
-        for (const event of stablecoinEvents.data) {
-          if (event.parsedJson && typeof event.parsedJson === 'object') {
-            const stablecoinData = event.parsedJson as {
-              circle_id?: string;
-              member?: string;
-              cycle?: string | number;
-            };
-            
-            if (stablecoinData.circle_id === circleId && stablecoinData.member) {
-              if (stablecoinData.cycle !== undefined) {
-                const eventCycle = typeof stablecoinData.cycle === 'string'
-                  ? parseInt(stablecoinData.cycle, 10)
-                  : stablecoinData.cycle;
-                
-                if (!isNaN(eventCycle) && eventCycle === currentCycle) {
-                  console.log(`[Progress] Found contribution from StablecoinContributionMade for user ${stablecoinData.member}`);
-                  contributedMembers.add(stablecoinData.member);
-                  
-                  // Add to all members list if not already there
-                  if (!allMembers.includes(stablecoinData.member)) {
-                    allMembers.push(stablecoinData.member);
-                  }
-                }
-              } else {
-                // If cycle not specified, assume it's for the current cycle
-                contributedMembers.add(stablecoinData.member);
-                
-                // Add to all members list if not already there
-                if (!allMembers.includes(stablecoinData.member)) {
-                  allMembers.push(stablecoinData.member);
-                }
-              }
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching StablecoinContributionMade events:', error);
-      }
-      
-      // If we don't have enough members, fill in with placeholder addresses up to maxMembers
-      while (allMembers.length < maxMembers) {
-        allMembers.push(`Member-${allMembers.length + 1}`);
-      }
-      
-      // If we have too many members, trim the list
-      if (allMembers.length > maxMembers) {
-        allMembers.splice(maxMembers);
-      }
-      
-      console.log(`[Progress] Total unique contributors: ${contributedMembers.size}/${maxMembers}`);
-      console.log(`[Progress] Contributors:`, Array.from(contributedMembers));
-      console.log(`[Progress] All members:`, allMembers);
+      // 1. Fetch the Circle object to get rotation_order and current_position
+      const circleObject = await client.getObject({
+        id: circleId,
+        options: { showContent: true },
+      });
 
-      // Sort members: Contributors first, then non-contributors
-      const sortedMemberList = [
-        ...allMembers.filter(member => contributedMembers.has(member)),
-        ...allMembers.filter(member => !contributedMembers.has(member))
-      ];
-      console.log(`[Progress] Sorted members:`, sortedMemberList);
+      if (circleObject.data?.content && 'fields' in circleObject.data.content) {
+        const circleFields = circleObject.data.content.fields as {
+          rotation_order?: string[];
+          current_position?: string | number;
+          members?: { fields?: { id?: { id: string } } };
+          [key: string]: unknown; // Allow other fields
+        };        
+        if (Array.isArray(circleFields.rotation_order)) {
+          memberListFromRotation = circleFields.rotation_order.filter(addr => typeof addr === 'string' && addr !== '0x0');
+        }
+        
+        const position = Number(circleFields.current_position);
+        if (!isNaN(position) && position < memberListFromRotation.length) {
+          currentRecipient = memberListFromRotation[position];
+          setCurrentPosition(position); // Update internal currentPosition state
+          console.log(`[Progress] Current recipient: ${currentRecipient} at position ${position}`);
+        }
+      } else {
+        console.error('[Progress] Could not fetch Circle object content.');
+        setIsLoading(false);
+        return;
+      }
+
+      // 2. Fetch the members table ID
+      let membersTableId: string | null = null;
+      if (circleObject.data?.content && 'fields' in circleObject.data.content) {
+        const circleFields = circleObject.data.content.fields as { 
+          members?: { fields?: { id?: { id: string } } } 
+        };
+        if (circleFields.members?.fields?.id?.id) {
+          membersTableId = circleFields.members.fields.id.id;
+        }
+      }
+
+      if (!membersTableId) {
+        console.error('[Progress] Could not find members table ID in Circle object.');
+        setIsLoading(false);
+        return;
+      }
+      
+      // 3. Iterate through members in rotation_order and check their last_contribution
+      for (const memberAddr of memberListFromRotation) {
+        if (memberAddr === currentRecipient) {
+          // Skip the current recipient as they don't contribute this cycle
+          continue;
+        }
+        
+      try {
+          const memberField = await client.getDynamicFieldObject({
+            parentId: membersTableId,
+            name: { type: 'address', value: memberAddr },
+          });
+
+          if (memberField.data?.content && 'fields' in memberField.data.content) {
+            const memberValue = (memberField.data.content.fields as {
+              value?: { fields?: { last_contribution?: string | number; [key: string]: unknown } };
+              [key: string]: unknown;
+            }).value;
+            if (memberValue?.fields?.last_contribution && Number(memberValue.fields.last_contribution) > 0) {
+              // Consider contributed if last_contribution is non-zero
+              // More sophisticated logic might compare this timestamp with the cycle start time
+              contributedMembers.add(memberAddr);
+              console.log(`[Progress] Member ${memberAddr} has contributed (last_contribution: ${memberValue.fields.last_contribution})`);
+              } else {
+              console.log(`[Progress] Member ${memberAddr} has NOT contributed (last_contribution: ${memberValue?.fields?.last_contribution})`);
+          }
+        }
+      } catch (error) {
+          console.warn(`[Progress] Error fetching member ${memberAddr}:`, error);
+        }
+      }
+      
+      console.log(`[Progress] Total unique contributors (excluding recipient): ${contributedMembers.size}`);
+      console.log(`[Progress] Contributors:`, Array.from(contributedMembers));
+      console.log(`[Progress] All members from rotation:`, memberListFromRotation);
 
       setProgressData({
-        totalMembers: maxMembers,
+        totalMembers: Number(maxMembers), // Use the prop value
         contributedMembers,
         currentCycle,
-        memberList: sortedMemberList, // Use the sorted list
-        currentRecipientAddress: currentRecipientAddress, // Ensure it's set here
+        memberList: memberListFromRotation, 
+        currentRecipientAddress: currentRecipient, 
       });
+      
+      alreadyFetchedForCycle.current = currentCycle;
     } catch (error) {
-      console.error('Error fetching contribution events:', error);
+      console.error('[Progress] Error fetching contribution status:', error);
     } finally {
       setIsLoading(false);
     }
   };
 
+  // Set up polling to check for payouts every 10 seconds
+  useEffect(() => {
+    // Initial check only, no interval anymore
+    checkForPayoutEvents();
+    
+    // Removed interval code here to stop auto-refresh
+
+    // No need for cleanup function since we don't create an interval
+  }, [circleId]);
+
   useEffect(() => {
     if (circleId && maxMembers > 0 && currentCycle > 0) {
       console.log("[Progress] Required data available, fetching contribution events...");
-      fetchTransactionHistory();
+      // Force a refresh when the cycle or recipient changes
+      fetchTransactionHistory(currentRecipientAddress !== progressData.currentRecipientAddress);
     } else {
       console.log("[Progress] Waiting for required data:", { circleId, maxMembers, currentCycle });
     }
-  // Add currentRecipientAddress to dependency array if it can change and trigger re-fetch
-  }, [circleId, maxMembers, currentCycle, currentRecipientAddress]);
+  // Add currentPosition (internal state), lastPayoutTime and currentRecipientAddress to dependency array
+  }, [circleId, maxMembers, currentCycle, currentPosition, lastPayoutTime, currentRecipientAddress]);
 
   // Calculate progress percentage
   const contributedCount = progressData.contributedMembers.size;
@@ -418,6 +356,7 @@ const ContributionProgress: React.FC<{
 
   return (
     <div className={`flex flex-col items-center ${className}`}>
+      {/* Title has been removed from here */}
       <div className="relative w-36 h-36">
         {/* Background circle (gray/inactive) */}
         <svg className="w-full h-full" viewBox="0 0 100 100">
@@ -476,40 +415,40 @@ const ContributionProgress: React.FC<{
 
           return membersForDots.map((memberAddr, index) => {
             const angle = numDots > 0 ? (index / numDots) * Math.PI * 2 - Math.PI / 2 : 0;
-            const x = 50 + 55 * Math.cos(angle);
-            const y = 50 + 55 * Math.sin(angle);
-            const hasContributed = progressData.contributedMembers.has(memberAddr);
+          const x = 50 + 55 * Math.cos(angle);
+          const y = 50 + 55 * Math.sin(angle);
+          const hasContributed = progressData.contributedMembers.has(memberAddr);
             // Recipient is filtered out, so dotColor is simpler
             const dotColor = hasContributed ? 'bg-green-500' : 'bg-gray-300';
-            
-            return (
+          
+          return (
               <div key={memberAddr} className="group"> {/* Use memberAddr for key due to filtering */}
-                <div 
-                  className={`absolute w-3 h-3 rounded-full transform -translate-x-1/2 -translate-y-1/2 border border-white 
+              <div 
+                className={`absolute w-3 h-3 rounded-full transform -translate-x-1/2 -translate-y-1/2 border border-white 
                     ${dotColor} 
-                    hover:scale-125 transition-all duration-200`}
-                  style={{ 
-                    left: `${x}%`, 
-                    top: `${y}%`,
-                  }}
-                />
-                {/* Tooltip that appears on hover */}
-                <div 
-                  className="absolute hidden group-hover:block bg-gray-900 text-white text-xs rounded p-2 z-10"
-                  style={{ 
-                    left: `${x}%`, 
-                    top: `${y}%`,
-                    transform: 'translate(-50%, -100%)',
-                    marginTop: '-10px',
-                  }}
-                >
-                  <p className="whitespace-nowrap">
-                    {formatAddress(memberAddr)}
+                  hover:scale-125 transition-all duration-200`}
+                style={{ 
+                  left: `${x}%`, 
+                  top: `${y}%`,
+                }}
+              />
+              {/* Tooltip that appears on hover */}
+              <div 
+                className="absolute hidden group-hover:block bg-gray-900 text-white text-xs rounded p-2 z-10"
+                style={{ 
+                  left: `${x}%`, 
+                  top: `${y}%`,
+                  transform: 'translate(-50%, -100%)',
+                  marginTop: '-10px',
+                }}
+              >
+                <p className="whitespace-nowrap">
+                  {formatAddress(memberAddr)}
                     {hasContributed ? ' ✓' : ' ✘'} {/* Recipient is not in this list */}
-                  </p>
-                </div>
+                </p>
               </div>
-            );
+            </div>
+          );
           });
         })()}
       </div>
@@ -519,7 +458,7 @@ const ContributionProgress: React.FC<{
           {isLoading ? "Loading..." : `${contributedCount} of ${expectedContributors} expected contributors`}
         </p>
         <p className="text-xs text-gray-500">
-          Cycle {progressData.currentCycle} Contributions
+          Current Cycle Contributions 
         </p>
       </div>
       
@@ -609,6 +548,10 @@ export default function ContributeToCircle() {
 
   // Add state for current cycle recipient address
   const [cycleRecipientAddress, setCycleRecipientAddress] = useState<string | null>(null);
+
+  // New states for cycle position tracking
+  const [currentPositionInCycle, setCurrentPositionInCycle] = useState<number | null>(null);
+  const [totalMembersInRotation, setTotalMembersInRotation] = useState<number | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -835,6 +778,8 @@ export default function ContributeToCircle() {
     console.log('Contribute - Fetching circle details for:', id);
     
     setLoading(true);
+    setCurrentPositionInCycle(null); // Reset before fetching
+    setTotalMembersInRotation(null); // Reset before fetching
     try {
       const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
       
@@ -865,6 +810,17 @@ export default function ContributeToCircle() {
         console.log('Contribute - Found current_cycle field:', cycleNumber);
       }
       setCurrentCycle(cycleNumber);
+
+      // Get current_position and rotation_order for cycle position display
+      if (fields.current_position !== undefined && fields.rotation_order && Array.isArray(fields.rotation_order)) {
+        const position = Number(fields.current_position);
+        const rotationOrderArray = fields.rotation_order.filter(addr => typeof addr === 'string' && addr !== '0x0');
+        if (!isNaN(position) && position >= 0 && rotationOrderArray.length > 0) {
+          setCurrentPositionInCycle(position);
+          setTotalMembersInRotation(rotationOrderArray.length);
+          console.log(`Contribute - Fetched cycle position: ${position + 1} of ${rotationOrderArray.length}`);
+        }
+      }
       
       // Get max_members from the circle object or dynamic fields
       let maxMembers = 10; // Default value
@@ -1452,7 +1408,7 @@ export default function ContributeToCircle() {
             
             const opType = typeof txData.operation_type === 'string'
               ? parseInt(txData.operation_type, 10)
-              : txData.operation_type;
+              : (typeof txData.operation_type === 'number' ? txData.operation_type : -1); // Default to -1 if undefined
             
             // Check if this is a contribution transaction
             if (txData.user === userAddress && opType === 0) {
@@ -1482,6 +1438,8 @@ export default function ContributeToCircle() {
   const checkIfUserIsCurrentRecipient = async () => {
     if (!circle || !circle.id || !userAddress || !circle.isActive) {
       setCycleRecipientAddress(null); // Reset if conditions not met
+      // setCurrentPositionInCycle(null); // Not strictly needed here if fetchCircleDetails handles it
+      // setTotalMembersInRotation(null);
       return false;
     }
     
@@ -1495,10 +1453,19 @@ export default function ContributeToCircle() {
       });
       
       if (circleObject.data?.content && 'fields' in circleObject.data.content) {
-        const circleFields = circleObject.data.content.fields as Record<string, unknown>;
+        const circleFields = circleObject.data.content.fields as Record<string, unknown>;;
         const currentPosition = Number(circleFields.current_position || 0);
-        const rotationOrder = circleFields.rotation_order as string[];
+        const rotationOrder = (circleFields.rotation_order as string[] || []).filter(addr => typeof addr === 'string' && addr !== '0x0');
         
+        // Also set these for the main display if not already set by fetchCircleDetails
+        // This ensures they are updated if this function runs after initial load due to cycle changes
+        if (currentPositionInCycle === null && rotationOrder.length > 0) {
+            setCurrentPositionInCycle(currentPosition);
+        }
+        if (totalMembersInRotation === null && rotationOrder.length > 0) {
+            setTotalMembersInRotation(rotationOrder.length);
+    }
+
         console.log(`[Recipient Check] Current position: ${currentPosition}`);
         console.log(`[Recipient Check] Rotation order:`, rotationOrder);
         
@@ -2636,15 +2603,38 @@ export default function ContributeToCircle() {
                       {/* Add Contribution Progress visualization here, above wallet balances */}
                       {circle && circle.isActive && (
                         <div className="bg-gray-50 p-4 rounded-lg shadow-sm md:col-span-2 mb-6">
-                          <h3 className="text-lg font-medium text-gray-800 mb-4 text-center">
-                            Contributions Made Cycle {currentCycle}
+                          <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-lg font-medium text-gray-800 text-center">
+                              Contributions Made Cycle {currentCycle}
+                              {totalMembersInRotation && typeof currentPositionInCycle === 'number' && currentPositionInCycle >= 0 
+                                ? ` (Position ${currentPositionInCycle + 1} of ${totalMembersInRotation})` 
+                                : ''}
                           </h3>
+                            <button
+                              onClick={() => {
+                                // Refresh cycle data
+                                fetchCircleDetails();
+                                checkUserContribution();
+                                checkIfUserIsCurrentRecipient();
+                                // Add toast to show it's refreshing
+                                toast.success("Refreshing contribution status...");
+                              }}
+                              className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 py-1 px-2 rounded flex items-center transition-colors"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                              Refresh Status
+                            </button>
+                          </div>
                           <div className="flex justify-center">
                             <ContributionProgress 
                               circleId={circle.id} 
                               maxMembers={circle.maxMembers || 5} 
-                              currentCycle={currentCycle}
+                              currentCycle={currentCycle} 
                               currentRecipientAddress={cycleRecipientAddress} // Pass the recipient address
+                              // currentPositionInCycle={currentPositionInCycle} // REMOVED
+                              // totalMembersInRotation={totalMembersInRotation} // REMOVED
                             />
                           </div>
                         </div>
