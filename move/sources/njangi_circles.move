@@ -1547,21 +1547,38 @@ module njangi::njangi_circles {
             circle.current_position = circle.current_position + 1;
         };
         
-        // Always update the next payout time, regardless of new cycle or just new position
-        // Get cycle length and day from config
+        // Get cycle configuration 
         let cycle_length = config::get_cycle_length(&circle.id);
         let cycle_day = config::get_cycle_day(&circle.id);
-        
-        // Calculate next payout time using the core helper function
         let now = clock::timestamp_ms(clock);
-        circle.next_payout_time = core::calculate_next_payout_time(
-            cycle_length, 
-            cycle_day, 
-            now
-        );
+        
+        // Always update the next payout time, regardless of new cycle or just new position
+        // Calculate next payout time based on position frequency
+        let base_interval = if (cycle_length == 0) {
+            // Weekly
+            SEVEN_DAYS_MS / rotation_len
+        } else if (cycle_length == 1) {
+            // Monthly - approximate a month using 30 days
+            THIRTY_DAYS_MS / rotation_len
+        } else if (cycle_length == 2) {
+            // Quarterly - approximate a quarter using 90 days
+            THIRTY_DAYS_MS * 3 / rotation_len
+        } else if (cycle_length == 3) {
+            // Bi-weekly
+            SEVEN_DAYS_MS * 2 / rotation_len
+        } else {
+            // Default to monthly
+            THIRTY_DAYS_MS / rotation_len
+        };
+        
+        // Set the next payout time to now + position interval
+        // This ensures each position has its appropriate time based on the cycle frequency
+        circle.next_payout_time = now + base_interval;
         
         std::debug::print(&b"New payout time set to:");
         std::debug::print(&circle.next_payout_time);
+        std::debug::print(&b"Based on interval:");
+        std::debug::print(&base_interval);
         
         // Print debug info about the new position and cycle
         std::debug::print(&b"New position:");

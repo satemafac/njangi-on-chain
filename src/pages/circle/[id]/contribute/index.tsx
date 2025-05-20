@@ -1446,7 +1446,7 @@ export default function ContributeToCircle() {
               : (typeof txData.operation_type === 'number' ? txData.operation_type : -1); // Default to -1 if undefined
             
             const eventTimestamp = Number(event.timestampMs || 0);
-              
+            
             // Check if this is a contribution transaction after the most recent payout
             if (txData.user === userAddress && 
                 opType === 0 && 
@@ -2686,7 +2686,7 @@ export default function ContributeToCircle() {
                                   </span>
                                 )}
                               </div>
-                            </h3>
+                          </h3>
                             <button
                               onClick={() => {
                                 // Refresh cycle data
