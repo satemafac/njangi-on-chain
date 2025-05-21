@@ -4165,6 +4165,333 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       } // End case 'adminTriggerUsdcPayout'
 
+      case 'resumeCycle':
+        // Validate required parameters
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+        
+        if (!circleId) {
+          return res.status(400).json({ error: 'Circle ID is required' });
+        }
+        
+        try {
+          // Validate the session
+          try {
+            if (!sessionId) {
+              throw new Error('No session ID provided');
+            }
+            // Just validate the session without storing the result
+            validateSession(sessionId, 'sendTransaction');
+          } catch (validationError) {
+            console.error('Session validation failed:', validationError);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: validationError instanceof Error ? validationError.message : 'Session validation failed',
+              requireRelogin: true
+            });
+          }
+
+          // Send transaction using zkLogin service
+          const txResult = await instance.sendTransaction(
+            account,
+            (txb: Transaction) => {
+              txb.setSender(account.userAddr);
+              
+              // Call the resume_cycle function
+              txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_circles::resume_cycle`,
+                arguments: [
+                  txb.object(circleId),
+                  txb.object(CLOCK_OBJECT_ID) // Clock object
+                ]
+              });
+            },
+            { gasBudget: 50000000 } // Standard gas budget
+          );
+          
+          console.log('Resume cycle transaction successful:', txResult);
+          return res.status(200).json({
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+        } catch (error) {
+          console.error('Error resuming cycle:', error);
+          
+          // Handle authentication errors
+          if (error instanceof Error &&
+              (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired') ||
+              error.message.includes('re-authenticate'))) {
+            
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+          
+          // Handle specific contract errors
+          if (error instanceof Error) {
+            if (error.message.includes('ENotAdmin') || error.message.includes('ENotCircleAdmin')) {
+              return res.status(403).json({ error: 'Only the circle admin can resume the cycle.' });
+            }
+            if (error.message.includes('ECircleNotActive')) {
+              return res.status(400).json({ error: 'Cannot resume cycle: The circle is not active.' });
+            }
+            if (!error.message.includes('paused') || !error.message.includes('cycle')) {
+              return res.status(400).json({ error: 'The circle is not paused after a cycle.' });
+            }
+          }
+          
+          // Generic error
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to resume cycle',
+            details: error instanceof Error ? error.stack : String(error),
+            requireRelogin: false
+          });
+        }
+        break;
+
+      case 'payoutSecurityDepositSui':
+        // Validate required parameters
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+        
+        // Extract parameters from request body
+        const { circleId: payoutCircleId, memberAddress, walletId: payoutWalletId } = req.body;
+        
+        if (!payoutCircleId) {
+          return res.status(400).json({ error: 'Circle ID is required' });
+        }
+        
+        if (!memberAddress) {
+          return res.status(400).json({ error: 'Member address is required' });
+        }
+        
+        if (!payoutWalletId) {
+          return res.status(400).json({ error: 'Wallet ID is required' });
+        }
+        
+        try {
+          // Validate the session
+          try {
+            if (!sessionId) {
+              throw new Error('No session ID provided');
+            }
+            // Just validate the session without storing the result
+            validateSession(sessionId, 'sendTransaction');
+          } catch (validationError) {
+            console.error('Session validation failed:', validationError);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: validationError instanceof Error ? validationError.message : 'Session validation failed',
+              requireRelogin: true
+            });
+          }
+          
+          console.log(`Processing SUI security deposit payout for member ${memberAddress} in circle ${payoutCircleId} with wallet ${payoutWalletId}`);
+
+          // Normalize address to ensure it's in the correct format
+          const normalizedAddress = memberAddress.startsWith('0x') ? memberAddress : `0x${memberAddress}`;
+          console.log(`Processing SUI security deposit payout for member ${normalizedAddress} in circle ${payoutCircleId} with wallet ${payoutWalletId}`);
+
+          // Send transaction using zkLogin service
+          const txResult = await instance.sendTransaction(
+            account,
+            (txb: Transaction) => {
+              txb.setSender(account.userAddr);
+              
+              // Call the admin_payout_security_deposit_sui function - no clock parameter needed
+              txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_payments::admin_payout_security_deposit_sui`,
+                arguments: [
+                  txb.object(payoutCircleId),
+                  txb.object(payoutWalletId),
+                  txb.pure.address(normalizedAddress)
+                ]
+              });
+            },
+            { gasBudget: 100000000 } // Higher gas budget for payout
+          );
+          
+          console.log('Security deposit SUI payout successful:', txResult);
+          return res.status(200).json({
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+        } catch (error) {
+          console.error('Error processing security deposit SUI payout:', error);
+          
+          // Handle authentication errors
+          if (error instanceof Error &&
+              (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired') ||
+              error.message.includes('re-authenticate'))) {
+            
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+          
+          // Handle specific contract errors
+          if (error instanceof Error) {
+            if (error.message.includes('ENotAdmin') || error.message.includes('ENotCircleAdmin')) {
+              return res.status(403).json({ error: 'Only the circle admin can process security deposit payouts.' });
+            }
+            if (error.message.includes('EMemberNotFound') || error.message.includes('EMemberNotActive')) {
+              return res.status(400).json({ error: 'Member not found or not active in this circle.' });
+            }
+            if (error.message.includes('ENoSecurityDeposit') || error.message.includes('EDepositNotPaid')) {
+              return res.status(400).json({ error: 'This member has not paid a security deposit or it has already been withdrawn.' });
+            }
+            if (error.message.includes('EInsufficientBalance')) {
+              return res.status(400).json({ error: 'Insufficient SUI balance to process the security deposit payout.' });
+            }
+          }
+          
+          // Generic error
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to process security deposit payout',
+            details: error instanceof Error ? error.stack : String(error),
+            requireRelogin: false
+          });
+        }
+        break;
+
+      case 'payoutSecurityDepositStablecoin':
+        // Validate required parameters
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+        
+        // Extract parameters from request body
+        const { circleId: stablecoinPayoutCircleId, memberAddress: stablecoinPayoutMember, walletId: stablecoinWalletId } = req.body;
+        
+        if (!stablecoinPayoutCircleId) {
+          return res.status(400).json({ error: 'Circle ID is required' });
+        }
+        
+        if (!stablecoinPayoutMember) {
+          return res.status(400).json({ error: 'Member address is required' });
+        }
+        
+        if (!stablecoinWalletId) {
+          return res.status(400).json({ error: 'Wallet ID is required' });
+        }
+        
+        try {
+          // Validate the session
+          try {
+            if (!sessionId) {
+              throw new Error('No session ID provided');
+            }
+            // Just validate the session without storing the result
+            validateSession(sessionId, 'sendTransaction');
+          } catch (validationError) {
+            console.error('Session validation failed:', validationError);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: validationError instanceof Error ? validationError.message : 'Session validation failed',
+              requireRelogin: true
+            });
+          }
+          
+          console.log(`Processing stablecoin security deposit payout for member ${stablecoinPayoutMember} in circle ${stablecoinPayoutCircleId} with wallet ${stablecoinWalletId}`);
+
+          // Normalize address to ensure it's in the correct format
+          const normalizedStablecoinAddress = stablecoinPayoutMember.startsWith('0x') ? stablecoinPayoutMember : `0x${stablecoinPayoutMember}`;
+          console.log(`Processing stablecoin security deposit payout for member ${normalizedStablecoinAddress} in circle ${stablecoinPayoutCircleId} with wallet ${stablecoinWalletId}`);
+
+          // Use the standard USDC type from constants
+          const depositUsedUsdcType = USDC_COIN_TYPE;
+          console.log(`Using stablecoin type: ${depositUsedUsdcType}`);
+
+          // Send transaction using zkLogin service
+          const txResult = await instance.sendTransaction(
+            account,
+            (txb: Transaction) => {
+              txb.setSender(account.userAddr);
+              
+              // Call the admin_payout_security_deposit_stablecoin function
+              txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_payments::admin_payout_security_deposit_stablecoin`,
+                typeArguments: [depositUsedUsdcType],
+                arguments: [
+                  txb.object(stablecoinPayoutCircleId),
+                  txb.object(stablecoinWalletId),
+                  txb.pure.address(normalizedStablecoinAddress),
+                  txb.object(CLOCK_OBJECT_ID) // Clock object
+                ]
+              });
+            },
+            { gasBudget: 100000000 } // Higher gas budget for payout
+          );
+          
+          console.log('Security deposit stablecoin payout successful:', txResult);
+          return res.status(200).json({
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+        } catch (error) {
+          console.error('Error processing security deposit stablecoin payout:', error);
+          
+          // Handle authentication errors
+          if (error instanceof Error &&
+              (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired') ||
+              error.message.includes('re-authenticate'))) {
+            
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+          
+          // Handle specific contract errors
+          if (error instanceof Error) {
+            if (error.message.includes('ENotAdmin') || error.message.includes('ENotCircleAdmin')) {
+              return res.status(403).json({ error: 'Only the circle admin can process security deposit payouts.' });
+            }
+            if (error.message.includes('EMemberNotFound') || error.message.includes('EMemberNotActive')) {
+              return res.status(400).json({ error: 'Member not found or not active in this circle.' });
+            }
+            if (error.message.includes('ENoSecurityDeposit') || error.message.includes('EDepositNotPaid')) {
+              return res.status(400).json({ error: 'This member has not paid a security deposit or it has already been withdrawn.' });
+            }
+            if (error.message.includes('EInsufficientBalance')) {
+              return res.status(400).json({ error: 'Insufficient stablecoin balance to process the security deposit payout.' });
+            }
+            if (error.message.includes('EUnsupportedToken')) {
+              return res.status(400).json({ error: 'This circle does not support stablecoin security deposit payouts.' });
+            }
+          }
+          
+          // Generic error
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to process stablecoin security deposit payout',
+            details: error instanceof Error ? error.stack : String(error),
+            requireRelogin: false
+          });
+        }
+        break;
+
       default:
         return res.status(400).json({ error: 'Unknown action' });
     }

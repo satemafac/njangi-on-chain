@@ -345,6 +345,24 @@ module njangi::njangi_custody {
     }
     
     // ----------------------------------------------------------
+    // Get total wallet balance (main balance + dynamic fields)
+    // ----------------------------------------------------------
+    public fun get_total_wallet_balance(wallet: &CustodyWallet): u64 {
+        let main_balance = balance::value(&wallet.balance);
+        
+        // Check for SUI in dynamic fields
+        let coin_field = coin_field_name<SUI>();
+        let dynamic_balance = if (dynamic_object_field::exists_(&wallet.id, coin_field)) {
+            let coin = dynamic_object_field::borrow<String, Coin<SUI>>(&wallet.id, coin_field);
+            coin::value(coin)
+        } else {
+            0
+        };
+        
+        main_balance + dynamic_balance
+    }
+    
+    // ----------------------------------------------------------
     // Get wallet circle ID
     // ----------------------------------------------------------
     public fun get_circle_id(wallet: &CustodyWallet): ID {
@@ -404,6 +422,85 @@ module njangi::njangi_custody {
     // ----------------------------------------------------------
     public fun get_admin(wallet: &CustodyWallet): address {
         wallet.admin
+    }
+    
+    // ----------------------------------------------------------
+    // Withdraw SUI from dynamic fields
+    // ----------------------------------------------------------
+    public fun withdraw_from_dynamic_fields(
+        wallet: &mut CustodyWallet,
+        amount: u64,
+        ctx: &mut TxContext
+    ): Coin<SUI> {
+        let sender = tx_context::sender(ctx);
+        let current_time = tx_context::epoch_timestamp_ms(ctx);
+        
+        // Only admin can withdraw
+        assert!(sender == wallet.admin, ENotWalletOwner);
+        
+        // Wallet must be active
+        assert!(wallet.is_active, EWalletNotActive);
+        
+        // Check if wallet is time-locked
+        if (option::is_some(&wallet.locked_until)) {
+            let lock_time = *option::borrow(&wallet.locked_until);
+            assert!(current_time >= lock_time, EFundsTimeLocked);
+        };
+        
+        // Look for SUI in the dynamic fields
+        let coin_field = coin_field_name<SUI>();
+        assert!(dynamic_object_field::exists_(&wallet.id, coin_field), EUnsupportedToken);
+        
+        // Get previous balance for events
+        let previous_balance = get_stablecoin_balance<SUI>(wallet);
+        assert!(previous_balance >= amount, 12); // EInsufficientBalance
+        
+        // Remove the coin, split it, and store back the remainder
+        let mut stored_coin = dynamic_object_field::remove<String, Coin<SUI>>(&mut wallet.id, coin_field);
+        let coin_to_send = coin::split<SUI>(&mut stored_coin, amount, ctx);
+        
+        // If the remainder has value, store it back
+        if (coin::value(&stored_coin) > 0) {
+            dynamic_object_field::add(&mut wallet.id, coin_field, stored_coin);
+        } else {
+            // If no remaining value, destroy the empty coin
+            coin::destroy_zero(stored_coin);
+        };
+        
+        // Get new balance for events
+        let new_balance = get_stablecoin_balance<SUI>(wallet);
+        
+        // Add transaction record to history
+        let txn = create_transaction(
+            core::custody_op_withdrawal(), 
+            sender, 
+            amount, 
+            current_time
+        );
+        vector::push_back(&mut wallet.transaction_history, txn);
+        
+        // Emit withdrawal event
+        event::emit(CustodyWithdrawn {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            recipient: sender,
+            amount,
+            operation_type: core::custody_op_withdrawal(),
+        });
+        
+        // Emit updated balance event for SUI coins
+        event::emit(CoinDeposited {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            coin_type: string::utf8(b"sui"),
+            amount: 0, // Amount withdrawn (not deposited but reusing event)
+            member: sender,
+            previous_balance,
+            new_balance,
+            timestamp: current_time,
+        });
+        
+        coin_to_send
     }
     
     // ----------------------------------------------------------

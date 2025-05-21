@@ -918,4 +918,208 @@ export class ZkLoginClient {
       throw error;
     }
   }
+
+  async resumeCycle(
+    account: AccountData,
+    circleId: string
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    try {
+      console.log(`ZkLoginClient: Resuming cycle for circle ${circleId}`);
+
+      // Verify the account has valid proof data
+      if (!account.zkProofs?.proofPoints || 
+          !account.zkProofs.issBase64Details || 
+          !account.zkProofs.headerBase64) {
+        throw new ZkLoginError(
+          'Missing required authentication data. Please login again.',
+          true
+        );
+      }
+
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'resumeCycle', 
+          account,
+          circleId
+        })
+      });
+      
+      // Try to parse the response
+      let responseData;
+      try {
+        responseData = await response.json();
+        console.log('ZkLoginClient: Resume cycle response:', 
+          response.status, response.statusText, responseData);
+      } catch (parseError) {
+        console.error('Failed to parse response:', parseError);
+        throw new ZkLoginError(`Failed to parse server response: ${response.statusText}`, false);
+      }
+      
+      // Handle authentication errors (401)
+      if (response.status === 401) {
+        console.error('Authentication error:', responseData);
+        throw new ZkLoginError(
+          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
+          true
+        );
+      }
+      
+      // Handle server errors (500)
+      if (!response.ok) {
+        console.error('Resume cycle failed:', responseData);
+        throw new ZkLoginError(
+          responseData.error || 'Failed to resume cycle', 
+          !!responseData.requireRelogin
+        );
+      }
+      
+      // Even for successful response, check if we have a digest
+      if (!responseData.digest) {
+        throw new ZkLoginError('No transaction digest received from server', false);
+      }
+      
+      console.log('Resume cycle succeeded:', responseData);
+      return {
+        digest: responseData.digest,
+        requireRelogin: responseData.requireRelogin
+      };
+    } catch (error) {
+      console.error('Resume cycle error in client:', error);
+      // Rethrow ZkLoginError as is
+      if (error instanceof ZkLoginError) {
+        throw error;
+      }
+      // Otherwise wrap in a new error
+      throw new ZkLoginError(String(error), false);
+    }
+  }
+
+  async payoutSecurityDepositSui(
+    account: AccountData,
+    circleId: string,
+    memberAddress: string,
+    walletId: string
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    try {
+      // Ensure address has 0x prefix
+      const normalizedAddress = memberAddress.startsWith('0x') ? memberAddress : `0x${memberAddress}`;
+      console.log(`ZkLoginClient: Paying out SUI security deposit for member ${normalizedAddress} in circle ${circleId} with wallet ${walletId}`);
+
+      // Verify the account has valid proof data
+      if (!account.zkProofs?.proofPoints || 
+          !account.zkProofs.issBase64Details || 
+          !account.zkProofs.headerBase64) {
+        throw new ZkLoginError(
+          'Missing required authentication data. Please login again.',
+          true
+        );
+      }
+
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'payoutSecurityDepositSui', 
+          account, 
+          circleId,
+          memberAddress: normalizedAddress,
+          walletId
+        }),
+      });
+
+      // Handle errors from the API
+      if (!response.ok) {
+        const errorData = await response.json();
+        if (response.status === 401) {
+          throw new ZkLoginError(
+            errorData.error || 'Authentication failed. Please login again.',
+            true
+          );
+        } else {
+          throw new Error(errorData.error || 'Failed to process security deposit payout');
+        }
+      }
+
+      // Return the transaction digest
+      const result = await response.json();
+      return { 
+        digest: result.digest,
+        requireRelogin: result.requireRelogin
+      };
+    } catch (error) {
+      console.error('Error in payoutSecurityDepositSui:', error);
+      if (error instanceof ZkLoginError) {
+        throw error;
+      } else {
+        throw new Error(error instanceof Error ? error.message : 'Unknown error occurred');
+      }
+    }
+  }
+  
+  // Method for stablecoin security deposit payout
+  async payoutSecurityDepositStablecoin(
+    account: AccountData,
+    circleId: string,
+    memberAddress: string,
+    walletId: string
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    try {
+      console.log(`ZkLoginClient: Paying out stablecoin security deposit for member ${memberAddress} in circle ${circleId} with wallet ${walletId}`);
+
+      // Ensure address has 0x prefix
+      const normalizedAddress = memberAddress.startsWith('0x') ? memberAddress : `0x${memberAddress}`;
+      console.log(`ZkLoginClient: Paying out stablecoin security deposit for member ${normalizedAddress} in circle ${circleId} with wallet ${walletId}`);
+
+      // Verify the account has valid proof data
+      if (!account.zkProofs?.proofPoints || 
+          !account.zkProofs.issBase64Details || 
+          !account.zkProofs.headerBase64) {
+        throw new ZkLoginError(
+          'Missing required authentication data. Please login again.',
+          true
+        );
+      }
+
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'payoutSecurityDepositStablecoin', 
+          account, 
+          circleId,
+          memberAddress: normalizedAddress,
+          walletId
+        }),
+      });
+
+      // Handle errors from the API
+      if (!response.ok) {
+        const errorData = await response.json();
+        if (response.status === 401) {
+          throw new ZkLoginError(
+            errorData.error || 'Authentication failed. Please login again.',
+            true
+          );
+        } else {
+          throw new Error(errorData.error || 'Failed to process stablecoin security deposit payout');
+        }
+      }
+
+      // Return the transaction digest
+      const result = await response.json();
+      return { 
+        digest: result.digest,
+        requireRelogin: result.requireRelogin
+      };
+    } catch (error) {
+      console.error('Error in payoutSecurityDepositStablecoin:', error);
+      if (error instanceof ZkLoginError) {
+        throw error;
+      } else {
+        throw new Error(error instanceof Error ? error.message : 'Unknown error occurred');
+      }
+    }
+  }
 } 
