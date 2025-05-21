@@ -21,9 +21,13 @@ All logic is enforced on-chain by a Move smart contract deployed to the Sui bloc
 4. **Automated Payout** – At cycle close the contract automatically transfers the pooled balance to that cycle's designated recipient.  
 5. **Completion** – After the final cycle, security deposits are released (minus any penalties) and the circle is closed.
 
-<img width="1714" alt="image" src="https://github.com/user-attachments/assets/9e928b07-3395-4cc6-9e17-b7b2b7950742" />
+
+<img width="1722" alt="image" src="https://github.com/user-attachments/assets/dbc5dcf2-6345-4a5e-9d3a-633f910c43bd" />
+
 <img width="1722" alt="image" src="https://github.com/user-attachments/assets/055a9b24-3014-4cbb-9a4d-971e780d96c9" />
-<img width="1722" alt="image" src="https://github.com/user-attachments/assets/055a9b24-3014-4cbb-9a4d-971e780d96c9" />
+
+<img width="1720" alt="image" src="https://github.com/user-attachments/assets/9ef55a5a-bcac-4199-b452-ef8051d6f96a" />
+
 
 ## Contract Interface (Move)
 ```move
