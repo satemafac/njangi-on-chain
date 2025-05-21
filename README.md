@@ -1,7 +1,7 @@
-# Njangi Rotational Circle Smart Contract
+# Njangi On-Chain Rotational Circle Smart Contract
 
 ## Overview
-Njangi is a decentralized implementation of the classic Rotational Savings and Credit Association (ROSCA).  
+Njangi On-Chain is a decentralized implementation of the classic Rotational Savings and Credit Association (ROSCA).  
 Members contribute a fixed amount of stable-value tokens each cycle, and the pooled funds are paid out to one member per cycle following a predefined rotation order.  
 All logic is enforced on-chain by a Move smart contract deployed to the Sui blockchain.
 
