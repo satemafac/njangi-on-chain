@@ -1,0 +1,6 @@
+[default]
+gas_budget = 50_000_000
+wallet_env = "mainnet"
+wallet_config = "~/.sui/sui_config/client.yaml"
+walrus_binary = "walrus"
+wallet_address = "0xdde1086c98c6023db8e3d8267992e4c9aeba3d0271f6bac85dc2f6daa8301c77" 

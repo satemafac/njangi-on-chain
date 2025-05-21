@@ -29,7 +29,9 @@ module njangi::njangi_circle_tests {
             // Create circle parameters
             let name = b"Test Circle";
             let contribution_amount = 100; // 100 SUI
+            let contribution_amount_usd = 2000; // $20.00 (in cents)
             let security_deposit = 50;  // 50 SUI
+            let security_deposit_usd = 1000; // $10.00 (in cents)
             let cycle_length = 0;       // Weekly
             let cycle_day = 1;          // Monday
             let circle_type = 0;        // Regular
@@ -38,6 +40,7 @@ module njangi::njangi_circle_tests {
             let penalty_rules = vector[true, true]; // Enable both penalty types
             let goal_type = std::option::none();
             let target_amount = std::option::none();
+            let target_amount_usd = std::option::none();
             let target_date = std::option::none();
             let verification_required = false;
 
@@ -45,7 +48,9 @@ module njangi::njangi_circle_tests {
             njangi_circle::create_circle(
                 name,
                 contribution_amount,
+                contribution_amount_usd,
                 security_deposit,
+                security_deposit_usd,
                 cycle_length,
                 cycle_day,
                 circle_type,
@@ -54,6 +59,7 @@ module njangi::njangi_circle_tests {
                 penalty_rules,
                 goal_type,
                 target_amount,
+                target_amount_usd,
                 target_date,
                 verification_required,
                 &clock,
@@ -76,13 +82,16 @@ module njangi::njangi_circle_tests {
             njangi_circle::create_circle(
                 b"Test Circle",
                 100,
+                2000, // $20.00 (in cents)
                 50,
+                1000, // $10.00 (in cents)
                 0,
                 1,
                 0,
                 5,
                 0,
                 vector[true, true],
+                std::option::none(),
                 std::option::none(),
                 std::option::none(),
                 std::option::none(),

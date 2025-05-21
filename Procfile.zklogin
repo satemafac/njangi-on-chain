@@ -1,0 +1,1 @@
+web: node --require ts-node/register src/services/persistent-salt-service.ts 

@@ -16,12 +16,14 @@
 # next.js
 /.next/
 /out/
+out-static/
 
 # production
 /build
 
 # misc
 .DS_Store
+**/.DS_Store
 *.pem
 
 # debug
@@ -29,9 +31,11 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+debug-*.cjs
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -41,3 +45,65 @@ yarn-error.log*
 next-env.d.ts
 sui-zklogin-demo/
 polymedia-zklogin-demo/
+
+# large files
+*.zkey
+
+# database files
+*.db
+dump.rdb
+
+# build artifacts
+build/
+.next/
+tsconfig.tsbuildinfo
+
+# Editors
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# Node.js dependencies
+node_modules/
+.npm
+package-lock.json
+yarn.lock
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+logs
+*.log
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Walrus files
+walrus-blobs/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Embedded git repositories
+backend-fix3/
+frontend-fix3/
+salt-service/
+walrus-sites/
+zklogin-sessions.json

@@ -1,0 +1,8 @@
+FROM mysten/zklogin:prover-stable
+WORKDIR /app
+COPY zkLogin.zkey /app/zkey/zkLogin.zkey
+COPY zkLogin.zkey /app/binaries/prod/zkLogin.zkey
+ENV RUST_LOG=info
+ENV ZKEY=/app/zkey/zkLogin.zkey
+ENV WITNESS_BINARIES=/app/binaries
+CMD sed -i "s/8080/$PORT/g" /app/service/run.sh && /app/service/run.sh

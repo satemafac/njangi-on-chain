@@ -10,7 +10,27 @@ const nextConfig = {
     dangerouslyAllowSVG: true,
     contentDispositionType: 'attachment',
     contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
-  }
+    unoptimized: process.env.NODE_ENV === 'production', // Use unoptimized images in production
+  },
+  // Handle CORS for API routes
+  async headers() {
+    return [
+      {
+        // matching all API routes
+        source: "/api/:path*",
+        headers: [
+          { key: "Access-Control-Allow-Credentials", value: "true" },
+          { key: "Access-Control-Allow-Origin", value: "*" },
+          { key: "Access-Control-Allow-Methods", value: "GET,OPTIONS,PATCH,DELETE,POST,PUT" },
+          { key: "Access-Control-Allow-Headers", value: "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version" },
+        ]
+      }
+    ]
+  },
+  // Handle trailing slash for Heroku
+  trailingSlash: false,
+  // Disable sourcemaps in production
+  productionBrowserSourceMaps: false,
 };
 
 module.exports = nextConfig; 

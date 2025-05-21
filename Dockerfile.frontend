@@ -1,0 +1,5 @@
+FROM mysten/zklogin:prover-fe-stable
+ENV NODE_ENV=production
+ENV DEBUG=zkLogin:info,jwks
+ENV PROVER_TIMEOUT=45
+CMD sed -i "s/8080/$PORT/g" /app/run.sh && /app/run.sh
