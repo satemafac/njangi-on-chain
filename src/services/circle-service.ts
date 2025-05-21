@@ -3,8 +3,13 @@ import { SuiClient } from '@mysten/sui/client';
 import { bcs } from '@mysten/sui/bcs';
 import type { CircleFormData, CycleLength, WeekDay } from '../types/circle';
 
-// Package ID from published contract
-const PACKAGE_ID = "0x3668a1e8e51453627141a2d2043e0244242dfe38c2f324686f6b4ec76d4d5a6d";
+// Check if we're on the client side
+const isClient = typeof window !== 'undefined';
+
+// Get package ID from environment variable, or fall back to a default value
+export const PACKAGE_ID = isClient 
+  ? process.env.NEXT_PUBLIC_PACKAGE_ID || "0xd530bfd7511ac2d343646a8ca4e2e14ffb89e1ec69a38ff8fb99c415706d6154"
+  : process.env.NEXT_PUBLIC_PACKAGE_ID || "0xd530bfd7511ac2d343646a8ca4e2e14ffb89e1ec69a38ff8fb99c415706d6154";
 
 // Constants from Move contract
 const CIRCLE_TYPE_ROTATIONAL = 0;
@@ -50,12 +55,16 @@ export class CircleService {
       const contributionAmount = BigInt(Math.floor(formData.contributionAmount * 1e9));
       const securityDeposit = BigInt(Math.floor(formData.securityDeposit * 1e9));
       
-      // 3. Convert cycle day to contract format
+      // 3. Convert USD amounts to cents (integer)
+      const contributionAmountUSD = BigInt(Math.floor(formData.contributionAmountUSD * 100));
+      const securityDepositUSD = BigInt(Math.floor(formData.securityDepositUSD * 100));
+      
+      // 4. Convert cycle day to contract format
       const cycleDay = typeof formData.cycleDay === 'string' 
         ? WEEKDAY_MAP[formData.cycleDay as WeekDay]
         : formData.cycleDay;
 
-      // 4. Prepare smart goal options
+      // 5. Prepare smart goal options
       const goalType = formData.cycleType === 'smart-goal' && formData.smartGoal
         ? [formData.smartGoal.goalType === 'amount' ? GOAL_TYPE_AMOUNT : GOAL_TYPE_TIME]
         : [];
@@ -66,19 +75,28 @@ export class CircleService {
           ? [BigInt(Math.floor(formData.smartGoal.targetAmount * 1e9))]
           : [];
 
+      // 6. Convert target amount USD to cents
+      const targetAmountUSD = formData.cycleType === 'smart-goal' && 
+        formData.smartGoal?.goalType === 'amount' && 
+        formData.smartGoal.targetAmountUSD
+          ? [BigInt(Math.floor(formData.smartGoal.targetAmountUSD * 100))]
+          : [];
+
       const targetDate = formData.cycleType === 'smart-goal' && 
         formData.smartGoal?.goalType === 'date' && 
         formData.smartGoal.targetDate
           ? [BigInt(Math.floor(new Date(formData.smartGoal.targetDate).getTime()))]
           : [];
       
-      // 5. Build transaction
+      // 7. Build transaction
       tx.moveCall({
-        target: `${PACKAGE_ID}::njangi_circle::create_circle`,
+        target: `${PACKAGE_ID}::njangi_circles::create_circle`,
         arguments: [
           tx.pure(nameBytes),                    // name: vector<u8>
           tx.pure.u64(contributionAmount),       // contribution_amount: u64
-          tx.pure.u64(securityDeposit),         // security_deposit: u64
+          tx.pure.u64(contributionAmountUSD),    // contribution_amount_usd: u64
+          tx.pure.u64(securityDeposit),          // security_deposit: u64
+          tx.pure.u64(securityDepositUSD),       // security_deposit_usd: u64
           tx.pure.u64(CYCLE_LENGTH_MAP[formData.cycleLength]), // cycle_length: u64
           tx.pure.u64(cycleDay),                // cycle_day: u64
           tx.pure.u8(formData.cycleType === 'rotational' ? CIRCLE_TYPE_ROTATIONAL : CIRCLE_TYPE_SMART_GOAL), // circle_type: u8
@@ -90,6 +108,7 @@ export class CircleService {
           ])),                                  // penalty_rules: vector<bool>
           tx.pure(bcs.vector(bcs.u8()).serialize(goalType)),     // goal_type: Option<u8>
           tx.pure(bcs.vector(bcs.u64()).serialize(targetAmount)), // target_amount: Option<u64>
+          tx.pure(bcs.vector(bcs.u64()).serialize(targetAmountUSD)), // target_amount_usd: Option<u64>
           tx.pure(bcs.vector(bcs.u64()).serialize(targetDate)),   // target_date: Option<u64>
           tx.pure.bool(formData.smartGoal?.verificationRequired || false), // verification_required: bool
           clock,                               // clock: &Clock
@@ -122,7 +141,7 @@ export class CircleService {
 
       // Join the circle
       tx.moveCall({
-        target: `${PACKAGE_ID}::njangi_circle::join_circle`,
+        target: `${PACKAGE_ID}::njangi_circles::join_circle`,
         arguments: [
           tx.object(circleId),    // circle: &mut Circle
           depositCoin,            // deposit: Coin<SUI>
@@ -145,7 +164,7 @@ export class CircleService {
       
       for (const address of memberAddresses) {
         tx.moveCall({
-          target: `${PACKAGE_ID}::njangi_circle::invite_member`,
+          target: `${PACKAGE_ID}::njangi_circles::invite_member`,
           typeArguments: [],
           arguments: [
             tx.object(circleId), // circle: &mut NjangiCircle

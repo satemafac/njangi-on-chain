@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../contexts/AuthContext';
-import Image from 'next/image';
 import * as Slider from '@radix-ui/react-slider';
 import * as Switch from '@radix-ui/react-switch';
 import * as Select from '@radix-ui/react-select';
@@ -10,18 +9,20 @@ import { priceService } from '../services/price-service';
 
 type CycleType = 'rotational' | 'smart-goal';
 type RotationStyle = 'fixed' | 'auction-based';
-type CycleLength = 'weekly' | 'monthly' | 'quarterly';
+type CycleLength = 'weekly' | 'bi-weekly' | 'monthly' | 'quarterly';
 type WeekDay = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
 
 interface CircleFormData {
   name: string;
-  contributionAmount: number;
+  contributionAmount: number; // SUI amount
+  contributionAmountUSD: number; // NEW: USD amount
   cycleLength: CycleLength;
   cycleDay: number | WeekDay;
   cycleType: CycleType;
   rotationStyle?: RotationStyle;
   numberOfMembers: number;
-  securityDeposit: number;
+  securityDeposit: number; // SUI amount
+  securityDepositUSD: number; // NEW: USD amount
   penaltyRules: {
     latePayment: boolean;
     missedMeeting: boolean;
@@ -29,6 +30,7 @@ interface CircleFormData {
   smartGoal?: {
     goalType: 'amount' | 'date';
     targetAmount?: number;
+    targetAmountUSD?: number; // NEW: USD amount
     targetDate?: string;
     verificationRequired: boolean;
   };
@@ -41,6 +43,7 @@ const MAX_MEMBERS = 20;
 // Type conversion maps for contract interaction
 const CYCLE_LENGTH_MAP = {
   weekly: 0,
+  'bi-weekly': 3,
   monthly: 1,
   quarterly: 2,
 } as const;
@@ -57,13 +60,13 @@ const GOAL_TYPE_MAP = {
 } as const;
 
 const WEEKDAY_MAP = {
-  monday: 1,
-  tuesday: 2,
-  wednesday: 3,
-  thursday: 4,
-  friday: 5,
-  saturday: 6,
-  sunday: 7,
+  monday: 0,
+  tuesday: 1,
+  wednesday: 2,
+  thursday: 3,
+  friday: 4,
+  saturday: 5,
+  sunday: 6,
 } as const;
 
 // Validation function for form data
@@ -99,7 +102,7 @@ const validateFormData = (formData: CircleFormData): string[] => {
 };
 
 // Function to prepare form data for contract
-const prepareCircleCreationData = (formData: CircleFormData) => {
+const prepareCircleCreationData = (formData: CircleFormData, suiPrice: number) => {
   // Convert cycle length to contract format
   const cycle_length = CYCLE_LENGTH_MAP[formData.cycleLength];
   
@@ -120,15 +123,29 @@ const prepareCircleCreationData = (formData: CircleFormData) => {
   const target_amount = formData.smartGoal?.goalType === 'amount' && formData.smartGoal.targetAmount
     ? { some: BigInt(Math.round(formData.smartGoal.targetAmount * 1e9)) }
     : { none: null };
+
+  // Store the USD values (converted to cents) - This is the primary value for the contract
+  // IMPORTANT: The contract expects USD values in cents (2 decimal places)
+  // For example, $0.20 = 20 cents, $10.50 = 1050 cents
+  const contribution_amount_usd = Math.floor(formData.contributionAmountUSD * 100);
+  const security_deposit_usd = Math.floor(formData.securityDepositUSD * 100);
+  const target_amount_usd = formData.smartGoal?.targetAmountUSD 
+    ? Math.floor(formData.smartGoal.targetAmountUSD * 100) 
+    : 0;
     
   // Convert target date to Option<u64> (Unix timestamp in seconds)
   const target_date = formData.smartGoal?.goalType === 'date' && formData.smartGoal.targetDate
     ? { some: BigInt(Math.round(new Date(formData.smartGoal.targetDate).getTime() / 1000)) }
     : { none: null };
 
-  // Convert amounts to MIST (1 SUI = 1e9 MIST)
-  const contribution_amount = BigInt(Math.round(formData.contributionAmount * 1e9));
-  const security_deposit = BigInt(Math.round(formData.securityDeposit * 1e9));
+  // Calculate SUI amounts based on USD values and current SUI price
+  // IMPORTANT: These values are proper SUI amounts with 9 decimals (MIST)
+  // For example, if $0.20 USD = 0.0575 SUI, then it would be 57,500,000 MIST (0.0575 * 1e9)
+  // The contract expects values in MIST format (9 decimals)
+  const contribution_amount = BigInt(Math.round((formData.contributionAmountUSD / suiPrice) * 1e9));
+  
+  // Calculate security deposit similarly
+  const security_deposit = BigInt(Math.round((formData.securityDepositUSD / suiPrice) * 1e9));
 
   // Convert penalty rules to array of booleans
   const penalty_rules = [
@@ -139,7 +156,9 @@ const prepareCircleCreationData = (formData: CircleFormData) => {
   return {
     name: formData.name,
     contribution_amount,
+    contribution_amount_usd,
     security_deposit,
+    security_deposit_usd,
     cycle_length,
     cycle_day,
     circle_type,
@@ -148,6 +167,7 @@ const prepareCircleCreationData = (formData: CircleFormData) => {
     penalty_rules,
     goal_type,
     target_amount,
+    target_amount_usd,
     target_date,
     verification_required: formData.smartGoal?.verificationRequired || false,
   };
@@ -165,23 +185,24 @@ export default function CreateCircle() {
   const [currentStep, setCurrentStep] = useState(0); // Start at step 0 for circle type selection
   const [useCustomContribution, setUseCustomContribution] = useState(false);
   const [useCustomDeposit, setUseCustomDeposit] = useState(false);
-  const [customUSDContribution, setCustomUSDContribution] = useState('');
-  const [customUSDDeposit, setCustomUSDDeposit] = useState('');
   const [formData, setFormData] = useState<CircleFormData>({
     name: '',
     contributionAmount: 0,
+    contributionAmountUSD: 0,
     cycleLength: 'monthly',
     cycleDay: 1, // Default to 1st of month/Monday
     cycleType: 'rotational', // Default to rotational
     rotationStyle: 'fixed', // Default to fixed rotation
     numberOfMembers: 3,
     securityDeposit: 0,
+    securityDepositUSD: 0,
     penaltyRules: {
       latePayment: false,
       missedMeeting: false,
     },
   });
-  const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
+  const [suiPrice, setSuiPrice] = useState<number | null>(null); // Changed to allow null
+  const [isPriceAvailable, setIsPriceAvailable] = useState(false);
   const [inviteMembers, setInviteMembers] = useState<InviteMember[]>([]);
   const [inviteInput, setInviteInput] = useState('');
   const [inviteType, setInviteType] = useState<'email' | 'phone'>('email');
@@ -194,6 +215,7 @@ export default function CreateCircle() {
     const fetchPrice = async () => {
       const price = await priceService.getSUIPrice();
       setSuiPrice(price);
+      setIsPriceAvailable(price !== null);
     };
 
     fetchPrice();
@@ -203,27 +225,29 @@ export default function CreateCircle() {
     return () => clearInterval(interval);
   }, []);
 
-  // Update conversion helpers to use $20 increments
-  const snapToTwentyDollars = (suiAmount: number) => {
-    const usdAmount = suiAmount * suiPrice;
-    const snappedUSD = Math.round(usdAmount / 20) * 20; // Snap to nearest $20
-    return Number((snappedUSD / suiPrice).toFixed(6));
+  // Update conversion helpers to allow precise values for testnet
+  const snapToTwentyDollars = (usdAmount: number, forceSnap: boolean = false) => {
+    if (forceSnap) {
+      return Math.round(usdAmount / 20) * 20; // Snap to nearest $20
+    }
+    return usdAmount; // Allow any value for testnet testing
   };
 
   const convertUSDtoSUI = (usdAmount: number) => {
+    if (!isPriceAvailable || suiPrice === null) return 0;
     return Number((usdAmount / suiPrice).toFixed(6));
   };
 
   // Update CurrencyDisplay component to use live price
-  const CurrencyDisplay = ({ sui, className = "" }: { sui: number; className?: string }) => {
-    const usd = sui * suiPrice;
-    
+  const SuiAmountDisplay = ({ sui, usd, className = "" }: { sui: number; usd: number; className?: string }) => {
     return (
       <Tooltip.Provider>
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
             <span className={`cursor-help ${className}`}>
-              {sui.toFixed(2)} SUI <span className="text-gray-500">({formatUSD(usd)})</span>
+              {formatUSD(usd)} {isPriceAvailable ? 
+                <span className="text-gray-500">({sui.toFixed(2)} SUI)</span> : 
+                <span className="text-yellow-500">(SUI price unavailable)</span>}
             </span>
           </Tooltip.Trigger>
           <Tooltip.Portal>
@@ -232,9 +256,18 @@ export default function CreateCircle() {
               sideOffset={5}
             >
               <div className="space-y-1">
-                <p>Live Conversion Rate:</p>
-                <p>1 SUI = {formatUSD(suiPrice)}</p>
-                <p className="text-xs text-gray-400">Updates every minute</p>
+                {isPriceAvailable ? (
+                  <>
+                    <p>Live Conversion Rate:</p>
+                    <p>1 SUI = {formatUSD(suiPrice!)}</p>
+                    <p className="text-xs text-gray-400">Updates every minute</p>
+                  </>
+                ) : (
+                  <>
+                    <p>SUI price currently unavailable</p>
+                    <p className="text-xs text-gray-400">SUI conversion will be applied at transaction time</p>
+                  </>
+                )}
               </div>
               <Tooltip.Arrow className="fill-gray-900" />
             </Tooltip.Content>
@@ -255,6 +288,26 @@ export default function CreateCircle() {
       ...prev,
       [name]: value,
     }));
+  };
+
+  // New function to handle USD amount changes and calculate SUI
+  const handleUSDInputChange = (field: 'contributionAmountUSD' | 'securityDepositUSD', value: number) => {
+    const snappedValue = snapToTwentyDollars(value);
+    const suiValue = convertUSDtoSUI(snappedValue);
+    
+    if (field === 'contributionAmountUSD') {
+      setFormData(prev => ({
+        ...prev,
+        contributionAmountUSD: snappedValue,
+        contributionAmount: suiValue
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        securityDepositUSD: snappedValue,
+        securityDeposit: suiValue
+      }));
+    }
   };
 
   const handlePenaltyChange = (name: string, checked: boolean) => {
@@ -281,18 +334,38 @@ export default function CreateCircle() {
       return;
     }
     
+    // Check if SUI price is available
+    if (!isPriceAvailable) {
+      setValidationErrors(["SUI price is currently unavailable. Please try again later."]);
+      return;
+    }
+    
     try {
-      // Prepare data for contract
-      const contractData = prepareCircleCreationData(formData);
+      // Prepare data for contract with current SUI price
+      const contractData = prepareCircleCreationData(formData, suiPrice!);
+      
+      // Debug logging
+      console.log("Circle Creation Data:", {
+        contributionAmountUSD: formData.contributionAmountUSD.toFixed(2),
+        securityDepositUSD: formData.securityDepositUSD.toFixed(2),
+        suiPrice: suiPrice!.toFixed(4),
+        contributionAmountMIST: contractData.contribution_amount.toString(),
+        securityDepositMIST: contractData.security_deposit.toString(),
+        expectedSUIAmount: (formData.contributionAmountUSD / suiPrice!).toFixed(6),
+        expectedMIST: Math.round((formData.contributionAmountUSD / suiPrice!) * 1e9)
+      });
       
       // Convert BigInt values to strings for JSON serialization
       const serializedData = {
         ...contractData,
         contribution_amount: contractData.contribution_amount.toString(),
+        contribution_amount_usd: contractData.contribution_amount_usd,
         security_deposit: contractData.security_deposit.toString(),
+        security_deposit_usd: contractData.security_deposit_usd,
         target_amount: contractData.target_amount?.some 
           ? { some: contractData.target_amount.some.toString() }
           : { none: null },
+        target_amount_usd: contractData.target_amount_usd,
         target_date: contractData.target_date?.some
           ? { some: contractData.target_date.some.toString() }
           : { none: null }
@@ -341,45 +414,14 @@ export default function CreateCircle() {
     }
   }, []);
 
-  const handleCustomUSDInput = (type: 'contribution' | 'deposit', value: string) => {
-    const numValue = value === '' ? 0 : parseFloat(value);
-    if (!isNaN(numValue)) {
-      const suiAmount = convertUSDtoSUI(numValue);
-      if (type === 'contribution') {
-        setCustomUSDContribution(value);
-        handleInputChange('contributionAmount', suiAmount);
-      } else {
-        setCustomUSDDeposit(value);
-        handleInputChange('securityDeposit', suiAmount);
-      }
-    }
-  };
-
   if (!isAuthenticated) {
     return null;
   }
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
-              <Image
-                src="/njangi-on-chain-logo.png"
-                alt="Njangi on-chain"
-                width={48}
-                height={48}
-                className="mr-3"
-                priority
-              />
-              <h1 className="text-xl font-semibold text-blue-600">Create New Njangi Circle</h1>
-            </div>
-          </div>
-        </div>
-      </nav>
-
       <main className="max-w-3xl mx-auto py-6 sm:px-6 lg:px-8">
+        <h1 className="text-2xl font-semibold text-blue-600 mb-4 px-4">Create New Njangi Circle</h1>
         <div className="bg-white shadow rounded-lg p-6">
           {currentStep === 0 ? (
             <div className="space-y-6">
@@ -516,41 +558,68 @@ export default function CreateCircle() {
                       Contribution Amount
                     </label>
                     <InfoTooltip>
-                      <p>The amount each member contributes per cycle</p>
-                      <p className="text-gray-300 text-xs mt-1">Use slider for amounts up to $200 or enter custom amount</p>
-                      <p className="text-gray-300 text-xs mt-1">Values increment by $10 for easier management</p>
+                      <p>The USD amount each member contributes per cycle</p>
+                      <p className="text-gray-300 text-xs mt-1">This amount will remain stable in USD value</p>
+                      <p className="text-gray-300 text-xs mt-1">The SUI amount will adjust based on current price</p>
                     </InfoTooltip>
                   </div>
                   <div className="flex items-center space-x-2">
-                    <CurrencyDisplay 
-                      sui={formData.contributionAmount} 
+                    <SuiAmountDisplay 
+                      sui={formData.contributionAmount}
+                      usd={formData.contributionAmountUSD}
                       className="text-sm text-blue-600 font-medium"
                     />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setUseCustomContribution(!useCustomContribution);
-                        if (!useCustomContribution) {
-                          setCustomUSDContribution((formData.contributionAmount * suiPrice).toString());
-                        }
-                      }}
-                      className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-                    >
-                      {useCustomContribution ? 'Use Slider' : 'Custom Amount'}
-                    </button>
+                    {useCustomContribution ? (
+                      <button
+                        type="button"
+                        onClick={() => setUseCustomContribution(false)}
+                        className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      >
+                        Use Slider
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setUseCustomContribution(true)}
+                        className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      >
+                        Custom Amount
+                      </button>
+                    )}
                   </div>
                 </div>
+                
+                {/* USD Pegging Explanation */}
+                <div className="px-3 py-2 bg-blue-50 border border-blue-200 rounded-md text-sm text-blue-700">
+                  <div className="flex items-start">
+                    <div className="mr-2 mt-0.5">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="font-medium">USD-Pegged Contributions</p>
+                      <p className="mt-1 text-xs">All contributions and security deposits are stored in USD value and converted to SUI at the current exchange rate when transactions occur. This provides stability against SUI price fluctuations.</p>
+                    </div>
+                  </div>
+                </div>
+                
                 {useCustomContribution ? (
                   <div className="flex items-center space-x-2">
                     <span className="text-gray-500">$</span>
                     <input
                       type="number"
-                      value={customUSDContribution}
-                      onChange={(e) => handleCustomUSDInput('contribution', e.target.value)}
+                      value={formData.contributionAmountUSD || ''}
+                      onChange={(e) => {
+                        const value = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                        if (!isNaN(value)) {
+                          handleUSDInputChange('contributionAmountUSD', value);
+                        }
+                      }}
                       placeholder="Enter amount in USD"
                       className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                       min="0"
-                      step="20"
+                      step="0.01"
                     />
                     <span className="text-gray-500">USD</span>
                   </div>
@@ -561,10 +630,10 @@ export default function CreateCircle() {
                         <div className="px-2">
                           <Slider.Root
                             className="relative flex items-center select-none touch-none w-full h-5"
-                            value={[formData.contributionAmount]}
-                            max={1000 / suiPrice} // ~$1000 USD
-                            step={20 / suiPrice} // $20 USD in SUI
-                            onValueChange={([value]) => handleInputChange('contributionAmount', snapToTwentyDollars(value))}
+                            value={[formData.contributionAmountUSD]}
+                            max={1000} // $1000 USD max
+                            step={20} // $20 USD increments
+                            onValueChange={([value]) => handleUSDInputChange('contributionAmountUSD', value)}
                           >
                             <Slider.Track className="bg-gray-200 relative grow rounded-full h-2">
                               <Slider.Range className="absolute bg-blue-500 rounded-full h-full" />
@@ -584,9 +653,9 @@ export default function CreateCircle() {
                           <div className="space-y-1">
                             <p>Drag to adjust contribution amount</p>
                             <p className="text-gray-300">
-                              {formatUSD(formData.contributionAmount * suiPrice)} per cycle
+                              {formatUSD(formData.contributionAmountUSD)} per cycle
                             </p>
-                            <p className="text-xs text-gray-400">Values increment by $20</p>
+                            <p className="text-xs text-gray-400">≈ {formData.contributionAmount.toFixed(2)} SUI at current price</p>
                           </div>
                           <Tooltip.Arrow className="fill-gray-900" />
                         </Tooltip.Content>
@@ -659,6 +728,7 @@ export default function CreateCircle() {
                   <InfoTooltip>
                     <p>How often the group meets and contributions are made</p>
                     <p className="text-gray-300 text-xs mt-1">Weekly: More frequent, smaller amounts</p>
+                    <p className="text-gray-300 text-xs mt-1">Bi-weekly: Twice a month</p>
                     <p className="text-gray-300 text-xs mt-1">Monthly: Most common option</p>
                     <p className="text-gray-300 text-xs mt-1">Quarterly: Larger amounts, less frequent</p>
                   </InfoTooltip>
@@ -668,7 +738,8 @@ export default function CreateCircle() {
                   onValueChange={(value: CycleLength) => {
                     handleInputChange('cycleLength', value);
                     // Reset cycleDay to appropriate default based on cycle length
-                    handleInputChange('cycleDay', value === 'weekly' ? 'monday' : 1);
+                    // Treat bi-weekly like weekly for day selection
+                    handleInputChange('cycleDay', (value === 'weekly' || value === 'bi-weekly') ? 'monday' : 1);
                   }}
                 >
                   <Select.Trigger
@@ -688,6 +759,15 @@ export default function CreateCircle() {
                           className="relative flex items-center px-8 py-2 text-sm text-gray-700 rounded-md hover:bg-blue-50 hover:text-blue-700 focus:bg-blue-50 focus:text-blue-700 outline-none cursor-pointer"
                         >
                           <Select.ItemText>Weekly</Select.ItemText>
+                          <Select.ItemIndicator className="absolute left-2 inline-flex items-center">
+                            <CheckIcon />
+                          </Select.ItemIndicator>
+                        </Select.Item>
+                        <Select.Item
+                          value="bi-weekly"
+                          className="relative flex items-center px-8 py-2 text-sm text-gray-700 rounded-md hover:bg-blue-50 hover:text-blue-700 focus:bg-blue-50 focus:text-blue-700 outline-none cursor-pointer"
+                        >
+                          <Select.ItemText>Bi-weekly</Select.ItemText>
                           <Select.ItemIndicator className="absolute left-2 inline-flex items-center">
                             <CheckIcon />
                           </Select.ItemIndicator>
@@ -720,14 +800,16 @@ export default function CreateCircle() {
               <div className="space-y-2">
                 <div className="flex items-center">
                   <label className="block text-sm font-medium text-gray-700">
-                    {formData.cycleLength === 'weekly' ? 'Day of Week' : 'Day of Month'}
+                    {/* Treat bi-weekly like weekly for label */} 
+                    {(formData.cycleLength === 'weekly' || formData.cycleLength === 'bi-weekly') ? 'Day of Week' : 'Day of Month'}
                   </label>
                   <InfoTooltip>
-                    {formData.cycleLength === 'weekly' ? (
-                      <p>Select which day of the week the group will meet</p>
+                    {/* Treat bi-weekly like weekly for tooltip */}
+                    {(formData.cycleLength === 'weekly' || formData.cycleLength === 'bi-weekly') ? (
+                      <p>Select which day of the week contributions are due (or meetings occur)</p>
                     ) : (
                       <>
-                        <p>Select which day of the month the group will meet</p>
+                        <p>Select which day of the month contributions are due (or meetings occur)</p>
                         <p className="text-gray-300 text-xs mt-1">Limited to days 1-28 to ensure consistency across months</p>
                       </>
                     )}
@@ -736,7 +818,8 @@ export default function CreateCircle() {
                 <Select.Root
                   value={formData.cycleDay.toString()}
                   onValueChange={(value) => {
-                    if (formData.cycleLength === 'weekly') {
+                    // Treat bi-weekly like weekly for value update
+                    if (formData.cycleLength === 'weekly' || formData.cycleLength === 'bi-weekly') {
                       handleInputChange('cycleDay', value as WeekDay);
                     } else {
                       handleInputChange('cycleDay', parseInt(value));
@@ -745,7 +828,8 @@ export default function CreateCircle() {
                 >
                   <Select.Trigger
                     className="inline-flex items-center justify-between w-full px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    aria-label={formData.cycleLength === 'weekly' ? 'Day of week' : 'Day of month'}
+                     /* Treat bi-weekly like weekly for aria-label */
+                    aria-label={(formData.cycleLength === 'weekly' || formData.cycleLength === 'bi-weekly') ? 'Day of week' : 'Day of month'}
                   >
                     <Select.Value />
                     <Select.Icon className="ml-2">
@@ -755,7 +839,8 @@ export default function CreateCircle() {
                   <Select.Portal>
                     <Select.Content className="overflow-hidden bg-white rounded-md shadow-lg">
                       <Select.Viewport className="p-1">
-                        {formData.cycleLength === 'weekly' ? (
+                         {/* Treat bi-weekly like weekly for options rendering */} 
+                        {(formData.cycleLength === 'weekly' || formData.cycleLength === 'bi-weekly') ? (
                           // Show weekday options
                           WEEKDAYS.map(({ value, label }) => (
                             <Select.Item
@@ -770,7 +855,7 @@ export default function CreateCircle() {
                             </Select.Item>
                           ))
                         ) : (
-                          // Show month day options
+                          // Show month day options (for monthly/quarterly)
                           MONTH_DAYS.map((day) => (
                             <Select.Item
                               key={day}
@@ -799,40 +884,67 @@ export default function CreateCircle() {
                     </label>
                     <InfoTooltip>
                       <p>One-time deposit to ensure member commitment</p>
+                      <p className="text-gray-300 text-xs mt-1">Fixed in USD value, converted to SUI at current price</p>
                       <p className="text-gray-300 text-xs mt-1">Refundable when leaving the circle in good standing</p>
-                      <p className="text-gray-300 text-xs mt-1">Used to cover missed payments or penalties</p>
                     </InfoTooltip>
                   </div>
                   <div className="flex items-center space-x-2">
-                    <CurrencyDisplay 
-                      sui={formData.securityDeposit} 
+                    <SuiAmountDisplay 
+                      sui={formData.securityDeposit}
+                      usd={formData.securityDepositUSD}
                       className="text-sm text-blue-600 font-medium"
                     />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setUseCustomDeposit(!useCustomDeposit);
-                        if (!useCustomDeposit) {
-                          setCustomUSDDeposit((formData.securityDeposit * suiPrice).toString());
-                        }
-                      }}
-                      className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-                    >
-                      {useCustomDeposit ? 'Use Slider' : 'Custom Amount'}
-                    </button>
+                    {useCustomDeposit ? (
+                      <button
+                        type="button"
+                        onClick={() => setUseCustomDeposit(false)}
+                        className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      >
+                        Use Slider
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setUseCustomDeposit(true)}
+                        className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      >
+                        Custom Amount
+                      </button>
+                    )}
                   </div>
                 </div>
+                
+                {/* USD Pegging Explanation for Security Deposit */}
+                <div className="px-3 py-2 bg-green-50 border border-green-200 rounded-md text-sm text-green-700">
+                  <div className="flex items-start">
+                    <div className="mr-2 mt-0.5">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="font-medium">Stable Security Deposit</p>
+                      <p className="mt-1 text-xs">The security deposit is stored as a USD value on-chain. Members will always deposit the same USD value regardless of SUI price, ensuring fairness across time.</p>
+                    </div>
+                  </div>
+                </div>
+                
                 {useCustomDeposit ? (
                   <div className="flex items-center space-x-2">
                     <span className="text-gray-500">$</span>
                     <input
                       type="number"
-                      value={customUSDDeposit}
-                      onChange={(e) => handleCustomUSDInput('deposit', e.target.value)}
+                      value={formData.securityDepositUSD || ''}
+                      onChange={(e) => {
+                        const value = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                        if (!isNaN(value)) {
+                          handleUSDInputChange('securityDepositUSD', value);
+                        }
+                      }}
                       placeholder="Enter amount in USD"
                       className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                       min="0"
-                      step="20"
+                      step="0.01"
                     />
                     <span className="text-gray-500">USD</span>
                   </div>
@@ -843,10 +955,10 @@ export default function CreateCircle() {
                         <div className="px-2">
                           <Slider.Root
                             className="relative flex items-center select-none touch-none w-full h-5"
-                            value={[formData.securityDeposit]}
-                            max={1000 / suiPrice} // ~$1000 USD
-                            step={20 / suiPrice} // $20 USD in SUI
-                            onValueChange={([value]) => handleInputChange('securityDeposit', snapToTwentyDollars(value))}
+                            value={[formData.securityDepositUSD]}
+                            max={1000} // $1000 USD max
+                            step={20} // $20 USD increments
+                            onValueChange={([value]) => handleUSDInputChange('securityDepositUSD', value)}
                           >
                             <Slider.Track className="bg-gray-200 relative grow rounded-full h-2">
                               <Slider.Range className="absolute bg-blue-500 rounded-full h-full" />
@@ -866,9 +978,9 @@ export default function CreateCircle() {
                           <div className="space-y-1">
                             <p>Drag to adjust security deposit</p>
                             <p className="text-gray-300">
-                              One-time deposit: {formatUSD(formData.securityDeposit * suiPrice)}
+                              One-time deposit: {formatUSD(formData.securityDepositUSD)}
                             </p>
-                            <p className="text-xs text-gray-400">Values increment by $20</p>
+                            <p className="text-xs text-gray-400">≈ {formData.securityDeposit.toFixed(2)} SUI at current price</p>
                           </div>
                           <Tooltip.Arrow className="fill-gray-900" />
                         </Tooltip.Content>
@@ -954,16 +1066,16 @@ export default function CreateCircle() {
                           Target Amount
                         </label>
                         <InfoTooltip>
-                          <p>The total amount your group aims to save</p>
+                          <p>The total USD amount your group aims to save</p>
+                          <p className="text-gray-300 text-xs mt-1">Fixed in USD value, not affected by SUI price</p>
                           <p className="text-gray-300 text-xs mt-1">Must be greater than individual contribution amount</p>
-                          <p className="text-gray-300 text-xs mt-1">Can&apos;t be changed once circle is created</p>
                         </InfoTooltip>
                       </div>
                       <div className="flex items-center space-x-2">
                         <span className="text-gray-500">$</span>
                         <input
                           type="number"
-                          value={formData.smartGoal?.targetAmount ? formData.smartGoal.targetAmount * suiPrice : ''}
+                          value={formData.smartGoal?.targetAmountUSD || ''}
                           onChange={(e) => {
                             const usdAmount = parseFloat(e.target.value);
                             if (!isNaN(usdAmount)) {
@@ -971,6 +1083,7 @@ export default function CreateCircle() {
                                 ...prev,
                                 smartGoal: {
                                   ...prev.smartGoal!,
+                                  targetAmountUSD: usdAmount,
                                   targetAmount: convertUSDtoSUI(usdAmount)
                                 }
                               }));
@@ -978,11 +1091,14 @@ export default function CreateCircle() {
                           }}
                           placeholder="Enter target amount in USD"
                           className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                          min={formData.contributionAmount * suiPrice}
+                          min={formData.securityDepositUSD}
                           step="100"
                         />
                         <span className="text-gray-500">USD</span>
                       </div>
+                      <p className="text-sm text-gray-500 mt-1">
+                        ≈ {formData.smartGoal?.targetAmount?.toFixed(2) || '0'} SUI at current price
+                      </p>
                     </div>
                   )}
 
@@ -1090,6 +1206,26 @@ export default function CreateCircle() {
                       <Switch.Thumb className="block w-5 h-5 bg-white rounded-full shadow-lg transition-transform duration-200 transform translate-x-0.5 data-[state=checked]:translate-x-[22px]" />
                     </Switch.Root>
                   </div>
+                </div>
+              </div>
+
+              {/* Final USD Peg Summary */}
+              <div className="mt-8 mb-6 border border-indigo-200 bg-indigo-50 rounded-lg p-4 text-indigo-700">
+                <h3 className="font-semibold text-sm flex items-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-indigo-600" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 11-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clipRule="evenodd" />
+                  </svg>
+                  USD-Pegged Njangi Feature
+                </h3>
+                <div className="mt-2 text-sm">
+                  <p>This circle will store all monetary values in USD. Key benefits:</p>
+                  <ul className="mt-2 list-disc list-inside space-y-1 text-xs">
+                    <li>Contribution amounts remain stable in USD terms regardless of SUI price</li>
+                    <li>Members joining at different times pay the same real-world value</li>
+                    <li>Security deposits maintain consistent value over time</li>
+                    <li>The UI will always show both USD and equivalent SUI amounts</li>
+                  </ul>
+                  <p className="mt-2 text-xs">Current SUI price: {suiPrice ? `$${suiPrice.toFixed(4)}` : "Loading..."}</p>
                 </div>
               </div>
 
@@ -1274,13 +1410,28 @@ export default function CreateCircle() {
 
               {/* Action Buttons */}
               <div className="flex justify-between pt-6">
-                <button
-                  type="button"
-                  onClick={() => setCurrentStep(1)}
-                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                >
-                  Back
-                </button>
+                <Tooltip.Provider>
+                  <Tooltip.Root>
+                    <Tooltip.Trigger asChild>
+                      <button
+                        type="button"
+                        disabled
+                        className="px-4 py-2 border border-gray-200 rounded-md shadow-sm text-sm font-medium text-gray-400 bg-gray-50 cursor-not-allowed"
+                      >
+                        Back
+                      </button>
+                    </Tooltip.Trigger>
+                    <Tooltip.Portal>
+                      <Tooltip.Content
+                        className="bg-gray-900 text-white px-3 py-2 rounded text-sm"
+                        sideOffset={5}
+                      >
+                        <p>Circle already created. Going back is not allowed to prevent duplicate creation.</p>
+                        <Tooltip.Arrow className="fill-gray-900" />
+                      </Tooltip.Content>
+                    </Tooltip.Portal>
+                  </Tooltip.Root>
+                </Tooltip.Provider>
                 <button
                   type="button"
                   onClick={() => {

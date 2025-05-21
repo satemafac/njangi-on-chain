@@ -16,14 +16,20 @@ import { SuiTransactionBlockResponse, ExecuteTransactionRequestType } from '@mys
 const FULLNODE_URL = 'https://fullnode.testnet.sui.io:443';
 const GOOGLE_OAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const FACEBOOK_OAUTH_URL = 'https://www.facebook.com/v18.0/dialog/oauth';
+const APPLE_OAUTH_URL = 'https://appleid.apple.com/auth/authorize';
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
 const FACEBOOK_CLIENT_ID = process.env.NEXT_PUBLIC_FACEBOOK_CLIENT_ID;
+const APPLE_CLIENT_ID = process.env.NEXT_PUBLIC_APPLE_CLIENT_ID;
 const REDIRECT_URI = process.env.NEXT_PUBLIC_REDIRECT_URI;
-const SALT_SERVICE_URL = 'http://localhost:5002/get-salt'; // Local salt service endpoint
+
+// Use environment variables for service URLs with more descriptive names
+const PROVER_FRONTEND_URL = process.env.NEXT_PUBLIC_PROVER_FRONTEND_URL || 'https://zklogin-frontend-fix3-e9578d3d8fdb.herokuapp.com';
+const SALT_SERVICE_URL = process.env.NEXT_PUBLIC_SALT_SERVICE_URL || 'https://zklogin-salt-service-545adc326c28.herokuapp.com/get-salt';
+
 const MAX_EPOCH = 2; // keep ephemeral keys active for this many Sui epochs from now (1 epoch ~= 24h)
 const GRAPHQL_URL = 'https://sui-testnet.mystenlabs.com/graphql';
 
-export type OAuthProvider = 'Google' | 'Facebook';
+export type OAuthProvider = 'Google' | 'Facebook' | 'Apple';
 
 export interface ZkLoginProofs {
   proofPoints: {
@@ -104,6 +110,7 @@ export class ZkLoginService {
     if (
       !GOOGLE_CLIENT_ID || 
       !FACEBOOK_CLIENT_ID || 
+      !APPLE_CLIENT_ID ||
       !REDIRECT_URI
     ) {
       throw new Error('Missing OAuth configuration');
@@ -132,18 +139,30 @@ export class ZkLoginService {
         client_id: GOOGLE_CLIENT_ID,
         redirect_uri: REDIRECT_URI,
         response_type: 'id_token',
+        response_mode: 'fragment',
         scope: 'openid profile email'
       });
       loginUrl = `${GOOGLE_OAUTH_URL}?${params.toString()}`;
-    } else {
+    } else if (provider === 'Facebook') {
       const params = new URLSearchParams({
         client_id: FACEBOOK_CLIENT_ID,
         redirect_uri: REDIRECT_URI,
         response_type: 'id_token',
+        response_mode: 'fragment',
         scope: 'openid email public_profile',
         nonce: nonce, // Use nonce directly instead of state for OIDC
       });
       loginUrl = `${FACEBOOK_OAUTH_URL}?${params.toString()}`;
+    } else { // Apple
+      const params = new URLSearchParams({
+        client_id: APPLE_CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        response_type: 'id_token',
+        scope: 'openid email name',
+        response_mode: 'fragment',
+        nonce: nonce,
+      });
+      loginUrl = `${APPLE_OAUTH_URL}?${params.toString()}`;
     }
 
     return { loginUrl, setupData };
@@ -287,11 +306,11 @@ export class ZkLoginService {
       aud: jwtPayload.aud,
       exp: jwtPayload.exp,
       iat: jwtPayload.iat,
-      clientId: setupData.provider === 'Google' ? GOOGLE_CLIENT_ID : FACEBOOK_CLIENT_ID
+      clientId: setupData.provider === 'Google' ? GOOGLE_CLIENT_ID : setupData.provider === 'Facebook' ? FACEBOOK_CLIENT_ID : APPLE_CLIENT_ID
     });
 
     // Get salt from the salt service with improved error handling
-    const clientId = setupData.provider === 'Google' ? GOOGLE_CLIENT_ID : FACEBOOK_CLIENT_ID;
+    const clientId = setupData.provider === 'Google' ? GOOGLE_CLIENT_ID : setupData.provider === 'Facebook' ? FACEBOOK_CLIENT_ID : APPLE_CLIENT_ID;
     if (!clientId) {
       throw new Error(`${setupData.provider} Client ID is not configured`);
     }
@@ -328,7 +347,7 @@ export class ZkLoginService {
     };
 
     // Get and validate the zero-knowledge proof
-    const proofResponse = await fetch('http://localhost:5003/v1', {
+    const proofResponse = await fetch(`${PROVER_FRONTEND_URL}/v1`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(proofRequest)
@@ -530,113 +549,129 @@ export class ZkLoginService {
 
       // Sign the transaction block with ephemeral key
       console.log('Signing transaction with ephemeral key...');
-      const { bytes, signature: userSignature } = await txb.sign({
-        client: this.suiClient,
-        signer: ephemeralKeyPair,
-      });
-
-      // Format and validate proof points
-      console.log('Formatting proof points for zkLogin signature...');
       try {
-        // Deep clone the proof points to ensure we don't modify the original
-        const proofPointsClone = JSON.parse(JSON.stringify(account.zkProofs.proofPoints));
-        
-        // Verify all required proof point components exist
-        if (!proofPointsClone.a || !proofPointsClone.b || !proofPointsClone.c ||
-            !Array.isArray(proofPointsClone.a) || !Array.isArray(proofPointsClone.b) || !Array.isArray(proofPointsClone.c)) {
-          throw new Error('Proof points missing required components');
-        }
-        
-        // Format the proof points according to Sui zkLogin requirements
-        const formattedProofPoints = {
-          a: proofPointsClone.a.map((point: string | number) => BigInt(point).toString()),
-          b: proofPointsClone.b.map((pair: string | number | Array<string | number>) => {
-            // Handle b points correctly - must be pairs
-            if (Array.isArray(pair) && pair.length === 2) {
-              return pair.map((point: string | number) => BigInt(point).toString());
-            } else if (!Array.isArray(pair)) {
-              // If not an array, create a pair with [point, 0]
-              return [BigInt(pair).toString(), "0"];
-            } else {
-              // If array but not length 2, log and throw error
-              console.error('Invalid b point format:', pair);
-              throw new Error(`Invalid b point format: expected pair but got array of length ${pair.length}`);
-            }
-          }),
-          c: proofPointsClone.c.map((point: string | number) => BigInt(point).toString()),
-        };
-        
-        console.log('Proof points formatted successfully');
-        
-        // Create zkLogin signature with the exact format required by Sui
-        console.log('Creating zkLogin signature with components:', {
-          hasAddressSeed: !!addressSeed,
-          userSignatureLength: userSignature?.length,
-          maxEpoch: account.maxEpoch,
-          proofPointsA: formattedProofPoints.a?.length,
-          proofPointsB: formattedProofPoints.b?.length,
-          proofPointsC: formattedProofPoints.c?.length,
-          hasHeaderBase64: !!account.zkProofs.headerBase64,
-          hasIssBase64Details: !!account.zkProofs.issBase64Details?.value
+        // Ensure transaction is valid by building it first
+        await txb.build({ client: this.suiClient });
+        console.log('Transaction built successfully');
+      
+        // Then sign it with the correct parameters
+        const { bytes, signature: userSignature } = await txb.sign({
+          client: this.suiClient,
+          signer: ephemeralKeyPair,
         });
+        
+        // Format and validate proof points
+        console.log('Formatting proof points for zkLogin signature...');
+        try {
+          // Deep clone the proof points to ensure we don't modify the original
+          const proofPointsClone = JSON.parse(JSON.stringify(account.zkProofs.proofPoints));
+          
+          // Verify all required proof point components exist
+          if (!proofPointsClone.a || !proofPointsClone.b || !proofPointsClone.c ||
+              !Array.isArray(proofPointsClone.a) || !Array.isArray(proofPointsClone.b) || !Array.isArray(proofPointsClone.c)) {
+            throw new Error('Proof points missing required components');
+          }
+          
+          // Format the proof points according to Sui zkLogin requirements
+          const formattedProofPoints = {
+            a: proofPointsClone.a.map((point: string | number) => BigInt(point).toString()),
+            b: proofPointsClone.b.map((pair: string | number | Array<string | number>) => {
+              // Handle b points correctly - must be pairs
+              if (Array.isArray(pair) && pair.length === 2) {
+                return pair.map((point: string | number) => BigInt(point).toString());
+              } else if (!Array.isArray(pair)) {
+                // If not an array, create a pair with [point, 0]
+                return [BigInt(pair).toString(), "0"];
+              } else {
+                // If array but not length 2, log and throw error
+                console.error('Invalid b point format:', pair);
+                throw new Error(`Invalid b point format: expected pair but got array of length ${pair.length}`);
+              }
+            }),
+            c: proofPointsClone.c.map((point: string | number) => BigInt(point).toString()),
+          };
+          
+          console.log('Proof points formatted successfully');
+          
+          // Create zkLogin signature with the exact format required by Sui
+          console.log('Creating zkLogin signature with components:', {
+            hasAddressSeed: !!addressSeed,
+            userSignatureLength: userSignature?.length,
+            maxEpoch: account.maxEpoch,
+            proofPointsA: formattedProofPoints.a?.length,
+            proofPointsB: formattedProofPoints.b?.length,
+            proofPointsC: formattedProofPoints.c?.length,
+            hasHeaderBase64: !!account.zkProofs.headerBase64,
+            hasIssBase64Details: !!account.zkProofs.issBase64Details?.value
+          });
 
-        // Ensure we have all the required inputs
-        if (!addressSeed || !userSignature || !account.zkProofs.headerBase64 ||
-            !account.zkProofs.issBase64Details || !account.zkProofs.issBase64Details.value) {
-          throw new Error('Missing required zkLogin signature components');
-        }
+          // Ensure we have all the required inputs
+          if (!addressSeed || !userSignature || !account.zkProofs.headerBase64 ||
+              !account.zkProofs.issBase64Details || !account.zkProofs.issBase64Details.value) {
+            throw new Error('Missing required zkLogin signature components');
+          }
 
-        // Create the zkLogin signature
-        const zkLoginSignature = getZkLoginSignature({
-          inputs: {
-            ...account.zkProofs,
-            proofPoints: formattedProofPoints,
-            addressSeed,
-          },
-          maxEpoch: account.maxEpoch,
-          userSignature,
-        });
-        
-        console.log('Generated zkLogin signature:', zkLoginSignature.substring(0, 20) + '...');
-        
-        // Execute transaction
-        console.log('Executing transaction with zkLogin signature...');
-        const result = await this.suiClient.executeTransactionBlock({
-          transactionBlock: bytes,
-          signature: zkLoginSignature,
-          options: {
-            showEffects: true,
-            showEvents: true,
-            showInput: true,
-            showObjectChanges: true,
-          },
-          requestType: options.requestType || 'WaitForLocalExecution'
-        });
-        
-        if (!result) {
-          throw new Error('No transaction response received');
+          // Create the zkLogin signature
+          const zkLoginSignature = getZkLoginSignature({
+            inputs: {
+              ...account.zkProofs,
+              proofPoints: formattedProofPoints,
+              addressSeed,
+            },
+            maxEpoch: account.maxEpoch,
+            userSignature,
+          });
+          
+          console.log('Generated zkLogin signature:', zkLoginSignature.substring(0, 20) + '...');
+          
+          // Execute transaction
+          console.log('Executing transaction with zkLogin signature...');
+          const result = await this.suiClient.executeTransactionBlock({
+            transactionBlock: bytes,
+            signature: zkLoginSignature,
+            options: {
+              showEffects: true,
+              showEvents: true,
+              showInput: true,
+              showObjectChanges: true,
+            },
+            requestType: options.requestType || 'WaitForLocalExecution'
+          });
+          
+          if (!result) {
+            throw new Error('No transaction response received');
+          }
+          
+          // Process and return transaction result
+          const txResult = this.processTransactionResponse(result);
+          if (txResult.status === 'failure') {
+            throw new Error(txResult.error || 'Transaction failed');
+          }
+          
+          return txResult;
+        } catch (error) {
+          // Handle proof formatting errors
+          console.error('Error in proof formatting or signature generation:', error);
+          if (error instanceof Error) {
+            throw new Error(`zkLogin signature error: ${error.message}`);
+          }
+          throw error;
         }
-        
-        // Process and return transaction result
-        const txResult = this.processTransactionResponse(result);
-        if (txResult.status === 'failure') {
-          throw new Error(txResult.error || 'Transaction failed');
-        }
-        
-        return txResult;
       } catch (error) {
-        // Handle proof formatting errors
-        console.error('Error in proof formatting or signature generation:', error);
-        if (error instanceof Error) {
-          throw new Error(`zkLogin signature error: ${error.message}`);
-        }
+        console.error('Error in transaction signing:', error);
         throw error;
       }
     } catch (err) {
       console.error('Transaction error:', err);
       
       if (err instanceof Error) {
-        // Check for specific error types
+        // **New**: Prioritize MoveAbort errors
+        if (err.message.includes('MoveAbort')) {
+          // Re-throw the original MoveAbort error so it gets passed back
+          throw new Error(err.message);
+        }
+        
+        // Keep existing checks for session/proof related errors
         if (err.message.includes('epoch has expired') || 
             err.message.includes('maxEpoch') || 
             err.message.includes('proof verify failed') ||
@@ -650,14 +685,20 @@ export class ZkLoginService {
           throw new Error('Insufficient gas: Please ensure you have enough SUI for gas');
         }
 
+        // Keep the check for invalid proof structure, but it should be less likely to catch MoveAborts now
         if (err.message.includes('Invalid proof') || 
             err.message.includes('proof points') ||
             err.message.includes('zkLogin signature error')) {
           throw new Error('Invalid proof structure: Please re-authenticate');
         }
+        
+        // If none of the above specific errors match, re-throw the original error message
+        // instead of the generic "Failed to execute transaction"
+        throw new Error(err.message || 'Failed to execute transaction. Please try again.');
       }
       
-      throw new Error('Failed to execute transaction. Please try again.');
+      // If it's not an Error instance, throw a generic message
+      throw new Error('An unknown error occurred during transaction execution.');
     }
   }
 

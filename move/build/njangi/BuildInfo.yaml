@@ -3,10 +3,11 @@ compiled_package_info:
   package_name: njangi
   address_alias_instantiation:
     njangi: "0000000000000000000000000000000000000000000000000000000000000000"
+    pyth: abf837e98c26087cba0883c0a7a28326b1fa3c5e1e2c5abdb486f9e8f594c837
     std: "0000000000000000000000000000000000000000000000000000000000000001"
     sui: "0000000000000000000000000000000000000000000000000000000000000002"
-    usdc: a1ec7fc00a6f40db9693ad1415d0c193ad3906494428cf252621037bd7117e29
-  source_digest: 50CB5C951B146A143A832F98D30494BFA2C924432F4ADEB6A66179E8A4ACBEE9
+    wormhole: f47329f4344f3bf0f8e436e2f7b485466cff300f12a166563995d3888c296a94
+  source_digest: 9E398B47DF1AAFC6CF01CC9B1E97651A44248DE2F507B092472F913115B1332E
   build_flags:
     dev_mode: false
     test_mode: false
@@ -27,6 +28,49 @@ compiled_package_info:
     lint_flag:
       no_lint: false
       lint: false
+    implicit_dependencies:
+      Bridge:
+        Internal:
+          kind:
+            Git:
+              git_url: "https://github.com/MystenLabs/sui.git"
+              git_rev: e54b798790ed
+              subdir: crates/sui-framework/packages/bridge
+          subst: ~
+          digest: ~
+          dep_override: true
+      MoveStdlib:
+        Internal:
+          kind:
+            Git:
+              git_url: "https://github.com/MystenLabs/sui.git"
+              git_rev: e54b798790ed
+              subdir: crates/sui-framework/packages/move-stdlib
+          subst: ~
+          digest: ~
+          dep_override: true
+      Sui:
+        Internal:
+          kind:
+            Git:
+              git_url: "https://github.com/MystenLabs/sui.git"
+              git_rev: e54b798790ed
+              subdir: crates/sui-framework/packages/sui-framework
+          subst: ~
+          digest: ~
+          dep_override: true
+      SuiSystem:
+        Internal:
+          kind:
+            Git:
+              git_url: "https://github.com/MystenLabs/sui.git"
+              git_rev: e54b798790ed
+              subdir: crates/sui-framework/packages/sui-system
+          subst: ~
+          digest: ~
+          dep_override: true
 dependencies:
   - MoveStdlib
+  - Pyth
   - Sui
+  - Wormhole
