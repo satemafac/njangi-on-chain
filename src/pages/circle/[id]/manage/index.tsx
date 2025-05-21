@@ -3,7 +3,7 @@ import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 import { SuiClient, SuiEvent } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
-import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle, Edit3, Users, Crown } from 'lucide-react';
+import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle, Edit3, Users, Crown, RefreshCw } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
@@ -26,9 +26,11 @@ interface Circle {
   cycleDay: number;
   maxMembers: number;
   currentMembers: number;
+  currentCycle: number; // Add currentCycle property
   nextPayoutTime: number;
   isActive: boolean;
   autoSwapEnabled: boolean;
+  paused: boolean; // Added paused state flag
   custody?: {
     walletId: string;
     stablecoinEnabled: boolean;
@@ -222,6 +224,7 @@ export default function ManageCircle() {
   const [usdcContributionBalance, setUsdcContributionBalance] = useState<number | null>(null);
   const [fetchingUsdcBalance, setFetchingUsdcBalance] = useState(false);
   const [fetchingSuiBalance, setFetchingSuiBalance] = useState(false);
+  const [paidOutInCurrentSessionMembers, setPaidOutInCurrentSessionMembers] = useState<Set<string>>(new Set());
 
   // State for contribution tracking
   const [contributionStatus, setContributionStatus] = useState<{
@@ -250,6 +253,13 @@ export default function ManageCircle() {
     medium: { min: 6, max: 10, label: 'Medium circle (6-10 members)', description: 'Balanced payout frequency and total pool size' },
     large: { min: 11, max: 20, label: 'Large circle (11-20 members)', description: 'Larger pool, longer wait for payouts' }
   };
+
+  // Add state for security deposit payout modal
+  const [showPayoutDepositModal, setShowPayoutDepositModal] = useState(false);
+  const [selectedMembersForPayout, setSelectedMembersForPayout] = useState<Set<string>>(new Set());
+  const [isProcessingPayout, setIsProcessingPayout] = useState(false);
+  const [payoutCoinType, setPayoutCoinType] = useState<'sui' | 'stablecoin'>('sui');
+  const [payoutProgress, setPayoutProgress] = useState<{current: number, total: number}>({current: 0, total: 0});
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -501,6 +511,16 @@ export default function ManageCircle() {
         console.error('Manage - Error checking circle activation:', error);
       }
 
+      // Check for paused status - safely get the boolean value
+      let isPaused = false;
+      if (typeof fields.paused_after_cycle === 'boolean') {
+        isPaused = fields.paused_after_cycle;
+      } else if (fields.paused_after_cycle) {
+        // Handle the case where it might be any other truthy value
+        isPaused = true;
+      }
+      console.log('[fetchCircleDetails] Circle paused status:', isPaused);
+
       // Fetch members and their addresses
       let actualMemberCount = 1; // Start with admin
       const memberAddresses = new Set<string>();
@@ -599,6 +619,26 @@ export default function ManageCircle() {
             if(hasPaid) console.log(`Deposit status for ${shortenAddress(address)} from CustodyDeposited event: ${hasPaid}`);
           }
 
+          // New Step: Check SecurityDepositReturned Event to override hasPaid to false if applicable
+          try {
+            const securityReturnedEvents = await client.queryEvents({
+              query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::SecurityDepositReturned` }, 
+              limit: 100 // Adjust limit as needed
+            });
+            const hasReturnedEvent = securityReturnedEvents.data.some(event => {
+              const parsed = event.parsedJson as { circle_id?: string; member?: string; };
+              // Ensure addresses are compared consistently (e.g., lowercase)
+              return parsed?.circle_id === id && parsed?.member?.toLowerCase() === address.toLowerCase();
+            });
+
+            if (hasReturnedEvent) {
+              hasPaid = false; // Override: if a deposit was returned, it's no longer considered paid
+              console.log(`[fetchCircleDetails] Deposit for ${shortenAddress(address)} definitively marked as UNPAID due to SecurityDepositReturned event.`);
+            }
+          } catch (eventError) {
+            console.warn(`Error fetching SecurityDepositReturned events for ${shortenAddress(address)}:`, eventError);
+          }
+
           // Find join date from MemberJoined event if possible
           const joinEvent = memberEvents.data.find((e: SuiEvent) => 
               (e.parsedJson as { member?: string })?.member === address && 
@@ -675,9 +715,11 @@ export default function ManageCircle() {
         cycleDay: configValues.cycleDay,
         maxMembers: configValues.maxMembers,
         currentMembers: actualMemberCount, // Use calculated count
+        currentCycle: Number(fields.current_cycle || 0), // Add current cycle
         nextPayoutTime: Number(fields.next_payout_time || 0),
         isActive: isActive,
-        autoSwapEnabled: finalAutoSwapValue, 
+        autoSwapEnabled: finalAutoSwapValue,
+        paused: isPaused, // Set the paused state
         custody: undefined // Reset custody, will be set later if found
       });
 
@@ -2095,12 +2137,12 @@ export default function ManageCircle() {
     });
   };
 
-  // Update the saveRotationOrder function to ensure proper validation
+  // Update the saveRotationOrder function to allow editing when circle is paused after a cycle
   const saveRotationOrder = async (newOrder: string[]) => {
     if (!id || !userAddress || !circle) return;
     
-    // Prevent saving rotation order if circle is active
-    if (circle.isActive) {
+    // Allow editing rotation order if circle is paused, but prevent if just active
+    if (circle.isActive && !circle.paused) {
       toast.error('Cannot modify rotation order for active circles');
       setIsEditingRotation(false);
       return;
@@ -2712,6 +2754,420 @@ export default function ManageCircle() {
     return "All requirements met! Circle can be activated.";
   };
 
+  // Add a function to resume the cycle
+  const handleResumeCycle = async () => {
+    if (!circle || !circle.paused) return;
+    
+    // Show confirmation modal first
+    setConfirmationModal({
+      isOpen: true,
+      title: 'Resume Circle Cycle',
+      message: (
+        <div>
+          <p>Cycle {circle.currentCycle} has completed. Would you like to:</p>
+          <ul className="mt-2 list-disc pl-5 text-sm">
+            <li>Resume to the next cycle</li>
+            <li>Allow members to make contributions for the new cycle</li>
+          </ul>
+          <p className="mt-2">Are you sure you want to proceed?</p>
+        </div>
+      ),
+      confirmText: 'Resume Cycle',
+      cancelText: 'Cancel',
+      confirmButtonVariant: 'primary',
+      onConfirm: async () => {
+        const toastId = 'resume-cycle';
+        try {
+          toast.loading('Resuming cycle...', { id: toastId });
+          
+          if (!account) {
+            toast.error('User account not available. Please log in again.', { id: toastId });
+            return;
+          }
+          
+          // Call the backend API
+          const response = await fetch('/api/zkLogin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'resumeCycle',
+              account,
+              circleId: circle.id
+            }),
+          });
+          
+          const result = await response.json();
+          
+          if (!response.ok) {
+            console.error('Failed to resume cycle:', result);
+            const errorDetail = parseMoveError(result.error || '');
+            toast.error(errorDetail.message, { id: toastId });
+            return;
+          }
+          
+          // Update local state
+          setCircle(prevCircle => prevCircle ? { ...prevCircle, paused: false } : null);
+          
+          // Refresh circle details
+          await fetchCircleDetails();
+          
+          toast.success('Successfully resumed to the next cycle', { id: toastId });
+        } catch (error) {
+          console.error('Error resuming cycle:', error);
+          toast.error('Failed to resume cycle', { id: toastId });
+        }
+      }
+    });
+  };
+
+  // Function to handle security deposit payout for multiple members
+  const handleSecurityDepositPayout = async (memberAddresses: string[], coinType: 'sui' | 'stablecoin') => {
+    if (!circle || !circle.id || !account) {
+      toast.error('Missing circle information or account.');
+      return;
+    }
+
+    if (!circle.custody?.walletId) {
+      toast.error('Custody wallet information is not available.');
+      return;
+    }
+
+    if (!circle.paused) {
+      toast.error('Circle must be paused to pay out security deposits.');
+      return;
+    }
+
+    if (memberAddresses.length === 0) {
+      toast.error('No members selected for payout.');
+      return;
+    }
+
+    setIsProcessingPayout(true);
+    const toastId = 'security-deposit-payout';
+    
+    try {
+      toast.loading(`Processing security deposits payout for ${memberAddresses.length} member(s)...`, { id: toastId });
+      
+      const zkLoginClient = new ZkLoginClient();
+      setPayoutProgress({current: 0, total: memberAddresses.length});
+      
+      // Process each member sequentially
+      for (let i = 0; i < memberAddresses.length; i++) {
+        const memberAddress = memberAddresses[i];
+        setPayoutProgress({current: i + 1, total: memberAddresses.length});
+        
+        try {
+          // Check if wallet ID is available
+          if (!circle.custody?.walletId) {
+            throw new Error('Wallet ID is required but not available');
+          }
+          
+          // Ensure address has proper format
+          const normalizedAddress = memberAddress.startsWith('0x') ? memberAddress : `0x${memberAddress}`;
+          
+          let result;
+          
+          if (coinType === 'sui') {
+            result = await zkLoginClient.payoutSecurityDepositSui(
+              account,
+              circle.id,
+              normalizedAddress,
+              circle.custody.walletId
+            );
+          } else {
+            result = await zkLoginClient.payoutSecurityDepositStablecoin(
+              account,
+              circle.id,
+              normalizedAddress,
+              circle.custody.walletId
+            );
+          }
+          
+          console.log(`Security deposit payout transaction executed for ${shortenAddress(memberAddress)}. Digest: ${result.digest}`);
+          
+          // Add to paid out set for immediate UI update in modal
+          setPaidOutInCurrentSessionMembers(prev => new Set(prev).add(memberAddress));
+          
+        } catch (memberError) {
+          console.error(`Error paying out security deposit for ${shortenAddress(memberAddress)}:`, memberError);
+          toast.error(`Failed to process payout for ${shortenAddress(memberAddress)}: ${memberError instanceof Error ? memberError.message : 'Unknown error'}`, 
+            { id: `${toastId}-error-${i}`, duration: 5000 });
+          
+          // Continue with next member even if one fails
+          if (memberError instanceof ZkLoginError && memberError.requireRelogin) {
+            router.push('/');
+            break;
+          }
+        }
+      }
+      
+      // Update the UI - refresh circle data and member status
+      await fetchCircleDetails();
+      
+      // Show success message
+      toast.success(`Completed security deposit payouts: ${payoutProgress.current}/${memberAddresses.length} successful`, { id: toastId });
+      
+      // Close the modal and reset selections
+      setShowPayoutDepositModal(false);
+      setSelectedMembersForPayout(new Set());
+      // setPaidOutInCurrentSessionMembers(new Set()); // Clear for next modal opening if desired, or let fetchCircleDetails handle it
+      
+    } catch (error) {
+      console.error('Error processing multiple security deposit payouts:', error);
+      
+      // Parse the error for a more specific message
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      toast.error(errorMessage, { id: toastId });
+      
+      if (error instanceof ZkLoginError && error.requireRelogin) {
+        router.push('/');
+      }
+    } finally {
+      setIsProcessingPayout(false);
+      setPayoutProgress({current: 0, total: 0});
+    }
+  };
+
+  // Replace the SecurityDepositPayoutModal component with the updated version
+  const SecurityDepositPayoutModal = () => {
+    if (!showPayoutDepositModal) return null;
+    
+    // Filter to only show members with paid deposits AND not paid out in current session
+    const eligibleMembers = members.filter(member => member.depositPaid && !paidOutInCurrentSessionMembers.has(member.address));
+    const alreadyPaidMembers = members.filter(member => !member.depositPaid || paidOutInCurrentSessionMembers.has(member.address));
+    
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+          <div className="bg-blue-600 text-white px-6 py-4">
+            <h2 className="text-xl font-semibold">Pay Out Security Deposits</h2>
+            <p className="text-blue-100 text-sm mt-1">
+              Return security deposits to members who wish to exit the circle
+            </p>
+          </div>
+          
+          <div className="px-6 py-4 flex-grow overflow-y-auto">
+            {eligibleMembers.length === 0 ? (
+              <div className="text-center py-8">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <p className="mt-4 text-gray-600">No members with paid security deposits found.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-gray-700 mb-4">
+                  Select one or more members to return their security deposits. This action cannot be undone.
+                </p>
+                
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-sm font-medium text-gray-500">
+                    {selectedMembersForPayout.size} member(s) selected
+                  </span>
+                  <div className="flex space-x-2">
+                    <button 
+                      onClick={() => setSelectedMembersForPayout(new Set())}
+                      className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 py-1 px-2 rounded transition-colors"
+                    >
+                      Clear All
+                    </button>
+                    <button 
+                      onClick={() => {
+                        const allEligibleMemberAddresses = new Set(eligibleMembers.map(member => member.address));
+                        setSelectedMembersForPayout(allEligibleMemberAddresses);
+                      }}
+                      className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 py-1 px-2 rounded transition-colors"
+                    >
+                      Select All
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="space-y-2 max-h-64 overflow-y-auto pr-2">
+                  {eligibleMembers.map(member => {
+                    const isSelected = selectedMembersForPayout.has(member.address);
+                    return (
+                      <div 
+                        key={member.address}
+                        className={`border rounded-lg p-3 cursor-pointer transition-colors ${
+                          isSelected 
+                            ? 'border-blue-500 bg-blue-50' 
+                            : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50'
+                        }`}
+                        onClick={() => {
+                          const newSelected = new Set(selectedMembersForPayout);
+                          if (newSelected.has(member.address)) {
+                            newSelected.delete(member.address);
+                          } else {
+                            newSelected.add(member.address);
+                          }
+                          setSelectedMembersForPayout(newSelected);
+                        }}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center">
+                            <div className={`w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center ${
+                              isSelected 
+                                ? 'bg-blue-500 ring-2 ring-blue-300' 
+                                : 'border border-gray-300'
+                            }`}>
+                              {isSelected && (
+                                <Check className="w-3 h-3 text-white" />
+                              )}
+                            </div>
+                            <div className="ml-3">
+                              <p className="font-medium text-gray-900">{shortenAddress(member.address)}</p>
+                              <p className="text-xs text-gray-500">
+                                {member.address === circle?.admin ? 'Admin' : `Position: ${member.position !== undefined ? member.position + 1 : 'Not set'}`}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="text-sm font-medium text-gray-900">
+                            {circle?.securityDeposit.toFixed(4)} SUI
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {/* Display members who have already been paid out or whose deposit is not marked as paid */}
+                  {alreadyPaidMembers.map(member => (
+                    <div 
+                      key={member.address}
+                      className="border rounded-lg p-3 cursor-not-allowed bg-gray-100 border-gray-200 opacity-70"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center">
+                          <div className={`w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center bg-green-500 ring-2 ring-green-300`}>
+                            <Check className="w-3 h-3 text-white" />
+                          </div>
+                          <div className="ml-3">
+                            <p className="font-medium text-gray-600">{shortenAddress(member.address)}</p>
+                            <p className="text-xs text-gray-400">
+                              {member.address === circle?.admin ? 'Admin' : `Position: ${member.position !== undefined ? member.position + 1 : 'Not set'}`}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-sm font-medium text-green-600">
+                          Paid Out
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                
+                {/* Coin type selection */}
+                {selectedMembersForPayout.size > 0 && (
+                  <div className="mt-6 border-t border-gray-200 pt-4">
+                    <p className="font-medium text-gray-800 mb-3">Select payout coin type:</p>
+                    <div className="flex space-x-3">
+                      <button
+                        className={`px-4 py-2 rounded-md border ${
+                          payoutCoinType === 'sui' 
+                            ? 'bg-blue-50 border-blue-500 text-blue-700' 
+                            : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                        }`}
+                        onClick={() => setPayoutCoinType('sui')}
+                        type="button"
+                      >
+                        SUI
+                      </button>
+                      <button
+                        className={`px-4 py-2 rounded-md border ${
+                          payoutCoinType === 'stablecoin' 
+                            ? 'bg-blue-50 border-blue-500 text-blue-700' 
+                            : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                        }`}
+                        onClick={() => setPayoutCoinType('stablecoin')}
+                        disabled={!circle?.custody?.stablecoinEnabled}
+                        type="button"
+                      >
+                        Stablecoin (USDC)
+                      </button>
+                    </div>
+                    {payoutCoinType === 'stablecoin' && !circle?.custody?.stablecoinEnabled && (
+                      <p className="mt-2 text-sm text-amber-600">
+                        Stablecoin payouts are not enabled for this circle.
+                      </p>
+                    )}
+                  </div>
+                )}
+                
+                {/* Progress indicator for multi-payout */}
+                {isProcessingPayout && payoutProgress.total > 0 && (
+                  <div className="mt-4 border-t border-gray-200 pt-4">
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm font-medium text-gray-700">
+                          Processing payouts: {payoutProgress.current}/{payoutProgress.total}
+                        </span>
+                        <span className="text-xs font-medium text-gray-500">
+                          {Math.round((payoutProgress.current / payoutProgress.total) * 100)}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2.5">
+                        <div 
+                          className="bg-blue-600 h-2.5 rounded-full" 
+                          style={{ 
+                            width: `${(payoutProgress.current / payoutProgress.total) * 100}%` 
+                          }}
+                        ></div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          
+          <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex justify-end space-x-3">
+            <button
+              className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+              onClick={() => {
+                setShowPayoutDepositModal(false);
+                setSelectedMembersForPayout(new Set());
+                setPaidOutInCurrentSessionMembers(new Set()); // Clear when modal is cancelled/closed
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              className={`px-4 py-2 rounded-md text-white ${
+                selectedMembersForPayout.size === 0 || isProcessingPayout || 
+                // Disable if all selected members are already paid out (though they shouldn't be selectable)
+                (selectedMembersForPayout.size > 0 && Array.from(selectedMembersForPayout).every(addr => paidOutInCurrentSessionMembers.has(addr) || !members.find(m=>m.address === addr)?.depositPaid))
+                  ? 'bg-gray-400 cursor-not-allowed' 
+                  : 'bg-blue-600 hover:bg-blue-700'
+              }`}
+              disabled={selectedMembersForPayout.size === 0 || isProcessingPayout || (selectedMembersForPayout.size > 0 && Array.from(selectedMembersForPayout).every(addr => paidOutInCurrentSessionMembers.has(addr) || !members.find(m=>m.address === addr)?.depositPaid))}
+              onClick={() => {
+                const selectedAddresses = Array.from(selectedMembersForPayout).filter(
+                  addr => !(paidOutInCurrentSessionMembers.has(addr) || !members.find(m=>m.address === addr)?.depositPaid)
+                );
+                if (selectedAddresses.length > 0) {
+                  handleSecurityDepositPayout(selectedAddresses, payoutCoinType);
+                }
+              }}
+            >
+              {isProcessingPayout ? (
+                <div className="flex items-center">
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Processing...
+                </div>
+              ) : selectedMembersForPayout.size > 1 ? (
+                `Pay Out ${selectedMembersForPayout.size} Deposits`
+              ) : (
+                'Pay Out Deposit'
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <main className="max-w-7xl mx-auto py-4 sm:py-6 px-4 sm:px-6 lg:px-8">
@@ -3055,6 +3511,77 @@ export default function ManageCircle() {
                   </div>
                 </div>
                 
+                {/* Add the paused status banner */}
+                {circle.paused && (
+                  <div className="mb-6 p-5 bg-amber-50 border-2 border-amber-300 rounded-lg">
+                    <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
+                      <div className="flex-1">
+                        <h3 className="text-lg font-semibold text-amber-800 flex items-center">
+                          <Pause className="mr-2 h-5 w-5" />
+                          Circle Paused After Cycle Completion
+                        </h3>
+                        <p className="text-amber-700 mt-2">
+                          The circle has been paused after completing cycle {circle.currentCycle}. As the admin, you can:
+                        </p>
+                        <ul className="list-disc pl-5 mt-2 text-sm text-amber-600 space-y-1">
+                          <li>Pay out remaining security deposits to members who want to leave</li>
+                          <li>Edit rotation order for the next cycle</li>
+                          <li>Resume the circle to start the next cycle</li>
+                        </ul>
+                        <p className="mt-3 text-sm text-amber-700 font-medium bg-amber-100 p-2 rounded border border-amber-200 flex items-start">
+                          <AlertTriangle className="mr-2 h-4 w-4 flex-shrink-0 mt-0.5" />
+                          <span>
+                            When you resume the circle, all members will need to pay a new security deposit for the next cycle.
+                            Their deposit status will be reset, requiring them to make a new deposit before they can contribute.
+                          </span>
+                        </p>
+                      </div>
+                      <div className="flex flex-col gap-3 w-full sm:w-auto">
+                        {/* Resume Cycle Button */}
+                        <button
+                          onClick={() => {
+                            // Confirm before proceeding
+                            setConfirmationModal({
+                              isOpen: true,
+                              title: 'Resume Circle & Reset Deposits',
+                              message: (
+                                <div>
+                                  <p className="mb-2">Are you sure you want to resume the circle for the next cycle?</p>
+                                  <p className="text-amber-600 font-medium">This will reset all members&apos; deposit status, requiring them to pay a new security deposit before they can contribute to the next cycle.</p>
+                                </div>
+                              ),
+                              onConfirm: () => handleResumeCycle(), // Use the existing handleResumeCycle function
+                              confirmText: 'Yes, Resume Circle',
+                              cancelText: 'Cancel',
+                              confirmButtonVariant: 'warning',
+                            });
+                          }}
+                          className="w-full px-4 py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white rounded-md shadow-sm transition-all flex items-center justify-center font-medium text-sm"
+                        >
+                          <CheckCircle className="mr-2 h-4 w-4" />
+                          Resume Cycle
+                        </button>
+                        <button
+                          onClick={() => setShowPayoutDepositModal(true)}
+                          className="w-full px-4 py-3 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white rounded-md shadow-sm transition-all flex items-center justify-center font-medium text-sm"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          Pay Deposits
+                        </button>
+                        <button
+                          onClick={fetchCircleDetails}
+                          className="w-full px-4 py-3 bg-white hover:bg-gray-50 text-gray-700 rounded-md shadow-sm transition-all flex items-center justify-center font-medium border border-gray-300 text-sm"
+                        >
+                          <RefreshCw className="mr-2 h-4 w-4" />
+                          Refresh
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
                 {/* Members Management */}
                 <div className="px-1 sm:px-2">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4">
@@ -3110,27 +3637,43 @@ export default function ManageCircle() {
                             <Tooltip.Trigger asChild>
                               <div>
                                 <button
-                                  onClick={() => !circle?.isActive && setIsEditingRotation(true)}
-                                  className={`w-full sm:w-auto px-3 sm:px-4 py-2 rounded-md flex items-center justify-center text-sm ${
-                                    circle?.isActive 
+                                  onClick={() => setIsEditingRotation(true)}
+                                  className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center ${
+                                      circle?.isActive && !circle?.paused 
                                       ? 'bg-gray-100 text-gray-500 cursor-not-allowed' 
                                       : 'bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors'
                                   }`}
-                                  disabled={circle?.isActive}
+                                  disabled={circle?.isActive && !circle?.paused}
                                 >
                                   <ListOrdered size={16} className="mr-1.5" />
                                   Edit Rotation Order
                                 </button>
                               </div>
                             </Tooltip.Trigger>
-                            {circle?.isActive && (
+                            {(circle?.isActive && !circle?.paused) && (
                               <Tooltip.Portal>
                                 <Tooltip.Content
                                   className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
                                   sideOffset={5}
                                 >
-                                  <p>Rotation order cannot be modified after circle activation.</p>
-                                  <p className="mt-1 text-gray-300">The order is locked when the circle is active.</p>
+                                  <p>Rotation order cannot be modified while the circle is active.</p>
+                                  <p className="mt-1 text-gray-300">
+                                    The order can only be edited before activation or when the circle is paused between cycles.
+                                  </p>
+                                  <Tooltip.Arrow className="fill-gray-800" />
+                                </Tooltip.Content>
+                              </Tooltip.Portal>
+                            )}
+                            {(circle?.paused) && (
+                              <Tooltip.Portal>
+                                <Tooltip.Content
+                                  className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
+                                  sideOffset={5}
+                                >
+                                  <p>You can now edit the rotation order for the next cycle.</p>
+                                  <p className="mt-1 text-gray-300">
+                                    After you finish editing, click Resume Cycle to continue to the next cycle with the new order.
+                                  </p>
                                   <Tooltip.Arrow className="fill-gray-800" />
                                 </Tooltip.Content>
                               </Tooltip.Portal>
@@ -3838,6 +4381,7 @@ export default function ManageCircle() {
         cancelText="Cancel"
         confirmButtonVariant={confirmationModal.confirmButtonVariant}
       />
+      <SecurityDepositPayoutModal />
     </div>
   );
 } 

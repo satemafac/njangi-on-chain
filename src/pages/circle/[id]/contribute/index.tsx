@@ -1265,6 +1265,30 @@ export default function ContributeToCircle() {
         }
         // Add more event checks here if needed
       }
+
+      // New Step: Check SecurityDepositReturned Event to override depositPaid to false if applicable
+      // This check should come *after* all checks that might set depositPaid to true,
+      // as a returned deposit means it's no longer considered paid.
+      if (depositPaid) { // Only check if we currently think it's paid
+        try {
+          console.log(`[ContributePage] Checking SecurityDepositReturned events for ${userAddress} in circle ${circle.id}...`);
+          const securityReturnedEvents = await client.queryEvents({
+            query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::SecurityDepositReturned` }, 
+            limit: 50 // Adjust limit as needed
+          });
+          const hasReturnedEvent = securityReturnedEvents.data.some(event => {
+            const parsed = event.parsedJson as { circle_id?: string; member?: string; };
+            return parsed?.circle_id === circle.id && parsed?.member?.toLowerCase() === userAddress.toLowerCase();
+          });
+
+          if (hasReturnedEvent) {
+            depositPaid = false; // Override: if a deposit was returned, it's no longer considered paid
+            console.log(`[ContributePage] User ${userAddress} deposit status set to NOT PAID due to SecurityDepositReturned event.`);
+          }
+        } catch (eventError) {
+          console.warn(`[ContributePage] Error fetching SecurityDepositReturned events:`, eventError);
+        }
+      }
       
       setUserDepositPaid(depositPaid);
       console.log('Final user deposit status:', depositPaid ? 'Paid' : 'Not Paid');
@@ -2437,6 +2461,10 @@ export default function ContributeToCircle() {
                         </span>
                       )}{' '}
                       before contributing.
+                    </p>
+                    <p className="text-xs text-amber-500 mt-2 italic">
+                      Note: A new security deposit is required for each cycle after the circle is reset. This ensures
+                      continued commitment and participation from all members.
                     </p>
                   </div>
                   

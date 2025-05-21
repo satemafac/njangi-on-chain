@@ -68,6 +68,7 @@ module njangi::njangi_circles {
         active_auction: Option<Auction>,
         is_active: bool,
         contributions_this_cycle: u64, // Track total contributions for the current cycle
+        paused_after_cycle: bool, // Flag to indicate if circle is paused after completing a cycle
     }
     
     // ----------------------------------------------------------
@@ -158,6 +159,28 @@ module njangi::njangi_circles {
         new_max_members: u64,
     }
 
+    // Add after CircleMaxMembersUpdated event struct
+    public struct CyclePaused has copy, drop {
+        circle_id: ID,
+        admin: address,
+        cycle_completed: u64,
+    }
+
+    // Cycle Resumed Event - Emitted when admin resumes a paused cycle
+    public struct CycleResumed has copy, drop {
+        circle_id: ID,
+        admin: address,
+        new_cycle: u64,
+    }
+
+    // Member Deposits Reset Event - Emitted when all members' deposit status is reset
+    public struct MemberDepositsReset has copy, drop {
+        circle_id: ID,
+        admin: address,
+        cycle: u64,
+        timestamp: u64,
+    }
+
     // ----------------------------------------------------------
     // Create Circle
     // ----------------------------------------------------------
@@ -228,6 +251,7 @@ module njangi::njangi_circles {
             active_auction: option::none(),
             is_active: false,
             contributions_this_cycle: 0, // Initialize to 0
+            paused_after_cycle: false,
         };
         
         // Create and attach configurations using the new module
@@ -582,6 +606,7 @@ module njangi::njangi_circles {
             created_at: _,
             is_active: _,
             contributions_this_cycle: _,
+            paused_after_cycle: _,
         } = circle;
         
         // Destroy balances and tables
@@ -1455,7 +1480,9 @@ module njangi::njangi_circles {
         circle.contributions_this_cycle = 0;
     }
     
+    // ----------------------------------------------------------
     // Reset the payout status for all members in the rotation (for a new cycle)
+    // ----------------------------------------------------------
     public(package) fun reset_all_members_payout_status(circle: &mut Circle) {
         // Get all the non-zero addresses from rotation_order
         let rotation = &circle.rotation_order;
@@ -1483,7 +1510,46 @@ module njangi::njangi_circles {
         };
     }
     
+    // ----------------------------------------------------------
+    // Reset deposit status for all members in the rotation (for a new cycle)
+    // ----------------------------------------------------------
+    public(package) fun reset_all_members_deposit_status(circle: &mut Circle, ctx: &mut TxContext) {
+        // Get all the non-zero addresses from rotation_order
+        let rotation = &circle.rotation_order;
+        let len = vector::length(rotation);
+        let mut i = 0;
+        
+        std::debug::print(&len);
+        std::debug::print(&b"Resetting deposit status for all members");
+        
+        while (i < len) {
+            let member_addr = *vector::borrow(rotation, i);
+            
+            // Skip placeholder addresses
+            if (member_addr != @0x0 && table::contains(&circle.members, member_addr)) {
+                let member = table::borrow_mut(&mut circle.members, member_addr);
+                // Reset deposit status to false for all members
+                members::set_deposit_paid(member, false);
+                
+                // Add debug output
+                std::debug::print(&member_addr);
+                std::debug::print(&b"Set deposit status to false");
+            };
+            i = i + 1;
+        };
+        
+        // Emit the member deposits reset event
+        event::emit(MemberDepositsReset {
+            circle_id: object::uid_to_inner(&circle.id),
+            admin: circle.admin,
+            cycle: circle.current_cycle,
+            timestamp: tx_context::epoch_timestamp_ms(ctx)
+        });
+    }
+    
+    // ----------------------------------------------------------
     // Reset contribution status for all members except the current recipient
+    // ----------------------------------------------------------
     public(package) fun reset_all_members_contribution_status(circle: &mut Circle) {
         // Reset the contributions counter for this cycle
         circle.contributions_this_cycle = 0;
@@ -1513,7 +1579,9 @@ module njangi::njangi_circles {
         };
     }
     
+    // ----------------------------------------------------------
     // Advance rotation position and cycle management
+    // ----------------------------------------------------------
     public(package) fun advance_rotation_position_and_cycle(
         circle: &mut Circle, 
         paid_member_address: address,
@@ -1534,51 +1602,106 @@ module njangi::njangi_circles {
         // We reset all members' contribution status for the new position/cycle
         reset_all_members_contribution_status(circle);
         
-        // If we're at the last position in the rotation, advance to next cycle
-        if (circle.current_position + 1 >= rotation_len) {
-            // Reset position to 0 for the next cycle
-            circle.current_position = 0;
-            // Increment cycle
-            circle.current_cycle = circle.current_cycle + 1;
-            // Reset all member payout status
-            reset_all_members_payout_status(circle);
-        } else {
-            // Just move to the next position in the same cycle
-            circle.current_position = circle.current_position + 1;
-        };
-        
-        // Get cycle configuration 
+        // Get cycle configuration for time calculations
         let cycle_length = config::get_cycle_length(&circle.id);
         let cycle_day = config::get_cycle_day(&circle.id);
         let now = clock::timestamp_ms(clock);
         
-        // Always update the next payout time, regardless of new cycle or just new position
-        // Calculate next payout time based on position frequency
-        let base_interval = if (cycle_length == 0) {
-            // Weekly
-            SEVEN_DAYS_MS / rotation_len
-        } else if (cycle_length == 1) {
-            // Monthly - approximate a month using 30 days
-            THIRTY_DAYS_MS / rotation_len
-        } else if (cycle_length == 2) {
-            // Quarterly - approximate a quarter using 90 days
-            THIRTY_DAYS_MS * 3 / rotation_len
-        } else if (cycle_length == 3) {
-            // Bi-weekly
-            SEVEN_DAYS_MS * 2 / rotation_len
+        // If we're at the last position in the rotation, pause after cycle completion
+        if (circle.current_position + 1 >= rotation_len) {
+            // Set paused_after_cycle flag to true
+            circle.paused_after_cycle = true;
+            
+            // We don't advance the cycle yet since we're paused
+            // The admin will need to call resume_cycle to continue
+            
+            // Update next_payout_time to current time to prevent automatic payouts
+            circle.next_payout_time = now;
+            
+            std::debug::print(&b"Cycle completed and paused. Admin needs to resume.");
+            
+            // Emit event
+            event::emit(CyclePaused {
+                circle_id: object::uid_to_inner(&circle.id),
+                admin: circle.admin,
+                cycle_completed: circle.current_cycle,
+            });
         } else {
-            // Default to monthly
-            THIRTY_DAYS_MS / rotation_len
+            // Just move to the next position in the same cycle
+            circle.current_position = circle.current_position + 1;
+            
+            // For position advancement within the same cycle, we need to maintain the cycle pattern
+            // For weekly cycles, we need to stay on the same weekday
+            // For monthly cycles, we need to stay on the same day of month, etc.
+            
+            if (circle.current_position == 0) {
+                // This means we're at the first position after cycling (edge case)
+                // Calculate like a new cycle
+                circle.next_payout_time = core::calculate_next_payout_time(
+                    cycle_length, 
+                    cycle_day, 
+                    now
+                );
+            } else {
+                // We're advancing positions within the same cycle
+                
+                // Calculate the proper interval based on cycle type
+                let mut interval_ms = 0;
+                
+                if (cycle_length == 0) { // Weekly cycle
+                    // For weekly cycles, we maintain the same weekday
+                    // Calculate days until the next instance of the same weekday
+                    interval_ms = core::ms_per_day() * 7 / rotation_len;
+                } else if (cycle_length == 3) { // Bi-weekly cycle
+                    // For bi-weekly, same as weekly but with 14 days
+                    interval_ms = core::ms_per_day() * 14 / rotation_len;
+                } else if (cycle_length == 1) { // Monthly cycle 
+                    // For monthly, we try to keep the same day of month
+                    // An average month is 30 days
+                    interval_ms = core::ms_per_day() * 30 / rotation_len;
+                } else { // Quarterly cycle
+                    // For quarterly cycles (90 days)
+                    interval_ms = core::ms_per_day() * 90 / rotation_len;
+                };
+                
+                // Update next_payout_time by adding the interval
+                circle.next_payout_time = circle.next_payout_time + interval_ms;
+                
+                // If this is a weekly or bi-weekly cycle, we need to verify the weekday matches
+                if (cycle_length == 0 || cycle_length == 3) {
+                    // Get the weekday of the current and calculated next payout
+                    let current_weekday = core::get_weekday(now);
+                    let next_weekday = core::get_weekday(circle.next_payout_time);
+                    
+                    // If the weekday has drifted from the configured cycle_day, recalculate
+                    if (next_weekday != cycle_day) {
+                        std::debug::print(&b"Weekday drift detected, recalculating to maintain cycle day");
+                        std::debug::print(&current_weekday);
+                        std::debug::print(&next_weekday);
+                        std::debug::print(&cycle_day);
+                        
+                        // Recalculate to get back to the correct weekday
+                        // We still want the next position's payout, but on the right day
+                        let days_to_add = if (cycle_day >= next_weekday) {
+                            cycle_day - next_weekday
+                        } else {
+                            7 - (next_weekday - cycle_day) // Days until next occurrence
+                        };
+                        
+                        // Adjust the next_payout_time to be on the correct weekday
+                        // Keep the time of day the same
+                        let time_of_day_ms = core::get_day_ms(circle.next_payout_time);
+                        let base_day = circle.next_payout_time - time_of_day_ms; // Midnight of the day
+                        
+                        // Add days to get to the correct weekday, plus the time of day
+                        circle.next_payout_time = base_day + (days_to_add * core::ms_per_day()) + time_of_day_ms;
+                    };
+                };
+            };
+            
+            std::debug::print(&b"Advanced position within cycle. New payout time set to:");
+            std::debug::print(&circle.next_payout_time);
         };
-        
-        // Set the next payout time to now + position interval
-        // This ensures each position has its appropriate time based on the cycle frequency
-        circle.next_payout_time = now + base_interval;
-        
-        std::debug::print(&b"New payout time set to:");
-        std::debug::print(&circle.next_payout_time);
-        std::debug::print(&b"Based on interval:");
-        std::debug::print(&base_interval);
         
         // Print debug info about the new position and cycle
         std::debug::print(&b"New position:");
@@ -1587,6 +1710,82 @@ module njangi::njangi_circles {
         std::debug::print(&circle.current_cycle);
     }
     
+    // ----------------------------------------------------------
+    // Admin function to resume cycle after pause
+    // ----------------------------------------------------------
+    public entry fun resume_cycle(
+        circle: &mut Circle,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        // Only admin can resume the cycle
+        assert!(tx_context::sender(ctx) == circle.admin, 7);
+        
+        // Circle must be active and paused
+        assert!(circle.is_active, 54);
+        assert!(circle.paused_after_cycle, 57); // New error code for "Circle is not paused"
+        
+        // Reset position to 0 for the next cycle
+        circle.current_position = 0;
+        
+        // Increment cycle
+        circle.current_cycle = circle.current_cycle + 1;
+        
+        // Reset all member payout status
+        reset_all_members_payout_status(circle);
+        
+        // Reset all member deposit status for new security deposits
+        reset_all_members_deposit_status(circle, ctx);
+        
+        // Calculate next payout time based on the cycle configuration
+        circle.next_payout_time = core::calculate_next_payout_time(
+            config::get_cycle_length(&circle.id),
+            config::get_cycle_day(&circle.id),
+            clock::timestamp_ms(clock)
+        );
+        
+        // Clear pause flag
+        circle.paused_after_cycle = false;
+        
+        // Emit event for cycle resumed
+        event::emit(CycleResumed {
+            circle_id: object::uid_to_inner(&circle.id),
+            admin: circle.admin,
+            new_cycle: circle.current_cycle,
+        });
+        
+        std::debug::print(&b"Cycle resumed. Starting new cycle:");
+        std::debug::print(&circle.current_cycle);
+    }
+
+    // ----------------------------------------------------------
+    // Check if circle is paused after cycle
+    // ----------------------------------------------------------
+    public fun is_paused_after_cycle(circle: &Circle): bool {
+        circle.paused_after_cycle
+    }
+
+    // ----------------------------------------------------------
+    // Helper to convert cycle length to milliseconds
+    // ----------------------------------------------------------
+    public fun cycle_length_in_milliseconds(circle: &Circle): u64 {
+        let cycle_length = config::get_cycle_length(&circle.id);
+        
+        // Convert cycle length to milliseconds
+        // 0 = weekly, 1 = monthly, 2 = quarterly, 3 = bi-weekly
+        if (cycle_length == 0) {
+            SEVEN_DAYS_MS // Weekly
+        } else if (cycle_length == 1) {
+            THIRTY_DAYS_MS // Monthly (30 days)
+        } else if (cycle_length == 2) {
+            THIRTY_DAYS_MS * 3 // Quarterly (90 days)
+        } else if (cycle_length == 3) {
+            SEVEN_DAYS_MS * 2 // Bi-weekly (14 days)
+        } else {
+            THIRTY_DAYS_MS // Default to monthly if unknown
+        }
+    }
+
     // Get the next member in rotation order who should receive a payout
     public fun get_next_payout_recipient(circle: &Circle): Option<address> {
         let rotation = &circle.rotation_order;
@@ -1660,7 +1859,7 @@ module njangi::njangi_circles {
         // Compare with actual contributions this cycle
         circle.contributions_this_cycle >= expected_contributions
     }
-
+    
     // ----------------------------------------------------------
     // Set the current position in the rotation
     // ----------------------------------------------------------
@@ -1677,26 +1876,5 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     public fun get_current_position(circle: &Circle): u64 {
         circle.current_position
-    }
-
-    // ----------------------------------------------------------
-    // Helper to convert cycle length to milliseconds
-    // ----------------------------------------------------------
-    public fun cycle_length_in_milliseconds(circle: &Circle): u64 {
-        let cycle_length = config::get_cycle_length(&circle.id);
-        
-        // Convert cycle length to milliseconds
-        // 0 = weekly, 1 = monthly, 2 = quarterly, 3 = bi-weekly
-        if (cycle_length == 0) {
-            SEVEN_DAYS_MS // Weekly
-        } else if (cycle_length == 1) {
-            THIRTY_DAYS_MS // Monthly (30 days)
-        } else if (cycle_length == 2) {
-            THIRTY_DAYS_MS * 3 // Quarterly (90 days)
-        } else if (cycle_length == 3) {
-            SEVEN_DAYS_MS * 2 // Bi-weekly (14 days)
-        } else {
-            THIRTY_DAYS_MS // Default to monthly if unknown
-        }
     }
 } 

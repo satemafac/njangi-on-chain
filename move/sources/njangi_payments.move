@@ -1,5 +1,5 @@
 module njangi::njangi_payments {
-    use sui::object::ID;
+    use sui::object::{Self, ID, UID};
     use sui::tx_context::{Self, TxContext};
     use sui::coin::{Self, Coin};
     use sui::balance::{Self, Balance};
@@ -7,6 +7,7 @@ module njangi::njangi_payments {
     use sui::event;
     use sui::sui::SUI;
     use sui::transfer;
+    use sui::dynamic_object_field;
     use std::option::{Self, Option};
     use std::string::{Self, String};
     use std::vector;
@@ -104,6 +105,15 @@ module njangi::njangi_payments {
         milestone_number: u64,
         submitted_by: address,
         proof_type: u8,
+        timestamp: u64,
+    }
+    
+    public struct SecurityDepositReturned has copy, drop {
+        circle_id: ID,
+        wallet_id: ID,
+        member: address,
+        amount: u64,
+        coin_type: String,
         timestamp: u64,
     }
     
@@ -954,6 +964,159 @@ module njangi::njangi_payments {
             amount: contribution_amount_usd, // USD cents
             cycle: circles::get_current_cycle(circle),
             payout_type: circles::get_goal_type(circle),
+        });
+    }
+    
+    // ----------------------------------------------------------
+    // Admin function to pay out SUI security deposit to a member when the circle is paused
+    // This is a specialized version for SUI deposits
+    // ----------------------------------------------------------
+    public entry fun admin_payout_security_deposit_sui(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        member_addr: address,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        
+        // Only admin can trigger security deposit payout
+        assert!(sender == circles::get_admin(circle), 7);
+        
+        // Circle must be paused after a cycle
+        assert!(circles::is_paused_after_cycle(circle), 58); // New error code for not paused
+        
+        // Verify member is a circle member
+        assert!(circles::is_member(circle, member_addr), 8);
+        
+        // Verify wallet belongs to this circle
+        assert!(custody::get_circle_id(wallet) == circles::get_id(circle), 46);
+        
+        // Wallet must be active
+        assert!(custody::is_wallet_active(wallet), 43);
+        
+        // Get the member and check security deposit details
+        let member = circles::get_member(circle, member_addr);
+        let deposit_amount = members::get_deposit_balance(member);
+        assert!(deposit_amount > 0, 59); // New error for no deposit to return
+        
+        // Check if deposit has already been returned
+        assert!(members::has_paid_deposit(member), 60); // Must have paid deposit
+        
+        // Mark the member's deposit as no longer paid
+        let member_mut = circles::get_member_mut(circle, member_addr);
+        members::set_deposit_paid(member_mut, false); // Set not paid (returned)
+        members::set_deposit_balance(member_mut, 0); // Zero out the balance
+        
+        // Check if there's enough balance in the wallet
+        let wallet_balance = custody::get_total_wallet_balance(wallet);
+        assert!(wallet_balance >= deposit_amount, EInsufficientTreasuryBalance);
+        
+        // Try to withdraw from dynamic fields first, if that fails use the regular withdraw
+        let deposit_coin = if (custody::has_stablecoin_balance<SUI>(wallet)) {
+            // Check if we have enough in dynamic fields
+            let dynamic_balance = custody::get_stablecoin_balance<SUI>(wallet);
+            if (dynamic_balance >= deposit_amount) {
+                custody::withdraw_from_dynamic_fields(
+                    wallet,
+                    deposit_amount,
+                    ctx
+                )
+            } else {
+                // Fall back to regular withdraw
+                custody::withdraw(
+                    wallet,
+                    deposit_amount,
+                    ctx
+                )
+            }
+        } else {
+            // Use regular withdraw if no dynamic fields exist
+            custody::withdraw(
+                wallet,
+                deposit_amount,
+                ctx
+            )
+        };
+        
+        // Transfer to the member
+        transfer::public_transfer(deposit_coin, member_addr);
+        
+        // Emit event for security deposit return
+        event::emit(SecurityDepositReturned {
+            circle_id: circles::get_id(circle),
+            wallet_id: custody::get_circle_id(wallet),
+            member: member_addr,
+            amount: deposit_amount,
+            coin_type: string::utf8(b"sui"),
+            timestamp: tx_context::epoch_timestamp_ms(ctx)
+        });
+    }
+    
+    // ----------------------------------------------------------
+    // Admin function to pay out stablecoin security deposit to a member when the circle is paused
+    // This is the generic version for stablecoin deposits
+    // ----------------------------------------------------------
+    public entry fun admin_payout_security_deposit_stablecoin<CoinType>(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        member_addr: address,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        
+        // Only admin can trigger security deposit payout
+        assert!(sender == circles::get_admin(circle), 7);
+        
+        // Circle must be paused after a cycle
+        assert!(circles::is_paused_after_cycle(circle), 58); // New error code for not paused
+        
+        // Verify member is a circle member
+        assert!(circles::is_member(circle, member_addr), 8);
+        
+        // Verify wallet belongs to this circle
+        assert!(custody::get_circle_id(wallet) == circles::get_id(circle), 46);
+        
+        // Wallet must be active
+        assert!(custody::is_wallet_active(wallet), 43);
+        
+        // Get the member and check security deposit details
+        let member = circles::get_member(circle, member_addr);
+        let deposit_amount = members::get_deposit_balance(member);
+        assert!(deposit_amount > 0, 59); // New error for no deposit to return
+        
+        // Check if deposit has already been returned
+        assert!(members::has_paid_deposit(member), 60); // Must have paid deposit
+        
+        // Mark the member's deposit as no longer paid
+        let member_mut = circles::get_member_mut(circle, member_addr);
+        members::set_deposit_paid(member_mut, false); // Set not paid (returned)
+        members::set_deposit_balance(member_mut, 0); // Zero out the balance
+        
+        // Check if there's enough balance of this coin type in the wallet
+        let wallet_balance = custody::get_stablecoin_balance<CoinType>(wallet);
+        assert!(wallet_balance >= deposit_amount, EInsufficientTreasuryBalance);
+        
+        // Withdraw the deposit and transfer it to the member
+        let deposit_coin = custody::withdraw_stablecoin<CoinType>(
+            wallet,
+            deposit_amount,
+            member_addr, // Return directly to member
+            clock,
+            ctx
+        );
+        
+        // Transfer to the member
+        transfer::public_transfer(deposit_coin, member_addr);
+        
+        // Emit event for security deposit return
+        event::emit(SecurityDepositReturned {
+            circle_id: circles::get_id(circle),
+            wallet_id: custody::get_circle_id(wallet),
+            member: member_addr,
+            amount: deposit_amount,
+            coin_type: string::utf8(b"stablecoin"),
+            timestamp: clock::timestamp_ms(clock)
         });
     }
 } 
