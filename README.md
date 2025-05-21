@@ -1,6 +1,7 @@
 <img width="1714" alt="image" src="https://github.com/user-attachments/assets/9e928b07-3395-4cc6-9e17-b7b2b7950742" />
 
 # Njangi On-Chain Rotational Circle Smart Contract
+Try it out https://njangi-on-chain-1014e48e59ae.herokuapp.com/
 
 ## Overview
 Njangi On-Chain is a decentralized implementation of the classic Rotational Savings and Credit Association (ROSCA).  
