@@ -20,7 +20,8 @@ All logic is enforced on-chain by a Move smart contract deployed to the Sui bloc
 3. **Cycle Contributions** – During each cycle every member deposits the fixed amount before the deadline.  
 4. **Automated Payout** – At cycle close the contract automatically transfers the pooled balance to that cycle's designated recipient.  
 5. **Completion** – After the final cycle, security deposits are released (minus any penalties) and the circle is closed.
-   
+
+<img width="1714" alt="image" src="https://github.com/user-attachments/assets/9e928b07-3395-4cc6-9e17-b7b2b7950742" />
 <img width="1722" alt="image" src="https://github.com/user-attachments/assets/055a9b24-3014-4cbb-9a4d-971e780d96c9" />
 <img width="1722" alt="image" src="https://github.com/user-attachments/assets/055a9b24-3014-4cbb-9a4d-971e780d96c9" />
 
