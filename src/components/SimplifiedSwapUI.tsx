@@ -65,7 +65,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
   const [retryCount, setRetryCount] = useState<number>(0);
   
   // New state variables for slippage error modal
-  const [showSlippageErrorModal, setShowSlippageErrorModal] = useState<boolean>(false);
+  // const [showSlippageErrorModal, setShowSlippageErrorModal] = useState<boolean>(false);
   const [recommendedSlippage, setRecommendedSlippage] = useState<number>(10);
 
   // Add this to component state
@@ -616,14 +616,30 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
                 toast.error(errorMessage, { id: 'swap-step' });
               } else if (result.details.includes('Slippage tolerance exceeded') || 
                         (result.details.includes('MoveAbort') && result.details.includes('1) in command 2'))) {
-                // For slippage errors, show the modal instead of a toast
+                // For slippage errors, automatically increase slippage without showing the modal
                 const newRecommendedSlippage = Math.min(50, Math.ceil(slippage * 2));
                 toast.dismiss('swap-step'); // Dismiss the loading toast
                 
+                // Set the recommended slippage
                 setRecommendedSlippage(newRecommendedSlippage);
-                setShowSlippageErrorModal(true);
+                
+                // Automatically apply the higher slippage
+                setSlippage(newRecommendedSlippage);
+                console.log(`Automatically increased slippage to ${newRecommendedSlippage}% due to price movement`);
+                
+                // Show a toast notification instead of modal
+                toast.success(`Increased slippage to ${newRecommendedSlippage}% due to price movement`, { 
+                  id: 'slippage-auto-increase',
+                  duration: 3000
+                });
+                
+                // Try the swap again after a short delay to allow for UI update
+                setTimeout(() => {
+                  handleSwap();
+                }, 500);
+                
                 setProcessing(false);
-                return; // Exit early without throwing error since we're handling with modal
+                return; // Exit early without throwing error since we're handling it
               }
             }
           }
@@ -712,14 +728,30 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
                 toast.error(errorMessage, { id: 'swap-step' });
               } else if (result.details.includes('Slippage tolerance exceeded') || 
                         (result.details.includes('MoveAbort') && result.details.includes('1) in command 2'))) {
-                // For slippage errors, show the modal instead of a toast
+                // For slippage errors, automatically increase slippage without showing the modal
                 const newRecommendedSlippage = Math.min(50, Math.ceil(slippage * 2));
                 toast.dismiss('swap-step'); // Dismiss the loading toast
                 
+                // Set the recommended slippage
                 setRecommendedSlippage(newRecommendedSlippage);
-                setShowSlippageErrorModal(true);
+                
+                // Automatically apply the higher slippage
+                setSlippage(newRecommendedSlippage);
+                console.log(`Automatically increased slippage to ${newRecommendedSlippage}% due to price movement`);
+                
+                // Show a toast notification instead of modal
+                toast.success(`Increased slippage to ${newRecommendedSlippage}% due to price movement`, { 
+                  id: 'slippage-auto-increase',
+                  duration: 3000
+                });
+                
+                // Try the swap again after a short delay to allow for UI update
+                setTimeout(() => {
+                  handleSwap();
+                }, 500);
+                
                 setProcessing(false);
-                return; // Exit early without throwing error since we're handling with modal
+                return; // Exit early without throwing error since we're handling it
               }
             }
           }
@@ -1223,14 +1255,9 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
           setHighVolatilityDetected(true);
         }
         
-        // If slippage is lower than recommendation, update it and notify user
+        // If slippage is lower than recommendation, update it but don't show modal
         if (slippage < recommendation) {
           setRecommendedSlippage(recommendation);
-          
-          // Only show warning if the difference is significant
-          if (recommendation - slippage >= 5) {
-            setShowSlippageErrorModal(true);
-          }
         }
       } catch (error) {
         console.error("Error checking pool conditions:", error);
@@ -1299,8 +1326,8 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
     <div className="bg-[#121212] rounded-xl p-4 text-white">
       {/* Slippage Error Modal */}
       <ConfirmationModal
-        isOpen={showSlippageErrorModal}
-        onClose={() => setShowSlippageErrorModal(false)}
+        isOpen={false}
+        onClose={() => {}}
         onConfirm={handleSlippageConfirmation}
         title="Price Movement Detected"
         confirmText={`Increase Slippage to ${recommendedSlippage}% & Retry`}
