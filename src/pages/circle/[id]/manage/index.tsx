@@ -2851,6 +2851,9 @@ export default function ManageCircle() {
       const zkLoginClient = new ZkLoginClient();
       setPayoutProgress({current: 0, total: memberAddresses.length});
       
+      // Track actual successful payouts
+      let successCount = 0;
+      
       // Process each member sequentially
       for (let i = 0; i < memberAddresses.length; i++) {
         const memberAddress = memberAddresses[i];
@@ -2888,6 +2891,9 @@ export default function ManageCircle() {
           // Add to paid out set for immediate UI update in modal
           setPaidOutInCurrentSessionMembers(prev => new Set(prev).add(memberAddress));
           
+          // Increment success counter
+          successCount++;
+          
         } catch (memberError) {
           console.error(`Error paying out security deposit for ${shortenAddress(memberAddress)}:`, memberError);
           toast.error(`Failed to process payout for ${shortenAddress(memberAddress)}: ${memberError instanceof Error ? memberError.message : 'Unknown error'}`, 
@@ -2904,8 +2910,8 @@ export default function ManageCircle() {
       // Update the UI - refresh circle data and member status
       await fetchCircleDetails();
       
-      // Show success message
-      toast.success(`Completed security deposit payouts: ${payoutProgress.current}/${memberAddresses.length} successful`, { id: toastId });
+      // Show success message with actual success count
+      toast.success(`Completed security deposit payouts: ${successCount}/${memberAddresses.length} successful`, { id: toastId });
       
       // Close the modal and reset selections
       setShowPayoutDepositModal(false);
@@ -2930,11 +2936,61 @@ export default function ManageCircle() {
 
   // Replace the SecurityDepositPayoutModal component with the updated version
   const SecurityDepositPayoutModal = () => {
+    // Determine available coin types based on wallet balances
+    const hasSuiBalance = suiSecurityDepositBalance !== null && suiSecurityDepositBalance > 0;
+    const hasUsdcBalance = usdcSecurityDepositBalance !== null && usdcSecurityDepositBalance > 0;
+    
+    // Auto-detect default coin type based on balances - must be before any early returns
+    useEffect(() => {
+      // If we have USDC but no SUI, default to USDC
+      if (hasUsdcBalance && !hasSuiBalance) {
+        setPayoutCoinType('stablecoin');
+      }
+      // If we have both, prefer the one with higher balance
+      else if (hasUsdcBalance && hasSuiBalance) {
+        if ((usdcSecurityDepositBalance || 0) * suiPrice > (suiSecurityDepositBalance || 0)) {
+          setPayoutCoinType('stablecoin');
+        } else {
+          setPayoutCoinType('sui');
+        }
+      }
+      // Default remains 'sui' if we only have SUI or if we don't have any deposits
+    }, [hasUsdcBalance, hasSuiBalance, suiSecurityDepositBalance, usdcSecurityDepositBalance, suiPrice]);
+    
+    // Safely get security deposit amount
+    const securityDepositAmount = circle?.securityDeposit?.toFixed(4) || '0.0000';
+    
+    // Early return if modal should not be shown
     if (!showPayoutDepositModal) return null;
     
     // Filter to only show members with paid deposits AND not paid out in current session
     const eligibleMembers = members.filter(member => member.depositPaid && !paidOutInCurrentSessionMembers.has(member.address));
     const alreadyPaidMembers = members.filter(member => !member.depositPaid || paidOutInCurrentSessionMembers.has(member.address));
+    
+    // Function to handle member selection
+    const handleMemberSelection = (memberAddress: string) => {
+      const newSelected = new Set(selectedMembersForPayout);
+      if (newSelected.has(memberAddress)) {
+        newSelected.delete(memberAddress);
+      } else {
+        newSelected.add(memberAddress);
+      }
+      setSelectedMembersForPayout(newSelected);
+    };
+    
+    // Function to check if button should be disabled
+    const isPayoutButtonDisabled = () => {
+      return (
+        selectedMembersForPayout.size === 0 || 
+        isProcessingPayout || 
+        (selectedMembersForPayout.size > 0 && Array.from(selectedMembersForPayout).every(addr => 
+          paidOutInCurrentSessionMembers.has(addr) || 
+          !members.find(m => m.address === addr)?.depositPaid
+        )) ||
+        (payoutCoinType === 'sui' && !hasSuiBalance) ||
+        (payoutCoinType === 'stablecoin' && !hasUsdcBalance)
+      );
+    };
     
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -2994,15 +3050,7 @@ export default function ManageCircle() {
                             ? 'border-blue-500 bg-blue-50' 
                             : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50'
                         }`}
-                        onClick={() => {
-                          const newSelected = new Set(selectedMembersForPayout);
-                          if (newSelected.has(member.address)) {
-                            newSelected.delete(member.address);
-                          } else {
-                            newSelected.add(member.address);
-                          }
-                          setSelectedMembersForPayout(newSelected);
-                        }}
+                        onClick={() => handleMemberSelection(member.address)}
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center">
@@ -3018,12 +3066,12 @@ export default function ManageCircle() {
                             <div className="ml-3">
                               <p className="font-medium text-gray-900">{shortenAddress(member.address)}</p>
                               <p className="text-xs text-gray-500">
-                                {member.address === circle?.admin ? 'Admin' : `Position: ${member.position !== undefined ? member.position + 1 : 'Not set'}`}
+                                {circle && member.address === circle.admin ? 'Admin' : `Position: ${member.position !== undefined ? member.position + 1 : 'Not set'}`}
                               </p>
                             </div>
                           </div>
                           <div className="text-sm font-medium text-gray-900">
-                            {circle?.securityDeposit.toFixed(4)} SUI
+                            {securityDepositAmount} SUI
                           </div>
                         </div>
                       </div>
@@ -3043,7 +3091,7 @@ export default function ManageCircle() {
                           <div className="ml-3">
                             <p className="font-medium text-gray-600">{shortenAddress(member.address)}</p>
                             <p className="text-xs text-gray-400">
-                              {member.address === circle?.admin ? 'Admin' : `Position: ${member.position !== undefined ? member.position + 1 : 'Not set'}`}
+                              {circle && member.address === circle.admin ? 'Admin' : `Position: ${member.position !== undefined ? member.position + 1 : 'Not set'}`}
                             </p>
                           </div>
                         </div>
@@ -3055,38 +3103,55 @@ export default function ManageCircle() {
                   ))}
                 </div>
                 
-                {/* Coin type selection */}
+                {/* Coin type selection with auto-detection */}
                 {selectedMembersForPayout.size > 0 && (
                   <div className="mt-6 border-t border-gray-200 pt-4">
-                    <p className="font-medium text-gray-800 mb-3">Select payout coin type:</p>
+                    <div className="flex justify-between items-center mb-3">
+                      <p className="font-medium text-gray-800">Select payout coin type:</p>
+                      
+                      {/* Show balances to help users select */}
+                      <div className="flex space-x-4 text-xs text-gray-600">
+                        <div className="flex items-center">
+                          <span className={`w-2 h-2 rounded-full mr-1 ${hasSuiBalance ? 'bg-green-500' : 'bg-gray-300'}`}></span>
+                          <span>SUI: {suiSecurityDepositBalance?.toFixed(4) || '0'}</span>
+                        </div>
+                        <div className="flex items-center">
+                          <span className={`w-2 h-2 rounded-full mr-1 ${hasUsdcBalance ? 'bg-green-500' : 'bg-gray-300'}`}></span>
+                          <span>USDC: {usdcSecurityDepositBalance?.toFixed(2) || '0'}</span>
+                        </div>
+                      </div>
+                    </div>
+                    
                     <div className="flex space-x-3">
                       <button
                         className={`px-4 py-2 rounded-md border ${
                           payoutCoinType === 'sui' 
                             ? 'bg-blue-50 border-blue-500 text-blue-700' 
                             : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-                        }`}
+                        } ${!hasSuiBalance ? 'opacity-50 cursor-not-allowed' : ''}`}
                         onClick={() => setPayoutCoinType('sui')}
+                        disabled={!hasSuiBalance}
                         type="button"
                       >
-                        SUI
+                        SUI {!hasSuiBalance && '(No Balance)'}
                       </button>
                       <button
                         className={`px-4 py-2 rounded-md border ${
                           payoutCoinType === 'stablecoin' 
                             ? 'bg-blue-50 border-blue-500 text-blue-700' 
                             : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-                        }`}
+                        } ${!hasUsdcBalance ? 'opacity-50 cursor-not-allowed' : ''}`}
                         onClick={() => setPayoutCoinType('stablecoin')}
-                        disabled={!circle?.custody?.stablecoinEnabled}
+                        disabled={!hasUsdcBalance}
                         type="button"
                       >
-                        Stablecoin (USDC)
+                        Stablecoin (USDC) {!hasUsdcBalance && '(No Balance)'}
                       </button>
                     </div>
-                    {payoutCoinType === 'stablecoin' && !circle?.custody?.stablecoinEnabled && (
+                    
+                    {!hasSuiBalance && !hasUsdcBalance && (
                       <p className="mt-2 text-sm text-amber-600">
-                        Stablecoin payouts are not enabled for this circle.
+                        No security deposit balances available in either coin type.
                       </p>
                     )}
                   </div>
@@ -3132,16 +3197,14 @@ export default function ManageCircle() {
             </button>
             <button
               className={`px-4 py-2 rounded-md text-white ${
-                selectedMembersForPayout.size === 0 || isProcessingPayout || 
-                // Disable if all selected members are already paid out (though they shouldn't be selectable)
-                (selectedMembersForPayout.size > 0 && Array.from(selectedMembersForPayout).every(addr => paidOutInCurrentSessionMembers.has(addr) || !members.find(m=>m.address === addr)?.depositPaid))
+                isPayoutButtonDisabled()
                   ? 'bg-gray-400 cursor-not-allowed' 
                   : 'bg-blue-600 hover:bg-blue-700'
               }`}
-              disabled={selectedMembersForPayout.size === 0 || isProcessingPayout || (selectedMembersForPayout.size > 0 && Array.from(selectedMembersForPayout).every(addr => paidOutInCurrentSessionMembers.has(addr) || !members.find(m=>m.address === addr)?.depositPaid))}
+              disabled={isPayoutButtonDisabled()}
               onClick={() => {
                 const selectedAddresses = Array.from(selectedMembersForPayout).filter(
-                  addr => !(paidOutInCurrentSessionMembers.has(addr) || !members.find(m=>m.address === addr)?.depositPaid)
+                  addr => !(paidOutInCurrentSessionMembers.has(addr) || !members.find(m => m.address === addr)?.depositPaid)
                 );
                 if (selectedAddresses.length > 0) {
                   handleSecurityDepositPayout(selectedAddresses, payoutCoinType);
@@ -3157,9 +3220,9 @@ export default function ManageCircle() {
                   Processing...
                 </div>
               ) : selectedMembersForPayout.size > 1 ? (
-                `Pay Out ${selectedMembersForPayout.size} Deposits`
+                `Pay Out ${selectedMembersForPayout.size} Deposits with ${payoutCoinType === 'sui' ? 'SUI' : 'USDC'}`
               ) : (
-                'Pay Out Deposit'
+                `Pay Out Deposit with ${payoutCoinType === 'sui' ? 'SUI' : 'USDC'}`
               )}
             </button>
           </div>
@@ -4279,14 +4342,26 @@ export default function ManageCircle() {
                             <button
                               onClick={() => toast.success('This feature is coming soon')}
                               className={`px-3 sm:px-5 py-2 sm:py-3 text-white rounded-lg text-xs sm:text-sm transition-all flex items-center justify-center shadow-md font-medium w-full sm:w-auto ${
-                                !circle || !circle.isActive
+                                !circle || !circle.isActive || circle.paused
                                   ? 'bg-gray-400 opacity-60 cursor-not-allowed'
                                   : 'bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-600 hover:to-yellow-700'
                               }`}
-                              disabled={!circle || !circle.isActive}
+                              disabled={!circle || !circle.isActive || circle.paused}
                             >
-                              <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5" />
-                              Pause Contributions
+                              {circle?.paused ? (
+                                <>
+                                  <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                  </svg>
+                                  Resume Contributions
+                                </>
+                              ) : (
+                                <>
+                                  <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5" />
+                                  Pause Contributions
+                                </>
+                              )}
                             </button>
                           </div>
                         </Tooltip.Trigger>
@@ -4298,6 +4373,18 @@ export default function ManageCircle() {
                             >
                               <p>Cannot pause contributions: The circle is not active yet.</p>
                               <p className="mt-1 text-gray-300">Activate the circle first before pausing contributions.</p>
+                              <Tooltip.Arrow className="fill-gray-800" />
+                            </Tooltip.Content>
+                          </Tooltip.Portal>
+                        )}
+                        {circle && circle.isActive && circle.paused && (
+                          <Tooltip.Portal>
+                            <Tooltip.Content
+                              className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
+                              sideOffset={5}
+                            >
+                              <p>The circle is already paused after cycle completion.</p>
+                              <p className="mt-1 text-gray-300">Please use the &quot;Resume Cycle&quot; button at the top of the page to resume the circle to the next cycle.</p>
                               <Tooltip.Arrow className="fill-gray-800" />
                             </Tooltip.Content>
                           </Tooltip.Portal>

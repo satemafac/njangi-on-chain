@@ -62,6 +62,7 @@ interface Circle {
   maxMembers?: number; // Add maxMembers field
   nextPayoutTime?: number; // Add nextPayoutTime field
   cycleLength?: number; // Add cycleLength field
+  pausedAfterCycle?: boolean; // Add pausedAfterCycle field
 }
 
 // Define a type for the fields from the SUI object
@@ -122,12 +123,14 @@ const ContributionProgress: React.FC<{
   currentRecipientAddress?: string | null; // Add to props
   // currentPositionInCycle?: number | null; // REMOVED - No longer used here
   // totalMembersInRotation?: number | null; // REMOVED - No longer used here
+  isPaused?: boolean; // Add isPaused prop
 }> = ({ 
   circleId, 
   maxMembers, 
   currentCycle, 
   className = '', 
   currentRecipientAddress,
+  isPaused = false // Default to false
   // currentPositionInCycle, // REMOVED
   // totalMembersInRotation // REMOVED
 }) => {
@@ -223,17 +226,25 @@ const ContributionProgress: React.FC<{
           rotation_order?: string[];
           current_position?: string | number;
           members?: { fields?: { id?: { id: string } } };
+          paused_after_cycle?: boolean; // Add check for paused state
           [key: string]: unknown; // Allow other fields
         };        
         if (Array.isArray(circleFields.rotation_order)) {
           memberListFromRotation = circleFields.rotation_order.filter(addr => typeof addr === 'string' && addr !== '0x0');
         }
         
-        const position = Number(circleFields.current_position);
-        if (!isNaN(position) && position < memberListFromRotation.length) {
-          currentRecipient = memberListFromRotation[position];
-          setCurrentPosition(position); // Update internal currentPosition state
-          console.log(`[Progress] Current recipient: ${currentRecipient} at position ${position}`);
+        // Only set current recipient if not paused
+        if (!isPaused && !circleFields.paused_after_cycle) {
+          const position = Number(circleFields.current_position);
+          if (!isNaN(position) && position < memberListFromRotation.length) {
+            currentRecipient = memberListFromRotation[position];
+            setCurrentPosition(position); // Update internal currentPosition state
+            console.log(`[Progress] Current recipient: ${currentRecipient} at position ${position}`);
+          }
+        } else {
+          console.log(`[Progress] Circle is paused - no current recipient`);
+          currentRecipient = null;
+          setCurrentPosition(null);
         }
       } else {
         console.error('[Progress] Could not fetch Circle object content.');
@@ -329,7 +340,7 @@ const ContributionProgress: React.FC<{
       console.log("[Progress] Waiting for required data:", { circleId, maxMembers, currentCycle });
     }
   // Add currentPosition (internal state), lastPayoutTime and currentRecipientAddress to dependency array
-  }, [circleId, maxMembers, currentCycle, currentPosition, lastPayoutTime, currentRecipientAddress]);
+  }, [circleId, maxMembers, currentCycle, currentPosition, lastPayoutTime, currentRecipientAddress, isPaused]);
 
   // Calculate progress percentage
   const contributedCount = progressData.contributedMembers.size;
@@ -341,6 +352,7 @@ const ContributionProgress: React.FC<{
   
   // Determine status color based on progress
   const getStatusColor = () => {
+    if (isPaused) return 'text-amber-500'; // Amber for paused state
     if (progressPercentage === 100) return 'text-green-500';
     if (progressPercentage > 60) return 'text-blue-500';
     if (progressPercentage > 30) return 'text-yellow-500';
@@ -375,7 +387,7 @@ const ContributionProgress: React.FC<{
             cy="50"
             r="45"
             fill="none"
-            stroke={progressPercentage === 100 ? '#10B981' : '#3B82F6'}
+            stroke={isPaused ? '#f59e0b' : progressPercentage === 100 ? '#10B981' : '#3B82F6'}
             strokeWidth="8"
             strokeDasharray={`${progressPercentage * 2.83} 283`}
             strokeDashoffset="0"
@@ -384,31 +396,53 @@ const ContributionProgress: React.FC<{
             className="transition-all duration-500 ease-in-out"
           />
           
-          {/* Center text */}
-          <text 
-            x="50" 
-            y="50" 
-            textAnchor="middle" 
-            dominantBaseline="middle"
-            className={`${getStatusColor()} font-bold text-xl fill-current`}
-          >
-            {isLoading ? "..." : `${Math.round(progressPercentage)}%`}
-          </text>
-          <text 
-            x="50" 
-            y="65" 
-            textAnchor="middle" 
-            dominantBaseline="middle"
-            className="text-gray-500 text-xs fill-current"
-          >
-            Complete
-          </text>
+          {/* Center content - conditional rendering */}
+          {isPaused ? (
+            <>
+              {/* Pause icon for paused state - move up slightly */}
+              <g transform="translate(50, 42)" className="fill-amber-500">
+                <rect x="-10" y="-15" width="7" height="30" rx="2" />
+                <rect x="3" y="-15" width="7" height="30" rx="2" />
+              </g>
+              <text 
+                x="50" 
+                y="75" 
+                textAnchor="middle" 
+                dominantBaseline="middle"
+                className="text-gray-500 text-xs fill-current"
+              >
+                Cycle
+              </text>
+            </>
+          ) : (
+            <>
+              {/* Percentage text for normal state */}
+              <text 
+                x="50" 
+                y="50" 
+                textAnchor="middle" 
+                dominantBaseline="middle"
+                className={`${getStatusColor()} font-bold text-xl fill-current`}
+              >
+                {isLoading ? "..." : `${Math.round(progressPercentage)}%`}
+              </text>
+              <text 
+                x="50" 
+                y="65" 
+                textAnchor="middle" 
+                dominantBaseline="middle"
+                className="text-gray-500 text-xs fill-current"
+              >
+                Complete
+              </text>
+            </>
+          )}
         </svg>
         
         {/* Member sectors around the circle */}
         {(() => {
           // Filter out the recipient for dot visualization around the circle
-          const membersForDots = progressData.currentRecipientAddress
+          const membersForDots = progressData.currentRecipientAddress && !isPaused
             ? progressData.memberList.filter(member => member !== progressData.currentRecipientAddress)
             : progressData.memberList;
           const numDots = membersForDots.length;
@@ -419,7 +453,11 @@ const ContributionProgress: React.FC<{
           const y = 50 + 55 * Math.sin(angle);
           const hasContributed = progressData.contributedMembers.has(memberAddr);
             // Recipient is filtered out, so dotColor is simpler
-            const dotColor = hasContributed ? 'bg-green-500' : 'bg-gray-300';
+            const dotColor = isPaused 
+              ? 'bg-amber-300' // Amber for paused state
+              : hasContributed 
+                ? 'bg-green-500' 
+                : 'bg-gray-300';
           
           return (
               <div key={memberAddr} className="group"> {/* Use memberAddr for key due to filtering */}
@@ -444,7 +482,11 @@ const ContributionProgress: React.FC<{
               >
                 <p className="whitespace-nowrap">
                   {formatAddress(memberAddr)}
-                    {hasContributed ? ' ✓' : ' ✘'} {/* Recipient is not in this list */}
+                    {isPaused 
+                      ? ' (Cycle Paused)' 
+                      : hasContributed 
+                        ? ' ✓' 
+                        : ' ✘'}
                 </p>
               </div>
             </div>
@@ -458,7 +500,7 @@ const ContributionProgress: React.FC<{
           {isLoading ? "Loading..." : `${contributedCount} of ${expectedContributors} expected contributors`}
         </p>
         <p className="text-xs text-gray-500">
-          Current Cycle Contributions 
+          {isPaused ? `Cycle ${currentCycle} Completed - Pending Next Cycle` : `Current Cycle Contributions`}
         </p>
       </div>
       
@@ -466,21 +508,31 @@ const ContributionProgress: React.FC<{
       <div className="mt-3 grid grid-cols-1 gap-2 text-xs w-full max-w-xs">
         {progressData.memberList.map((memberAddr, index) => {
           const hasContributed = progressData.contributedMembers.has(memberAddr);
-          const isRecipient = memberAddr === progressData.currentRecipientAddress;
+          const isRecipient = !isPaused && memberAddr === progressData.currentRecipientAddress;
           
-          let statusText = 'Pending';
-          let statusColorClass = 'text-gray-500';
-          let dotColorClass = 'bg-gray-300';
-
-          if (isRecipient) {
-            statusText = 'Receiving Payout';
-            statusColorClass = 'text-blue-600 font-medium';
-            dotColorClass = 'bg-blue-500';
-          } else if (hasContributed) {
-            statusText = 'Contributed';
-            statusColorClass = 'text-green-600 font-medium';
-            dotColorClass = 'bg-green-500';
-          }
+          const statusText = isPaused 
+            ? 'Waiting for Next Cycle' 
+            : isRecipient 
+              ? 'Receiving Payout' 
+              : hasContributed 
+                ? 'Contributed' 
+                : 'Pending';
+                
+          const statusColorClass = isPaused 
+            ? 'text-amber-600 font-medium' 
+            : isRecipient 
+              ? 'text-blue-600 font-medium' 
+              : hasContributed 
+                ? 'text-green-600 font-medium' 
+                : 'text-gray-500';
+                
+          const dotColorClass = isPaused 
+            ? 'bg-amber-300' 
+            : isRecipient 
+              ? 'bg-blue-500' 
+              : hasContributed 
+                ? 'bg-green-500' 
+                : 'bg-gray-300';
 
           return (
             <div key={index} className="flex items-center justify-between">
@@ -552,6 +604,9 @@ export default function ContributeToCircle() {
   // New states for cycle position tracking
   const [currentPositionInCycle, setCurrentPositionInCycle] = useState<number | null>(null);
   const [totalMembersInRotation, setTotalMembersInRotation] = useState<number | null>(null);
+
+  // Add a new state variable to track if a user has had their security deposit returned during the current paused cycle
+  const [securityDepositReturnedDuringPause, setSecurityDepositReturnedDuringPause] = useState<boolean>(false);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -801,6 +856,13 @@ export default function ContributeToCircle() {
       if ('is_active' in fields) {
         isActive = Boolean(fields.is_active);
         console.log('Contribute - Found is_active field in circle object:', isActive);
+      }
+
+      // Check for paused after cycle field
+      let isPausedAfterCycle = false;
+      if ('paused_after_cycle' in fields) {
+        isPausedAfterCycle = Boolean(fields.paused_after_cycle);
+        console.log('Contribute - Found paused_after_cycle field in circle object:', isPausedAfterCycle);
       }
       
       // Read current_cycle from the circle object
@@ -1082,6 +1144,7 @@ export default function ContributeToCircle() {
         autoSwapEnabled: configValues.autoSwapEnabled,
         isActive: isActive, // Use our correctly determined isActive value
         maxMembers: maxMembers, // Add max members to circle object
+        pausedAfterCycle: isPausedAfterCycle, // Add paused after cycle flag
         // Remove nextPayoutTime and cycleLength if only used for progress component
         // nextPayoutTime: nextPayoutTime,
         // cycleLength: cycleLength 
@@ -1099,6 +1162,7 @@ export default function ContributeToCircle() {
         autoSwapEnabled: configValues.autoSwapEnabled,
         isActive,
         maxMembers,
+        pausedAfterCycle: isPausedAfterCycle,
         // Remove from log if removed from state
         // nextPayoutTime,
         // cycleLength
@@ -1141,6 +1205,7 @@ export default function ContributeToCircle() {
         const hasEnoughForContribution = totalUsdcBalance >= circle.contributionAmountUsd;
         const autoSwapOn = Boolean(circle.autoSwapEnabled);
         const circleActive = Boolean(circle.isActive);
+        const circlePaused = Boolean(circle.pausedAfterCycle);
 
         // Log intermediate values for debugging
         console.log('[Direct Deposit Check]', {
@@ -1149,6 +1214,7 @@ export default function ContributeToCircle() {
             hasEnoughForContribution,
             autoSwapOn,
             circleActive,
+            circlePaused,
             securityDepositUsd: circle.securityDepositUsd,
             contributionAmountUsd: circle.contributionAmountUsd,
             totalUsdcBalance
@@ -1160,9 +1226,10 @@ export default function ContributeToCircle() {
           console.log("Showing direct deposit for SECURITY DEPOSIT (Circle active status ignored)");
         }
         // Condition 2: Making Regular Contribution (userDepositPaid state is true)
-        else if (userDepositPaid && hasEnoughForContribution && autoSwapOn && circleActive) {
+        // Don't allow contributions if circle is paused after cycle
+        else if (userDepositPaid && hasEnoughForContribution && autoSwapOn && circleActive && !circlePaused) {
            showOption = true;
-           console.log("Showing direct deposit for CONTRIBUTION (Circle must be active)");
+           console.log("Showing direct deposit for CONTRIBUTION (Circle must be active and not paused)");
         }
         
         setShowDirectDepositOption(showOption);
@@ -1303,6 +1370,13 @@ export default function ContributeToCircle() {
   // Add a function to check if the user has contributed for the current cycle
   const checkUserContribution = async () => {
     if (!circle || !circle.id || !userAddress) return;
+    
+    // If circle is paused after cycle, no contributions are allowed
+    if (circle.pausedAfterCycle) {
+      console.log(`[Contribution Check] Circle is paused after cycle - contributions not possible`);
+      setUserHasContributed(false);
+      return false;
+    }
     
     console.log(`[Contribution Check] Starting check for user ${userAddress} in circle ${circle.id} for cycle ${currentCycle}`);
     
@@ -1502,8 +1576,14 @@ export default function ContributeToCircle() {
   const checkIfUserIsCurrentRecipient = async () => {
     if (!circle || !circle.id || !userAddress || !circle.isActive) {
       setCycleRecipientAddress(null); // Reset if conditions not met
-      // setCurrentPositionInCycle(null); // Not strictly needed here if fetchCircleDetails handles it
-      // setTotalMembersInRotation(null);
+      return false;
+    }
+    
+    // If circle is paused after cycle, there is no current recipient
+    if (circle.pausedAfterCycle) {
+      console.log(`[Recipient Check] Circle is paused after cycle - no current recipient`);
+      setCycleRecipientAddress(null);
+      setIsCurrentRecipient(false);
       return false;
     }
     
@@ -1559,9 +1639,105 @@ export default function ContributeToCircle() {
     }
   };
 
+  // Add a function to check if the user has received a security deposit payout
+  const checkSecurityDepositReturned = async () => {
+    if (!circle || !circle.id || !userAddress) return false;
+    
+    try {
+      const client = new SuiClient({ url: getJsonRpcUrl() });
+      console.log(`[SecurityDepositCheck] Checking if ${userAddress} has received security deposit payout in circle ${circle.id}`);
+      
+      // Look for SecurityDepositReturned events for this user and circle
+      const securityReturnedEvents = await client.queryEvents({
+        query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::SecurityDepositReturned` }, 
+        limit: 50
+      });
+      
+      // Filter events by circle and user
+      const relevantEvents = securityReturnedEvents.data.filter(event => {
+        const parsed = event.parsedJson as { circle_id?: string; member?: string; };
+        return parsed?.circle_id === circle.id && 
+               parsed?.member?.toLowerCase() === userAddress.toLowerCase();
+      });
+      
+      if (relevantEvents.length === 0) {
+        console.log(`[SecurityDepositCheck] No security deposit return events found for ${userAddress}`);
+        setSecurityDepositReturnedDuringPause(false);
+        return false;
+      }
+      
+      // Find the most recent return event
+      const mostRecentEvent = relevantEvents.sort((a, b) => {
+        return (Number(b.timestampMs) || 0) - (Number(a.timestampMs) || 0);
+      })[0];
+      
+      // Check if the event happened during the current cycle 
+      // and after the most recent CycleResumed event (if any)
+      const returnTimestamp = Number(mostRecentEvent.timestampMs);
+      console.log(`[SecurityDepositCheck] Found security deposit return event at ${new Date(returnTimestamp).toISOString()}`);
+      
+      // Check for the most recent CycleResumed event
+      const cycleResumedEvents = await client.queryEvents({
+        query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::CycleResumed` },
+        limit: 20
+      });
+      
+      // Filter and sort to find the most recent resume event for this circle
+      const circleResumeEvents = cycleResumedEvents.data
+        .filter(event => {
+          const parsedJson = event.parsedJson as { circle_id?: string };
+          return parsedJson?.circle_id === circle.id;
+        })
+        .sort((a, b) => {
+          return (Number(b.timestampMs) || 0) - (Number(a.timestampMs) || 0);
+        });
+      
+      // If there's a resume event, check if the deposit return happened after it
+      if (circleResumeEvents.length > 0) {
+        const lastResumeTimestamp = Number(circleResumeEvents[0].timestampMs);
+        console.log(`[SecurityDepositCheck] Last cycle resume was at ${new Date(lastResumeTimestamp).toISOString()}`);
+        
+        // If the return happened after the last resume, and the circle is currently paused,
+        // then the user has received their deposit during the current pause period
+        if (returnTimestamp > lastResumeTimestamp && circle.pausedAfterCycle) {
+          console.log(`[SecurityDepositCheck] User received security deposit payout during current pause period`);
+          setSecurityDepositReturnedDuringPause(true);
+          return true;
+        }
+      } else if (circle.pausedAfterCycle) {
+        // If there are no resume events but the circle is paused, assume the return
+        // happened during the current pause (since there's no previous pause to compare with)
+        console.log(`[SecurityDepositCheck] No resume events found, but circle is paused. Assuming security deposit was returned during current pause.`);
+        setSecurityDepositReturnedDuringPause(true);
+        return true;
+      }
+      
+      console.log(`[SecurityDepositCheck] Security deposit was not returned during current pause period`);
+      setSecurityDepositReturnedDuringPause(false);
+      return false;
+      
+    } catch (error) {
+      console.error(`[SecurityDepositCheck] Error checking security deposit return status:`, error);
+      return false;
+    }
+  };
+
+  // Update useEffect to call the new function
+  useEffect(() => {
+    if (circle && userAddress && circle.pausedAfterCycle) {
+      checkSecurityDepositReturned();
+    }
+  }, [circle, userAddress]);
+
   // Modify handleContribute to check if user is the current recipient
   const handleContribute = async () => {
     if (!circle || !userAddress) return;
+    
+    // Check if the circle is paused after cycle
+    if (circle.pausedAfterCycle) {
+      toast.error('Contributions are disabled while the cycle is paused. Please wait for the admin to resume the cycle.');
+      return;
+    }
     
     // Check if user is the current recipient and shouldn't contribute
     if (isCurrentRecipient) {
@@ -1711,9 +1887,16 @@ export default function ContributeToCircle() {
     };
   };
 
+  // Modify the handlePaySecurityDeposit function to check if deposit was returned during pause
   const handlePaySecurityDeposit = async () => {
     if (!circle || !userAddress || !circle.walletId) {
       toast.error('Circle information incomplete. Cannot process deposit.');
+      return;
+    }
+    
+    // Check if security deposit was already returned during the current pause
+    if (circle.pausedAfterCycle && securityDepositReturnedDuringPause) {
+      toast.error('You have already received your security deposit for this cycle. Please wait for the admin to resume the cycle before paying a new deposit.');
       return;
     }
     
@@ -2118,6 +2301,21 @@ export default function ContributeToCircle() {
   const handleDirectUsdcDeposit = async () => {
     if (!circle || !userAddress || !userUsdcBalance) return;
     
+    // Determine if this is a security deposit or contribution
+    const isSecurityDeposit = !userDepositPaid;
+    
+    // If it's a security deposit, check if it was already returned during the current pause
+    if (isSecurityDeposit && circle.pausedAfterCycle && securityDepositReturnedDuringPause) {
+      toast.error('You have already received your security deposit for this cycle. Please wait for the admin to resume the cycle before paying a new deposit.');
+      return;
+    }
+    
+    // If it's a contribution, check if the circle is paused
+    if (!isSecurityDeposit && circle.pausedAfterCycle) {
+      toast.error('Contributions are disabled while the circle is paused. Please wait for the admin to resume the cycle.');
+      return;
+    }
+    
     // Check if user is current recipient
     if (isCurrentRecipient) {
       toast.error('You are the current recipient for this cycle. You don&apos;t need to contribute.');
@@ -2215,8 +2413,14 @@ export default function ContributeToCircle() {
   const handleRefreshContributionStatus = async () => {
     toast.loading('Refreshing contribution status...', { id: 'refresh-status' });
     try {
-      // Refresh the cycle information first
+      // Refresh the circle information first
       await fetchCircleDetails();
+      
+      // If circle is paused, just update UI and return
+      if (circle?.pausedAfterCycle) {
+        toast.success('Circle is paused after cycle completion', { id: 'refresh-status' });
+        return;
+      }
       
       // Refresh contribution status
       await checkUserContribution();
@@ -2259,8 +2463,40 @@ export default function ContributeToCircle() {
           </div>
         )}
 
-        {/* Show message if user is current recipient */}
-        {isCurrentRecipient && (
+        {/* Add prominent message for cycle paused state */}
+        {circle?.pausedAfterCycle && (
+          <div className="mb-4 p-4 bg-amber-50 rounded-lg border-2 border-amber-300">
+            <div className="flex items-start space-x-3">
+              <div className="bg-amber-100 p-1.5 rounded-full flex-shrink-0 mt-0.5">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div>
+                <h4 className="text-lg font-medium text-amber-800">Cycle Paused</h4>
+                <p className="mt-1 text-amber-700">
+                  Cycle {currentCycle} has been completed, and the circle is now paused. New contributions are disabled until the admin resumes the circle to start the next cycle.
+                </p>
+                {!userDepositPaid && !securityDepositReturnedDuringPause && (
+                  <p className="mt-2 text-amber-700 font-medium">
+                    You can still pay your security deposit while the circle is paused to prepare for the next cycle.
+                  </p>
+                )}
+                {!userDepositPaid && securityDepositReturnedDuringPause && (
+                  <p className="mt-2 text-amber-700 font-medium">
+                    Your security deposit has been returned. You&apos;ll need to wait for the admin to resume the cycle before paying a new deposit.
+                  </p>
+                )}
+                <p className="mt-2 text-sm text-amber-600">
+                  <span className="font-medium">Note:</span> When the admin resumes the circle, all members will need to pay a new security deposit for the next cycle.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Show message if user is current recipient - only show if not paused */}
+        {isCurrentRecipient && !circle?.pausedAfterCycle && (
           <div className="mb-4 p-4 bg-green-50 rounded-lg border-2 border-green-200">
             <div className="flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
               <div className="bg-green-100 p-1.5 rounded-full flex-shrink-0 self-start">
@@ -2278,8 +2514,8 @@ export default function ContributeToCircle() {
           </div>
         )}
 
-        {/* Show message if user has already contributed */}
-        {userHasContributed && (
+        {/* Show message if user has already contributed - only show if not paused */}
+        {userHasContributed && !circle?.pausedAfterCycle && (
           <div className="mb-4 p-4 bg-green-50 rounded-lg border-2 border-green-200">
             <div className="flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
               <div className="bg-green-100 p-1.5 rounded-full flex-shrink-0 self-start">
@@ -2316,9 +2552,10 @@ export default function ContributeToCircle() {
                   <button
                     onClick={handleDirectUsdcDeposit}
                     disabled={directDepositProcessing || 
-                            (userDepositPaid && !circle?.isActive) || 
+                            (userDepositPaid && (!circle?.isActive || circle?.pausedAfterCycle)) || 
                             userHasContributed ||
-                            isCurrentRecipient}
+                            isCurrentRecipient ||
+                            (!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause)}
                     className="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
                   >
                     {directDepositProcessing ? (
@@ -2335,6 +2572,8 @@ export default function ContributeToCircle() {
                       `Already Contributed`
                     ) : isCurrentRecipient ? (
                       `You Are the Current Recipient`
+                    ) : circle?.pausedAfterCycle ? (
+                      `Circle is Paused After Cycle`
                     ) : (
                       `Contribute ${circle?.contributionAmountUsd?.toFixed(2)} USDC Directly`
                     )}
@@ -2348,15 +2587,17 @@ export default function ContributeToCircle() {
         {/* Show the appropriate form based on auto-swap setting */}
         {circle?.autoSwapEnabled ? (
           <>
-            {!circle.isActive && (
+            {(!circle.isActive || circle.pausedAfterCycle) && (
               <div className="mb-4 p-3 bg-amber-50 rounded-lg border border-amber-200">
                 <p className="text-sm text-amber-700 font-medium">
-                  This circle is not active yet
+                  {!circle.isActive ? "This circle is not active yet" : "This circle is paused after cycle completion"}
                 </p>
                 <p className="text-xs text-amber-600 mt-1">
                   {!userDepositPaid 
-                    ? "Security deposits can still be paid before activation."
-                    : "Regular contributions are disabled until the admin activates the circle. Please check back later."}
+                    ? "Security deposits can still be paid before activation or while paused."
+                    : circle.pausedAfterCycle
+                      ? "Regular contributions are disabled while the circle is paused. Please wait for the admin to resume the cycle."
+                      : "Regular contributions are disabled until the admin activates the circle. Please check back later."}
                 </p>
               </div>
             )}
@@ -2372,7 +2613,8 @@ export default function ContributeToCircle() {
                 // Check if user has contributed after completing a transaction
                 checkUserContribution();
               }}
-              disabled={userDepositPaid && (!circle?.isActive || userHasContributed || isCurrentRecipient)}
+              disabled={userDepositPaid && (!circle?.isActive || circle?.pausedAfterCycle || userHasContributed || isCurrentRecipient) ||
+                      (!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause)}
             />
           </>
         ) : (
@@ -2496,7 +2738,9 @@ export default function ContributeToCircle() {
                   
                   <button
                     onClick={handlePaySecurityDeposit}
-                    disabled={isPayingDeposit || !circle || circle.securityDepositUsd <= 0 || (userBalance !== null && userBalance < getRequiredDepositAmount())}
+                    disabled={isPayingDeposit || !circle || circle.securityDepositUsd <= 0 || 
+                             (userBalance !== null && userBalance < getRequiredDepositAmount()) ||
+                             (circle.pausedAfterCycle && securityDepositReturnedDuringPause)}
                     className="w-full py-3 px-4 rounded-lg shadow-sm text-sm font-bold text-white bg-amber-500 hover:bg-amber-600 transition-all disabled:opacity-70 disabled:cursor-not-allowed"
                   >
                     {isPayingDeposit ? (
@@ -2518,6 +2762,21 @@ export default function ContributeToCircle() {
                     The deposit is refundable if you decide to leave the circle later.
                   </p>
                 </div>
+              </div>
+            )}
+
+            {/* Add info message explaining why security deposit button is disabled */}
+            {!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause && (
+              <div className="mt-3 p-3 bg-red-50 rounded-lg border border-red-200">
+                <p className="text-sm text-red-700 font-medium flex items-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  Security deposit already returned
+                </p>
+                <p className="text-xs text-red-600 mt-1">
+                  You have already received your security deposit for this cycle. You must wait for the admin to resume the cycle before paying a new deposit.
+                </p>
               </div>
             )}
 
@@ -2566,13 +2825,15 @@ export default function ContributeToCircle() {
                       (userBalance !== null && userBalance < getRequiredContributionAmount()) || 
                       !userDepositPaid || 
                       (!circle?.isActive && userDepositPaid) ||
+                      (circle?.pausedAfterCycle && userDepositPaid) ||
                       userHasContributed ||
-                      isCurrentRecipient} // Disable if user is current recipient
+                      isCurrentRecipient} // Disable if user is current recipient or circle is paused
               className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all disabled:opacity-70 disabled:cursor-not-allowed`}
             >
               {isProcessing ? 'Processing...' : 
                isCurrentRecipient ? 'You Are the Current Recipient' : 
                userHasContributed ? 'Already Contributed' : 
+               circle?.pausedAfterCycle ? 'Circle is Paused After Cycle' : 
                'Contribute Now'}
             </button>
             
@@ -2580,16 +2841,20 @@ export default function ContributeToCircle() {
               By contributing, you agree to the circle&apos;s terms and conditions.
             </p>
             
-            {/* Add inactive circle message */}
-            {circle && !circle.isActive && (
+            {/* Add inactive or paused circle message */}
+            {circle && (!circle.isActive || circle.pausedAfterCycle) && (
               <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200">
                 <p className="text-sm text-amber-700 font-medium">
-                  This circle is not active yet
+                  {!circle.isActive 
+                    ? "This circle is not active yet"
+                    : "This circle is paused after cycle completion"}
                 </p>
                 <p className="text-xs text-amber-600 mt-1">
                   {!userDepositPaid 
-                    ? "Security deposits can still be paid before activation."
-                    : "Regular contributions are disabled until the admin activates the circle. Please check back later."}
+                    ? "Security deposits can still be paid before activation or while paused."
+                    : circle.pausedAfterCycle
+                      ? "Regular contributions are disabled while the circle is paused. Please wait for the admin to resume the cycle."
+                      : "Regular contributions are disabled until the admin activates the circle. Please check back later."}
                 </p>
               </div>
             )}
@@ -2707,14 +2972,18 @@ export default function ContributeToCircle() {
                           <div className="flex justify-between items-center mb-4">
                             <h3 className="text-lg font-medium text-gray-800 text-center">
                               <div className="flex flex-col sm:flex-row sm:items-center">
-                                <span>Contributions Made Cycle {currentCycle}</span>
-                                {totalMembersInRotation && typeof currentPositionInCycle === 'number' && currentPositionInCycle >= 0 && (
+                                <span>
+                                  {circle?.pausedAfterCycle 
+                                    ? `Cycle ${currentCycle} Completed - Pending Next Cycle`
+                                    : `Contributions Made Cycle ${currentCycle}`}
+                                </span>
+                                {totalMembersInRotation && typeof currentPositionInCycle === 'number' && currentPositionInCycle >= 0 && !circle?.pausedAfterCycle && (
                                   <span className="text-sm text-gray-600 mt-1 sm:mt-0 sm:ml-1">
                                     (Position {currentPositionInCycle + 1} of {totalMembersInRotation})
                                   </span>
                                 )}
                               </div>
-                          </h3>
+                            </h3>
                             <button
                               onClick={() => {
                                 // Refresh cycle data
@@ -2738,8 +3007,7 @@ export default function ContributeToCircle() {
                               maxMembers={circle.maxMembers || 5} 
                               currentCycle={currentCycle} 
                               currentRecipientAddress={cycleRecipientAddress} // Pass the recipient address
-                              // currentPositionInCycle={currentPositionInCycle} // REMOVED
-                              // totalMembersInRotation={totalMembersInRotation} // REMOVED
+                              isPaused={circle.pausedAfterCycle} // Add isPaused prop
                             />
                           </div>
                         </div>

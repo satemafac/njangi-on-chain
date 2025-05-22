@@ -6,6 +6,7 @@ import * as Switch from '@radix-ui/react-switch';
 import * as Select from '@radix-ui/react-select';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../services/price-service';
+import { toast } from 'react-hot-toast';
 
 type CycleType = 'rotational' | 'smart-goal';
 type RotationStyle = 'fixed' | 'auction-based';
@@ -451,18 +452,31 @@ export default function CreateCircle() {
                 {/* Smart Goal Circle Card */}
                 <button
                   onClick={() => {
-                    setFormData(prev => ({ ...prev, cycleType: 'smart-goal' }));
-                    setCurrentStep(1);
+                    // Show toast notification instead of navigating
+                    toast.success("Smart Goal Circles are coming soon!", {
+                      icon: "🚧",
+                      duration: 3000
+                    });
                   }}
-                  className="p-6 border rounded-lg hover:border-blue-500 hover:shadow-md transition-all text-center group"
+                  className="p-6 border rounded-lg border-gray-300 hover:border-gray-400 transition-all text-center group relative"
                 >
-                  <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  {/* Coming Soon Badge - move to top-right corner of the card instead of floating outside */}
+                  <div className="absolute top-2 right-2">
+                    <span className="bg-amber-500 text-white text-xs px-2 py-1 rounded-full font-medium whitespace-nowrap shadow-md">
+                      Coming Soon
+                    </span>
+                  </div>
+                  
+                  {/* Reduce opacity of the overlay to make text more visible */}
+                  <div className="absolute inset-0 bg-white/30 rounded-lg"></div>
+                  
+                  <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4 relative">
                     <svg className="w-8 h-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                   </div>
-                  <h3 className="text-xl font-medium text-gray-900 mb-2">Smart Goal Circle</h3>
-                  <p className="text-gray-600">Members contribute towards a shared savings goal with automatic distribution upon completion</p>
+                  <h3 className="text-xl font-medium text-gray-900 mb-2 relative">Smart Goal Circle</h3>
+                  <p className="text-gray-600 relative">Members contribute towards a shared savings goal with automatic distribution upon completion</p>
                 </button>
               </div>
 
