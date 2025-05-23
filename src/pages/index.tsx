@@ -4,11 +4,20 @@ import { useAuth } from '../contexts/AuthContext';
 import { LoginButton } from '../components/LoginButton';
 import Image from 'next/image';
 import Link from 'next/link';
+import Head from 'next/head';
 
 export default function Home() {
   const router = useRouter();
   const { account } = useAuth();
   const [openFaqItems, setOpenFaqItems] = useState<{[key: string]: boolean}>({});
+
+  const culturalNames = [
+    "Adaji", "Ajoh", "Asue", "Arisan", "Cadena", "Chama", "ChitFunds", "Cundina",
+    "Equb", "Esusu", "Family-Lottery", "Hagbad", "Hui", "Idir", "Iqub", "Keyes",
+    "Kibata", "Kikoba", "Micro-Credit", "Mujin", "Njangi", "Paluwagan", "Pandero",
+    "Pari", "ROSCA", "Round", "Samity", "SittuDanawa", "Sou-sou", "Pardner",
+    "Stokvel", "Tanda", "Tontine"
+  ];
 
   const toggleFaqItem = (id: string) => {
     setOpenFaqItems(prev => ({
@@ -24,7 +33,142 @@ export default function Home() {
   }, [account, router]);
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <>
+      <Head>
+        {/* Primary Meta Tags */}
+        <title>Njangi On-Chain - Secure Blockchain Savings Circles | Sui zkLogin</title>
+        <meta name="title" content="Njangi On-Chain - Secure Blockchain Savings Circles | Sui zkLogin" />
+        <meta name="description" content="Join the world's first blockchain-based Njangi platform. Create secure, transparent savings circles with zkLogin authentication on Sui blockchain. Supporting 6+ currencies including USDC, USDT, SUI, and BTC." />
+        <meta name="keywords" content="Njangi, ROSCA, Tontine, blockchain savings, Sui blockchain, zkLogin, cryptocurrency savings, DeFi, community savings, stablecoin, USDC, USDT, BTC" />
+        <meta name="robots" content="index, follow" />
+        <meta name="language" content="English" />
+        <meta name="author" content="Njangi On-Chain" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        
+        {/* Open Graph / Facebook */}
+        <meta property="og:type" content="website" />
+        <meta property="og:url" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/" />
+        <meta property="og:title" content="Njangi On-Chain - Secure Blockchain Savings Circles" />
+        <meta property="og:description" content="Join the world's first blockchain-based Njangi platform. Create secure, transparent savings circles with zkLogin authentication on Sui blockchain." />
+        <meta property="og:image" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/njangi-on-chain-logo.png" />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta property="og:site_name" content="Njangi On-Chain" />
+        <meta property="og:locale" content="en_US" />
+        
+        {/* Twitter */}
+        <meta property="twitter:card" content="summary_large_image" />
+        <meta property="twitter:url" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/" />
+        <meta property="twitter:title" content="Njangi On-Chain - Secure Blockchain Savings Circles" />
+        <meta property="twitter:description" content="Join the world's first blockchain-based Njangi platform. Create secure, transparent savings circles with zkLogin authentication on Sui blockchain." />
+        <meta property="twitter:image" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/njangi-on-chain-logo.png" />
+        <meta property="twitter:site" content="@njangi_on_chain" />
+        <meta property="twitter:creator" content="@njangi_on_chain" />
+        
+        {/* Additional Meta Tags */}
+        <meta name="theme-color" content="#2563eb" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+        <meta name="apple-mobile-web-app-title" content="Njangi On-Chain" />
+        
+        {/* Canonical URL */}
+        <link rel="canonical" href="https://njangi-on-chain-1014e48e59ae.herokuapp.com/" />
+        
+        {/* Favicon */}
+        <link rel="icon" href="/favicon.ico" />
+        <link rel="apple-touch-icon" href="/njangi-on-chain-logo.png" />
+        
+        {/* Structured Data */}
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@type": "WebApplication",
+              "name": "Njangi On-Chain",
+              "description": "Secure blockchain-based savings circles platform built on Sui blockchain with zkLogin authentication",
+              "url": "https://njangi-on-chain-1014e48e59ae.herokuapp.com/",
+              "applicationCategory": "FinanceApplication",
+              "operatingSystem": "Web",
+              "offers": {
+                "@type": "Offer",
+                "price": "0",
+                "priceCurrency": "USD"
+              },
+              "author": {
+                "@type": "Organization",
+                "name": "Njangi On-Chain",
+                "url": "https://njangi-on-chain-1014e48e59ae.herokuapp.com/",
+                "sameAs": [
+                  "https://x.com/njangi_on_chain",
+                  "https://www.instagram.com/njangionchain"
+                ]
+              },
+              "featureList": [
+                "Unlimited Savings Groups",
+                "Decentralized Payments",
+                "Provably Fair Order",
+                "zkLogin Authentication",
+                "Multi-currency Support",
+                "Smart Contract Security"
+              ],
+              "supportedPaymentMethod": [
+                "Cryptocurrency",
+                "USDC",
+                "USDT", 
+                "SUI",
+                "Bitcoin"
+              ]
+            })
+          }}
+        />
+      </Head>
+      
+      <div className="min-h-screen bg-gray-50">
+      {/* Cultural Names Sliding Banner */}
+      <div className="bg-gradient-to-r from-blue-600 via-blue-700 to-blue-600 text-white py-3 overflow-hidden relative">
+        <div className="absolute inset-0 bg-black bg-opacity-10"></div>
+        <div className="relative">
+          <style jsx>{`
+            @keyframes slide {
+              0% {
+                transform: translateX(100%);
+              }
+              100% {
+                transform: translateX(-100%);
+              }
+            }
+            .sliding-banner {
+              animation: slide 60s linear infinite;
+            }
+            .sliding-banner:hover {
+              animation-play-state: paused;
+            }
+          `}</style>
+          <div className="sliding-banner whitespace-nowrap">
+            <span className="inline-flex items-center space-x-8 text-sm font-medium">
+              {/* First set */}
+              {culturalNames.map((name, index) => (
+                <span key={`first-${index}`} className="inline-flex items-center">
+                  <span className="w-2 h-2 bg-blue-200 rounded-full mr-3"></span>
+                  {name}
+                </span>
+              ))}
+              {/* Duplicate for seamless loop */}
+              {culturalNames.map((name, index) => (
+                <span key={`second-${index}`} className="inline-flex items-center ml-8">
+                  <span className="w-2 h-2 bg-blue-200 rounded-full mr-3"></span>
+                  {name}
+                </span>
+              ))}
+            </span>
+          </div>
+        </div>
+        {/* Gradient fade edges */}
+        <div className="absolute top-0 left-0 w-20 h-full bg-gradient-to-r from-blue-600 to-transparent z-10"></div>
+        <div className="absolute top-0 right-0 w-20 h-full bg-gradient-to-l from-blue-600 to-transparent z-10"></div>
+      </div>
+
       {/* Hero Section */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="py-12 md:py-20">
@@ -166,6 +310,143 @@ export default function Home() {
               </div>
               <h3 className="text-lg font-medium text-gray-900">100% Secure and Trustless</h3>
               <p className="mt-2 text-gray-500">All transactions are secured by Sui blockchain with full verification and auditability.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Comparison Table Section */}
+      <div className="bg-gray-50 py-16">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-12">
+            <h2 className="text-3xl font-extrabold text-gray-900 sm:text-4xl">
+              Why Choose Njangi On-Chain?
+            </h2>
+            <p className="mt-4 text-lg text-gray-500 max-w-3xl mx-auto">
+              See how we combine the best of traditional community savings with modern blockchain technology,
+              outperforming both offline methods and traditional banking systems.
+            </p>
+          </div>
+
+          {/* Desktop Table */}
+          <div className="hidden lg:block">
+            <div className="overflow-hidden shadow-lg rounded-lg">
+              <table className="min-w-full bg-white">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900 uppercase tracking-wider">
+                      Features
+                    </th>
+                    <th className="px-6 py-4 text-center text-sm font-semibold text-red-600 uppercase tracking-wider">
+                      Traditional Njangi
+                    </th>
+                    <th className="px-6 py-4 text-center text-sm font-semibold text-blue-600 uppercase tracking-wider bg-blue-50">
+                      Njangi On-Chain
+                    </th>
+                    <th className="px-6 py-4 text-center text-sm font-semibold text-gray-600 uppercase tracking-wider">
+                      Banks & Fintech Apps
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  <tr>
+                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Community Focus</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">✓ Strong community bonds</td>
+                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Community + Technology</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">Individual accounts only</td>
+                  </tr>
+                  <tr className="bg-gray-50">
+                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Global Accessibility</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">Local meetings required</td>
+                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Worldwide borderless</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">Country restrictions</td>
+                  </tr>
+                  <tr>
+                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Transparency</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">Limited to group</td>
+                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Full blockchain transparency</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">Corporate controlled</td>
+                  </tr>
+                  <tr className="bg-gray-50">
+                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Cultural Preservation</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">✓ Traditional values</td>
+                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Cultural heritage preserved</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">Generic products</td>
+                  </tr>
+                  <tr>
+                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Fees & Costs</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">No fees (trust-based)</td>
+                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Minimal blockchain fees</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">High account/transfer fees</td>
+                  </tr>
+                  <tr className="bg-gray-50">
+                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Control & Ownership</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">Community managed</td>
+                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Self-custody & control</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">Bank controls funds</td>
+                  </tr>
+                  <tr>
+                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Interest & Returns</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">No interest earned</td>
+                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Potential crypto appreciation</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">Low savings rates</td>
+                  </tr>
+                  <tr className="bg-gray-50">
+                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Security</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">Social trust dependent</td>
+                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Cryptographic guarantees</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">Corporate security risks</td>
+                  </tr>
+                  <tr>
+                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Setup Complexity</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">Simple social setup</td>
+                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Social login (zkLogin)</td>
+                    <td className="px-6 py-4 text-center text-sm text-gray-500">Complex KYC/documentation</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Mobile Cards */}
+          <div className="lg:hidden space-y-6">
+            <div className="bg-white rounded-lg shadow-md p-6 border-l-4 border-red-500">
+              <h3 className="text-lg font-semibold text-red-600 mb-4">Traditional Njangi</h3>
+              <ul className="space-y-2 text-sm text-gray-600">
+                <li>• ✓ Strong community bonds</li>
+                <li>• Local meetings required</li>
+                <li>• Limited to group transparency</li>
+                <li>• ✓ Traditional values preserved</li>
+                <li>• No fees (trust-based)</li>
+                <li>• Social trust dependent</li>
+              </ul>
+            </div>
+
+            <div className="bg-blue-50 rounded-lg shadow-md p-6 border-l-4 border-blue-500">
+              <h3 className="text-lg font-semibold text-blue-600 mb-4">✨ Njangi On-Chain</h3>
+              <ul className="space-y-2 text-sm text-blue-700 font-medium">
+                <li>• ✓ Community + Modern technology</li>
+                <li>• ✓ Worldwide borderless access</li>
+                <li>• ✓ Full blockchain transparency</li>
+                <li>• ✓ Cultural heritage preserved</li>
+                <li>• ✓ Minimal blockchain fees</li>
+                <li>• ✓ Self-custody & control</li>
+                <li>• ✓ Potential crypto appreciation</li>
+                <li>• ✓ Social login with zkLogin</li>
+              </ul>
+            </div>
+
+            <div className="bg-white rounded-lg shadow-md p-6 border-l-4 border-gray-400">
+              <h3 className="text-lg font-semibold text-gray-600 mb-4">Banks & Fintech Apps</h3>
+              <ul className="space-y-2 text-sm text-gray-600">
+                <li>• Individual accounts only</li>
+                <li>• Country restrictions</li>
+                <li>• Corporate controlled transparency</li>
+                <li>• Generic financial products</li>
+                <li>• High account/transfer fees</li>
+                <li>• Bank controls your funds</li>
+                <li>• Complex KYC/documentation</li>
+              </ul>
             </div>
           </div>
         </div>
@@ -325,22 +606,40 @@ export default function Home() {
       </div>
 
       {/* Cultural Names Section */}
-      <div className="bg-blue-600 py-12">
+      <div className="bg-white py-16">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <h2 className="text-2xl font-bold text-white text-center mb-8">
+          <h2 className="text-3xl font-extrabold text-gray-900 text-center mb-8 sm:text-4xl">
             One Global Movement, Countless Cultural Expressions
           </h2>
-          <div className="flex flex-wrap justify-center gap-3 text-white">
-            {["Adaji", "Ajoh", "Asue", "Arisan", "Cadena", "Chama", "ChitFunds", "Cundina",
-              "Equb", "Esusu", "Family-Lottery", "Hagbad", "Hui", "Idir", "Iqub", "Keyes",
-              "Kibata", "Kikoba", "Micro-Credit", "Mujin", "Njangi", "Paluwagan", "Pandero",
-              "Pari", "ROSCA", "Round", "Samity", "SittuDanawa", "Sou-sou", "Pardner",
-              "Stokvel", "Tanda", "Tontine"].map((name, index) => (
-              <span key={index} className="bg-blue-500 px-3 py-1 rounded-full text-sm">
+          <p className="text-center text-lg text-gray-600 mb-8 max-w-3xl mx-auto">
+            From Njangi in Cameroon to Tontine in France, ROSCA in economics, and Chama in Kenya - 
+            discover how communities worldwide practice collective savings.
+          </p>
+          <div className="flex flex-wrap justify-center gap-3">
+            {culturalNames.map((name, index) => (
+              <span key={index} className="bg-blue-50 text-blue-700 border border-blue-200 px-4 py-2 rounded-full text-sm font-medium hover:bg-blue-100 transition-colors">
                 {name}
               </span>
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* Call to Action Section */}
+      <div className="bg-gradient-to-r from-blue-600 to-blue-700 py-16">
+        <div className="max-w-4xl mx-auto text-center px-4 sm:px-6 lg:px-8">
+          <h2 className="text-3xl font-extrabold text-white sm:text-4xl">
+            Ready to Start Your Njangi Journey?
+          </h2>
+          <p className="mt-4 text-xl text-blue-100">
+            Join thousands of users worldwide who are already saving together securely on the blockchain.
+          </p>
+          <div className="mt-8">
+            <LoginButton />
+          </div>
+          <p className="mt-4 text-sm text-blue-200">
+            Get started in less than 2 minutes with your social account • No crypto experience required
+          </p>
         </div>
       </div>
 
@@ -391,5 +690,6 @@ export default function Home() {
         </div>
       </footer>
     </div>
+    </>
   );
 } 
