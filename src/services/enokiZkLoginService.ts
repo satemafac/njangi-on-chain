@@ -325,7 +325,12 @@ export class EnokiZkLoginService {
       aud: jwtPayload.aud,
       exp: jwtPayload.exp,
       iat: jwtPayload.iat,
-      provider: setupData.provider
+      provider: setupData.provider,
+      // Log all available claims for debugging
+      allClaims: Object.keys(jwtPayload),
+      name: jwtPayload.name || 'not provided',
+      email: jwtPayload.email || 'not provided',
+      picture: jwtPayload.picture || 'not provided'
     });
 
     // Get salt from Enoki salt service
@@ -352,14 +357,39 @@ export class EnokiZkLoginService {
     // Get the zero-knowledge proof from Enoki
     const zkProofs = await this.getZkProof(proofRequest);
 
+    // Extract profile data with provider-specific logic
+    let name = jwtPayload.name as string | undefined;
+    const picture = jwtPayload.picture as string | undefined;
+    
+    // For Apple, handle special cases
+    if (setupData.provider === 'Apple') {
+      // Apple may not provide name/picture in subsequent logins
+      // Check for email as a fallback identifier
+      const email = jwtPayload.email as string | undefined;
+      
+      if (!name && email) {
+        // Extract name from email prefix as fallback
+        name = email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+      }
+      
+      // Apple doesn't typically provide profile pictures via OAuth
+      // Could potentially be handled via Apple's REST API in the future
+      console.log('Apple profile data:', { 
+        hasName: !!name, 
+        hasEmail: !!email, 
+        hasPicture: !!picture,
+        extractedName: name
+      });
+    }
+
     return { 
       address: userAddr, 
       zkProofs,
       userSalt: userSalt.toString(),
       sub: jwtPayload.sub,
       aud: typeof jwtPayload.aud === 'string' ? jwtPayload.aud : jwtPayload.aud[0],
-      picture: jwtPayload.picture as string | undefined,
-      name: jwtPayload.name as string | undefined
+      picture,
+      name
     };
   }
 
