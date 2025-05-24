@@ -28,6 +28,7 @@
     "@headlessui/react": "^2.2.0",
     "@heroicons/react": "^2.2.0",
     "@mysten/dapp-kit": "^0.14.48",
+    "@mysten/enoki": "^0.6.13",
     "@mysten/sui": "^1.21.2",
     "@mysten/sui.js": "^0.54.1",
     "@mysten/wallet-kit": "^0.8.6",
