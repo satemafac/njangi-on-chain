@@ -124,7 +124,7 @@ export default function Home() {
         />
       </Head>
       
-      <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50">
       {/* Cultural Names Sliding Banner */}
       <div className="bg-gradient-to-r from-blue-600 via-blue-700 to-blue-600 text-white py-3 overflow-hidden relative">
         <div className="absolute inset-0 bg-black bg-opacity-10"></div>
