@@ -148,7 +148,7 @@ export default function Home() {
             }
             @media (max-width: 768px) {
               .sliding-banner {
-                animation: slide 60s linear infinite;
+                animation: slide 150s linear infinite;
               }
             }
           `}</style>
