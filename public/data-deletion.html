@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Deletion Request - Njangi On-Chain</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+            color: #333;
+        }
+        h1 { color: #2563eb; }
+        h2 { color: #1e40af; margin-top: 2em; }
+        .form-container {
+            background: #f9fafb;
+            padding: 2em;
+            border-radius: 12px;
+            margin: 2em 0;
+            border: 1px solid #e5e7eb;
+        }
+        .form-group {
+            margin-bottom: 1.5em;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.5em;
+            font-weight: 600;
+            color: #374151;
+        }
+        input, textarea, select {
+            width: 100%;
+            padding: 0.75em;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 1em;
+            box-sizing: border-box;
+        }
+        textarea {
+            height: 120px;
+            resize: vertical;
+        }
+        .submit-btn {
+            background: #dc2626;
+            color: white;
+            padding: 1em 2em;
+            border: none;
+            border-radius: 6px;
+            font-size: 1em;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .submit-btn:hover {
+            background: #b91c1c;
+        }
+        .important-notice {
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            padding: 1em;
+            border-radius: 8px;
+            margin: 1em 0;
+        }
+        .blockchain-notice {
+            background: #dbeafe;
+            border: 1px solid #3b82f6;
+            padding: 1em;
+            border-radius: 8px;
+            margin: 1em 0;
+        }
+        .contact-info {
+            background: #f3f4f6;
+            padding: 1.5em;
+            border-radius: 8px;
+            margin-top: 2em;
+        }
+    </style>
+</head>
+<body>
+    <h1>Data Deletion Request</h1>
+    
+    <p>If you would like to request the deletion of your personal data from our Njangi On-Chain application, please fill out the form below or contact us directly.</p>
+
+    <div class="important-notice">
+        <h3>⚠️ Important Notice</h3>
+        <p>Before requesting data deletion, please note that:</p>
+        <ul>
+            <li>You must complete or exit all active circles before data deletion</li>
+            <li>Security deposits will be returned according to circle terms</li>
+            <li>Some data may be retained for legal compliance purposes</li>
+            <li>This process may take up to 30 days to complete</li>
+        </ul>
+    </div>
+
+    <div class="blockchain-notice">
+        <h3>🔗 Blockchain Data</h3>
+        <p><strong>Please understand:</strong> Data stored on the Sui blockchain (transactions, smart contract interactions, wallet addresses) cannot be deleted as blockchain data is immutable and publicly accessible. This deletion request only applies to data stored in our application databases.</p>
+    </div>
+
+    <div class="form-container">
+        <h2>Data Deletion Request Form</h2>
+        
+        <form action="mailto:privacy@njangi-on-chain.com" method="post" enctype="text/plain">
+            <div class="form-group">
+                <label for="email">Your Email Address *</label>
+                <input type="email" id="email" name="email" required placeholder="Enter the email associated with your account">
+            </div>
+
+            <div class="form-group">
+                <label for="wallet">Wallet Address (if applicable)</label>
+                <input type="text" id="wallet" name="wallet" placeholder="Your Sui wallet address">
+            </div>
+
+            <div class="form-group">
+                <label for="account-type">Account Type</label>
+                <select id="account-type" name="account-type">
+                    <option value="regular">Regular User</option>
+                    <option value="circle-admin">Circle Administrator</option>
+                    <option value="both">Both Regular User and Admin</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="deletion-reason">Reason for Deletion (Optional)</label>
+                <select id="deletion-reason" name="deletion-reason">
+                    <option value="">Select a reason</option>
+                    <option value="no-longer-using">No longer using the service</option>
+                    <option value="privacy-concerns">Privacy concerns</option>
+                    <option value="switching-platforms">Switching to different platform</option>
+                    <option value="account-security">Account security concerns</option>
+                    <option value="other">Other</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="additional-info">Additional Information</label>
+                <textarea id="additional-info" name="additional-info" placeholder="Please provide any additional details about your deletion request, including specific data you want deleted or any concerns you have."></textarea>
+            </div>
+
+            <div class="form-group">
+                <label for="confirmation">
+                    <input type="checkbox" id="confirmation" name="confirmation" required style="width: auto; margin-right: 8px;">
+                    I confirm that I want to permanently delete my personal data from Njangi On-Chain databases, and I understand that blockchain data cannot be deleted.
+                </label>
+            </div>
+
+            <button type="submit" class="submit-btn">Submit Deletion Request</button>
+        </form>
+    </div>
+
+    <h2>What Data Will Be Deleted?</h2>
+    <p>Upon processing your request, we will delete:</p>
+    <ul>
+        <li>Profile information and preferences</li>
+        <li>Join request history and notifications</li>
+        <li>Session data and authentication tokens</li>
+        <li>Communication logs and support tickets</li>
+        <li>Analytics data linked to your account</li>
+    </ul>
+
+    <h2>What Data Cannot Be Deleted?</h2>
+    <p>The following data cannot be deleted due to technical or legal constraints:</p>
+    <ul>
+        <li>Blockchain transaction records on Sui network</li>
+        <li>Smart contract interaction history</li>
+        <li>Data required for legal compliance and fraud prevention</li>
+        <li>Aggregated, anonymized analytics data</li>
+    </ul>
+
+    <h2>Data Deletion Process</h2>
+    <ol>
+        <li><strong>Request Submission:</strong> Submit this form or email us directly</li>
+        <li><strong>Identity Verification:</strong> We may ask for additional verification to confirm your identity</li>
+        <li><strong>Circle Status Check:</strong> We'll verify you have no active circles or pending transactions</li>
+        <li><strong>Processing:</strong> Data deletion will be processed within 30 days</li>
+        <li><strong>Confirmation:</strong> You'll receive confirmation once deletion is complete</li>
+    </ol>
+
+    <div class="contact-info">
+        <h2>Alternative Contact Methods</h2>
+        <p><strong>Email:</strong> privacy@njangi-on-chain.com</p>
+        <p><strong>Subject Line:</strong> Data Deletion Request - [Your Email]</p>
+        <p><strong>Response Time:</strong> Within 72 hours for acknowledgment, up to 30 days for completion</p>
+        
+        <h3>What to Include in Your Email:</h3>
+        <ul>
+            <li>Your account email address</li>
+            <li>Wallet address (if known)</li>
+            <li>Reason for deletion (optional)</li>
+            <li>Confirmation that you understand blockchain data limitations</li>
+        </ul>
+    </div>
+
+    <h2>Questions or Concerns?</h2>
+    <p>If you have any questions about the data deletion process or our data handling practices, please contact us at <strong>privacy@njangi-on-chain.com</strong> or refer to our <a href="https://njangi-on-chain-1014e48e59ae.herokuapp.com/privacy-policy.html">Privacy Policy</a>.</p>
+
+    <p><em>This data deletion policy is part of our commitment to user privacy and data protection rights.</em></p>
+</body>
+</html> 
