@@ -28,11 +28,23 @@ export default function AuthCallback() {
         
         // Try to get the ID token from different places
         let idToken = null;
+        let appleUserData = null;
         
         // 1. Try URL hash (fragment)
         const hash = window.location.hash.substring(1);
         const hashParams = new URLSearchParams(hash);
         idToken = hashParams.get('id_token');
+        
+        // Extract Apple user data if available
+        const userDataParam = hashParams.get('user');
+        if (userDataParam) {
+          try {
+            appleUserData = JSON.parse(decodeURIComponent(userDataParam));
+            console.log('Apple user profile data found:', appleUserData);
+          } catch (e) {
+            console.warn('Failed to parse Apple user data:', e);
+          }
+        }
         
         // 2. If not in hash, try search params (query string)
         if (!idToken) {
