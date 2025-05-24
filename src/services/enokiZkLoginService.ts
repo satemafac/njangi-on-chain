@@ -159,9 +159,11 @@ export class EnokiZkLoginService {
       });
       loginUrl = `${FACEBOOK_OAUTH_URL}?${params.toString()}`;
     } else { // Apple
+      // Apple uses form_post, so it needs to redirect to our API endpoint
+      const appleRedirectUri = REDIRECT_URI.replace('/auth/callback', '/api/auth/callback');
       const params = new URLSearchParams({
         client_id: APPLE_CLIENT_ID,
-        redirect_uri: REDIRECT_URI,
+        redirect_uri: appleRedirectUri,
         response_type: 'code id_token',
         scope: 'openid email name',
         response_mode: 'form_post',
