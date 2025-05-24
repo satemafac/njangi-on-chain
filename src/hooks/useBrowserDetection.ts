@@ -14,6 +14,21 @@ export interface BrowserInfo {
 
 export const useBrowserDetection = (): BrowserInfo => {
   return useMemo(() => {
+    // Check if we're in a browser environment
+    if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+      return {
+        isInstagram: false,
+        isTikTok: false,
+        isFacebook: false,
+        isTwitter: false,
+        isLinkedIn: false,
+        isSnapchat: false,
+        isInAppBrowser: false,
+        browserName: 'server',
+        userAgent: ''
+      };
+    }
+    
     const userAgent = navigator.userAgent || '';
     
     const isInstagram = userAgent.includes('Instagram');
