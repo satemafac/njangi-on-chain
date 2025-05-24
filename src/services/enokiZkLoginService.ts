@@ -359,7 +359,7 @@ export class EnokiZkLoginService {
 
     // Extract profile data with provider-specific logic
     let name = jwtPayload.name as string | undefined;
-    const picture = jwtPayload.picture as string | undefined;
+    let picture = jwtPayload.picture as string | undefined;
     
     // For Apple, handle special cases
     if (setupData.provider === 'Apple') {
@@ -372,13 +372,21 @@ export class EnokiZkLoginService {
         name = email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
       }
       
-      // Apple doesn't typically provide profile pictures via OAuth
-      // Could potentially be handled via Apple's REST API in the future
+      // Apple doesn't provide profile pictures via OAuth
+      // Generate a custom avatar URL based on the user's name
+      if (!picture && name) {
+        // Create initials-based avatar using a service like DiceBear or UI Avatars
+        const initials = name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+        const backgroundColor = this.generateColorFromName(name);
+        picture = `https://ui-avatars.com/api/?name=${encodeURIComponent(initials)}&background=${backgroundColor}&color=fff&size=128&bold=true`;
+      }
+      
       console.log('Apple profile data:', { 
         hasName: !!name, 
         hasEmail: !!email, 
         hasPicture: !!picture,
-        extractedName: name
+        extractedName: name,
+        generatedAvatar: picture
       });
     }
 
@@ -406,6 +414,59 @@ export class EnokiZkLoginService {
   public getPublicKeyFromPrivate(privateKeyBase64: string): string {
     const keyPair = this.keypairFromSecretKey(privateKeyBase64);
     return keyPair.getPublicKey().toBase64();
+  }
+
+  /**
+   * Generate a consistent color based on a name for avatar generation
+   * @param name The user's name
+   * @returns A hex color code without the # prefix
+   */
+  private generateColorFromName(name: string): string {
+    // Simple hash function to generate consistent colors
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) {
+      hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    
+    // Convert to hex color (avoiding too dark colors)
+    const hue = Math.abs(hash) % 360;
+    const saturation = 65; // Fixed saturation for pleasant colors
+    const lightness = 55; // Fixed lightness for readability
+    
+    // Convert HSL to RGB then to hex
+    const rgb = this.hslToRgb(hue / 360, saturation / 100, lightness / 100);
+    return rgb.map(x => {
+      const hex = Math.round(x * 255).toString(16);
+      return hex.length === 1 ? '0' + hex : hex;
+    }).join('');
+  }
+
+  /**
+   * Convert HSL to RGB
+   */
+  private hslToRgb(h: number, s: number, l: number): [number, number, number] {
+    let r, g, b;
+
+    if (s === 0) {
+      r = g = b = l; // achromatic
+    } else {
+      const hue2rgb = (p: number, q: number, t: number) => {
+        if (t < 0) t += 1;
+        if (t > 1) t -= 1;
+        if (t < 1/6) return p + (q - p) * 6 * t;
+        if (t < 1/2) return q;
+        if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+        return p;
+      };
+
+      const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+      const p = 2 * l - q;
+      r = hue2rgb(p, q, h + 1/3);
+      g = hue2rgb(p, q, h);
+      b = hue2rgb(p, q, h - 1/3);
+    }
+
+    return [r, g, b];
   }
 
   /**
