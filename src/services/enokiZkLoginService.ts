@@ -162,7 +162,7 @@ export class EnokiZkLoginService {
       const params = new URLSearchParams({
         client_id: APPLE_CLIENT_ID,
         redirect_uri: REDIRECT_URI,
-        response_type: 'id_token',
+        response_type: 'code id_token',
         scope: 'openid email name',
         response_mode: 'fragment',
         nonce: nonce,
