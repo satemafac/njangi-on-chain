@@ -132,41 +132,43 @@ export default function Home() {
           <style jsx>{`
             @keyframes slide {
               0% {
-                transform: translateX(100%);
+                transform: translateX(0);
               }
               100% {
-                transform: translateX(-100%);
+                transform: translateX(-50%);
               }
             }
             .sliding-banner {
-              animation: slide 60s linear infinite;
+              animation: slide 80s linear infinite;
+              display: flex;
+              width: max-content;
             }
             .sliding-banner:hover {
               animation-play-state: paused;
             }
+            @media (max-width: 768px) {
+              .sliding-banner {
+                animation: slide 60s linear infinite;
+              }
+            }
           `}</style>
           <div className="sliding-banner whitespace-nowrap">
-            <span className="inline-flex items-center space-x-8 text-sm font-medium">
-              {/* First set */}
-              {culturalNames.map((name, index) => (
-                <span key={`first-${index}`} className="inline-flex items-center">
-                  <span className="w-2 h-2 bg-blue-200 rounded-full mr-3"></span>
-                  {name}
-                </span>
-              ))}
-              {/* Duplicate for seamless loop */}
-              {culturalNames.map((name, index) => (
-                <span key={`second-${index}`} className="inline-flex items-center ml-8">
-                  <span className="w-2 h-2 bg-blue-200 rounded-full mr-3"></span>
-                  {name}
-                </span>
-              ))}
-            </span>
+            {/* Multiple sets for seamless loop on all screen sizes */}
+            {Array.from({ length: 4 }, (_, setIndex) => (
+              <span key={`set-${setIndex}`} className="inline-flex items-center space-x-6 mr-6">
+                {culturalNames.map((name, index) => (
+                  <span key={`${setIndex}-${index}`} className="inline-flex items-center">
+                    <span className="w-2 h-2 bg-blue-200 rounded-full mr-3"></span>
+                    <span className="text-sm font-medium">{name}</span>
+                  </span>
+                ))}
+              </span>
+            ))}
           </div>
         </div>
         {/* Gradient fade edges */}
-        <div className="absolute top-0 left-0 w-20 h-full bg-gradient-to-r from-blue-600 to-transparent z-10"></div>
-        <div className="absolute top-0 right-0 w-20 h-full bg-gradient-to-l from-blue-600 to-transparent z-10"></div>
+        <div className="absolute top-0 left-0 w-12 sm:w-20 h-full bg-gradient-to-r from-blue-600 to-transparent z-10"></div>
+        <div className="absolute top-0 right-0 w-12 sm:w-20 h-full bg-gradient-to-l from-blue-600 to-transparent z-10"></div>
       </div>
 
       {/* Hero Section */}
