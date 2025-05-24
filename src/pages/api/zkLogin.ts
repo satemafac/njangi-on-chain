@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { ZkLoginService, SetupData, AccountData, OAuthProvider } from '@/services/zkLoginService';
+import { SetupData, AccountData, OAuthProvider } from '@/services/zkLoginService';
 import { ZkLoginError } from '@/services/zkLoginClient';
 import { SuiClient } from '@mysten/sui/client';
 import { PACKAGE_ID } from '../../services/circle-service';
@@ -11,6 +11,7 @@ import { AggregatorClient, Env } from '@cetusprotocol/aggregator-sdk';
 import BN from 'bn.js';
 import { Transaction } from '@mysten/sui/transactions';
 import * as fs from 'fs';
+import { enokiZkLoginService } from '@/services/enokiZkLoginService';
 
 // Add at the top with other imports
 interface RPCError extends Error {
@@ -331,7 +332,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       sessionCount: sessions.size
     });
 
-    const instance = ZkLoginService.getInstance();
+    const instance = enokiZkLoginService;
     // Do not initialize Cetus SDK here since we're not using it directly
 
     switch (action) {
@@ -3166,7 +3167,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           console.log(`Setting rotation position for member ${memberAddress} to position ${position} in circle ${circleId}`);
           
           // Get the ZkLoginService instance
-          const zkLoginService = ZkLoginService.getInstance();
+          const zkLoginService = enokiZkLoginService;
           
           // Send the transaction using the service's sendTransaction method
           const result = await zkLoginService.sendTransaction(
@@ -3232,7 +3233,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           console.log(`Reordering rotation positions for circle ${circleId} with ${newOrder.length} members`);
           
           // Get the ZkLoginService instance
-          const zkLoginService = ZkLoginService.getInstance();
+          const zkLoginService = enokiZkLoginService;
           
           // Send the transaction using the service's sendTransaction method
           const result = await zkLoginService.sendTransaction(
