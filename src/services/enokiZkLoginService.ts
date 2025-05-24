@@ -164,7 +164,7 @@ export class EnokiZkLoginService {
         redirect_uri: REDIRECT_URI,
         response_type: 'code id_token',
         scope: 'openid email name',
-        response_mode: 'fragment',
+        response_mode: 'form_post',
         nonce: nonce,
       });
       loginUrl = `${APPLE_OAUTH_URL}?${params.toString()}`;
