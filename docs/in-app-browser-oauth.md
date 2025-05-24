@@ -82,9 +82,58 @@ The `InAppBrowserModal` component provides:
 1. User sees warning banner about in-app browser
 2. Clicks "Login with Google" 
 3. Modal appears with clear instructions
-4. User copies link and opens in default browser
-5. Completes OAuth successfully
-6. Returns to app automatically
+4. **Primary method**: User copies link and opens in default browser
+5. **Alternative methods**: Share link or attempt direct opening
+6. Completes OAuth successfully
+7. Returns to app automatically
+
+## Implementation Features
+
+### 🎯 **Smart User Guidance**
+- **Copy Link** (Primary): Most reliable method across all platforms
+- **Platform-specific instructions**: Tailored steps for iOS, Android, and desktop
+- **Share Link**: Uses native sharing on mobile devices (when available)
+- **Attempt Browser Open**: Tries various methods to force external browser
+
+### 🔧 **Technical Approach**
+```typescript
+// Primary action - Copy to clipboard (most reliable)
+const handleCopyUrl = async () => {
+  await navigator.clipboard.writeText(loginUrl);
+  // Fallback for older browsers
+};
+
+// Secondary action - Attempt external browser opening
+const handleOpenInBrowser = () => {
+  if (isIOS) {
+    // iOS-specific approach
+  } else if (isAndroid) {
+    // Android intent URLs
+    window.location.href = `intent://${url}#Intent;scheme=https;...`;
+  } else {
+    window.open(loginUrl, '_blank');
+  }
+};
+
+// Tertiary action - Native sharing (mobile only)
+if (navigator.share) {
+  navigator.share({ title, text, url: loginUrl });
+}
+```
+
+### ⚠️ **Known Limitations**
+
+**"Open in Browser" Button Challenges:**
+- Instagram iOS: Often still opens in in-app browser
+- Facebook Android: May work with intent URLs
+- TikTok: Limited external browser support
+- **Solution**: Copy method is emphasized as primary action
+
+**Why Copy Link Works Best:**
+- ✅ Universal compatibility
+- ✅ User has full control
+- ✅ Works on all platforms
+- ✅ No technical limitations
 
 ## Implementation Files
 

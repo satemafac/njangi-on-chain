@@ -39,20 +39,58 @@ export function InAppBrowserModal({
   };
 
   const handleOpenInBrowser = () => {
-    // Try multiple methods to open in default browser
     const userAgent = navigator.userAgent;
+    const isIOS = /iPad|iPhone|iPod/.test(userAgent);
+    const isAndroid = /Android/.test(userAgent);
     
-    if (userAgent.includes('Instagram')) {
-      // Instagram specific - try intent URL for Android
-      if (userAgent.includes('Android')) {
-        window.location.href = `intent://${loginUrl.replace(/^https?:\/\//, '')}#Intent;scheme=https;package=com.android.chrome;end`;
+    try {
+      if (isIOS) {
+        // iOS: Try multiple approaches
+        if (userAgent.includes('Instagram')) {
+          // For Instagram on iOS, try to trigger the "Open in Safari" prompt
+          // Create a link that might trigger the browser selector
+          const link = document.createElement('a');
+          link.href = loginUrl;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          
+          // Try to trigger a right-click context menu that shows "Open in Safari"
+          const event = new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+            button: 0
+          });
+          
+          document.body.appendChild(link);
+          link.dispatchEvent(event);
+          document.body.removeChild(link);
+        } else {
+          // Fallback for other iOS browsers
+          window.open(loginUrl, '_blank');
+        }
+      } else if (isAndroid) {
+        // Android: Use intent URLs to force external browser
+        if (userAgent.includes('Instagram')) {
+          // Try Chrome intent first
+          window.location.href = `intent://${loginUrl.replace(/^https?:\/\//, '')}#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(loginUrl)};end`;
+        } else {
+          // Generic Android intent
+          window.location.href = `intent://${loginUrl.replace(/^https?:\/\//, '')}#Intent;scheme=https;action=android.intent.action.VIEW;end`;
+        }
       } else {
+        // Desktop or other platforms
         window.open(loginUrl, '_blank');
       }
-    } else {
-      window.open(loginUrl, '_blank');
+    } catch (error) {
+      console.error('Failed to open in browser:', error);
+      // If all else fails, copy to clipboard
+      handleCopyUrl();
     }
   };
+
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const isAndroid = /Android/.test(navigator.userAgent);
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
@@ -70,51 +108,96 @@ export function InAppBrowserModal({
         
         <p className="text-gray-600 mb-6">
           {provider} doesn&apos;t allow login from {browserName}&apos;s browser for security reasons. 
-          To continue, please open this link in your default browser:
+          Please use your default browser to continue:
         </p>
         
         <div className="space-y-4">
-          {/* Copy URL Button */}
+          {/* Copy URL Button - Make this the primary action */}
           <button
             onClick={handleCopyUrl}
-            className={`w-full px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
+            className={`w-full px-4 py-3 rounded-lg font-medium transition-all duration-200 text-lg ${
               copyFeedback 
                 ? 'bg-green-600 text-white' 
-                : 'bg-blue-600 hover:bg-blue-700 text-white'
+                : 'bg-blue-600 hover:bg-blue-700 text-white shadow-lg'
             }`}
           >
-            {copyFeedback ? '✓ Copied!' : 'Copy Login Link'}
+            {copyFeedback ? '✓ Copied to Clipboard!' : '📋 Copy Login Link'}
           </button>
           
-          {/* Open in Browser Button */}
-          <button
-            onClick={handleOpenInBrowser}
-            className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-colors"
-          >
-            Open in Browser
-          </button>
-          
-          {/* Instructions */}
-          <div className="text-sm text-gray-500 bg-gray-50 p-3 rounded-lg">
-            <p className="font-medium mb-2">📱 Step-by-step:</p>
-            <ol className="list-decimal list-inside space-y-1">
-              <li>Tap &quot;Copy Login Link&quot; above</li>
-              <li>Open Safari, Chrome, or your default browser</li>
-              <li>Paste the link in the address bar</li>
-              <li>Complete {provider} login</li>
-              <li>You&apos;ll be redirected back automatically</li>
-            </ol>
+          {/* Platform-specific instructions */}
+          <div className="text-sm bg-blue-50 p-4 rounded-lg border-l-4 border-blue-400">
+            {isIOS && (
+              <div>
+                <p className="font-medium text-blue-800 mb-2">📱 iOS Instructions:</p>
+                <ol className="list-decimal list-inside space-y-1 text-blue-700">
+                  <li>Tap &quot;Copy Login Link&quot; above</li>
+                  <li>Press your home button or swipe up</li>
+                  <li>Open Safari (or your preferred browser)</li>
+                  <li>Tap the address bar and paste the link</li>
+                  <li>Complete your {provider} login</li>
+                </ol>
+              </div>
+            )}
+            {isAndroid && (
+              <div>
+                <p className="font-medium text-blue-800 mb-2">🤖 Android Instructions:</p>
+                <ol className="list-decimal list-inside space-y-1 text-blue-700">
+                  <li>Tap &quot;Copy Login Link&quot; above</li>
+                  <li>Open Chrome or your default browser</li>
+                  <li>Paste the link in the address bar</li>
+                  <li>Complete your {provider} login</li>
+                </ol>
+                <p className="mt-2 text-xs text-blue-600">Or try the &quot;Try Opening in Browser&quot; button below</p>
+              </div>
+            )}
+            {!isIOS && !isAndroid && (
+              <div>
+                <p className="font-medium text-blue-800 mb-2">💻 Instructions:</p>
+                <ol className="list-decimal list-inside space-y-1 text-blue-700">
+                  <li>Copy the login link above</li>
+                  <li>Open your default browser</li>
+                  <li>Paste and visit the link</li>
+                  <li>Complete your {provider} login</li>
+                </ol>
+              </div>
+            )}
           </div>
           
-          {/* Alternative method for iOS */}
-          {navigator.userAgent.includes('iPhone') && (
-            <div className="text-xs text-gray-400 bg-blue-50 p-2 rounded border-l-4 border-blue-400">
-              <p className="font-medium text-blue-800">iOS tip:</p>
-              <p className="text-blue-700">
-                You can also tap and hold the &quot;Open in Browser&quot; button and select &quot;Open in Safari&quot;
-              </p>
-            </div>
+          {/* Try Open in Browser Button - Secondary action */}
+          <button
+            onClick={handleOpenInBrowser}
+            className="w-full px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors border border-gray-300"
+          >
+            {isAndroid ? '🔗 Try Opening in Browser' : '🔗 Attempt External Open'}
+          </button>
+          
+          {/* Share/Send to yourself option for mobile */}
+          {(isIOS || isAndroid) && navigator.share && (
+            <button
+              onClick={() => {
+                if (navigator.share) {
+                  navigator.share({
+                    title: `${provider} Login`,
+                    text: `Complete your ${provider} login:`,
+                    url: loginUrl
+                  }).catch(err => {
+                    console.log('Share failed:', err);
+                    // Fallback to copy
+                    handleCopyUrl();
+                  });
+                }
+              }}
+              className="w-full px-4 py-2 bg-purple-100 hover:bg-purple-200 text-purple-700 rounded-lg font-medium transition-colors border border-purple-300"
+            >
+              📤 Share Login Link
+            </button>
           )}
+          
+          {/* Success message */}
+          <div className="text-xs text-gray-500 bg-green-50 p-3 rounded-lg">
+            <p className="font-medium text-green-800">✨ After completing login:</p>
+            <p className="text-green-700">You&apos;ll be automatically redirected back to this app!</p>
+          </div>
         </div>
         
         <button
