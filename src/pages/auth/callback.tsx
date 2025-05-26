@@ -25,6 +25,11 @@ export default function AuthCallback() {
     const processCallback = async () => {
       try {
         console.log('Processing authentication callback');
+        console.log('Current URL:', window.location.href);
+        console.log('localStorage before processing:', {
+          redirectAfterLogin: localStorage.getItem('redirectAfterLogin'),
+          allKeys: Object.keys(localStorage)
+        });
         
         // Try to get the ID token from different places
         let idToken = null;
@@ -87,33 +92,50 @@ export default function AuthCallback() {
         
         // Check if there's a stored redirect URL
         const redirectUrl = localStorage.getItem('redirectAfterLogin');
-        console.log('Checking for stored redirect URL:', redirectUrl);
-        console.log('Current localStorage keys:', Object.keys(localStorage));
+        console.log('Checking for stored redirect URL after auth success:', redirectUrl);
+        console.log('Current localStorage keys after auth:', Object.keys(localStorage));
         
         // Short delay before redirecting to show completion
         setTimeout(() => {
           if (redirectUrl) {
-            // Clear the stored redirect URL
-            localStorage.removeItem('redirectAfterLogin');
-            console.log('Redirecting to stored URL:', redirectUrl);
+            console.log('Found redirect URL, processing redirect to:', redirectUrl);
             
             // Check if the redirect URL is for the same domain
             try {
               const redirectUrlObj = new URL(redirectUrl);
               const currentUrlObj = new URL(window.location.href);
               
+              console.log('Redirect URL analysis:', {
+                redirectOrigin: redirectUrlObj.origin,
+                currentOrigin: currentUrlObj.origin,
+                isSameOrigin: redirectUrlObj.origin === currentUrlObj.origin,
+                redirectPath: redirectUrlObj.pathname + redirectUrlObj.search + redirectUrlObj.hash
+              });
+              
               if (redirectUrlObj.origin === currentUrlObj.origin) {
                 // Same origin, use router.push for better navigation
                 const redirectPath = redirectUrlObj.pathname + redirectUrlObj.search + redirectUrlObj.hash;
                 console.log('Same origin redirect, using router.push to:', redirectPath);
+                
+                // Clear the stored redirect URL BEFORE navigating
+                localStorage.removeItem('redirectAfterLogin');
+                console.log('Cleared redirect URL from localStorage before navigation');
+                
                 router.push(redirectPath);
               } else {
                 // Different origin, use window.location.href
                 console.log('Different origin redirect, using window.location.href to:', redirectUrl);
+                
+                // Clear the stored redirect URL BEFORE navigating
+                localStorage.removeItem('redirectAfterLogin');
+                console.log('Cleared redirect URL from localStorage before navigation');
+                
                 window.location.href = redirectUrl;
               }
             } catch (error) {
               console.error('Error parsing redirect URL:', error);
+              // Clear the stored redirect URL
+              localStorage.removeItem('redirectAfterLogin');
               // Fallback to window.location.href
               window.location.href = redirectUrl;
             }
