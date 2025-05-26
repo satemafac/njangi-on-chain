@@ -564,20 +564,29 @@ export default function JoinCircle() {
         dayFormat = `Day ${validCycleDay === 0 ? 1 : validCycleDay}`;
     }
     
-    // Return string with day format only, removing " day" suffix if using ordinals
-    if (validCycleLength === 1 || validCycleLength === 2) {
-        return `${cyclePeriod} (${dayFormat.replace(' day', '')})`;
-    } else {
+    // Return formatted string
     return `${cyclePeriod} (${dayFormat})`;
-    }
   };
 
   // Helper to format dates with ordinal suffix
   const getOrdinalSuffix = (day: number) => {
-    const suffixes = ['th', 'st', 'nd', 'rd'];
-    const relevantDigits = (day % 100);
-    const suffix = (relevantDigits >= 11 && relevantDigits <= 13) ? 'th' : suffixes[Math.min(relevantDigits % 10, 3)];
-    return `${day}${suffix} day`;
+    // Handle special cases for 11th, 12th, 13th
+    if (day >= 11 && day <= 13) {
+      return `${day}th`;
+    }
+    
+    // Handle other cases based on last digit
+    const lastDigit = day % 10;
+    switch (lastDigit) {
+      case 1:
+        return `${day}st`;
+      case 2:
+        return `${day}nd`;
+      case 3:
+        return `${day}rd`;
+      default:
+        return `${day}th`;
+    }
   };
 
   // Helper function to calculate SUI amount from USD value
