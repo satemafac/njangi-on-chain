@@ -7,6 +7,22 @@ import * as Select from '@radix-ui/react-select';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
+import { SuiClient } from '@mysten/sui.js/client';
+
+// Add package ID constant
+const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID || '0x123';
+
+// Add interface for CircleCreated event
+interface CircleCreatedEvent {
+  circle_id: string;
+  admin: string;
+  name: string;
+  contribution_amount: string;
+  contribution_amount_usd: string;
+  security_deposit_usd: string;
+  max_members: string;
+  cycle_length: string;
+}
 
 type CycleType = 'rotational' | 'smart-goal';
 type RotationStyle = 'fixed' | 'auction-based';
@@ -208,9 +224,9 @@ export default function CreateCircle() {
   const [inviteInput, setInviteInput] = useState('');
   const [inviteType, setInviteType] = useState<'email' | 'phone'>('email');
   const [inviteLink, setInviteLink] = useState('');
-  const [showCopiedToast, setShowCopiedToast] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [createdCircleId, setCreatedCircleId] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchPrice = async () => {
@@ -394,6 +410,11 @@ export default function CreateCircle() {
         throw new Error(result.error || 'Transaction failed.');
       }
       
+      // Store the transaction digest for reference
+      if (result.digest) {
+        console.log('Circle creation transaction successful:', result.digest);
+      }
+      
       // Move to invite step on success
       setCurrentStep(2);
     } catch (err) {
@@ -414,6 +435,146 @@ export default function CreateCircle() {
       }
     }
   }, []);
+
+  // Function to fetch the actual circle ID from blockchain events
+  const fetchCircleId = async (): Promise<string | null> => {
+    if (!account?.userAddr) {
+      throw new Error('No user address available');
+    }
+
+    try {
+      // Create the Sui client
+      const client = new SuiClient({
+        url: 'https://fullnode.testnet.sui.io:443'
+      });
+
+      // Query for CircleCreated events where the user is the admin
+      const circleEvents = await client.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleCreated`
+        },
+        limit: 50, // Get recent events
+        order: 'descending' // Most recent first
+      });
+
+      console.log('Fetched circle events:', circleEvents.data.length);
+
+      // Find the most recent circle created by this user
+      for (const event of circleEvents.data) {
+        if (event.parsedJson && typeof event.parsedJson === 'object') {
+          const parsedEvent = event.parsedJson as CircleCreatedEvent;
+          if (parsedEvent.admin === account.userAddr && parsedEvent.circle_id) {
+            console.log('Found circle ID:', parsedEvent.circle_id);
+            return parsedEvent.circle_id;
+          }
+        }
+      }
+
+      throw new Error('No circle found for this user');
+    } catch (error) {
+      console.error('Error fetching circle ID:', error);
+      throw error;
+    }
+  };
+
+  const addInviteMember = () => {
+    if (inviteInput.trim()) {
+      setInviteMembers([
+        ...inviteMembers,
+        { type: inviteType, value: inviteInput.trim(), status: 'pending' },
+      ]);
+      setInviteInput('');
+    }
+  };
+
+  const removeInviteMember = (index: number) => {
+    setInviteMembers(inviteMembers.filter((_, i) => i !== index));
+  };
+
+  const sendEmailInvite = (email: string) => {
+    if (!inviteLink || !createdCircleId || !formData.name) {
+      toast.error('Please fetch the circle ID first before sending invites');
+      return;
+    }
+
+    const subject = `Join ${formData.name} - Njangi Savings Circle`;
+    const body = `Hi there!
+
+You've been invited to join "${formData.name}", a secure savings circle powered by blockchain technology.
+
+Circle Details:
+• Contribution: ${formatUSD(formData.contributionAmountUSD)} per ${formData.cycleLength}
+• Security Deposit: ${formatUSD(formData.securityDepositUSD)} (one-time, refundable)
+• Members: ${formData.numberOfMembers} people
+• Schedule: ${formData.cycleLength} contributions
+
+To join this circle, simply click the link below:
+${inviteLink}
+
+What is Njangi On-Chain?
+Njangi is a traditional savings system where members contribute regularly and take turns receiving the full pot. Our platform uses blockchain technology to make it transparent, secure, and automated.
+
+Benefits:
+✓ Transparent and secure transactions
+✓ Automated payouts
+✓ No middleman fees
+✓ Community-based savings
+
+Questions? Feel free to reach out!
+
+Best regards,
+The Njangi On-Chain Team`;
+
+    const mailtoLink = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    
+    try {
+      window.open(mailtoLink, '_self');
+      
+      // Update the invite status to 'sent'
+      setInviteMembers(prev => 
+        prev.map(member => 
+          member.value === email && member.type === 'email' 
+            ? { ...member, status: 'sent' as const }
+            : member
+        )
+      );
+      
+      toast.success(`Email invite opened for ${email}`);
+    } catch (error) {
+      console.error('Error opening email client:', error);
+      toast.error('Failed to open email client');
+      
+      // Update status to error
+      setInviteMembers(prev => 
+        prev.map(member => 
+          member.value === email && member.type === 'email' 
+            ? { ...member, status: 'error' as const }
+            : member
+        )
+      );
+    }
+  };
+
+  const sendAllEmailInvites = () => {
+    const emailInvites = inviteMembers.filter(member => member.type === 'email' && member.status === 'pending');
+    
+    if (emailInvites.length === 0) {
+      toast.error('No email invites to send');
+      return;
+    }
+
+    if (!inviteLink || !createdCircleId) {
+      toast.error('Please fetch the circle ID first before sending invites');
+      return;
+    }
+
+    // Send emails one by one with a small delay
+    emailInvites.forEach((member, index) => {
+      setTimeout(() => {
+        sendEmailInvite(member.value);
+      }, index * 500); // 500ms delay between each email
+    });
+  };
 
   if (!isAuthenticated) {
     return null;
@@ -1227,7 +1388,7 @@ export default function CreateCircle() {
               <div className="mt-8 mb-6 border border-indigo-200 bg-indigo-50 rounded-lg p-4 text-indigo-700">
                 <h3 className="font-semibold text-sm flex items-center">
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-indigo-600" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 11-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clipRule="evenodd" />
+                    <path fillRule="evenodd" d="M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm1-11a1 1 0 1 1-2 0v2H7a1 1 0 1 0 0 2h2v2a1 1 0 1 0 2 0v-2h2a1 1 0 1 0 0-2h-2V7z" clipRule="evenodd" />
                   </svg>
                   USD-Pegged Njangi Feature
                 </h3>
@@ -1298,6 +1459,21 @@ export default function CreateCircle() {
                   </div>
                 </div>
 
+                {/* Email functionality note */}
+                {inviteType === 'email' && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
+                    <div className="flex items-start">
+                      <svg className="h-5 w-5 text-blue-400 mr-2 mt-0.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <div className="text-sm text-blue-700">
+                        <p className="font-medium">Email Invites</p>
+                        <p className="mt-1">Email invites will open in your default email client with a pre-written message containing the circle details and join link.</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Invite Input */}
                 <div className="flex space-x-2">
                   <div className="flex-grow">
@@ -1309,22 +1485,25 @@ export default function CreateCircle() {
                       id="invite-input"
                       value={inviteInput}
                       onChange={(e) => setInviteInput(e.target.value)}
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          addInviteMember();
+                        }
+                      }}
                       placeholder={inviteType === 'email' ? 'Enter email address' : 'Enter phone number'}
                       className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                     />
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      if (inviteInput) {
-                        setInviteMembers([
-                          ...inviteMembers,
-                          { type: inviteType, value: inviteInput, status: 'pending' },
-                        ]);
-                        setInviteInput('');
-                      }
-                    }}
-                    className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                    onClick={addInviteMember}
+                    disabled={!inviteInput.trim()}
+                    className={`inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white transition-colors ${
+                      inviteInput.trim()
+                        ? 'bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500'
+                        : 'bg-gray-400 cursor-not-allowed'
+                    }`}
                   >
                     Add
                   </button>
@@ -1333,6 +1512,23 @@ export default function CreateCircle() {
                 {/* Invite List */}
                 {inviteMembers.length > 0 && (
                   <div className="mt-4 space-y-2">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-medium text-gray-700">
+                        Added Members ({inviteMembers.length})
+                      </span>
+                      {inviteMembers.some(member => member.type === 'email' && member.status === 'pending') && createdCircleId && (
+                        <button
+                          type="button"
+                          onClick={sendAllEmailInvites}
+                          className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded text-blue-700 bg-blue-100 hover:bg-blue-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                        >
+                          <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                          </svg>
+                          Send All Email Invites
+                        </button>
+                      )}
+                    </div>
                     {inviteMembers.map((member, index) => (
                       <div
                         key={index}
@@ -1353,7 +1549,16 @@ export default function CreateCircle() {
                           <span className="text-sm font-medium text-gray-900">{member.value}</span>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <span className={`text-sm ${
+                          {member.type === 'email' && member.status === 'pending' && createdCircleId && (
+                            <button
+                              type="button"
+                              onClick={() => sendEmailInvite(member.value)}
+                              className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                            >
+                              Send Email
+                            </button>
+                          )}
+                          <span className={`text-xs ${
                             member.status === 'sent' ? 'text-green-600' :
                             member.status === 'error' ? 'text-red-600' :
                             'text-gray-500'
@@ -1364,9 +1569,7 @@ export default function CreateCircle() {
                           </span>
                           <button
                             type="button"
-                            onClick={() => {
-                              setInviteMembers(inviteMembers.filter((_, i) => i !== index));
-                            }}
+                            onClick={() => removeInviteMember(index)}
                             className="text-gray-400 hover:text-red-500"
                           >
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1384,42 +1587,107 @@ export default function CreateCircle() {
               <div className="bg-white rounded-lg p-6 space-y-4">
                 <h3 className="text-lg font-medium text-gray-900">Shareable Invite Link</h3>
                 <p className="text-sm text-gray-500">
-                  Share this link with potential members to let them join your circle
+                  First, fetch the circle ID from the blockchain, then share the invite link
                 </p>
-                <div className="flex space-x-2">
-                  <div className="flex-grow relative">
-                    <input
-                      type="text"
-                      readOnly
-                      value={inviteLink || 'Generating link...'}
-                      className="block w-full rounded-md border-gray-300 bg-gray-50 pr-24 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(inviteLink);
-                        setShowCopiedToast(true);
-                        setTimeout(() => setShowCopiedToast(false), 2000);
-                      }}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1 text-sm font-medium text-blue-600 hover:text-blue-700"
-                    >
-                      Copy Link
-                    </button>
+                
+                {/* Fetch Circle ID Section */}
+                {!createdCircleId && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <div className="flex items-start space-x-3">
+                      <div className="flex-shrink-0">
+                        <svg className="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="text-sm font-medium text-blue-800">Circle Created Successfully!</h4>
+                        <p className="mt-1 text-sm text-blue-700">
+                          Your circle has been created on the blockchain. Click the button below to fetch the circle ID and generate your invite link.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              const fetchedCircleId = await fetchCircleId();
+                              if (fetchedCircleId) {
+                                setCreatedCircleId(fetchedCircleId);
+                                const shareLink = `${window.location.origin}/circle/${fetchedCircleId}/join`;
+                                setInviteLink(shareLink);
+                                toast.success('Circle ID fetched and invite link generated!');
+                              } else {
+                                toast.error('No circle found. Please try again in a few moments.');
+                              }
+                            } catch {
+                              toast.error('Failed to fetch circle ID. Please try again.');
+                            }
+                          }}
+                          className="mt-3 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                        >
+                          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                          Fetch Circle ID & Generate Link
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      // Generate new invite link
-                      setInviteLink(`https://njangi.com/invite/${Math.random().toString(36).slice(2)}`);
-                    }}
-                    className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                  >
-                    <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                    Generate New Link
-                  </button>
-                </div>
+                )}
+                
+                {/* Invite Link Display - Only show after circle ID is fetched */}
+                {createdCircleId && (
+                  <div className="space-y-3">
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+                      <div className="flex items-center space-x-2">
+                        <svg className="h-5 w-5 text-green-400" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span className="text-sm font-medium text-green-800">Circle ID: {createdCircleId}</span>
+                      </div>
+                    </div>
+                    
+                    <div className="flex space-x-2">
+                      <div className="flex-grow relative">
+                        <input
+                          type="text"
+                          readOnly
+                          value={inviteLink || ''}
+                          className="block w-full rounded-md border-gray-300 bg-gray-50 pr-24 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (inviteLink) {
+                              navigator.clipboard.writeText(inviteLink)
+                                .then(() => {
+                                  toast.success('Invite link copied to clipboard!');
+                                })
+                                .catch(() => {
+                                  toast.error('Failed to copy invite link');
+                                });
+                            }
+                          }}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1 text-sm font-medium text-blue-600 hover:text-blue-700 cursor-pointer transition-colors"
+                        >
+                          Copy Link
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Show placeholder when no circle ID yet */}
+                {!createdCircleId && (
+                  <div className="flex space-x-2">
+                    <div className="flex-grow">
+                      <input
+                        type="text"
+                        readOnly
+                        value="Click 'Fetch Circle ID & Generate Link' above to get your invite link..."
+                        className="block w-full rounded-md border-gray-300 bg-gray-100 text-gray-500 shadow-sm"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Action Buttons */}
@@ -1449,24 +1717,26 @@ export default function CreateCircle() {
                 <button
                   type="button"
                   onClick={() => {
-                    // TODO: Send invites and create circle
-                    router.push('/dashboard');
+                    // Send all pending email invites first
+                    const emailInvites = inviteMembers.filter(member => member.type === 'email' && member.status === 'pending');
+                    if (emailInvites.length > 0 && createdCircleId) {
+                      sendAllEmailInvites();
+                      toast.success(`Opened ${emailInvites.length} email invites in your email client`);
+                    }
+                    
+                    // Then redirect to dashboard
+                    setTimeout(() => {
+                      router.push('/dashboard');
+                    }, 1000);
                   }}
                   className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                 >
-                  Create Circle & Send Invites
+                  {inviteMembers.filter(member => member.type === 'email' && member.status === 'pending').length > 0 && createdCircleId
+                    ? 'Send Email Invites & Finish'
+                    : 'Finish & Go to Dashboard'
+                  }
                 </button>
               </div>
-
-              {/* Copied Toast */}
-              {showCopiedToast && (
-                <div className="fixed top-4 right-4 bg-gray-900 text-white px-4 py-2 rounded-lg shadow-lg transition-opacity duration-200 flex items-center space-x-2">
-                  <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
-                  </svg>
-                  <span>Link copied to clipboard!</span>
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -1521,7 +1791,7 @@ const InfoIcon = () => (
       fill="currentColor"
     />
     <path 
-      d="M8 4a1 1 0 1 1 0-2 1 1 0 0 1 0 2zm0 9a1 1 0 0 1-1-1V7a1 1 0 1 1 2 0v5a1 1 0 0 1-1 1z" 
+      d="M8 4a1 1 0 1 1 0-2 1 1 0 0 1 0 2zm0 9a1 1 0 0 1-1-1V7a1 1 0 1 0 2 0v5a1 1 0 0 1-1 1z" 
       fill="currentColor"
     />
   </svg>
