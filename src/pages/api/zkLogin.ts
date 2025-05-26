@@ -2179,6 +2179,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               isSecurityDeposit: !depositIsPaid,
               isContribution: depositIsPaid
             });
+            
+            // Validate that the coin has sufficient value
+            if (requiredDepositAmount > 0 && coinValue < requiredDepositAmount) {
+              const shortfall = requiredDepositAmount - coinValue;
+              const shortfallUSD = (shortfall / 10000).toFixed(4);
+              const requiredUSD = (requiredDepositAmount / 10000).toFixed(4);
+              const currentUSD = (coinValue / 10000).toFixed(4);
+              
+              return res.status(400).json({
+                error: `Insufficient USDC balance for deposit. Required: $${requiredUSD} USDC, but coin only has $${currentUSD} USDC. You need $${shortfallUSD} more USDC.`,
+                code: 'EInsufficientBalance',
+                required: requiredDepositAmount,
+                available: coinValue,
+                shortfall: shortfall,
+                coinId: coinObjectId
+              });
+            }
           } catch (e) {
             console.error('Error checking circle and coin info:', e);
           }
@@ -2843,10 +2860,63 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             { gasBudget: 100000000 } // Higher gas budget for swap
           );
           
-          console.log('Swap transaction successful:', txResult);
+          console.log('Swap transaction executed:', {
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+
+          // Check if transaction failed
+          if (txResult.status === 'failure') {
+            console.error('Swap transaction failed with status: failure');
+            
+            // Extract error information from the transaction result
+            let errorMessage = 'Swap transaction failed';
+            let slippageError = false;
+            let recommendedSlippage = Math.min(50, Math.ceil(effectiveSlippage * 2));
+            
+            // Check for specific error patterns in the transaction result
+            if (txResult.error) {
+              console.error('Transaction error details:', txResult.error);
+              
+              // Check for slippage-related errors
+              if (txResult.error.includes('MoveAbort') && 
+                  (txResult.error.includes('1) in command 2') || 
+                   txResult.error.includes('pool_script'))) {
+                slippageError = true;
+                errorMessage = 'Swap failed due to price movement. Try increasing slippage tolerance.';
+                
+                // Calculate recommended slippage based on current market conditions
+                if (effectiveSlippage < 10) {
+                  recommendedSlippage = 15;
+                } else if (effectiveSlippage < 20) {
+                  recommendedSlippage = 25;
+                } else {
+                  recommendedSlippage = Math.min(50, effectiveSlippage + 10);
+                }
+              } else if (txResult.error.includes('insufficient')) {
+                errorMessage = 'Insufficient balance for this swap';
+              } else if (txResult.error.includes('pool')) {
+                errorMessage = 'Liquidity pool error. Please try again later.';
+              }
+            }
+            
+            return res.status(400).json({
+              error: errorMessage,
+              isSlippageError: slippageError,
+              recommendedSlippage: recommendedSlippage,
+              currentSlippage: effectiveSlippage,
+              transactionFailed: true,
+              digest: txResult.digest,
+              gasUsed: txResult.gasUsed,
+              details: txResult.error || 'Transaction execution failed'
+            });
+          }
+          
+          // Only proceed with coin extraction if transaction was successful
+          let createdCoinId = null;
           
           // Find the created coin object ID from transaction effects
-          let createdCoinId = null;
           // Use optional chaining and type checking instead of type assertion
           if (txResult && typeof txResult === 'object' && 'effects' in txResult) {
             const effects = txResult.effects as {
@@ -3058,9 +3128,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
           
+          // Check for slippage-related errors in the error message
+          let slippageError = false;
+          let recommendedSlippage = 15; // Default recommendation
+          
+          if (error instanceof Error) {
+            const errorMessage = error.message.toLowerCase();
+            if (errorMessage.includes('slippage') || 
+                errorMessage.includes('price') || 
+                errorMessage.includes('moveabort') ||
+                errorMessage.includes('pool_script')) {
+              slippageError = true;
+              recommendedSlippage = Math.min(50, Math.ceil((Number(req.body.slippage) || 5) * 2));
+            }
+          }
+          
           return res.status(500).json({ 
             error: error instanceof Error ? error.message : 'Failed to execute swap',
             details: error instanceof Error ? error.stack : String(error),
+            isSlippageError: slippageError,
+            recommendedSlippage: recommendedSlippage,
             requireRelogin: false
           });
         }
