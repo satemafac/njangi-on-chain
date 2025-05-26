@@ -24,6 +24,7 @@ export default function AuthCallback() {
   useEffect(() => {
     const processCallback = async () => {
       try {
+        console.log('=== CALLBACK START ===');
         console.log('Processing authentication callback');
         console.log('Current URL:', window.location.href);
         console.log('localStorage before processing:', {
@@ -81,15 +82,19 @@ export default function AuthCallback() {
           throw new Error('No ID token found in callback URL');
         }
 
+        console.log('=== STARTING ZKLOGIN PROCESS ===');
         setStatus('Generating zero-knowledge proof...');
         
         // Complete the zkLogin flow
+        console.log('About to call handleCallback...');
         await handleCallback(idToken);
+        console.log('handleCallback completed successfully!');
         
         // Set progress to 100% when done
         setProgress(100);
         setStatus('Authentication successful! Redirecting...');
         
+        console.log('=== CHECKING REDIRECT URL ===');
         // Check if there's a stored redirect URL
         const redirectUrl = localStorage.getItem('redirectAfterLogin');
         console.log('Checking for stored redirect URL after auth success:', redirectUrl);
@@ -97,6 +102,7 @@ export default function AuthCallback() {
         
         // Short delay before redirecting to show completion
         setTimeout(() => {
+          console.log('=== STARTING REDIRECT PROCESS ===');
           if (redirectUrl) {
             console.log('Found redirect URL, processing redirect to:', redirectUrl);
             
@@ -121,6 +127,7 @@ export default function AuthCallback() {
                 localStorage.removeItem('redirectAfterLogin');
                 console.log('Cleared redirect URL from localStorage before navigation');
                 
+                console.log('Executing router.push...');
                 router.push(redirectPath);
               } else {
                 // Different origin, use window.location.href
@@ -146,6 +153,7 @@ export default function AuthCallback() {
           }
         }, 500);
       } catch (err) {
+        console.error('=== CALLBACK ERROR ===');
         console.error('Auth callback error:', err);
         setIsError(true);
         setStatus('Authentication failed');
