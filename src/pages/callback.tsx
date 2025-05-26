@@ -73,9 +73,21 @@ export default function AuthCallback() {
         setProgress(100);
         setStatus('Authentication successful! Redirecting...');
         
+        // Check if there's a stored redirect URL
+        const redirectUrl = localStorage.getItem('redirectAfterLogin');
+        
         // Short delay before redirecting to show completion
         setTimeout(() => {
-          router.push('/dashboard');
+          if (redirectUrl) {
+            // Clear the stored redirect URL
+            localStorage.removeItem('redirectAfterLogin');
+            console.log('Redirecting to stored URL:', redirectUrl);
+            // Use window.location.href for external URLs or different origins
+            window.location.href = redirectUrl;
+          } else {
+            // Default redirect to dashboard
+            router.push('/dashboard');
+          }
         }, 500);
       } catch (err) {
         console.error('Auth callback error:', err);
