@@ -477,13 +477,32 @@ export default function CreateCircle() {
     }
   };
 
-  const addInviteMember = () => {
+  const addInviteMember = async () => {
     if (inviteInput.trim()) {
       setInviteMembers([
         ...inviteMembers,
         { type: inviteType, value: inviteInput.trim(), status: 'pending' },
       ]);
       setInviteInput('');
+      
+      // Auto-fetch circle ID when first email is added
+      if (inviteType === 'email' && !createdCircleId) {
+        try {
+          toast.loading('Fetching circle ID...', { id: 'fetch-circle-id' });
+          const fetchedCircleId = await fetchCircleId();
+          if (fetchedCircleId) {
+            setCreatedCircleId(fetchedCircleId);
+            const shareLink = `${window.location.origin}/circle/${fetchedCircleId}/join`;
+            setInviteLink(shareLink);
+            toast.success('Circle ID fetched automatically!', { id: 'fetch-circle-id' });
+          } else {
+            toast.error('Circle not found yet. Please try again in a moment.', { id: 'fetch-circle-id' });
+          }
+        } catch (error) {
+          console.error('Error auto-fetching circle ID:', error);
+          toast.error('Failed to fetch circle ID automatically. You can try the manual button.', { id: 'fetch-circle-id' });
+        }
+      }
     }
   };
 
@@ -1468,7 +1487,7 @@ The Njangi On-Chain Team`;
                       </svg>
                       <div className="text-sm text-blue-700">
                         <p className="font-medium">Email Invites</p>
-                        <p className="mt-1">Email invites will open in your default email client with a pre-written message containing the circle details and join link.</p>
+                        <p className="mt-1">Adding an email will automatically fetch your circle ID and generate the invite link. Email invites will then open in your default email client with a pre-written message containing the circle details and join link.</p>
                       </div>
                     </div>
                   </div>
@@ -1587,10 +1606,13 @@ The Njangi On-Chain Team`;
               <div className="bg-white rounded-lg p-6 space-y-4">
                 <h3 className="text-lg font-medium text-gray-900">Shareable Invite Link</h3>
                 <p className="text-sm text-gray-500">
-                  First, fetch the circle ID from the blockchain, then share the invite link
+                  {createdCircleId 
+                    ? "Your circle ID has been fetched and invite link is ready to share"
+                    : "Add an email above to automatically fetch the circle ID and generate the invite link"
+                  }
                 </p>
                 
-                {/* Fetch Circle ID Section */}
+                {/* Auto-fetch explanation - Only show when no circle ID yet */}
                 {!createdCircleId && (
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                     <div className="flex items-start space-x-3">
@@ -1602,31 +1624,34 @@ The Njangi On-Chain Team`;
                       <div className="flex-1">
                         <h4 className="text-sm font-medium text-blue-800">Circle Created Successfully!</h4>
                         <p className="mt-1 text-sm text-blue-700">
-                          Your circle has been created on the blockchain. Click the button below to fetch the circle ID and generate your invite link.
+                          Your circle has been created on the blockchain. When you add an email address above, we&apos;ll automatically fetch the circle ID and generate your shareable invite link.
                         </p>
+                        
+                        {/* Manual fetch button as fallback */}
                         <button
                           type="button"
                           onClick={async () => {
                             try {
+                              toast.loading('Fetching circle ID...', { id: 'manual-fetch' });
                               const fetchedCircleId = await fetchCircleId();
                               if (fetchedCircleId) {
                                 setCreatedCircleId(fetchedCircleId);
                                 const shareLink = `${window.location.origin}/circle/${fetchedCircleId}/join`;
                                 setInviteLink(shareLink);
-                                toast.success('Circle ID fetched and invite link generated!');
+                                toast.success('Circle ID fetched successfully!', { id: 'manual-fetch' });
                               } else {
-                                toast.error('No circle found. Please try again in a few moments.');
+                                toast.error('No circle found. Please try again in a few moments.', { id: 'manual-fetch' });
                               }
                             } catch {
-                              toast.error('Failed to fetch circle ID. Please try again.');
+                              toast.error('Failed to fetch circle ID. Please try again.', { id: 'manual-fetch' });
                             }
                           }}
-                          className="mt-3 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                          className="mt-3 inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded text-blue-700 bg-blue-100 hover:bg-blue-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                         >
-                          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                           </svg>
-                          Fetch Circle ID & Generate Link
+                          Or fetch manually
                         </button>
                       </div>
                     </div>
@@ -1682,7 +1707,7 @@ The Njangi On-Chain Team`;
                       <input
                         type="text"
                         readOnly
-                        value="Click 'Fetch Circle ID & Generate Link' above to get your invite link..."
+                        value="Add an email address above to automatically generate your invite link..."
                         className="block w-full rounded-md border-gray-300 bg-gray-100 text-gray-500 shadow-sm"
                       />
                     </div>
