@@ -87,6 +87,8 @@ export default function AuthCallback() {
         
         // Check if there's a stored redirect URL
         const redirectUrl = localStorage.getItem('redirectAfterLogin');
+        console.log('Checking for stored redirect URL:', redirectUrl);
+        console.log('Current localStorage keys:', Object.keys(localStorage));
         
         // Short delay before redirecting to show completion
         setTimeout(() => {
@@ -94,9 +96,29 @@ export default function AuthCallback() {
             // Clear the stored redirect URL
             localStorage.removeItem('redirectAfterLogin');
             console.log('Redirecting to stored URL:', redirectUrl);
-            // Use window.location.href for external URLs or different origins
-            window.location.href = redirectUrl;
+            
+            // Check if the redirect URL is for the same domain
+            try {
+              const redirectUrlObj = new URL(redirectUrl);
+              const currentUrlObj = new URL(window.location.href);
+              
+              if (redirectUrlObj.origin === currentUrlObj.origin) {
+                // Same origin, use router.push for better navigation
+                const redirectPath = redirectUrlObj.pathname + redirectUrlObj.search + redirectUrlObj.hash;
+                console.log('Same origin redirect, using router.push to:', redirectPath);
+                router.push(redirectPath);
+              } else {
+                // Different origin, use window.location.href
+                console.log('Different origin redirect, using window.location.href to:', redirectUrl);
+                window.location.href = redirectUrl;
+              }
+            } catch (error) {
+              console.error('Error parsing redirect URL:', error);
+              // Fallback to window.location.href
+              window.location.href = redirectUrl;
+            }
           } else {
+            console.log('No stored redirect URL found, redirecting to dashboard');
             // Default redirect to dashboard
             router.push('/dashboard');
           }
