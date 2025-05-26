@@ -154,11 +154,12 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
 
   // Initialize with required amount and calculate suggested amount with buffer
   useEffect(() => {
-    if (requiredAmount > 0 && suiPrice && suiPrice > 0) {
+    if (requiredAmount > 0 && suiPrice && suiPrice > 0 && circleId) {
       console.log(`[SimplifiedSwapUI] Auto-setting amount for ${paymentType}:`, {
         requiredAmount,
         suiPrice,
-        slippage
+        slippage,
+        circleId
       });
       
       // Calculate the suggested amount with slippage buffer
@@ -171,6 +172,20 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
       // to get the actual swap quote for the suggested amount
       getSwapEstimate(suggestedAmountWithBuffer.toString());
       
+      // Immediate fallback: Set a direct calculation to ensure receive amount is shown
+      const immediateUsdcAmount = suggestedAmountWithBuffer * suiPrice * 0.95; // Conservative estimate
+      setReceiveAmount(immediateUsdcAmount.toFixed(6));
+      
+      // Fallback: Also set a direct calculation in case getSwapEstimate doesn't work immediately
+      setTimeout(() => {
+        // Check if receiveAmount is still at default value after a short delay
+        if (receiveAmount === '0.0' || parseFloat(receiveAmount) === 0) {
+          console.log('[SimplifiedSwapUI] Fallback: Setting direct calculation for receive amount');
+          const directUsdcAmount = suggestedAmountWithBuffer * suiPrice * 0.95; // Conservative estimate
+          setReceiveAmount(directUsdcAmount.toFixed(6));
+        }
+      }, 100);
+      
       // Check payment status with the suggested amount
       checkPaymentStatus(suggestedAmountWithBuffer);
       
@@ -179,16 +194,18 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
       // If we don't have price yet, just set the base amount
       setAmount(requiredAmount.toString());
       console.log(`[SimplifiedSwapUI] Set base amount ${requiredAmount} SUI (waiting for price)`);
+    } else if (requiredAmount > 0 && suiPrice && !circleId) {
+      console.log(`[SimplifiedSwapUI] Waiting for circleId to calculate swap estimate`);
     }
-  }, [requiredAmount, suiPrice, slippage, currentDepositPaid, paymentType]);
+  }, [requiredAmount, suiPrice, slippage, currentDepositPaid, paymentType, circleId]);
 
   // Separate effect to handle price updates when amount is already set
   useEffect(() => {
-    if (amount && parseFloat(amount) > 0 && suiPrice && suiPrice > 0) {
+    if (amount && parseFloat(amount) > 0 && suiPrice && suiPrice > 0 && circleId) {
       // Only update estimates, don't change the amount the user has set
       getSwapEstimate(amount);
     }
-  }, [suiPrice]);
+  }, [suiPrice, circleId]);
 
   // Update suggested amount when slippage changes
   useEffect(() => {
