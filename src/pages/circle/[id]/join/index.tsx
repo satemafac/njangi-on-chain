@@ -635,6 +635,27 @@ export default function JoinCircle() {
     );
   };
 
+  // Store the current URL for redirect after login
+  useEffect(() => {
+    if (!isAuthenticated && id) {
+      // Store the current join URL so user can be redirected back after login
+      const currentUrl = window.location.href;
+      localStorage.setItem('redirectAfterLogin', currentUrl);
+      console.log('Stored redirect URL for after login:', currentUrl);
+    } else if (isAuthenticated) {
+      // Clear redirect URL if user is already authenticated
+      localStorage.removeItem('redirectAfterLogin');
+    }
+    
+    // Cleanup function to remove redirect URL when component unmounts
+    return () => {
+      // Only clear if user is not authenticated (to avoid clearing during login flow)
+      if (!isAuthenticated) {
+        localStorage.removeItem('redirectAfterLogin');
+      }
+    };
+  }, [isAuthenticated, id]);
+
   // Generate page title & description based on circle data
   const pageTitle = circle 
     ? `Join ${circle.name} Circle - Njangi On-Chain`
