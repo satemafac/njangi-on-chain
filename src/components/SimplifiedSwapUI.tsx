@@ -152,18 +152,63 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
     fetchSuiPrice();
   }, []);
 
-  // Initialize with required amount
+  // Initialize with required amount and calculate suggested amount with buffer
   useEffect(() => {
-    if (requiredAmount > 0) {
-      setAmount(requiredAmount.toString());
-      getSwapEstimate(requiredAmount.toString());
+    if (requiredAmount > 0 && suiPrice && suiPrice > 0) {
+      console.log(`[SimplifiedSwapUI] Auto-setting amount for ${paymentType}:`, {
+        requiredAmount,
+        suiPrice,
+        slippage
+      });
       
-      // Calculate suggested amount with slippage and gas if we have price
-      if (suiPrice) {
-        calculateSuggestedAmount(requiredAmount, suiPrice, slippage);
+      // Calculate the suggested amount with slippage buffer
+      const suggestedAmountWithBuffer = calculateSuggestedAmount(requiredAmount, suiPrice, slippage);
+      
+      // Set the amount to the suggested amount (with buffer) for one-click swapping
+      setAmount(suggestedAmountWithBuffer.toString());
+      
+      // Calculate the conservative USDC estimate
+      let estimationFactor = 0.97; // 3% reduction as baseline
+      if (!currentDepositPaid) {
+        estimationFactor = 0.95; // 5% reduction for security deposits
       }
+      if (suggestedAmountWithBuffer < 0.2) {
+        estimationFactor -= 0.03; // Additional 3% reduction for small amounts
+      }
+      
+      const conservativeUsdcAmount = suggestedAmountWithBuffer * suiPrice * estimationFactor;
+      setReceiveAmount(conservativeUsdcAmount.toFixed(6));
+      
+      // Create a swap quote with the suggested amount
+      const quote: SwapQuote = {
+        amountIn: suggestedAmountWithBuffer,
+        amountOut: conservativeUsdcAmount * 1e6, // Convert to micro USDC
+        price: suiPrice * estimationFactor, // Adjusted price
+        priceImpact: 0.10 + ((1 - estimationFactor) * 100), // Higher price impact for conservative estimates
+        poolId: 'auto-calculated'
+      };
+      
+      setSwapQuote(quote);
+      setEffectiveRate(suiPrice * estimationFactor);
+      
+      // Check payment status with the suggested amount
+      checkPaymentStatus(suggestedAmountWithBuffer);
+      
+      console.log(`[SimplifiedSwapUI] Auto-set amount to ${suggestedAmountWithBuffer.toFixed(8)} SUI for ${paymentType}`);
+    } else if (requiredAmount > 0 && !suiPrice) {
+      // If we don't have price yet, just set the base amount
+      setAmount(requiredAmount.toString());
+      console.log(`[SimplifiedSwapUI] Set base amount ${requiredAmount} SUI (waiting for price)`);
     }
-  }, [requiredAmount, suiPrice]);
+  }, [requiredAmount, suiPrice, slippage, currentDepositPaid, paymentType]);
+
+  // Separate effect to handle price updates when amount is already set
+  useEffect(() => {
+    if (amount && parseFloat(amount) > 0 && suiPrice && suiPrice > 0) {
+      // Only update estimates, don't change the amount the user has set
+      getSwapEstimate(amount);
+    }
+  }, [suiPrice]);
 
   // Update suggested amount when slippage changes
   useEffect(() => {
@@ -595,6 +640,41 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
             return;
           }
           
+          // Check if this is a slippage error with recommended slippage
+          if (result.isSlippageError && result.recommendedSlippage) {
+            toast.dismiss('swap-step'); // Dismiss the loading toast
+            
+            // Set the recommended slippage
+            setRecommendedSlippage(result.recommendedSlippage);
+            
+            // Show user-friendly message with slippage guidance
+            const currentSlippageText = result.currentSlippage ? `${result.currentSlippage}%` : `${slippage}%`;
+            const recommendedSlippageText = `${result.recommendedSlippage}%`;
+            
+            toast.error(
+              `Swap failed due to price movement. Current slippage: ${currentSlippageText}. Try increasing to ${recommendedSlippageText} or higher.`,
+              { 
+                id: 'slippage-guidance',
+                duration: 8000 // Show longer for user to read
+              }
+            );
+            
+            // Automatically apply the higher slippage
+            setSlippage(result.recommendedSlippage);
+            console.log(`Automatically increased slippage to ${result.recommendedSlippage}% due to price movement`);
+            
+            // Show a follow-up toast about the automatic adjustment
+            setTimeout(() => {
+              toast.success(`Slippage automatically increased to ${recommendedSlippageText}. You can try the swap again.`, { 
+                id: 'slippage-auto-increase',
+                duration: 5000
+              });
+            }, 1000);
+            
+            setProcessing(false);
+            return; // Exit early without throwing error since we're handling it
+          }
+          
           // Check for detailed error information
           let errorMessage = result.error || 'Swap failed';
           if (result.details) {
@@ -616,7 +696,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
                 toast.error(errorMessage, { id: 'swap-step' });
               } else if (result.details.includes('Slippage tolerance exceeded') || 
                         (result.details.includes('MoveAbort') && result.details.includes('1) in command 2'))) {
-                // For slippage errors, automatically increase slippage without showing the modal
+                // Legacy handling for older error format - this should now be caught by isSlippageError above
                 const newRecommendedSlippage = Math.min(50, Math.ceil(slippage * 2));
                 toast.dismiss('swap-step'); // Dismiss the loading toast
                 
@@ -625,7 +705,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
                 
                 // Automatically apply the higher slippage
                 setSlippage(newRecommendedSlippage);
-                console.log(`Automatically increased slippage to ${newRecommendedSlippage}% due to price movement`);
+                console.log(`Automatically increased slippage to ${newRecommendedSlippage}% due to price movement (legacy handling)`);
                 
                 // Show a toast notification instead of modal
                 toast.success(`Increased slippage to ${newRecommendedSlippage}% due to price movement`, { 
@@ -647,12 +727,63 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
           throw new Error(errorMessage);
         }
         
+        // Check if the transaction failed even with a 200 response
+        if (result.transactionFailed || result.status === 'failure') {
+          console.error('Transaction failed:', result);
+          
+          // Handle slippage errors from transaction failure
+          if (result.isSlippageError && result.recommendedSlippage) {
+            toast.dismiss('swap-step');
+            
+            const currentSlippageText = result.currentSlippage ? `${result.currentSlippage}%` : `${slippage}%`;
+            const recommendedSlippageText = `${result.recommendedSlippage}%`;
+            
+            toast.error(
+              `Swap failed due to price movement. Current slippage: ${currentSlippageText}. Try increasing to ${recommendedSlippageText} or higher.`,
+              { 
+                id: 'slippage-guidance',
+                duration: 8000
+              }
+            );
+            
+            // Automatically apply the higher slippage
+            setSlippage(result.recommendedSlippage);
+            console.log(`Automatically increased slippage to ${result.recommendedSlippage}% due to transaction failure`);
+            
+            setTimeout(() => {
+              toast.success(`Slippage automatically increased to ${recommendedSlippageText}. You can try the swap again.`, { 
+                id: 'slippage-auto-increase',
+                duration: 5000
+              });
+            }, 1000);
+            
+            setProcessing(false);
+            return;
+          }
+          
+          // Handle other transaction failures
+          const errorMessage = result.error || 'Swap transaction failed';
+          toast.error(errorMessage, { id: 'swap-step' });
+          setProcessing(false);
+          return;
+        }
+        
         toast.success('SUI to USDC swap completed successfully!', { id: 'swap-step' });
         console.log('Swap transaction executed with digest:', result.digest);
+        
+        // Check if we have a valid coin ID from the swap
+        if (!result.createdCoinId) {
+          console.error('No USDC coin ID returned from swap transaction');
+          toast.error('Swap completed but USDC coin not found. Please check your wallet and try again.', { id: 'swap-step' });
+          setProcessing(false);
+          return;
+        }
         
         // Store the swap transaction digest and coin ID for the next step
         setSwapTxDigest(result.digest);
         setSwappedCoinId(result.createdCoinId); // API should return the created USDC coin's ID
+        
+        console.log('Swap successful, proceeding to deposit step with coin ID:', result.createdCoinId);
         
         // Move to the deposit step
         setTransactionStep('deposit');
@@ -707,6 +838,41 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
             return;
           }
           
+          // Check if this is a slippage error with recommended slippage
+          if (result.isSlippageError && result.recommendedSlippage) {
+            toast.dismiss('swap-step'); // Dismiss the loading toast
+            
+            // Set the recommended slippage
+            setRecommendedSlippage(result.recommendedSlippage);
+            
+            // Show user-friendly message with slippage guidance
+            const currentSlippageText = result.currentSlippage ? `${result.currentSlippage}%` : `${slippage}%`;
+            const recommendedSlippageText = `${result.recommendedSlippage}%`;
+            
+            toast.error(
+              `Swap failed due to price movement. Current slippage: ${currentSlippageText}. Try increasing to ${recommendedSlippageText} or higher.`,
+              { 
+                id: 'slippage-guidance',
+                duration: 8000 // Show longer for user to read
+              }
+            );
+            
+            // Automatically apply the higher slippage
+            setSlippage(result.recommendedSlippage);
+            console.log(`Automatically increased slippage to ${result.recommendedSlippage}% due to price movement`);
+            
+            // Show a follow-up toast about the automatic adjustment
+            setTimeout(() => {
+              toast.success(`Slippage automatically increased to ${recommendedSlippageText}. You can try the swap again.`, { 
+                id: 'slippage-auto-increase',
+                duration: 5000
+              });
+            }, 1000);
+            
+            setProcessing(false);
+            return; // Exit early without throwing error since we're handling it
+          }
+          
           // Check for detailed error information
           let errorMessage = result.error || 'Swap failed';
           if (result.details) {
@@ -728,7 +894,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
                 toast.error(errorMessage, { id: 'swap-step' });
               } else if (result.details.includes('Slippage tolerance exceeded') || 
                         (result.details.includes('MoveAbort') && result.details.includes('1) in command 2'))) {
-                // For slippage errors, automatically increase slippage without showing the modal
+                // Legacy handling for older error format - this should now be caught by isSlippageError above
                 const newRecommendedSlippage = Math.min(50, Math.ceil(slippage * 2));
                 toast.dismiss('swap-step'); // Dismiss the loading toast
                 
@@ -737,7 +903,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
                 
                 // Automatically apply the higher slippage
                 setSlippage(newRecommendedSlippage);
-                console.log(`Automatically increased slippage to ${newRecommendedSlippage}% due to price movement`);
+                console.log(`Automatically increased slippage to ${newRecommendedSlippage}% due to price movement (legacy handling)`);
                 
                 // Show a toast notification instead of modal
                 toast.success(`Increased slippage to ${newRecommendedSlippage}% due to price movement`, { 
@@ -762,9 +928,19 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
         toast.success('SUI to USDC swap completed successfully!', { id: 'swap-step' });
         console.log('Swap transaction executed with digest:', result.digest);
         
+        // Check if we have a valid coin ID from the swap
+        if (!result.createdCoinId) {
+          console.error('No USDC coin ID returned from swap transaction');
+          toast.error('Swap completed but USDC coin not found. Please check your wallet and try again.', { id: 'swap-step' });
+          setProcessing(false);
+          return;
+        }
+        
         // Store the swap transaction digest and coin ID for the next step
         setSwapTxDigest(result.digest);
         setSwappedCoinId(result.createdCoinId); // API should return the created USDC coin's ID
+        
+        console.log('Swap successful, proceeding to deposit step with coin ID:', result.createdCoinId);
         
         // Move to the deposit step
         setTransactionStep('deposit');
@@ -815,10 +991,37 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
   
   // Second transaction: Deposit the USDC to the custody wallet
   const handleDeposit = async () => {
-    if (!swappedCoinId || !account || !circleId || !walletId) {
-      toast.error("Missing required information for deposit", { id: 'deposit-step' });
+    // Provide detailed error messages for missing information
+    if (!swappedCoinId) {
+      toast.error("No USDC coin found from swap. Please try the swap again.", { id: 'deposit-step' });
+      console.error('Missing swappedCoinId for deposit');
       return;
     }
+    
+    if (!account) {
+      toast.error("User account not available. Please refresh and try again.", { id: 'deposit-step' });
+      console.error('Missing account for deposit');
+      return;
+    }
+    
+    if (!circleId) {
+      toast.error("Circle ID not available. Please refresh and try again.", { id: 'deposit-step' });
+      console.error('Missing circleId for deposit');
+      return;
+    }
+    
+    if (!walletId) {
+      toast.error("Custody wallet ID not available. Please refresh and try again.", { id: 'deposit-step' });
+      console.error('Missing walletId for deposit');
+      return;
+    }
+    
+    console.log('Starting deposit with:', {
+      swappedCoinId,
+      circleId,
+      walletId,
+      userAddr: account.userAddr
+    });
     
     setDepositProcessing(true);
     toast.loading('Preparing deposit transaction...', { id: 'deposit-step' });
@@ -942,6 +1145,49 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
             { id: 'deposit-step', duration: 8000 }
           );
           setDepositProcessing(false);
+          return;
+        }
+        
+        // Handle insufficient balance errors
+        if (result.code === 'EInsufficientBalance') {
+          const requiredUSD = (result.required / 10000).toFixed(4);
+          const availableUSD = (result.available / 10000).toFixed(4);
+          const shortfallUSD = (result.shortfall / 10000).toFixed(4);
+          
+          // Calculate how much more SUI is needed
+          let suggestedSuiAmount = '';
+          if (suiPrice && suiPrice > 0) {
+            // Calculate additional SUI needed with buffer for slippage
+            const shortfallUsdValue = result.shortfall / 10000;
+            const additionalSuiNeeded = shortfallUsdValue / suiPrice;
+            // Add 10% buffer for slippage and fees
+            const bufferedSuiAmount = additionalSuiNeeded * 1.1;
+            suggestedSuiAmount = ` Try swapping at least ${bufferedSuiAmount.toFixed(6)} more SUI.`;
+          }
+          
+          toast.error(
+            `Insufficient USDC for deposit. Required: $${requiredUSD}, Available: $${availableUSD}. You need $${shortfallUSD} more USDC.${suggestedSuiAmount}`,
+            { id: 'deposit-step', duration: 12000 }
+          );
+          setDepositProcessing(false);
+          
+          // Reset to allow user to try swapping more
+          setTransactionStep('swap');
+          setSwappedCoinId(null);
+          setSwapTxDigest(null);
+          
+          // If we can calculate the needed amount, pre-fill it
+          if (suiPrice && suiPrice > 0) {
+            const shortfallUsdValue = result.shortfall / 10000;
+            const additionalSuiNeeded = shortfallUsdValue / suiPrice;
+            const bufferedSuiAmount = additionalSuiNeeded * 1.15; // 15% buffer
+            setAmount(bufferedSuiAmount.toFixed(8));
+            
+            // Update the receive amount estimate
+            const estimatedUsdc = bufferedSuiAmount * suiPrice * 0.95; // Conservative estimate
+            setReceiveAmount(estimatedUsdc.toFixed(6));
+          }
+          
           return;
         }
         
@@ -1162,10 +1408,18 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
       return "Enter Amount";
     }
     
+    // Check if the current amount matches the suggested amount (within 1%)
+    const isUsingSuggestedAmount = suggestedAmount && 
+      Math.abs(parseFloat(amount) - suggestedAmount) / suggestedAmount < 0.01;
+    
     if (currentDepositPaid) {
-      return "Swap & Contribute";
+      return isUsingSuggestedAmount 
+        ? "Swap & Contribute (Optimized Amount)" 
+        : "Swap & Contribute";
     } else {
-      return "Swap & Pay Security Deposit";
+      return isUsingSuggestedAmount 
+        ? "Swap & Pay Security Deposit (Optimized Amount)" 
+        : "Swap & Pay Security Deposit";
     }
   };
 
@@ -1516,6 +1770,24 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
       {/* Form fields - only shown in swap step */}
       {transactionStep === 'swap' && (
         <>
+          {/* Add helpful message about auto-calculated amount */}
+          {suggestedAmount && Math.abs(parseFloat(amount || '0') - suggestedAmount) / suggestedAmount < 0.01 && (
+            <div className="bg-green-900/20 border border-green-600/30 rounded-lg p-3 mb-3 text-sm">
+              <div className="flex items-start space-x-2">
+                <div className="w-5 h-5 bg-green-500 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <span className="text-white text-xs font-bold">✓</span>
+                </div>
+                <div>
+                  <p className="text-green-400 font-medium mb-1">Ready for One-Click Swap!</p>
+                  <p className="text-green-300/80 text-xs">
+                    The amount has been automatically calculated with {slippage}% slippage buffer and gas fees. 
+                    You can swap immediately or adjust the amount if needed.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Required amount info */}
           {requiredAmount > 0 && (
             <div className="bg-[#1A1A1A] rounded-lg p-3 mb-3 text-sm">
@@ -1530,7 +1802,12 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
                     <div className="mr-2 text-white">{suggestedAmount.toFixed(8)} SUI</div>
                     <button
                       onClick={handleSuggestedAmountClick}
-                      className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors duration-200 flex items-center"
+                      disabled={disabled || processing || depositProcessing}
+                      className={`px-4 py-2 rounded-md text-sm font-medium transition-colors duration-200 flex items-center ${
+                        disabled || processing || depositProcessing
+                          ? 'bg-gray-500 text-gray-300 cursor-not-allowed'
+                          : 'bg-blue-600 hover:bg-blue-700 text-white'
+                      }`}
                     >
                       Use Suggested Amount ({suggestedAmount.toFixed(8)} SUI)
                     </button>
@@ -1544,9 +1821,16 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
           <div className="bg-[#1A1A1A] rounded-lg p-4 mb-2">
             <div className="flex justify-between text-gray-400 mb-1">
               <span>You Pay</span>
+              {/* Add auto-calculated indicator */}
+              {suggestedAmount && Math.abs(parseFloat(amount || '0') - suggestedAmount) / suggestedAmount < 0.01 && (
+                <div className="flex items-center text-xs">
+                  <div className="w-2 h-2 bg-green-400 rounded-full mr-1.5"></div>
+                  <span className="text-green-400 font-medium">Auto-Optimized</span>
+                </div>
+              )}
             </div>
             <div className="flex justify-between items-center">
-              <div className="w-full px-4 py-3 bg-[#1B1B1B] rounded-lg flex items-center mt-1">
+              <div className="w-full px-4 py-3 bg-[#1B1B1B] rounded-lg flex items-center mt-1 relative">
                 <input
                   id="amount-input"
                   type="number"
@@ -1554,8 +1838,16 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
                   onChange={handleAmountChange}
                   placeholder="0.0"
                   className="bg-transparent text-2xl outline-none w-full"
-                  disabled={processing}
+                  disabled={disabled || processing || depositProcessing}
                 />
+                {/* Add subtle indicator inside input when auto-calculated */}
+                {suggestedAmount && Math.abs(parseFloat(amount || '0') - suggestedAmount) / suggestedAmount < 0.01 && (
+                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                    <div className="bg-green-500/20 text-green-400 text-xs px-2 py-1 rounded-full border border-green-500/30">
+                      ✓ Optimized
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="flex flex-col items-end">
                 <div className="flex items-center bg-[#333333] py-1 px-3 rounded-lg mb-1">
@@ -1564,13 +1856,23 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
                 <div className="flex space-x-1">
                   <button 
                     onClick={handleHalfClick}
-                    className="bg-[#2D2D2D] hover:bg-[#444444] text-xs px-2 py-1 rounded"
+                    disabled={disabled || processing || depositProcessing}
+                    className={`text-xs px-2 py-1 rounded transition-colors ${
+                      disabled || processing || depositProcessing
+                        ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                        : 'bg-[#2D2D2D] hover:bg-[#444444] text-white'
+                    }`}
                   >
                     HALF
                   </button>
                   <button 
                     onClick={handleMaxClick}
-                    className="bg-[#2D2D2D] hover:bg-[#444444] text-xs px-2 py-1 rounded"
+                    disabled={disabled || processing || depositProcessing}
+                    className={`text-xs px-2 py-1 rounded transition-colors ${
+                      disabled || processing || depositProcessing
+                        ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                        : 'bg-[#2D2D2D] hover:bg-[#444444] text-white'
+                    }`}
                   >
                     MAX
                   </button>
