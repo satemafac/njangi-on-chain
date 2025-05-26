@@ -75,15 +75,6 @@ export default function JoinCircle() {
   const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
   const [hasPendingRequest, setHasPendingRequest] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [routerReady, setRouterReady] = useState(false);
-
-  // Track when router is ready
-  useEffect(() => {
-    if (router.isReady) {
-      setRouterReady(true);
-      console.log('Join - Router is ready, query:', router.query);
-    }
-  }, [router.isReady, router.query]);
 
   useEffect(() => {
     // Fetch the current SUI price
@@ -646,34 +637,24 @@ export default function JoinCircle() {
 
   // Store the current URL for redirect after login
   useEffect(() => {
-    console.log('Join page useEffect - isAuthenticated:', isAuthenticated, 'id:', id, 'routerReady:', routerReady);
-    
-    if (!isAuthenticated && id && routerReady) {
+    if (!isAuthenticated && id) {
       // Store the current join URL so user can be redirected back after login
       const currentUrl = window.location.href;
       localStorage.setItem('redirectAfterLogin', currentUrl);
       console.log('Stored redirect URL for after login:', currentUrl);
-      console.log('localStorage after storing:', localStorage.getItem('redirectAfterLogin'));
     } else if (isAuthenticated) {
       // Clear redirect URL if user is already authenticated
-      console.log('User is authenticated, clearing redirect URL');
       localStorage.removeItem('redirectAfterLogin');
     }
     
-    // Cleanup function - only clear if user becomes authenticated
-    // Don't clear when component unmounts during login flow
+    // Cleanup function to remove redirect URL when component unmounts
     return () => {
-      console.log('Join page cleanup - isAuthenticated:', isAuthenticated);
-      // Only clear if user is authenticated (successful login completed)
-      if (isAuthenticated) {
-        console.log('Cleanup: removing redirect URL because user is authenticated');
+      // Only clear if user is not authenticated (to avoid clearing during login flow)
+      if (!isAuthenticated) {
         localStorage.removeItem('redirectAfterLogin');
-      } else {
-        console.log('Cleanup: keeping redirect URL because user is not authenticated');
       }
-      // If user is not authenticated, keep the redirect URL for the callback
     };
-  }, [isAuthenticated, id, routerReady]);
+  }, [isAuthenticated, id]);
 
   // Generate page title & description based on circle data
   const pageTitle = circle 
@@ -692,29 +673,7 @@ export default function JoinCircle() {
   }, [circle, pageTitle]);
 
   // Update the component's return statement to safely check auth state
-  if (!routerReady) {
-    // Show loading while router is not ready
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-          <div className="px-4 py-6 sm:px-0">
-            <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100 p-6">
-              <div className="text-center py-8">
-                <svg className="animate-spin h-8 w-8 text-blue-500 mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                <p className="text-gray-500">Loading...</p>
-              </div>
-            </div>
-          </div>
-        </main>
-      </div>
-    );
-  }
-
   if (!id) {
-    console.log('Join - No ID found in router query:', router.query);
     return (
       <div className="min-h-screen bg-gray-50">
         <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
