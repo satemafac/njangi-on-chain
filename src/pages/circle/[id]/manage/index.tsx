@@ -1009,7 +1009,44 @@ export default function ManageCircle() {
     try {
       console.log(`[ManagePage] ${approve ? 'Approving' : 'Rejecting'} join request for user ${request.user_address} in circle ${request.circle_id}`);
       
-      // If approving, first try to approve on blockchain
+      // If approving, check if we would exceed max members
+      if (approve && circle) {
+        const currentActiveMembers = members.filter(m => m.status === 'active').length;
+        const wouldExceedLimit = currentActiveMembers >= circle.maxMembers;
+        
+        if (wouldExceedLimit) {
+          // Show modal asking admin if they want to increase max members first
+          setConfirmationModal({
+            isOpen: true,
+            title: 'Maximum Members Limit Reached',
+            message: (
+              <div className="space-y-3">
+                <p>
+                  Approving <strong>{shortenAddress(request.user_address)}</strong> would exceed 
+                  the current maximum member limit of <strong>{circle.maxMembers}</strong>.
+                </p>
+                <p className="text-sm text-gray-600">
+                  Current active members: <strong>{currentActiveMembers}</strong>
+                </p>
+                <p className="text-sm text-blue-600">
+                  Would you like to increase the maximum members to <strong>{currentActiveMembers + 1}</strong> 
+                  and then approve this member?
+                </p>
+              </div>
+            ),
+            onConfirm: async () => {
+              // First increase max members, then approve
+              await increaseMaxMembersAndApprove([request], currentActiveMembers + 1);
+            },
+            confirmText: `Increase Limit & Approve`,
+            cancelText: 'Cancel',
+            confirmButtonVariant: 'primary',
+          });
+          return;
+        }
+      }
+      
+      // If rejecting, first try to approve on blockchain
       if (approve) {
         const blockchainToastId = 'blockchain-approve-member';
         toast.loading(`Approving ${shortenAddress(request.user_address)} on blockchain...`, { id: blockchainToastId });
@@ -1096,11 +1133,215 @@ export default function ManageCircle() {
     }
   };
 
+  // New function to handle increasing max members and then approving requests
+  const increaseMaxMembersAndApprove = async (requests: JoinRequest[], newMaxMembers: number) => {
+    if (!circle || !account) return;
+    
+    const toastId = 'increase-and-approve';
+    
+    try {
+      toast.loading('Increasing maximum members...', { id: toastId });
+      
+      // First, increase the max members
+      const maxMembersResponse = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'adminSetMaxMembers',
+          account,
+          circleId: circle.id,
+          newMaxMembers
+        }),
+      });
+      
+      const maxMembersResult = await maxMembersResponse.json();
+      
+      if (!maxMembersResponse.ok) {
+        console.error('Failed to update max members:', maxMembersResult);
+        const errorDetail = parseMoveError(maxMembersResult.error || '');
+        toast.error(`Failed to increase max members: ${errorDetail.message}`, { id: toastId });
+        return;
+      }
+      
+      // Update local state
+      setCircle(prevCircle => prevCircle ? { ...prevCircle, maxMembers: newMaxMembers } : null);
+      
+      toast.loading('Approving members...', { id: toastId });
+      
+      // Now approve the members
+      if (requests.length === 1) {
+        // Single approval
+        const request = requests[0];
+        const blockchainSuccess = await callAdminApproveMember(
+          request.circle_id,
+          request.user_address
+        );
+        
+        if (!blockchainSuccess) {
+          toast.error('Failed to approve member on blockchain', { id: toastId });
+          return;
+        }
+        
+        // Update database
+        const response = await fetch(`/api/join-requests/${request.circle_id}/update`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userAddress: request.user_address,
+            status: 'approved'
+          })
+        });
+        
+        const result = await response.json();
+        
+        if (!response.ok || !result.success) {
+          toast.error('Failed to update request in database', { id: toastId });
+          return;
+        }
+        
+        // Update UI
+        setPendingRequests(prev => 
+          prev.filter(req => 
+            !(req.circle_id === request.circle_id && 
+              req.user_address === request.user_address)
+          )
+        );
+        
+        setMembers(prev => [
+          ...prev,
+          {
+            address: request.user_address,
+            joinDate: Date.now(),
+            status: 'active'
+          }
+        ]);
+        
+        setCircle(prevCircle => prevCircle ? { 
+          ...prevCircle, 
+          currentMembers: prevCircle.currentMembers + 1 
+        } : null);
+        
+        toast.success(`Maximum members increased to ${newMaxMembers} and member approved!`, { id: toastId });
+        
+      } else {
+        // Bulk approval
+        const memberAddresses = requests.map(req => req.user_address);
+        
+        const blockchainSuccess = await callAdminApproveMembers(
+          requests[0].circle_id,
+          memberAddresses
+        );
+        
+        if (!blockchainSuccess) {
+          toast.error('Failed to approve members on blockchain', { id: toastId });
+          return;
+        }
+        
+        // Update database for all requests
+        let allDbUpdatesSuccessful = true;
+        for (const request of requests) {
+          try {
+            const response = await fetch(`/api/join-requests/${request.circle_id}/update`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                userAddress: request.user_address,
+                status: 'approved'
+              })
+            });
+            
+            const result = await response.json();
+            
+            if (!response.ok || !result.success) {
+              allDbUpdatesSuccessful = false;
+            }
+          } catch {
+            allDbUpdatesSuccessful = false;
+          }
+        }
+        
+        if (allDbUpdatesSuccessful) {
+          // Update UI
+          const currentTimestamp = Date.now();
+          const newMembers = requests.map(req => ({
+            address: req.user_address,
+            joinDate: currentTimestamp,
+            status: 'active' as const
+          }));
+          
+          setMembers(prev => [...prev, ...newMembers]);
+          
+          setCircle(prevCircle => prevCircle ? { 
+            ...prevCircle, 
+            currentMembers: prevCircle.currentMembers + requests.length 
+          } : null);
+          
+          // Remove approved requests from pending list
+          const approvedAddresses = new Set(requests.map(req => req.user_address));
+          setPendingRequests(prev => 
+            prev.filter(req => !approvedAddresses.has(req.user_address))
+          );
+          
+          toast.success(`Maximum members increased to ${newMaxMembers} and ${requests.length} members approved!`, { id: toastId });
+        } else {
+          toast.error('Some requests could not be updated. Please refresh and try again.', { id: toastId });
+          await fetchPendingRequests();
+        }
+      }
+      
+      // Refresh circle details
+      await fetchCircleDetails();
+      
+    } catch (error) {
+      console.error('Error in increaseMaxMembersAndApprove:', error);
+      toast.error('Failed to increase max members and approve', { id: toastId });
+    }
+  };
+
   // New function to handle bulk approval of join requests
   const handleBulkApprove = async () => {
     if (pendingRequests.length === 0) return;
     
-    // Show confirmation modal
+    // Check if bulk approval would exceed max members
+    if (circle) {
+      const currentActiveMembers = members.filter(m => m.status === 'active').length;
+      const wouldExceedLimit = currentActiveMembers + pendingRequests.length > circle.maxMembers;
+      
+      if (wouldExceedLimit) {
+        const newMaxMembers = currentActiveMembers + pendingRequests.length;
+        
+        // Show modal asking admin if they want to increase max members first
+        setConfirmationModal({
+          isOpen: true,
+          title: 'Maximum Members Limit Would Be Exceeded',
+          message: (
+            <div className="space-y-3">
+              <p>
+                Approving all <strong>{pendingRequests.length}</strong> pending requests would exceed 
+                the current maximum member limit of <strong>{circle.maxMembers}</strong>.
+              </p>
+              <p className="text-sm text-gray-600">
+                Current active members: <strong>{currentActiveMembers}</strong><br/>
+                After approval: <strong>{currentActiveMembers + pendingRequests.length}</strong>
+              </p>
+              <p className="text-sm text-blue-600">
+                Would you like to increase the maximum members to <strong>{newMaxMembers}</strong> 
+                and then approve all pending requests?
+              </p>
+            </div>
+          ),
+          onConfirm: async () => {
+            await increaseMaxMembersAndApprove(pendingRequests, newMaxMembers);
+          },
+          confirmText: `Increase Limit & Approve All`,
+          cancelText: 'Cancel',
+          confirmButtonVariant: 'primary',
+        });
+        return;
+      }
+    }
+    
+    // Show confirmation modal for normal bulk approval
     setConfirmationModal({
       isOpen: true,
       title: 'Approve All Pending Requests',
