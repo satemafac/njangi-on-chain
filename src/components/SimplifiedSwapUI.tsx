@@ -167,29 +167,9 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
       // Set the amount to the suggested amount (with buffer) for one-click swapping
       setAmount(suggestedAmountWithBuffer.toString());
       
-      // Calculate the conservative USDC estimate
-      let estimationFactor = 0.97; // 3% reduction as baseline
-      if (!currentDepositPaid) {
-        estimationFactor = 0.95; // 5% reduction for security deposits
-      }
-      if (suggestedAmountWithBuffer < 0.2) {
-        estimationFactor -= 0.03; // Additional 3% reduction for small amounts
-      }
-      
-      const conservativeUsdcAmount = suggestedAmountWithBuffer * suiPrice * estimationFactor;
-      setReceiveAmount(conservativeUsdcAmount.toFixed(6));
-      
-      // Create a swap quote with the suggested amount
-      const quote: SwapQuote = {
-        amountIn: suggestedAmountWithBuffer,
-        amountOut: conservativeUsdcAmount * 1e6, // Convert to micro USDC
-        price: suiPrice * estimationFactor, // Adjusted price
-        priceImpact: 0.10 + ((1 - estimationFactor) * 100), // Higher price impact for conservative estimates
-        poolId: 'auto-calculated'
-      };
-      
-      setSwapQuote(quote);
-      setEffectiveRate(suiPrice * estimationFactor);
+      // Instead of manually calculating conservative estimates, call getSwapEstimate
+      // to get the actual swap quote for the suggested amount
+      getSwapEstimate(suggestedAmountWithBuffer.toString());
       
       // Check payment status with the suggested amount
       checkPaymentStatus(suggestedAmountWithBuffer);
@@ -236,28 +216,8 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
           console.log(`Updating amount based on slippage change: ${currentAmount} → ${newSuggestedAmount}`);
           setAmount(newSuggestedAmount.toString());
           
-          // Update the receive amount too
-          if (suiPrice) {
-            // Apply the conservative estimation factor
-            let estimationFactor = 0.97; // 3% reduction as baseline
-            if (!currentDepositPaid) {
-              estimationFactor = 0.95; // 5% reduction for security deposits
-            }
-            if (newSuggestedAmount < 0.2) {
-              estimationFactor -= 0.03; // Additional 3% reduction for small amounts
-            }
-            
-            const newUsdcAmount = newSuggestedAmount * suiPrice * estimationFactor;
-            setReceiveAmount(newUsdcAmount.toFixed(6));
-            
-            // Also update swap quote if it exists
-            if (swapQuote) {
-              const updatedQuote = { ...swapQuote };
-              updatedQuote.amountIn = newSuggestedAmount;
-              updatedQuote.amountOut = newUsdcAmount * 1e6; // Convert to micro USDC
-              setSwapQuote(updatedQuote);
-            }
-          }
+          // Call getSwapEstimate to get the actual swap quote
+          getSwapEstimate(newSuggestedAmount.toString());
         }
       }
     }
@@ -1541,32 +1501,11 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
         amountInput.value = suggestedAmount.toString();
       }
       
-      // Update the receive amount with the conservative estimate
-      if (suiPrice) {
-        let estimationFactor = 0.97; // 3% reduction as baseline
-        if (!currentDepositPaid) {
-          estimationFactor = 0.95; // 5% reduction for security deposits
-        }
-        if (suggestedAmount < 0.2) {
-          estimationFactor -= 0.03; // Additional 3% reduction for small amounts
-        }
-        
-        const usdcAmount = suggestedAmount * suiPrice * estimationFactor;
-        setReceiveAmount(usdcAmount.toFixed(6));
-        
-        // Create a swapQuote with the live price data if one doesn't exist
-        const quote: SwapQuote = {
-          amountIn: suggestedAmount,
-          amountOut: usdcAmount * 1e6, // Convert to micro USDC
-          price: suiPrice,
-          priceImpact: 0.05, // Use a modest default impact
-          poolId: 'suggested-amount'
-        };
-        
-        setSwapQuote(quote);
-        setEffectiveRate(suiPrice * estimationFactor);
-        checkPaymentStatus(suggestedAmount);
-      }
+      // Call getSwapEstimate to get the actual swap quote instead of manual calculation
+      getSwapEstimate(suggestedAmount.toString());
+      
+      // Check payment status with the suggested amount
+      checkPaymentStatus(suggestedAmount);
       
       // Also verify if slippage is sufficient
       checkPoolConditionsAndUpdateSlippage();
@@ -1704,19 +1643,8 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
                         console.log(`Updating amount from slippage button: ${value}% → ${newSuggestedAmount}`);
                         setAmount(newSuggestedAmount.toString());
                         
-                        // Update the receive amount estimation
-                        if (suiPrice) {
-                          let estimationFactor = 0.97; // 3% reduction as baseline
-                          if (!currentDepositPaid) {
-                            estimationFactor = 0.95; // 5% reduction for security deposits
-                          }
-                          if (newSuggestedAmount < 0.2) {
-                            estimationFactor -= 0.03; // Additional 3% reduction for small amounts
-                          }
-                          
-                          const newUsdcAmount = newSuggestedAmount * suiPrice * estimationFactor;
-                          setReceiveAmount(newUsdcAmount.toFixed(6));
-                        }
+                        // Call getSwapEstimate to get the actual swap quote
+                        getSwapEstimate(newSuggestedAmount.toString());
                       }
                     }
                   }}
