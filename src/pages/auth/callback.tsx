@@ -24,13 +24,7 @@ export default function AuthCallback() {
   useEffect(() => {
     const processCallback = async () => {
       try {
-        console.log('=== CALLBACK START ===');
         console.log('Processing authentication callback');
-        console.log('Current URL:', window.location.href);
-        console.log('localStorage before processing:', {
-          redirectAfterLogin: localStorage.getItem('redirectAfterLogin'),
-          allKeys: Object.keys(localStorage)
-        });
         
         // Try to get the ID token from different places
         let idToken = null;
@@ -82,78 +76,51 @@ export default function AuthCallback() {
           throw new Error('No ID token found in callback URL');
         }
 
-        console.log('=== STARTING ZKLOGIN PROCESS ===');
         setStatus('Generating zero-knowledge proof...');
         
         // Complete the zkLogin flow
-        console.log('About to call handleCallback...');
         await handleCallback(idToken);
-        console.log('handleCallback completed successfully!');
         
         // Set progress to 100% when done
         setProgress(100);
         setStatus('Authentication successful! Redirecting...');
         
-        console.log('=== CHECKING REDIRECT URL ===');
         // Check if there's a stored redirect URL
         const redirectUrl = localStorage.getItem('redirectAfterLogin');
-        console.log('Checking for stored redirect URL after auth success:', redirectUrl);
-        console.log('Current localStorage keys after auth:', Object.keys(localStorage));
         
         // Short delay before redirecting to show completion
         setTimeout(() => {
-          console.log('=== STARTING REDIRECT PROCESS ===');
           if (redirectUrl) {
-            console.log('Found redirect URL, processing redirect to:', redirectUrl);
+            // Clear the stored redirect URL
+            localStorage.removeItem('redirectAfterLogin');
+            console.log('Redirecting to stored URL:', redirectUrl);
             
-            // Check if the redirect URL is for the same domain
+            // Check if it's a same-origin URL
             try {
-              const redirectUrlObj = new URL(redirectUrl);
-              const currentUrlObj = new URL(window.location.href);
+              const url = new URL(redirectUrl);
+              const currentOrigin = window.location.origin;
               
-              console.log('Redirect URL analysis:', {
-                redirectOrigin: redirectUrlObj.origin,
-                currentOrigin: currentUrlObj.origin,
-                isSameOrigin: redirectUrlObj.origin === currentUrlObj.origin,
-                redirectPath: redirectUrlObj.pathname + redirectUrlObj.search + redirectUrlObj.hash
-              });
-              
-              if (redirectUrlObj.origin === currentUrlObj.origin) {
-                // Same origin, use router.push for better navigation
-                const redirectPath = redirectUrlObj.pathname + redirectUrlObj.search + redirectUrlObj.hash;
-                console.log('Same origin redirect, using router.push to:', redirectPath);
-                
-                // Clear the stored redirect URL BEFORE navigating
-                localStorage.removeItem('redirectAfterLogin');
-                console.log('Cleared redirect URL from localStorage before navigation');
-                
-                console.log('Executing router.push...');
-                router.push(redirectPath);
+              if (url.origin === currentOrigin) {
+                // Same origin - use Next.js router for better handling
+                const path = url.pathname + url.search + url.hash;
+                console.log('Same origin redirect, using router.push to:', path);
+                router.push(path);
               } else {
-                // Different origin, use window.location.href
-                console.log('Different origin redirect, using window.location.href to:', redirectUrl);
-                
-                // Clear the stored redirect URL BEFORE navigating
-                localStorage.removeItem('redirectAfterLogin');
-                console.log('Cleared redirect URL from localStorage before navigation');
-                
+                // Different origin - use window.location.href
+                console.log('Different origin redirect, using window.location.href');
                 window.location.href = redirectUrl;
               }
             } catch (error) {
               console.error('Error parsing redirect URL:', error);
-              // Clear the stored redirect URL
-              localStorage.removeItem('redirectAfterLogin');
-              // Fallback to window.location.href
-              window.location.href = redirectUrl;
+              // Fallback to router.push if URL parsing fails
+              router.push('/dashboard');
             }
           } else {
-            console.log('No stored redirect URL found, redirecting to dashboard');
             // Default redirect to dashboard
             router.push('/dashboard');
           }
         }, 500);
       } catch (err) {
-        console.error('=== CALLBACK ERROR ===');
         console.error('Auth callback error:', err);
         setIsError(true);
         setStatus('Authentication failed');
