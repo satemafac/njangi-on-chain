@@ -94,27 +94,8 @@ export default function AuthCallback() {
             // Clear the stored redirect URL
             localStorage.removeItem('redirectAfterLogin');
             console.log('Redirecting to stored URL:', redirectUrl);
-            
-            // Check if it's a same-origin URL
-            try {
-              const url = new URL(redirectUrl);
-              const currentOrigin = window.location.origin;
-              
-              if (url.origin === currentOrigin) {
-                // Same origin - use Next.js router for better handling
-                const path = url.pathname + url.search + url.hash;
-                console.log('Same origin redirect, using router.push to:', path);
-                router.push(path);
-              } else {
-                // Different origin - use window.location.href
-                console.log('Different origin redirect, using window.location.href');
-                window.location.href = redirectUrl;
-              }
-            } catch (error) {
-              console.error('Error parsing redirect URL:', error);
-              // Fallback to router.push if URL parsing fails
-              router.push('/dashboard');
-            }
+            // Use window.location.href for external URLs or different origins
+            window.location.href = redirectUrl;
           } else {
             // Default redirect to dashboard
             router.push('/dashboard');
