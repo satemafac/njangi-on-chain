@@ -601,9 +601,9 @@ The Njangi On-Chain Team`;
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <main className="max-w-3xl mx-auto py-6 sm:px-6 lg:px-8">
-        <h1 className="text-2xl font-semibold text-blue-600 mb-4 px-4">Create New Njangi Circle</h1>
-        <div className="bg-white shadow rounded-lg p-6">
+      <main className="max-w-3xl mx-auto py-4 sm:py-6 px-4 sm:px-6 lg:px-8">
+        <h1 className="text-xl sm:text-2xl font-semibold text-blue-600 mb-4">Create New Njangi Circle</h1>
+        <div className="bg-white shadow rounded-lg p-4 sm:p-6">
           {currentStep === 0 ? (
             <div className="space-y-6">
               <div className="text-center">
@@ -1427,7 +1427,7 @@ The Njangi On-Chain Team`;
                 <button
                   type="button"
                   onClick={() => router.back()}
-                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200"
                 >
                   Cancel
                 </button>
@@ -1449,16 +1449,16 @@ The Njangi On-Chain Team`;
               </div>
 
               {/* Direct Invites Section */}
-              <div className="bg-white rounded-lg p-6 space-y-6">
-                <div className="flex items-center justify-between">
+              <div className="bg-white rounded-lg p-4 sm:p-6 space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-3 sm:space-y-0">
                   <h3 className="text-lg font-medium text-gray-900">Direct Invites</h3>
-                  <div className="flex items-center space-x-2">
+                  <div className="flex items-center space-x-2 bg-gray-100 rounded-lg p-1">
                     <button
                       type="button"
                       onClick={() => setInviteType('email')}
-                      className={`px-3 py-1.5 text-sm font-medium rounded-md ${
+                      className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
                         inviteType === 'email'
-                          ? 'bg-blue-100 text-blue-700'
+                          ? 'bg-white text-blue-700 shadow-sm'
                           : 'text-gray-500 hover:text-gray-700'
                       }`}
                     >
@@ -1467,9 +1467,9 @@ The Njangi On-Chain Team`;
                     <button
                       type="button"
                       onClick={() => setInviteType('phone')}
-                      className={`px-3 py-1.5 text-sm font-medium rounded-md ${
+                      className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
                         inviteType === 'phone'
-                          ? 'bg-blue-100 text-blue-700'
+                          ? 'bg-white text-blue-700 shadow-sm'
                           : 'text-gray-500 hover:text-gray-700'
                       }`}
                     >
@@ -1482,10 +1482,10 @@ The Njangi On-Chain Team`;
                 {inviteType === 'email' && (
                   <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
                     <div className="flex items-start">
-                      <svg className="h-5 w-5 text-blue-400 mr-2 mt-0.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                      <svg className="h-5 w-5 text-blue-400 mr-2 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 20 20" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
-                      <div className="text-sm text-blue-700">
+                      <div className="text-sm text-blue-700 min-w-0">
                         <p className="font-medium">Email Invites</p>
                         <p className="mt-1">Adding an email will automatically fetch your circle ID and generate the invite link. Email invites will then open in your default email client with a pre-written message containing the circle details and join link.</p>
                       </div>
@@ -1494,7 +1494,7 @@ The Njangi On-Chain Team`;
                 )}
 
                 {/* Invite Input */}
-                <div className="flex space-x-2">
+                <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">
                   <div className="flex-grow">
                     <label htmlFor="invite-input" className="sr-only">
                       {inviteType === 'email' ? 'Email address' : 'Phone number'}
@@ -1511,14 +1511,14 @@ The Njangi On-Chain Team`;
                         }
                       }}
                       placeholder={inviteType === 'email' ? 'Enter email address' : 'Enter phone number'}
-                      className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                      className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
                     />
                   </div>
                   <button
                     type="button"
                     onClick={addInviteMember}
                     disabled={!inviteInput.trim()}
-                    className={`inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white transition-colors ${
+                    className={`w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white transition-colors ${
                       inviteInput.trim()
                         ? 'bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500'
                         : 'bg-gray-400 cursor-not-allowed'
@@ -1531,7 +1531,7 @@ The Njangi On-Chain Team`;
                 {/* Invite List */}
                 {inviteMembers.length > 0 && (
                   <div className="mt-4 space-y-2">
-                    <div className="flex items-center justify-between mb-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-2 sm:space-y-0 mb-3">
                       <span className="text-sm font-medium text-gray-700">
                         Added Members ({inviteMembers.length})
                       </span>
@@ -1539,7 +1539,7 @@ The Njangi On-Chain Team`;
                         <button
                           type="button"
                           onClick={sendAllEmailInvites}
-                          className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded text-blue-700 bg-blue-100 hover:bg-blue-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                          className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded text-blue-700 bg-blue-100 hover:bg-blue-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
                         >
                           <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -1551,10 +1551,10 @@ The Njangi On-Chain Team`;
                     {inviteMembers.map((member, index) => (
                       <div
                         key={index}
-                        className="flex items-center justify-between py-2 px-3 bg-gray-50 rounded-md"
+                        className="flex items-center justify-between py-3 px-3 bg-gray-50 rounded-md"
                       >
-                        <div className="flex items-center space-x-3">
-                          <span className="text-gray-500">
+                        <div className="flex items-center space-x-3 min-w-0 flex-1">
+                          <span className="text-gray-500 flex-shrink-0">
                             {member.type === 'email' ? (
                               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -1565,19 +1565,19 @@ The Njangi On-Chain Team`;
                               </svg>
                             )}
                           </span>
-                          <span className="text-sm font-medium text-gray-900">{member.value}</span>
+                          <span className="text-sm font-medium text-gray-900 truncate">{member.value}</span>
                         </div>
-                        <div className="flex items-center space-x-2">
+                        <div className="flex items-center space-x-2 flex-shrink-0">
                           {member.type === 'email' && member.status === 'pending' && createdCircleId && (
                             <button
                               type="button"
                               onClick={() => sendEmailInvite(member.value)}
-                              className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                              className="text-xs text-blue-600 hover:text-blue-700 font-medium whitespace-nowrap"
                             >
                               Send Email
                             </button>
                           )}
-                          <span className={`text-xs ${
+                          <span className={`text-xs whitespace-nowrap ${
                             member.status === 'sent' ? 'text-green-600' :
                             member.status === 'error' ? 'text-red-600' :
                             'text-gray-500'
@@ -1589,9 +1589,9 @@ The Njangi On-Chain Team`;
                           <button
                             type="button"
                             onClick={() => removeInviteMember(index)}
-                            className="text-gray-400 hover:text-red-500"
+                            className="text-gray-400 hover:text-red-500 p-1"
                           >
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
                             </svg>
                           </button>
@@ -1603,7 +1603,7 @@ The Njangi On-Chain Team`;
               </div>
 
               {/* Shareable Link Section */}
-              <div className="bg-white rounded-lg p-6 space-y-4">
+              <div className="bg-white rounded-lg p-4 sm:p-6 space-y-4">
                 <h3 className="text-lg font-medium text-gray-900">Shareable Invite Link</h3>
                 <p className="text-sm text-gray-500">
                   {createdCircleId 
@@ -1614,14 +1614,14 @@ The Njangi On-Chain Team`;
                 
                 {/* Auto-fetch explanation - Only show when no circle ID yet */}
                 {!createdCircleId && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 sm:p-4">
                     <div className="flex items-start space-x-3">
                       <div className="flex-shrink-0">
                         <svg className="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 20 20" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
                       </div>
-                      <div className="flex-1">
+                      <div className="flex-1 min-w-0">
                         <h4 className="text-sm font-medium text-blue-800">Circle Created Successfully!</h4>
                         <p className="mt-1 text-sm text-blue-700">
                           Your circle has been created on the blockchain. When you add an email address above, we&apos;ll automatically fetch the circle ID and generate your shareable invite link.
@@ -1661,23 +1661,35 @@ The Njangi On-Chain Team`;
                 {/* Invite Link Display - Only show after circle ID is fetched */}
                 {createdCircleId && (
                   <div className="space-y-3">
+                    {/* Circle ID Display - Mobile Responsive */}
                     <div className="bg-green-50 border border-green-200 rounded-lg p-3">
-                      <div className="flex items-center space-x-2">
-                        <svg className="h-5 w-5 text-green-400" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                      <div className="flex items-start space-x-2">
+                        <svg className="h-5 w-5 text-green-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
-                        <span className="text-sm font-medium text-green-800">Circle ID: {createdCircleId}</span>
+                        <div className="min-w-0 flex-1">
+                          <span className="text-sm font-medium text-green-800 block mb-1">Circle ID:</span>
+                          <div className="bg-white rounded border p-2">
+                            <code className="text-xs text-gray-800 break-all font-mono leading-relaxed">
+                              {createdCircleId}
+                            </code>
+                          </div>
+                        </div>
                       </div>
                     </div>
                     
-                    <div className="flex space-x-2">
-                      <div className="flex-grow relative">
-                        <input
-                          type="text"
-                          readOnly
-                          value={inviteLink || ''}
-                          className="block w-full rounded-md border-gray-300 bg-gray-50 pr-24 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                        />
+                    {/* Invite Link Input - Mobile Responsive */}
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-700 block">Invite Link:</label>
+                      <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">
+                        <div className="flex-grow">
+                          <input
+                            type="text"
+                            readOnly
+                            value={inviteLink || ''}
+                            className="block w-full rounded-md border-gray-300 bg-gray-50 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                          />
+                        </div>
                         <button
                           type="button"
                           onClick={() => {
@@ -1691,7 +1703,7 @@ The Njangi On-Chain Team`;
                                 });
                             }
                           }}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1 text-sm font-medium text-blue-600 hover:text-blue-700 cursor-pointer transition-colors"
+                          className="w-full sm:w-auto px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
                         >
                           Copy Link
                         </button>
@@ -1702,13 +1714,14 @@ The Njangi On-Chain Team`;
                 
                 {/* Show placeholder when no circle ID yet */}
                 {!createdCircleId && (
-                  <div className="flex space-x-2">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700 block">Invite Link:</label>
                     <div className="flex-grow">
                       <input
                         type="text"
                         readOnly
                         value="Add an email address above to automatically generate your invite link..."
-                        className="block w-full rounded-md border-gray-300 bg-gray-100 text-gray-500 shadow-sm"
+                        className="block w-full rounded-md border-gray-300 bg-gray-100 text-gray-500 shadow-sm text-sm"
                       />
                     </div>
                   </div>
@@ -1716,21 +1729,21 @@ The Njangi On-Chain Team`;
               </div>
 
               {/* Action Buttons */}
-              <div className="flex justify-between pt-6">
+              <div className="flex flex-col sm:flex-row justify-between pt-6 space-y-3 sm:space-y-0 sm:space-x-3">
                 <Tooltip.Provider>
                   <Tooltip.Root>
                     <Tooltip.Trigger asChild>
                       <button
                         type="button"
                         disabled
-                        className="px-4 py-2 border border-gray-200 rounded-md shadow-sm text-sm font-medium text-gray-400 bg-gray-50 cursor-not-allowed"
+                        className="w-full sm:w-auto px-4 py-2 border border-gray-200 rounded-md shadow-sm text-sm font-medium text-gray-400 bg-gray-50 cursor-not-allowed"
                       >
                         Back
                       </button>
                     </Tooltip.Trigger>
                     <Tooltip.Portal>
                       <Tooltip.Content
-                        className="bg-gray-900 text-white px-3 py-2 rounded text-sm"
+                        className="bg-gray-900 text-white px-3 py-2 rounded text-sm max-w-xs"
                         sideOffset={5}
                       >
                         <p>Circle already created. Going back is not allowed to prevent duplicate creation.</p>
@@ -1754,7 +1767,7 @@ The Njangi On-Chain Team`;
                       router.push('/dashboard');
                     }, 1000);
                   }}
-                  className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  className="w-full sm:w-auto px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                 >
                   {inviteMembers.filter(member => member.type === 'email' && member.status === 'pending').length > 0 && createdCircleId
                     ? 'Send Email Invites & Finish'
