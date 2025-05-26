@@ -1533,7 +1533,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
   };
 
   return (
-    <div className="bg-[#121212] rounded-xl p-4 text-white">
+    <div className="bg-[#121212] rounded-xl p-3 sm:p-4 text-white">
       {/* Slippage Error Modal */}
       <ConfirmationModal
         isOpen={false}
@@ -1567,15 +1567,15 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
       />
 
       {/* Header section */}
-      <div className="flex justify-between items-center mb-4">
-        <div className="flex space-x-6">
-          <button className="text-white border-b-2 border-white pb-1 font-medium">Swap</button>
+      <div className="flex justify-between items-center mb-3 sm:mb-4">
+        <div className="flex space-x-4 sm:space-x-6">
+          <button className="text-white border-b-2 border-white pb-1 font-medium text-base sm:text-lg">Swap</button>
         </div>
         <div className="flex items-center space-x-2">
           <div className={`${
             slippageChanged ? 'bg-blue-900/50 border border-blue-500/50' : 'bg-[#232323]'
-          } px-3 py-1 rounded-md flex items-center transition-colors`}>
-            <span className={slippageChanged ? 'text-blue-400 font-medium' : ''}>
+          } px-2 sm:px-3 py-1.5 sm:py-1 rounded-md flex items-center transition-colors`}>
+            <span className={`text-sm sm:text-base ${slippageChanged ? 'text-blue-400 font-medium' : ''}`}>
               {slippage}%
               {slippageChanged && 
                 <span className="ml-1 text-xs px-1 py-0.5 bg-blue-800 rounded text-white">custom</span>
@@ -1583,24 +1583,24 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
             </span>
             <button 
               onClick={() => setShowSettings(!showSettings)}
-              className={`ml-2 ${slippageChanged ? 'text-blue-400' : ''}`}
+              className={`ml-2 p-1 ${slippageChanged ? 'text-blue-400' : ''}`}
               title="Adjust slippage tolerance"
             >
-              <Settings size={16} />
+              <Settings size={18} className="sm:w-4 sm:h-4" />
             </button>
           </div>
         </div>
       </div>
 
       {/* Add this after the header section */}
-      <div className="flex justify-between items-center mb-3 bg-[#232323] px-3 py-2 rounded-lg text-sm">
-        <div className="flex items-center">
-          <span className="text-gray-400 mr-2">SUI Price:</span>
-          <span className="font-medium text-white">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-3 bg-[#232323] px-3 py-2.5 sm:py-2 rounded-lg text-sm sm:text-sm space-y-2 sm:space-y-0">
+        <div className="flex items-center justify-center sm:justify-start">
+          <span className="text-gray-400 mr-2 text-sm sm:text-sm">SUI Price:</span>
+          <span className="font-medium text-white text-base sm:text-sm">
             {suiPrice ? `$${suiPrice.toFixed(2)}` : 'Loading...'}
           </span>
           {priceLastUpdated && (
-            <span className="ml-2 text-xs text-gray-500">
+            <span className="ml-2 text-xs text-gray-500 hidden sm:inline">
               {`updated ${Math.floor((new Date().getTime() - priceLastUpdated.getTime()) / 1000 / 60)}m ago`}
             </span>
           )}
@@ -1608,9 +1608,9 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
         <button 
           onClick={refreshPrice} 
           disabled={isPriceLoading}
-          className={`flex items-center space-x-1 text-xs bg-[#333333] hover:bg-[#444444] px-2 py-1 rounded-md ${isPriceLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+          className={`flex items-center justify-center space-x-1 text-xs sm:text-xs bg-[#333333] hover:bg-[#444444] px-3 py-2 sm:px-2 sm:py-1 rounded-md ${isPriceLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
         >
-          <RefreshCw size={12} className={isPriceLoading ? 'animate-spin' : ''} />
+          <RefreshCw size={14} className={`sm:w-3 sm:h-3 ${isPriceLoading ? 'animate-spin' : ''}`} />
           <span>Refresh</span>
         </button>
       </div>
@@ -1735,37 +1735,37 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
 
           {/* Required amount info */}
           {requiredAmount > 0 && (
-            <div className="bg-[#1A1A1A] rounded-lg p-3 mb-3 text-sm">
-              <div className="flex justify-between items-center">
-                <span className="text-gray-400">Required {paymentType}:</span>
-                <span>{requiredAmount} SUI</span>
+            <div className="bg-[#1A1A1A] rounded-lg p-3 sm:p-3 mb-3 text-sm">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-2 sm:space-y-0">
+                <span className="text-gray-400 text-sm sm:text-sm">Required {paymentType}:</span>
+                <span className="text-base sm:text-sm font-medium">{requiredAmount} SUI</span>
               </div>
               {suggestedAmount && (
-                <div className="flex justify-between items-center mt-2">
-                  <div className="text-gray-400">Suggested amount (with {slippage}% slippage + gas):</div>
-                  <div className="flex items-center">
-                    <div className="mr-2 text-white">{suggestedAmount.toFixed(8)} SUI</div>
-                    <button
-                      onClick={handleSuggestedAmountClick}
-                      disabled={disabled || processing || depositProcessing}
-                      className={`px-4 py-2 rounded-md text-sm font-medium transition-colors duration-200 flex items-center ${
-                        disabled || processing || depositProcessing
-                          ? 'bg-gray-500 text-gray-300 cursor-not-allowed'
-                          : 'bg-blue-600 hover:bg-blue-700 text-white'
-                      }`}
-                    >
-                      Use Suggested Amount ({suggestedAmount.toFixed(8)} SUI)
-                    </button>
+                <div className="flex flex-col space-y-3 mt-3 sm:mt-2">
+                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-1 sm:space-y-0">
+                    <div className="text-gray-400 text-sm">Suggested amount (with {slippage}% slippage + gas):</div>
+                    <div className="text-base sm:text-sm font-medium text-white">{suggestedAmount.toFixed(8)} SUI</div>
                   </div>
+                  <button
+                    onClick={handleSuggestedAmountClick}
+                    disabled={disabled || processing || depositProcessing}
+                    className={`w-full sm:w-auto px-4 py-3 sm:py-2 rounded-md text-sm font-medium transition-colors duration-200 flex items-center justify-center ${
+                      disabled || processing || depositProcessing
+                        ? 'bg-gray-500 text-gray-300 cursor-not-allowed'
+                        : 'bg-blue-600 hover:bg-blue-700 text-white'
+                    }`}
+                  >
+                    Use Suggested Amount ({suggestedAmount.toFixed(8)} SUI)
+                  </button>
                 </div>
               )}
             </div>
           )}
 
           {/* You Pay section */}
-          <div className="bg-[#1A1A1A] rounded-lg p-4 mb-2">
-            <div className="flex justify-between text-gray-400 mb-1">
-              <span>You Pay</span>
+          <div className="bg-[#1A1A1A] rounded-lg p-3 sm:p-4 mb-2">
+            <div className="flex justify-between text-gray-400 mb-2 sm:mb-1">
+              <span className="text-sm sm:text-sm">You Pay</span>
               {/* Add auto-calculated indicator */}
               {suggestedAmount && Math.abs(parseFloat(amount || '0') - suggestedAmount) / suggestedAmount < 0.01 && (
                 <div className="flex items-center text-xs">
@@ -1774,35 +1774,39 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
                 </div>
               )}
             </div>
-            <div className="flex justify-between items-center">
-              <div className="w-full px-4 py-3 bg-[#1B1B1B] rounded-lg flex items-center mt-1 relative">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-3 sm:space-y-0">
+              <div className="w-full sm:flex-1 px-3 sm:px-4 py-4 sm:py-3 bg-[#1B1B1B] rounded-lg flex items-center relative">
                 <input
                   id="amount-input"
                   type="number"
                   value={amount}
                   onChange={handleAmountChange}
                   placeholder="0.0"
-                  className="bg-transparent text-2xl outline-none w-full"
+                  className={`bg-transparent text-xl sm:text-2xl outline-none w-full ${
+                    suggestedAmount && Math.abs(parseFloat(amount || '0') - suggestedAmount) / suggestedAmount < 0.01 
+                      ? 'pr-20 sm:pr-24' // Add right padding when indicator is shown
+                      : ''
+                  }`}
                   disabled={disabled || processing || depositProcessing}
                 />
                 {/* Add subtle indicator inside input when auto-calculated */}
                 {suggestedAmount && Math.abs(parseFloat(amount || '0') - suggestedAmount) / suggestedAmount < 0.01 && (
-                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
-                    <div className="bg-green-500/20 text-green-400 text-xs px-2 py-1 rounded-full border border-green-500/30">
+                  <div className="absolute right-2 sm:right-3 top-1/2 transform -translate-y-1/2 flex-shrink-0">
+                    <div className="bg-green-500/20 text-green-400 text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-full border border-green-500/30 whitespace-nowrap">
                       ✓ Optimized
                     </div>
                   </div>
                 )}
               </div>
-              <div className="flex flex-col items-end">
-                <div className="flex items-center bg-[#333333] py-1 px-3 rounded-lg mb-1">
-                  <span className="font-medium">SUI</span>
+              <div className="flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-start space-x-3 sm:space-x-0 sm:space-y-2 sm:ml-3">
+                <div className="flex items-center bg-[#333333] py-2 sm:py-1 px-4 sm:px-3 rounded-lg">
+                  <span className="font-medium text-sm sm:text-sm">SUI</span>
                 </div>
-                <div className="flex space-x-1">
+                <div className="flex space-x-2 sm:space-x-1">
                   <button 
                     onClick={handleHalfClick}
                     disabled={disabled || processing || depositProcessing}
-                    className={`text-xs px-2 py-1 rounded transition-colors ${
+                    className={`text-xs px-3 py-2 sm:px-2 sm:py-1 rounded transition-colors ${
                       disabled || processing || depositProcessing
                         ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
                         : 'bg-[#2D2D2D] hover:bg-[#444444] text-white'
@@ -1813,7 +1817,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
                   <button 
                     onClick={handleMaxClick}
                     disabled={disabled || processing || depositProcessing}
-                    className={`text-xs px-2 py-1 rounded transition-colors ${
+                    className={`text-xs px-3 py-2 sm:px-2 sm:py-1 rounded transition-colors ${
                       disabled || processing || depositProcessing
                         ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
                         : 'bg-[#2D2D2D] hover:bg-[#444444] text-white'
@@ -1835,19 +1839,19 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
           </div>
 
           {/* You Receive section */}
-          <div className="bg-[#1A1A1A] rounded-lg p-4 mt-2">
-            <div className="flex justify-between text-gray-400 mb-1">
-              <span>You Receive</span>
+          <div className="bg-[#1A1A1A] rounded-lg p-3 sm:p-4 mt-2">
+            <div className="flex justify-between text-gray-400 mb-2 sm:mb-1">
+              <span className="text-sm sm:text-sm">You Receive</span>
             </div>
             <div className="flex justify-between items-center">
               <input
                 type="text"
                 value={receiveAmount}
                 readOnly
-                className="bg-transparent text-2xl outline-none w-full"
+                className="bg-transparent text-xl sm:text-2xl outline-none w-full"
               />
-              <div className="flex items-center bg-[#333333] py-1 px-3 rounded-lg">
-                <span className="font-medium">USDC</span>
+              <div className="flex items-center bg-[#333333] py-2 sm:py-1 px-4 sm:px-3 rounded-lg ml-3">
+                <span className="font-medium text-sm sm:text-sm">USDC</span>
               </div>
             </div>
           </div>
@@ -1855,26 +1859,26 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
           {/* Price details */}
           {swapQuote && (
             <div className="mt-4 bg-transparent px-1">
-              <div className="flex justify-between items-center text-sm text-gray-400 mb-1">
+              <div className="flex justify-between items-center text-sm sm:text-sm text-gray-400 mb-2 sm:mb-1">
                 <span>Rate</span>
-                <span>1 SUI = {effectiveRate ? effectiveRate.toFixed(4) : '0.00'} USDC</span>
+                <span className="text-white font-medium">1 SUI = {effectiveRate ? effectiveRate.toFixed(4) : '0.00'} USDC</span>
               </div>
-              <div className="flex justify-between items-center text-sm text-gray-400">
+              <div className="flex justify-between items-center text-sm sm:text-sm text-gray-400 mb-2 sm:mb-0">
                 <span>Price Impact</span>
                 {renderPriceImpact()}
               </div>
-              <div className="flex justify-between items-center text-sm text-gray-400 mt-1">
+              <div className="flex justify-between items-center text-sm sm:text-sm text-gray-400 mt-2 sm:mt-1">
                 <span>Network Fee</span>
                 <span>~{ESTIMATED_GAS_FEE.toFixed(6)} SUI</span>
               </div>
-              <div className="flex justify-between items-center text-sm text-gray-400 mt-1">
+              <div className="flex justify-between items-center text-sm sm:text-sm text-gray-400 mt-2 sm:mt-1">
                 <span>Swap Provider</span>
                 <span className="text-blue-400">Cetus</span>
               </div>
               {swapQuote.priceImpact > 5 && (
-                <div className="mt-2 bg-red-900/30 border border-red-600/30 rounded-md p-2 text-xs text-red-300">
+                <div className="mt-3 sm:mt-2 bg-red-900/30 border border-red-600/30 rounded-md p-3 sm:p-2 text-xs text-red-300">
                   <div className="flex items-start">
-                    <AlertCircle size={12} className="mr-1 mt-0.5 flex-shrink-0 text-red-400" />
+                    <AlertCircle size={14} className="mr-2 sm:mr-1 mt-0.5 flex-shrink-0 text-red-400" />
                     <span>
                       High price impact detected ({swapQuote.priceImpact.toFixed(2)}%). This trade may result in significant value loss 
                       due to low liquidity. Consider using a higher slippage tolerance or trading a smaller amount.
@@ -1924,7 +1928,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
           paymentStatus === 'underpaid' ||
           transactionStep === 'complete'
         }
-        className={`w-full mt-4 py-3 rounded-lg font-medium text-white transition-all ${
+        className={`w-full mt-4 py-4 sm:py-3 rounded-lg font-medium text-white text-base sm:text-sm transition-all ${
           disabled || processing || depositProcessing || !amount || parseFloat(amount) <= 0 || paymentStatus === 'underpaid' || transactionStep === 'complete'
             ? 'bg-gray-400 cursor-not-allowed'
             : 'bg-blue-600 hover:bg-blue-700'
