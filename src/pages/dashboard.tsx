@@ -9,7 +9,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import * as Dialog from '@radix-ui/react-dialog';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
-import { Eye, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle } from 'lucide-react';
+import { Eye, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink } from 'lucide-react';
 import { PACKAGE_ID } from '../services/circle-service';
 // Use alias path for the modal import
 import ConfirmationModal from '@/components/ConfirmationModal';
@@ -227,6 +227,36 @@ interface TransactionInputData {
   [key: string]: unknown;
 }
 
+// Add transfer-related interfaces
+interface TransferFormData {
+  recipientAddress: string;
+  amount: string;
+  selectedToken: string;
+  memo?: string;
+}
+
+interface TransferValidation {
+  isValid: boolean;
+  errors: {
+    recipientAddress?: string;
+    amount?: string;
+    balance?: string;
+    general?: string;
+  };
+  warnings: {
+    highValue?: string;
+    newAddress?: string;
+    testnet?: string;
+  };
+}
+
+interface RecentContact {
+  address: string;
+  name?: string;
+  lastUsed: number;
+  frequency: number;
+}
+
 export default function Dashboard() {
   const router = useRouter();
   const { isAuthenticated, userAddress, account, deleteCircle: authDeleteCircle } = useAuth();
@@ -258,6 +288,25 @@ export default function Dashboard() {
     confirmText?: string;
     confirmButtonVariant?: 'primary' | 'danger' | 'warning';
   } | null>(null);
+
+  // Add transfer-related state
+  const [isTransferDialogOpen, setIsTransferDialogOpen] = useState(false);
+  const [transferForm, setTransferForm] = useState<TransferFormData>({
+    recipientAddress: '',
+    amount: '',
+    selectedToken: 'SUI',
+    memo: ''
+  });
+  const [transferValidation, setTransferValidation] = useState<TransferValidation>({
+    isValid: false,
+    errors: {},
+    warnings: {}
+  });
+  const [isTransferring, setIsTransferring] = useState(false);
+  const [recentContacts, setRecentContacts] = useState<RecentContact[]>([]);
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  const [transferStep, setTransferStep] = useState<'form' | 'review' | 'confirm' | 'success'>('form');
+  const [transferResult, setTransferResult] = useState<{ digest?: string; error?: string } | null>(null);
 
   // Update the script loading in useEffect for MoonPay SDK
   useEffect(() => {
@@ -1730,6 +1779,233 @@ export default function Dashboard() {
     sessionStorage.setItem('testnetBannerDismissed', 'true');
   };
 
+  // Load recent contacts from localStorage
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('recentContacts');
+      if (stored) {
+        const contacts = JSON.parse(stored) as RecentContact[];
+        // Sort by frequency and last used, limit to 10
+        const sortedContacts = contacts
+          .sort((a, b) => b.frequency - a.frequency || b.lastUsed - a.lastUsed)
+          .slice(0, 10);
+        setRecentContacts(sortedContacts);
+      }
+    } catch (error) {
+      console.error('Error loading recent contacts:', error);
+    }
+  }, []);
+
+  // Validate SUI address format
+  const isValidSuiAddress = (address: string): boolean => {
+    if (!address) return false;
+    
+    // Remove 0x prefix if present
+    const cleanAddress = address.startsWith('0x') ? address.slice(2) : address;
+    
+    // Check if it's a valid hex string of correct length
+    const hexRegex = /^[0-9a-fA-F]+$/;
+    return hexRegex.test(cleanAddress) && (cleanAddress.length === 64 || cleanAddress.length === 40);
+  };
+
+  // Validate transfer form
+  const validateTransferForm = (formData: TransferFormData): TransferValidation => {
+    const errors: TransferValidation['errors'] = {};
+    const warnings: TransferValidation['warnings'] = {};
+
+    // Validate recipient address
+    if (!formData.recipientAddress.trim()) {
+      errors.recipientAddress = 'Recipient address is required';
+    } else if (!isValidSuiAddress(formData.recipientAddress)) {
+      errors.recipientAddress = 'Invalid SUI address format';
+    } else if (formData.recipientAddress.toLowerCase() === userAddress?.toLowerCase()) {
+      errors.recipientAddress = 'Cannot send to your own address';
+    }
+
+    // Validate amount
+    if (!formData.amount.trim()) {
+      errors.amount = 'Amount is required';
+    } else {
+      const amount = parseFloat(formData.amount);
+      if (isNaN(amount) || amount <= 0) {
+        errors.amount = 'Amount must be a positive number';
+      } else {
+        // Check balance
+        const selectedCoin = allCoins.find(coin => coin.symbol === formData.selectedToken);
+        if (selectedCoin) {
+          const decimals = selectedCoin.symbol.toLowerCase() === 'usdc' ? 1000000 : 1000000000;
+          const availableBalance = Number(selectedCoin.balance) / decimals;
+          
+          if (amount > availableBalance) {
+            errors.balance = `Insufficient balance. Available: ${availableBalance.toFixed(6)} ${formData.selectedToken}`;
+          } else if (formData.selectedToken === 'SUI' && amount > availableBalance - 0.01) {
+            errors.balance = 'Please leave at least 0.01 SUI for gas fees';
+          }
+
+          // High value warning (over $1000 USD equivalent)
+          if (formData.selectedToken === 'SUI' && suiPrice && amount * suiPrice > 1000) {
+            warnings.highValue = `High value transfer: ~$${(amount * suiPrice).toFixed(2)} USD`;
+          } else if (formData.selectedToken === 'USDC' && amount > 1000) {
+            warnings.highValue = `High value transfer: $${amount.toFixed(2)} USD`;
+          }
+        }
+      }
+    }
+
+    // Check if address is new (not in recent contacts)
+    if (formData.recipientAddress && !recentContacts.some(contact => 
+      contact.address.toLowerCase() === formData.recipientAddress.toLowerCase()
+    )) {
+      warnings.newAddress = 'This is a new address. Please double-check before sending.';
+    }
+
+    // Testnet warning
+    warnings.testnet = 'You are on Sui Testnet. These are test tokens with no real value.';
+
+    return {
+      isValid: Object.keys(errors).length === 0,
+      errors,
+      warnings
+    };
+  };
+
+  // Update validation when form changes
+  useEffect(() => {
+    const validation = validateTransferForm(transferForm);
+    setTransferValidation(validation);
+  }, [transferForm, allCoins, suiPrice, userAddress, recentContacts]);
+
+  // Handle transfer form submission
+  const handleTransferSubmit = async () => {
+    if (!transferValidation.isValid || !userAddress) return;
+
+    setIsTransferring(true);
+    setTransferStep('confirm');
+
+    try {
+      // Prepare transaction data
+      const amount = parseFloat(transferForm.amount);
+      const selectedCoin = allCoins.find(coin => coin.symbol === transferForm.selectedToken);
+      
+      if (!selectedCoin) {
+        throw new Error('Selected token not found');
+      }
+
+      const decimals = selectedCoin.symbol.toLowerCase() === 'usdc' ? 1000000 : 1000000000;
+      const amountInSmallestUnit = Math.floor(amount * decimals);
+
+      // Normalize recipient address
+      let recipientAddress = transferForm.recipientAddress.trim();
+      if (!recipientAddress.startsWith('0x')) {
+        recipientAddress = '0x' + recipientAddress;
+      }
+
+      // Call the transfer API
+      const response = await fetch('/api/transfer-tokens', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          recipientAddress,
+          amount: amountInSmallestUnit.toString(),
+          coinType: selectedCoin.coinType,
+          memo: transferForm.memo || undefined,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        setTransferResult({ digest: result.digest });
+        setTransferStep('success');
+
+        // Add to recent contacts
+        const newContact: RecentContact = {
+          address: recipientAddress,
+          lastUsed: Date.now(),
+          frequency: 1
+        };
+
+        const updatedContacts = [...recentContacts];
+        const existingIndex = updatedContacts.findIndex(c => 
+          c.address.toLowerCase() === recipientAddress.toLowerCase()
+        );
+
+        if (existingIndex >= 0) {
+          updatedContacts[existingIndex].frequency += 1;
+          updatedContacts[existingIndex].lastUsed = Date.now();
+        } else {
+          updatedContacts.push(newContact);
+        }
+
+        setRecentContacts(updatedContacts.slice(0, 10));
+        localStorage.setItem('recentContacts', JSON.stringify(updatedContacts.slice(0, 10)));
+
+        // Refresh balances after successful transfer
+        setTimeout(() => {
+          window.location.reload();
+        }, 3000);
+
+        toast.success('Transfer completed successfully!');
+      } else {
+        throw new Error(result.error || 'Transfer failed');
+      }
+    } catch (error) {
+      console.error('Transfer error:', error);
+      setTransferResult({ error: error instanceof Error ? error.message : 'Transfer failed' });
+      setTransferStep('form');
+      toast.error(error instanceof Error ? error.message : 'Transfer failed');
+    } finally {
+      setIsTransferring(false);
+    }
+  };
+
+  // Reset transfer dialog
+  const resetTransferDialog = () => {
+    setTransferForm({
+      recipientAddress: '',
+      amount: '',
+      selectedToken: 'SUI',
+      memo: ''
+    });
+    setTransferStep('form');
+    setTransferResult(null);
+    setShowAdvancedOptions(false);
+    setIsTransferDialogOpen(false);
+  };
+
+  // Quick amount buttons
+  const getQuickAmounts = (tokenSymbol: string) => {
+    if (tokenSymbol === 'SUI') {
+      return ['0.1', '1', '5', '10'];
+    } else if (tokenSymbol === 'USDC') {
+      return ['10', '50', '100', '500'];
+    }
+    return ['0.1', '1', '10', '100'];
+  };
+
+  // Set quick amount
+  const setQuickAmount = (amount: string) => {
+    setTransferForm(prev => ({ ...prev, amount }));
+  };
+
+  // Set max amount
+  const setMaxAmount = () => {
+    const selectedCoin = allCoins.find(coin => coin.symbol === transferForm.selectedToken);
+    if (selectedCoin) {
+      const decimals = selectedCoin.symbol.toLowerCase() === 'usdc' ? 1000000 : 1000000000;
+      let maxAmount = Number(selectedCoin.balance) / decimals;
+      
+      // Reserve gas for SUI transfers
+      if (transferForm.selectedToken === 'SUI') {
+        maxAmount = Math.max(0, maxAmount - 0.01);
+      }
+      
+      setTransferForm(prev => ({ ...prev, amount: maxAmount.toString() }));
+    }
+  };
+
   if (!isAuthenticated || !account) {
     return null;
   }
@@ -1871,6 +2147,26 @@ export default function Dashboard() {
                 <div className="p-6">
                   <p className="text-sm font-medium text-gray-500">Balance</p>
                   <p className="mt-1 text-2xl font-semibold text-blue-600">{Number(balance) / 1000000000} SUI</p>
+                  
+                  {/* Add Send button */}
+                  <div className="mt-3 flex space-x-2">
+                    <button
+                      onClick={() => setIsTransferDialogOpen(true)}
+                      className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
+                    >
+                      <Send className="w-4 h-4 mr-1.5" />
+                      Send
+                    </button>
+                    <a
+                      href={`https://faucet.sui.io/?address=${userAddress || ''}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
+                    >
+                      <ExternalLink className="w-4 h-4 mr-1.5" />
+                      Faucet
+                    </a>
+                  </div>
                   
                   {/* Display all coins */}
                   {allCoins.length > 1 && (
@@ -2772,6 +3068,422 @@ export default function Dashboard() {
           confirmButtonVariant={confirmModalProps.confirmButtonVariant}
         />
       )}
+
+      {/* Transfer Dialog */}
+      <Dialog.Root open={isTransferDialogOpen} onOpenChange={resetTransferDialog}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto focus:outline-none">
+            
+            {/* Header */}
+            <div className="flex justify-between items-center p-6 border-b border-gray-200">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-blue-100 rounded-lg">
+                  <Send className="w-5 h-5 text-blue-600" />
+                </div>
+                <div>
+                  <Dialog.Title className="text-lg font-semibold text-gray-900">
+                    Send Tokens
+                  </Dialog.Title>
+                  <p className="text-sm text-gray-500">
+                    {transferStep === 'form' && 'Enter transfer details'}
+                    {transferStep === 'review' && 'Review your transfer'}
+                    {transferStep === 'confirm' && 'Confirming transaction...'}
+                    {transferStep === 'success' && 'Transfer completed!'}
+                  </p>
+                </div>
+              </div>
+              <Dialog.Close className="text-gray-400 hover:text-gray-500 p-1 rounded-full hover:bg-gray-100 transition-colors">
+                <X className="w-5 h-5" />
+              </Dialog.Close>
+            </div>
+
+            {/* Progress Steps */}
+            <div className="px-6 py-4 bg-gray-50">
+              <div className="flex items-center justify-between">
+                {['form', 'review', 'confirm', 'success'].map((step, index) => (
+                  <div key={step} className="flex items-center">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
+                      transferStep === step 
+                        ? 'bg-blue-600 text-white' 
+                        : ['review', 'confirm', 'success'].includes(transferStep) && index < ['form', 'review', 'confirm', 'success'].indexOf(transferStep)
+                          ? 'bg-green-500 text-white'
+                          : 'bg-gray-200 text-gray-500'
+                    }`}>
+                      {['review', 'confirm', 'success'].includes(transferStep) && index < ['form', 'review', 'confirm', 'success'].indexOf(transferStep) 
+                        ? <CheckCircle className="w-4 h-4" />
+                        : index + 1
+                      }
+                    </div>
+                    {index < 3 && (
+                      <div className={`w-12 h-0.5 mx-2 ${
+                        ['review', 'confirm', 'success'].includes(transferStep) && index < ['form', 'review', 'confirm', 'success'].indexOf(transferStep)
+                          ? 'bg-green-500'
+                          : 'bg-gray-200'
+                      }`} />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Form Step */}
+            {transferStep === 'form' && (
+              <div className="p-6 space-y-6">
+                {/* Token Selection */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Select Token
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {allCoins.map((coin) => {
+                      const decimals = coin.symbol.toLowerCase() === 'usdc' ? 1000000 : 1000000000;
+                      const balance = Number(coin.balance) / decimals;
+                      return (
+                        <button
+                          key={coin.symbol}
+                          onClick={() => setTransferForm(prev => ({ ...prev, selectedToken: coin.symbol }))}
+                          className={`p-3 rounded-lg border-2 transition-all ${
+                            transferForm.selectedToken === coin.symbol
+                              ? 'border-blue-500 bg-blue-50'
+                              : 'border-gray-200 hover:border-gray-300'
+                          }`}
+                        >
+                          <div className="flex items-center space-x-2">
+                            <TokenIcon symbol={coin.symbol} />
+                            <div className="text-left">
+                              <div className="font-medium text-sm">{coin.symbol}</div>
+                              <div className="text-xs text-gray-500">
+                                {balance.toFixed(coin.symbol === 'SUI' ? 4 : 2)}
+                              </div>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Recipient Address */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Recipient Address
+                  </label>
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      value={transferForm.recipientAddress}
+                      onChange={(e) => setTransferForm(prev => ({ ...prev, recipientAddress: e.target.value }))}
+                      placeholder="0x... or paste full address"
+                      className={`w-full px-3 py-2 border rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                        transferValidation.errors.recipientAddress 
+                          ? 'border-red-300 focus:border-red-500 focus:ring-red-500' 
+                          : 'border-gray-300 focus:border-blue-500'
+                      }`}
+                    />
+                    {transferValidation.errors.recipientAddress && (
+                      <p className="text-sm text-red-600 flex items-center">
+                        <AlertCircle className="w-4 h-4 mr-1" />
+                        {transferValidation.errors.recipientAddress}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Recent Contacts */}
+                  {recentContacts.length > 0 && (
+                    <div className="mt-3">
+                      <p className="text-xs font-medium text-gray-500 mb-2">Recent Contacts</p>
+                      <div className="flex flex-wrap gap-1">
+                        {recentContacts.slice(0, 3).map((contact) => (
+                          <button
+                            key={contact.address}
+                            onClick={() => setTransferForm(prev => ({ ...prev, recipientAddress: contact.address }))}
+                            className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+                          >
+                            {contact.name || `${contact.address.slice(0, 6)}...${contact.address.slice(-4)}`}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Amount */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Amount
+                  </label>
+                  <div className="space-y-2">
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="any"
+                        value={transferForm.amount}
+                        onChange={(e) => setTransferForm(prev => ({ ...prev, amount: e.target.value }))}
+                        placeholder="0.00"
+                        className={`w-full px-3 py-2 pr-16 border rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                          transferValidation.errors.amount || transferValidation.errors.balance
+                            ? 'border-red-300 focus:border-red-500 focus:ring-red-500' 
+                            : 'border-gray-300 focus:border-blue-500'
+                        }`}
+                      />
+                      <div className="absolute inset-y-0 right-0 flex items-center pr-3">
+                        <span className="text-sm text-gray-500">{transferForm.selectedToken}</span>
+                      </div>
+                    </div>
+                    
+                    {/* Quick Amount Buttons */}
+                    <div className="flex space-x-2">
+                      {getQuickAmounts(transferForm.selectedToken).map((amount) => (
+                        <button
+                          key={amount}
+                          onClick={() => setQuickAmount(amount)}
+                          className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded transition-colors"
+                        >
+                          {amount}
+                        </button>
+                      ))}
+                      <button
+                        onClick={setMaxAmount}
+                        className="px-2 py-1 text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 rounded transition-colors"
+                      >
+                        Max
+                      </button>
+                    </div>
+
+                    {/* USD Value Display */}
+                    {transferForm.amount && !isNaN(parseFloat(transferForm.amount)) && (
+                      <div className="text-sm text-gray-500">
+                        {transferForm.selectedToken === 'SUI' && suiPrice && (
+                          <>≈ ${(parseFloat(transferForm.amount) * suiPrice).toFixed(2)} USD</>
+                        )}
+                        {transferForm.selectedToken === 'USDC' && (
+                          <>≈ ${parseFloat(transferForm.amount).toFixed(2)} USD</>
+                        )}
+                      </div>
+                    )}
+
+                    {(transferValidation.errors.amount || transferValidation.errors.balance) && (
+                      <p className="text-sm text-red-600 flex items-center">
+                        <AlertCircle className="w-4 h-4 mr-1" />
+                        {transferValidation.errors.amount || transferValidation.errors.balance}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Advanced Options */}
+                <div>
+                  <button
+                    onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+                    className="flex items-center text-sm text-blue-600 hover:text-blue-700"
+                  >
+                    Advanced Options
+                    <svg className={`w-4 h-4 ml-1 transition-transform ${showAdvancedOptions ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  
+                  {showAdvancedOptions && (
+                    <div className="mt-3 space-y-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Memo (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          value={transferForm.memo || ''}
+                          onChange={(e) => setTransferForm(prev => ({ ...prev, memo: e.target.value }))}
+                          placeholder="Add a note for this transfer"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          maxLength={100}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Warnings */}
+                {Object.keys(transferValidation.warnings).length > 0 && (
+                  <div className="space-y-2">
+                    {Object.entries(transferValidation.warnings).map(([key, warning]) => (
+                      <div key={key} className="flex items-start p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                        <Shield className="w-4 h-4 text-amber-600 mr-2 mt-0.5 flex-shrink-0" />
+                        <p className="text-sm text-amber-800">{warning}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Action Buttons */}
+                <div className="flex space-x-3 pt-4">
+                  <button
+                    onClick={resetTransferDialog}
+                    className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => setTransferStep('review')}
+                    disabled={!transferValidation.isValid}
+                    className="flex-1 px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Review Transfer
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Review Step */}
+            {transferStep === 'review' && (
+              <div className="p-6 space-y-6">
+                <div className="bg-gray-50 rounded-lg p-4 space-y-3">
+                  <h3 className="font-medium text-gray-900">Transfer Summary</h3>
+                  
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">From:</span>
+                      <span className="font-mono">{shortenAddress(userAddress)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">To:</span>
+                      <span className="font-mono">{shortenAddress(transferForm.recipientAddress)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Amount:</span>
+                      <span className="font-medium">{transferForm.amount} {transferForm.selectedToken}</span>
+                    </div>
+                    {transferForm.selectedToken === 'SUI' && suiPrice && (
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">USD Value:</span>
+                        <span>≈ ${(parseFloat(transferForm.amount) * suiPrice).toFixed(2)}</span>
+                      </div>
+                    )}
+                    {transferForm.selectedToken === 'USDC' && (
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">USD Value:</span>
+                        <span>≈ ${parseFloat(transferForm.amount).toFixed(2)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Network:</span>
+                      <span>Sui Testnet</span>
+                    </div>
+                    {transferForm.memo && (
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">Memo:</span>
+                        <span className="text-right max-w-32 truncate">{transferForm.memo}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Security Checklist */}
+                <div className="bg-blue-50 rounded-lg p-4">
+                  <h4 className="font-medium text-blue-900 mb-2 flex items-center">
+                    <Shield className="w-4 h-4 mr-2" />
+                    Security Checklist
+                  </h4>
+                  <div className="space-y-2 text-sm text-blue-800">
+                    <div className="flex items-center">
+                      <CheckCircle className="w-4 h-4 mr-2 text-green-600" />
+                      Recipient address format is valid
+                    </div>
+                    <div className="flex items-center">
+                      <CheckCircle className="w-4 h-4 mr-2 text-green-600" />
+                      Sufficient balance available
+                    </div>
+                    <div className="flex items-center">
+                      <CheckCircle className="w-4 h-4 mr-2 text-green-600" />
+                      Gas fees reserved (SUI transfers)
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex space-x-3">
+                  <button
+                    onClick={() => setTransferStep('form')}
+                    className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={handleTransferSubmit}
+                    disabled={isTransferring}
+                    className="flex-1 px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {isTransferring ? 'Confirming...' : 'Confirm Transfer'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Confirm Step */}
+            {transferStep === 'confirm' && (
+              <div className="p-6 text-center space-y-4">
+                <div className="w-16 h-16 mx-auto bg-blue-100 rounded-full flex items-center justify-center">
+                  <Clock className="w-8 h-8 text-blue-600 animate-pulse" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-medium text-gray-900">Processing Transfer</h3>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Please wait while we process your transaction on the Sui network...
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Success Step */}
+            {transferStep === 'success' && transferResult && (
+              <div className="p-6 text-center space-y-4">
+                <div className="w-16 h-16 mx-auto bg-green-100 rounded-full flex items-center justify-center">
+                  <CheckCircle className="w-8 h-8 text-green-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-medium text-gray-900">Transfer Successful!</h3>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Your {transferForm.amount} {transferForm.selectedToken} has been sent successfully.
+                  </p>
+                </div>
+
+                {transferResult.digest && (
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <p className="text-xs text-gray-500 mb-1">Transaction Hash:</p>
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-xs text-gray-700">
+                        {transferResult.digest.slice(0, 20)}...{transferResult.digest.slice(-10)}
+                      </span>
+                      <button
+                        onClick={() => copyToClipboard(transferResult.digest || '')}
+                        className="text-blue-600 hover:text-blue-700 p-1"
+                      >
+                        <Copy className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <a
+                      href={`https://testnet.suivision.xyz/txblock/${transferResult.digest}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center text-xs text-blue-600 hover:text-blue-700 mt-2"
+                    >
+                      View on Explorer
+                      <ExternalLink className="w-3 h-3 ml-1" />
+                    </a>
+                  </div>
+                )}
+
+                <button
+                  onClick={resetTransferDialog}
+                  className="w-full px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+                >
+                  Done
+                </button>
+              </div>
+            )}
+
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 } 
