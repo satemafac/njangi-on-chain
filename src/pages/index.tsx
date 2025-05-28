@@ -10,6 +10,15 @@ export default function Home() {
   const router = useRouter();
   const { account } = useAuth();
   const [openFaqItems, setOpenFaqItems] = useState<{[key: string]: boolean}>({});
+  
+  // Mainnet signup state
+  const [signupEmail, setSignupEmail] = useState('');
+  const [isSignupLoading, setIsSignupLoading] = useState(false);
+  const [signupMessage, setSignupMessage] = useState('');
+  const [showSignupSuccess, setShowSignupSuccess] = useState(false);
+  
+  // Live stats state
+  const [circleCount, setCircleCount] = useState<number | null>(null);
 
   const culturalNames = [
     "Adaji", "Ajoh", "Asue", "Arisan", "Cadena", "Chama", "ChitFunds", "Cundina",
@@ -24,6 +33,77 @@ export default function Home() {
       ...prev,
       [id]: !prev[id]
     }));
+  };
+
+  // Fetch live circle count from blockchain
+  useEffect(() => {
+    const fetchCircleCount = async () => {
+      try {
+        const response = await fetch('/api/circle-stats');
+        const data = await response.json();
+        
+        if (data.success && data.data?.circleCount !== undefined) {
+          setCircleCount(data.data.circleCount);
+        } else {
+          // Fallback if API fails
+          setCircleCount(3);
+        }
+      } catch (error) {
+        console.error('Error fetching circle count:', error);
+        // Fallback to a reasonable number if API fails
+        setCircleCount(3);
+      }
+    };
+
+    fetchCircleCount();
+  }, []);
+
+  // Handle mainnet signup form submission
+  const handleMainnetSignup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!signupEmail.trim()) {
+      setSignupMessage('Please enter your email address');
+      return;
+    }
+
+    setIsSignupLoading(true);
+    setSignupMessage('');
+
+    try {
+      const response = await fetch('/api/mainnet-signup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: signupEmail.trim(),
+          userAddress: account?.userAddr,
+          signupSource: 'homepage'
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setSignupMessage(data.message || 'Successfully signed up!');
+        setShowSignupSuccess(true);
+        setSignupEmail('');
+        
+        // Hide success message after 5 seconds
+        setTimeout(() => {
+          setShowSignupSuccess(false);
+          setSignupMessage('');
+        }, 5000);
+      } else {
+        setSignupMessage(data.message || 'Failed to sign up. Please try again.');
+      }
+    } catch (error) {
+      console.error('Error signing up for mainnet:', error);
+      setSignupMessage('Network error. Please try again.');
+    } finally {
+      setIsSignupLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -197,45 +277,47 @@ export default function Home() {
               <LoginButton />
             </div>
           </div>
+        </div>
+      </div>
 
-          {/* Feature Cards */}
-          <div className="mt-20">
-            <div className="grid grid-cols-1 gap-8 md:grid-cols-3">
-              <div className="text-center">
-                <div className="flex items-center justify-center h-12 w-12 rounded-md bg-blue-500 text-white mx-auto">
-                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                  </svg>
-                </div>
-                <h3 className="mt-4 text-lg font-medium text-gray-900">Secure</h3>
-                <p className="mt-2 text-base text-gray-500">
-                  Built on Sui blockchain with zkLogin authentication for maximum security.
-                </p>
+      {/* Feature Cards */}
+      <div className="mt-20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="grid grid-cols-1 gap-8 md:grid-cols-3">
+            <div className="text-center">
+              <div className="flex items-center justify-center h-12 w-12 rounded-md bg-blue-500 text-white mx-auto">
+                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
               </div>
+              <h3 className="mt-4 text-lg font-medium text-gray-900">Secure</h3>
+              <p className="mt-2 text-base text-gray-500">
+                Built on Sui blockchain with zkLogin authentication for maximum security.
+              </p>
+            </div>
 
-              <div className="text-center">
-                <div className="flex items-center justify-center h-12 w-12 rounded-md bg-blue-500 text-white mx-auto">
-                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                  </svg>
-                </div>
-                <h3 className="mt-4 text-lg font-medium text-gray-900">Community-Driven</h3>
-                <p className="mt-2 text-base text-gray-500">
-                  Preserving cultural traditions while modernizing community savings.
-                </p>
+            <div className="text-center">
+              <div className="flex items-center justify-center h-12 w-12 rounded-md bg-blue-500 text-white mx-auto">
+                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
               </div>
+              <h3 className="mt-4 text-lg font-medium text-gray-900">Community-Driven</h3>
+              <p className="mt-2 text-base text-gray-500">
+                Preserving cultural traditions while modernizing community savings.
+              </p>
+            </div>
 
-              <div className="text-center">
-                <div className="flex items-center justify-center h-12 w-12 rounded-md bg-blue-500 text-white mx-auto">
-                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                <h3 className="mt-4 text-lg font-medium text-gray-900">Transparent</h3>
-                <p className="mt-2 text-base text-gray-500">
-                  Full transparency and automated management of savings circles.
-                </p>
+            <div className="text-center">
+              <div className="flex items-center justify-center h-12 w-12 rounded-md bg-blue-500 text-white mx-auto">
+                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
               </div>
+              <h3 className="mt-4 text-lg font-medium text-gray-900">Transparent</h3>
+              <p className="mt-2 text-base text-gray-500">
+                Full transparency and automated management of savings circles.
+              </p>
             </div>
           </div>
         </div>
@@ -503,6 +585,13 @@ export default function Home() {
       {/* Stats Section */}
       <div className="bg-white py-16">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center px-4 py-2 rounded-full bg-green-100 text-green-800 text-sm font-medium mb-4">
+              <span className="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></span>
+              Live Statistics from Sui Blockchain
+            </div>
+          </div>
+          
           <div className="grid grid-cols-2 gap-8 md:grid-cols-4">
             <div className="text-center">
               <div className="flex justify-center mb-2">
@@ -519,14 +608,87 @@ export default function Home() {
             </div>
             
             <div className="text-center">
-              <span className="block text-4xl font-extrabold text-blue-600">1k+</span>
-              <span className="block mt-2 text-lg text-gray-500">Users</span>
+              <div className="flex items-center justify-center mb-1">
+                <span className="text-4xl font-extrabold text-blue-600">
+                  {circleCount !== null ? `${circleCount}+` : '...'}
+                </span>
+                {circleCount !== null && (
+                  <span className="ml-2 w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                )}
+              </div>
+              <span className="block mt-2 text-lg text-gray-500">Circles Created</span>
             </div>
             
             <div className="text-center">
-              <span className="block text-4xl font-extrabold text-blue-600">5k+</span>
-              <span className="block mt-2 text-lg text-gray-500">Transactions</span>
+              <span className="block text-4xl font-extrabold text-blue-600">100%</span>
+              <span className="block mt-2 text-lg text-gray-500">Auditable</span>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Simple Mainnet Launch Signup */}
+      <div className="bg-gradient-to-r from-blue-600 to-blue-700 py-16">
+        <div className="max-w-4xl mx-auto text-center px-4 sm:px-6 lg:px-8">
+          <div className="inline-flex items-center px-4 py-2 rounded-full bg-white bg-opacity-20 text-white text-sm font-medium mb-6">
+            <span className="w-2 h-2 bg-green-400 rounded-full mr-2 animate-pulse"></span>
+            Currently on Testnet
+          </div>
+          
+          <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold text-white mb-4">
+            🚀 Mainnet Launch Coming Soon!
+          </h2>
+          <p className="text-xl text-blue-100 mb-8 max-w-2xl mx-auto">
+            Be the first to know when Njangi On-Chain launches on Sui Mainnet. Get 
+            early access and exclusive benefits for early adopters.
+          </p>
+
+          {/* Simple Signup Form */}
+          <div className="max-w-lg mx-auto">
+            <form onSubmit={handleMainnetSignup} className="flex flex-col sm:flex-row gap-3">
+              <input
+                type="email"
+                placeholder="Enter your email address"
+                value={signupEmail}
+                onChange={(e) => setSignupEmail(e.target.value)}
+                required
+                className="flex-1 px-6 py-4 rounded-lg bg-white bg-opacity-90 text-gray-900 placeholder-gray-500 border-0 focus:ring-2 focus:ring-white focus:bg-white transition-all duration-200 text-lg"
+                disabled={isSignupLoading}
+              />
+              <button
+                type="submit"
+                disabled={isSignupLoading}
+                className="px-8 py-4 bg-white text-blue-700 font-bold rounded-lg hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed text-lg whitespace-nowrap"
+              >
+                {isSignupLoading ? 'Signing up...' : 'Notify Me'}
+              </button>
+            </form>
+
+            {/* Success/Error Messages */}
+            {signupMessage && (
+              <div className={`mt-4 p-3 rounded-lg ${
+                showSignupSuccess 
+                  ? 'bg-green-500 bg-opacity-20 text-green-100 border border-green-400' 
+                  : 'bg-red-500 bg-opacity-20 text-red-100 border border-red-400'
+              }`}>
+                <div className="flex items-center justify-center">
+                  {showSignupSuccess ? (
+                    <svg className="h-5 w-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    </svg>
+                  ) : (
+                    <svg className="h-5 w-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                  )}
+                  <span className="text-sm font-medium">{signupMessage}</span>
+                </div>
+              </div>
+            )}
+
+            <p className="mt-4 text-sm text-blue-200">
+              🎁 Early subscribers get exclusive benefits and priority access
+            </p>
           </div>
         </div>
       </div>

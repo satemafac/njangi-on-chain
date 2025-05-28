@@ -36,10 +36,29 @@ async function createTables() {
       )
     `);
     
+    // Create mainnet_signups table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS mainnet_signups (
+        id SERIAL PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        name TEXT,
+        user_address TEXT,
+        notification_preferences JSONB DEFAULT '{"email": true, "sms": false}',
+        signup_source TEXT DEFAULT 'homepage',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    
     // Create indexes for faster queries
     await client.query(`CREATE INDEX IF NOT EXISTS idx_join_requests_circle_id ON join_requests(circle_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_join_requests_user_address ON join_requests(user_address)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_join_requests_status ON join_requests(status)`);
+    
+    // Create indexes for mainnet_signups
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_mainnet_signups_email ON mainnet_signups(email)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_mainnet_signups_created_at ON mainnet_signups(created_at)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_mainnet_signups_user_address ON mainnet_signups(user_address)`);
     
     await client.query('COMMIT');
     console.log('✅ Database schema created successfully');
