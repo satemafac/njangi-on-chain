@@ -52,9 +52,11 @@ export class MainnetSignupDatabase {
 
       if (result.rows[0]) {
         console.log(`[DB] Successfully created/updated mainnet signup with ID: ${result.rows[0].id}`);
-        // Parse the JSON notification preferences
+        // Parse the JSON notification preferences only if it's a string
         const signup = result.rows[0];
-        signup.notification_preferences = JSON.parse(signup.notification_preferences);
+        if (typeof signup.notification_preferences === 'string') {
+          signup.notification_preferences = JSON.parse(signup.notification_preferences);
+        }
         return signup as MainnetSignup;
       } else {
         console.log(`[DB] No rows returned after mainnet signup creation/update`);
@@ -84,7 +86,9 @@ export class MainnetSignupDatabase {
       // Parse JSON notification preferences for each signup
       return result.rows.map(row => ({
         ...row,
-        notification_preferences: JSON.parse(row.notification_preferences)
+        notification_preferences: typeof row.notification_preferences === 'string' 
+          ? JSON.parse(row.notification_preferences) 
+          : row.notification_preferences
       })) as MainnetSignup[];
     } catch (error) {
       console.error('[DB] Error getting mainnet signups:', error);
@@ -133,7 +137,9 @@ export class MainnetSignupDatabase {
 
       return result.rows.map(row => ({
         ...row,
-        notification_preferences: JSON.parse(row.notification_preferences)
+        notification_preferences: typeof row.notification_preferences === 'string' 
+          ? JSON.parse(row.notification_preferences) 
+          : row.notification_preferences
       })) as MainnetSignup[];
     } catch (error) {
       console.error('[DB] Error getting signups by date range:', error);
