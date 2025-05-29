@@ -40,7 +40,7 @@ const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
   return (
     <AlertDialog.Root open={isOpen} onOpenChange={onClose}>
       <AlertDialog.Portal>
-        <AlertDialog.Overlay className="fixed inset-0 bg-black/30 z-40 data-[state=open]:animate-overlayShow" />
+        <AlertDialog.Overlay className="fixed inset-0 bg-black/30 z-50 data-[state=open]:animate-overlayShow" />
         <AlertDialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md z-50 data-[state=open]:animate-contentShow focus:outline-none">
           <div className="flex justify-between items-center mb-4">
             <AlertDialog.Title className="text-lg font-semibold text-gray-900">

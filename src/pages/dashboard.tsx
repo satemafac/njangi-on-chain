@@ -3007,8 +3007,8 @@ export default function Dashboard() {
       {/* Join Circle Dialog */}
       <Dialog.Root open={isJoinDialogOpen} onOpenChange={setIsJoinDialogOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/30" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-lg p-6 w-full max-w-md focus:outline-none">
+          <Dialog.Overlay className="fixed inset-0 bg-black/30 z-50" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-lg p-6 w-full max-w-md focus:outline-none z-50">
             <div className="flex justify-between items-center mb-4">
               <Dialog.Title className="text-lg font-medium text-gray-900">
                 Join a Circle
@@ -3072,8 +3072,8 @@ export default function Dashboard() {
       {/* Transfer Dialog */}
       <Dialog.Root open={isTransferDialogOpen} onOpenChange={resetTransferDialog}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto focus:outline-none">
+          <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto focus:outline-none z-50">
             
             {/* Header */}
             <div className="flex justify-between items-center p-6 border-b border-gray-200">

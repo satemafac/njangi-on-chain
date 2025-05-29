@@ -133,7 +133,7 @@ export const Navbar: React.FC = () => {
   }, [router.pathname]);
 
   return (
-    <nav className="bg-white shadow-sm sticky top-0 z-50">
+    <nav className="bg-white shadow-sm sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
         <div className="flex justify-between h-14 sm:h-16">
           <div className="flex items-center">
@@ -225,7 +225,7 @@ export const Navbar: React.FC = () => {
 
                 {/* Notifications Dropdown */}
                 {showNotifications && (
-                  <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-lg shadow-lg ring-1 ring-black ring-opacity-5 z-50">
+                  <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-lg shadow-lg ring-1 ring-black ring-opacity-5 z-45">
                     <div className="p-3 sm:p-4 border-b border-gray-100 flex justify-between items-center">
                       <div>
                         <h3 className="text-base sm:text-lg font-medium text-gray-900">Notifications</h3>
