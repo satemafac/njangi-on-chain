@@ -1,57 +1,17 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { useBrowserDetection } from '../hooks/useBrowserDetection';
-import { InAppBrowserModal } from './InAppBrowserModal';
 import type { OAuthProvider } from '../services/zkLoginService';
 
 export function LoginButton() {
   const { login } = useAuth();
-  const [showInAppModal, setShowInAppModal] = useState(false);
-  const [loginUrl, setLoginUrl] = useState<string>('');
-  const [selectedProvider, setSelectedProvider] = useState<OAuthProvider>('Google');
-  const browser = useBrowserDetection();
 
   const handleLogin = async (provider: OAuthProvider) => {
-    if (browser.isInAppBrowser) {
-      // For in-app browsers, generate the login URL but show modal instead of redirecting
-      try {
-        const { loginUrl } = await fetch('/api/zkLogin', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'beginLogin', provider })
-        }).then(res => res.json());
-        
-        setLoginUrl(loginUrl);
-        setSelectedProvider(provider);
-        setShowInAppModal(true);
-      } catch (error) {
-        console.error('Failed to generate login URL:', error);
-      }
-    } else {
-      // Normal browser - proceed with regular login
-      login(provider);
-    }
+    // Remove in-app browser check - allow direct login for all browsers including Instagram
+    login(provider);
   };
 
   return (
     <>
-      {browser.isInAppBrowser && (
-        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-          <div className="flex items-start">
-            <div className="flex-shrink-0">
-              <svg className="h-5 w-5 text-yellow-400 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-              </svg>
-            </div>
-            <div className="ml-3">
-              <p className="text-sm text-yellow-800">
-                <span className="font-medium">Using {browser.browserName}?</span> For security, OAuth login requires opening in your default browser.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-      
       <div className="flex flex-col items-center gap-4">
         <button
           onClick={() => handleLogin('Google')}
@@ -104,14 +64,6 @@ export function LoginButton() {
           Continue with Apple
         </button>
       </div>
-      
-      <InAppBrowserModal
-        isOpen={showInAppModal}
-        onClose={() => setShowInAppModal(false)}
-        loginUrl={loginUrl}
-        browserName={browser.browserName}
-        provider={selectedProvider}
-      />
     </>
   );
 } 
