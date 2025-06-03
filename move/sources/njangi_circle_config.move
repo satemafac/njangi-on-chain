@@ -2,7 +2,7 @@ module njangi::njangi_circle_config {
     use sui::object::{Self, UID};
     use sui::dynamic_field;
     use sui::tx_context::TxContext;
-    use std::string::String;
+    use std::string::{Self, String};
     use std::option::{Self, Option};
 
     // Constants for dynamic field keys
@@ -15,8 +15,11 @@ module njangi::njangi_circle_config {
         // Circle basic settings
         contribution_amount: u64,         // SUI amount with 9 decimals - this is the ACTUAL SUI value
         security_deposit: u64,            // SUI amount with 9 decimals - this is the ACTUAL SUI value
-        contribution_amount_usd: u64,     // USD amount in cents (e.g., 20 = $0.20) 
-        security_deposit_usd: u64,        // USD amount in cents (e.g., 20 = $0.20)
+        currency_type: String,            // Currency code (e.g., "USD", "XAF", "NGN")
+        contribution_amount_local: u64,   // Amount in local currency (with appropriate decimals)
+        security_deposit_local: u64,      // Amount in local currency (with appropriate decimals)
+        contribution_amount_usd: u64,     // USD equivalent amount (in cents, for validation)
+        security_deposit_usd: u64,        // USD equivalent amount (in cents, for validation)
         cycle_length: u64,
         cycle_day: u64,
         circle_type: u8,
@@ -30,7 +33,7 @@ module njangi::njangi_circle_config {
         // Goal/Milestone settings
         goal_type: Option<u8>,
         target_amount: Option<u64>,
-        target_amount_usd: Option<u64>,
+        target_amount_local: Option<u64>,  // Amount in local currency
         target_date: Option<u64>,
         verification_required: bool,
         goal_progress: u64,
@@ -53,6 +56,9 @@ module njangi::njangi_circle_config {
     public fun create_circle_config(
         contribution_amount: u64,
         security_deposit: u64,
+        currency_type: String,
+        contribution_amount_local: u64,
+        security_deposit_local: u64,
         contribution_amount_usd: u64,
         security_deposit_usd: u64,
         cycle_length: u64,
@@ -65,6 +71,9 @@ module njangi::njangi_circle_config {
         CircleConfig {
             contribution_amount,
             security_deposit,
+            currency_type,
+            contribution_amount_local,
+            security_deposit_local,
             contribution_amount_usd,
             security_deposit_usd,
             cycle_length,
@@ -80,14 +89,14 @@ module njangi::njangi_circle_config {
     public fun create_milestone_config(
         goal_type: Option<u8>,
         target_amount: Option<u64>,
-        target_amount_usd: Option<u64>,
+        target_amount_local: Option<u64>,
         target_date: Option<u64>,
         verification_required: bool
     ): MilestoneConfig {
         MilestoneConfig {
             goal_type,
             target_amount,
-            target_amount_usd,
+            target_amount_local,
             target_date,
             verification_required,
             goal_progress: 0,
@@ -170,16 +179,22 @@ module njangi::njangi_circle_config {
         config.security_deposit
     }
 
-    // Get contribution amount in USD
-    public fun get_contribution_amount_usd(obj: &UID): u64 {
+    // Get currency type
+    public fun get_currency_type(obj: &UID): String {
         let config = get_circle_config(obj);
-        config.contribution_amount_usd
+        config.currency_type
     }
 
-    // Get security deposit in USD
-    public fun get_security_deposit_usd(obj: &UID): u64 {
+    // Get contribution amount in local currency
+    public fun get_contribution_amount_local(obj: &UID): u64 {
         let config = get_circle_config(obj);
-        config.security_deposit_usd
+        config.contribution_amount_local
+    }
+
+    // Get security deposit in local currency
+    public fun get_security_deposit_local(obj: &UID): u64 {
+        let config = get_circle_config(obj);
+        config.security_deposit_local
     }
 
     // Get cycle length
@@ -224,10 +239,10 @@ module njangi::njangi_circle_config {
         config.target_amount
     }
 
-    // Get target amount USD from milestone config
-    public fun get_target_amount_usd(obj: &UID): Option<u64> {
+    // Get target amount in local currency from milestone config
+    public fun get_target_amount_local(obj: &UID): Option<u64> {
         let config = get_milestone_config(obj);
-        config.target_amount_usd
+        config.target_amount_local
     }
 
     // Get warning penalty amount
@@ -240,5 +255,17 @@ module njangi::njangi_circle_config {
     public fun get_goal_type(obj: &UID): Option<u8> {
         let config = get_milestone_config(obj);
         config.goal_type
+    }
+
+    // Get contribution amount in USD
+    public fun get_contribution_amount_usd(obj: &UID): u64 {
+        let config = get_circle_config(obj);
+        config.contribution_amount_usd
+    }
+
+    // Get security deposit in USD
+    public fun get_security_deposit_usd(obj: &UID): u64 {
+        let config = get_circle_config(obj);
+        config.security_deposit_usd
     }
 } 

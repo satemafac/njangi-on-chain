@@ -128,7 +128,27 @@ class DatabaseService {
         ORDER BY requestDate DESC
       `);
       
-      return stmt.all(circleId) as JoinRequest[];
+      const rawResults = stmt.all(circleId) as {
+        id: number;
+        circleId: string;
+        circleName: string;
+        userAddress: string;
+        userName: string;
+        requestDate: number;
+        status: 'pending' | 'approved' | 'rejected';
+      }[];
+      
+      // Convert SQLite results to JoinRequest format
+      return rawResults.map(row => ({
+        id: row.id,
+        circle_id: row.circleId,
+        circle_name: row.circleName,
+        user_address: row.userAddress,
+        user_name: row.userName,
+        status: row.status,
+        created_at: new Date(row.requestDate),
+        updated_at: new Date(row.requestDate)
+      }));
     } catch (error) {
       console.error('Error getting pending requests:', error);
       return [];
@@ -177,9 +197,65 @@ class DatabaseService {
         ORDER BY requestDate DESC
       `);
       
-      return stmt.all(userAddress) as JoinRequest[];
+      const rawResults = stmt.all(userAddress) as {
+        id: number;
+        circleId: string;
+        circleName: string;
+        userAddress: string;
+        userName: string;
+        requestDate: number;
+        status: 'pending' | 'approved' | 'rejected';
+      }[];
+      
+      // Convert SQLite results to JoinRequest format
+      return rawResults.map(row => ({
+        id: row.id,
+        circle_id: row.circleId,
+        circle_name: row.circleName,
+        user_address: row.userAddress,
+        user_name: row.userName,
+        status: row.status,
+        created_at: new Date(row.requestDate),
+        updated_at: new Date(row.requestDate)
+      }));
     } catch (error) {
       console.error('Error getting user requests:', error);
+      return [];
+    }
+  }
+
+  // Get all requests for a circle (including approved/rejected)
+  getRequestsByCircleId(circleId: string): JoinRequest[] {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT * FROM join_requests
+        WHERE circleId = ?
+        ORDER BY requestDate DESC
+      `);
+      
+      const rawResults = stmt.all(circleId) as {
+        id: number;
+        circleId: string;
+        circleName: string;
+        userAddress: string;
+        userName: string;
+        requestDate: number;
+        status: 'pending' | 'approved' | 'rejected';
+      }[];
+      
+      // Convert SQLite results to JoinRequest format
+      return rawResults.map(row => ({
+        id: row.id,
+        circle_id: row.circleId,
+        circle_name: row.circleName,
+        user_address: row.userAddress,
+        user_name: row.userName,
+        status: row.status,
+        created_at: new Date(row.requestDate),
+        updated_at: new Date(row.requestDate)
+      }));
+    } catch (error) {
+      console.error('Error getting circle requests:', error);
       return [];
     }
   }

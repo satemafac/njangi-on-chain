@@ -18,7 +18,37 @@ interface SimplifiedSwapUIProps {
   securityDepositAmount: number; // Amount of the security deposit
   onComplete?: () => void;
   disabled?: boolean; // Whether the component is disabled (e.g., if circle is not active)
+  circleCurrencyType?: string; // NEW PROP for circle's currency type
 }
+
+// Format currency value based on currency type (replicated from index.tsx)
+const formatCurrency = (amount: number, currencyType: string = 'USD') => {
+  const currencyFormats: Record<string, { symbol: string; locale: string; code: string }> = {
+    'USD': { symbol: '$', locale: 'en-US', code: 'USD' },
+    'XAF': { symbol: 'FCFA', locale: 'fr-CM', code: 'XAF' },
+    'NGN': { symbol: '₦', locale: 'en-NG', code: 'NGN' },
+    'EUR': { symbol: '€', locale: 'de-DE', code: 'EUR' },
+    'GBP': { symbol: '£', locale: 'en-GB', code: 'GBP' },
+    'CAD': { symbol: 'C$', locale: 'en-CA', code: 'CAD' },
+    'ZAR': { symbol: 'R', locale: 'en-ZA', code: 'ZAR' },
+    'KES': { symbol: 'KSh', locale: 'en-KE', code: 'KES' },
+    'EGP': { symbol: 'E£', locale: 'ar-EG', code: 'EGP' },
+    'MAD': { symbol: 'MAD', locale: 'ar-MA', code: 'MAD' }
+  };
+
+  const format = currencyFormats[currencyType] || currencyFormats['USD'];
+  
+  try {
+    return new Intl.NumberFormat(format.locale, {
+      style: 'currency',
+      currency: format.code,
+      minimumFractionDigits: 0, // Show 0 for whole numbers like FCFA
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    return `${format.symbol}${amount.toFixed(2)}`;
+  }
+};
 
 const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
   walletId,
@@ -28,6 +58,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
   securityDepositAmount = 0,
   onComplete,
   disabled = false, // Default to false
+  circleCurrencyType = 'USD', // Default to USD if not provided
 }) => {
   // Add debug logs to understand the data flow
   console.log('[SimplifiedSwapUI] Initializing. securityDepositPaid:', securityDepositPaid);
@@ -56,6 +87,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
   const [suggestedAmount, setSuggestedAmount] = useState<number | null>(null);
   const [isPriceLoading, setIsPriceLoading] = useState<boolean>(false);
   const [priceLastUpdated, setPriceLastUpdated] = useState<Date | null>(null);
+  const [receiveAmountLocalDisplay, setReceiveAmountLocalDisplay] = useState<string | null>(null);
   
   // New state variables for two-transaction approach
   const [transactionStep, setTransactionStep] = useState<'swap' | 'deposit' | 'complete'>('swap');
@@ -79,6 +111,26 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
 
   // Determine the required amount based on whether security deposit is paid
   const paymentType = currentDepositPaid ? 'contribution' : 'security deposit';
+
+  // Effect to convert receiveAmount (USDC) to local currency for display
+  useEffect(() => {
+    const convertReceiveAmount = async () => {
+      if (receiveAmount && parseFloat(receiveAmount) > 0 && circleCurrencyType && circleCurrencyType !== 'USD') {
+        try {
+          const numericReceiveAmount = parseFloat(receiveAmount);
+          const converted = await priceService.convertFromUSD(numericReceiveAmount, circleCurrencyType);
+          setReceiveAmountLocalDisplay(formatCurrency(converted, circleCurrencyType));
+        } catch (error) {
+          console.error('Error converting receive amount to local currency:', error);
+          setReceiveAmountLocalDisplay(null);
+        }
+      } else {
+        setReceiveAmountLocalDisplay(null); // Reset if currency is USD or amount is invalid
+      }
+    };
+
+    convertReceiveAmount();
+  }, [receiveAmount, circleCurrencyType, suiPrice]); // Added suiPrice as it might affect conversions indirectly via priceService state
 
   // Update the currentDepositPaid state whenever securityDepositPaid prop changes
   useEffect(() => {
@@ -1846,7 +1898,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
             <div className="flex justify-between items-center">
               <input
                 type="text"
-                value={receiveAmount}
+                value={receiveAmountLocalDisplay ? `${receiveAmount} USDC (≈ ${receiveAmountLocalDisplay})` : `${receiveAmount} USDC`}
                 readOnly
                 className="bg-transparent text-xl sm:text-2xl outline-none w-full"
               />

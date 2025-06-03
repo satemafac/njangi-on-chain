@@ -1,9 +1,17 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import joinRequestDatabase from '../../../../services/join-request-database';
+import databaseService from '../../../../services/database-service';
 
 type ResponseData = {
   success: boolean;
   message?: string;
+};
+
+// Check if we're running on localhost
+const isLocalhost = () => {
+  return process.env.NODE_ENV === 'development' || 
+         process.env.VERCEL_ENV === 'development' ||
+         !process.env.DATABASE_URL;
 };
 
 export default async function handler(
@@ -41,13 +49,40 @@ export default async function handler(
     }
 
     console.log(`[API] Updating join request for circle ${circleId}, user ${userAddress} to status ${status}`);
+    console.log(`[API] Is localhost: ${isLocalhost()}`);
 
-    // Update the join request status
-    const success = await joinRequestDatabase.updateJoinRequestStatus(
-      circleId,
-      userAddress,
-      status
-    );
+    let success = false;
+
+    if (isLocalhost()) {
+      // Use local SQLite database service for localhost
+      console.log('[API] Using local SQLite database service');
+      try {
+        success = databaseService.updateJoinRequestStatus(circleId, userAddress, status);
+        console.log(`[API] SQLite update result: ${success}`);
+      } catch (sqliteError) {
+        console.error('[API] SQLite database error:', sqliteError);
+        return res.status(500).json({
+          success: false,
+          message: 'Local database error: ' + (sqliteError as Error).message
+        });
+      }
+    } else {
+      // Use PostgreSQL database for production
+      console.log('[API] Using PostgreSQL database for production');
+      try {
+        success = await joinRequestDatabase.updateJoinRequestStatus(
+          circleId,
+          userAddress,
+          status
+        );
+      } catch (dbError) {
+        console.error('[API] PostgreSQL database error:', dbError);
+        return res.status(500).json({
+          success: false,
+          message: 'Database connection failed'
+        });
+      }
+    }
 
     if (!success) {
       console.log(`[API] Failed to update join request status in database`);
@@ -65,7 +100,7 @@ export default async function handler(
     console.error('Error updating join request:', error);
     return res.status(500).json({
       success: false,
-      message: 'Failed to update join request'
+      message: 'Failed to update join request: ' + (error as Error).message
     });
   }
 } 

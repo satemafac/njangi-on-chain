@@ -1,10 +1,18 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import joinRequestDatabase, { JoinRequest } from '../../../../services/join-request-database';
+import databaseService from '../../../../services/database-service';
 
 type ResponseData = {
   success: boolean;
   message?: string;
   data?: JoinRequest[];
+};
+
+// Check if we're running on localhost
+const isLocalhost = () => {
+  return process.env.NODE_ENV === 'development' || 
+         process.env.VERCEL_ENV === 'development' ||
+         !process.env.DATABASE_URL;
 };
 
 export default async function handler(
@@ -26,8 +34,31 @@ export default async function handler(
       });
     }
 
-    // Get all requests for this user
-    const requests = await joinRequestDatabase.getRequestsByUserAddress(userAddress);
+    console.log(`[API] Fetching join requests for user: ${userAddress}`);
+    console.log(`[API] Is localhost: ${isLocalhost()}`);
+
+    let requests: JoinRequest[] = [];
+
+    if (isLocalhost()) {
+      // Use local SQLite database service for localhost
+      console.log('[API] Using local SQLite database service');
+      try {
+        requests = databaseService.getRequestsByUserAddress(userAddress);
+        console.log(`[API] SQLite found ${requests.length} requests for user ${userAddress}`);
+      } catch (sqliteError) {
+        console.error('[API] SQLite database error:', sqliteError);
+        requests = [];
+      }
+    } else {
+      // Use PostgreSQL database for production
+      console.log('[API] Using PostgreSQL database for production');
+      try {
+        requests = await joinRequestDatabase.getRequestsByUserAddress(userAddress);
+      } catch (dbError) {
+        console.error('[API] PostgreSQL database error:', dbError);
+        requests = [];
+      }
+    }
 
     // Return the requests
     return res.status(200).json({
@@ -38,7 +69,7 @@ export default async function handler(
     console.error('Error fetching user join requests:', error);
     return res.status(500).json({
       success: false,
-      message: 'Failed to fetch user join requests'
+      message: 'Failed to fetch user join requests: ' + (error as Error).message
     });
   }
 } 

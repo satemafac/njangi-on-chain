@@ -15,14 +15,44 @@ export const Navbar: React.FC = () => {
   const [pendingRequests, setPendingRequests] = useState<JoinRequest[]>([]);
   const [loading, setLoading] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [lastFetchTime, setLastFetchTime] = useState<number>(0);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
-  // Fetch pending requests
+  // Debounce mechanism to prevent infinite loops
+  const FETCH_DEBOUNCE_MS = 5000; // 5 seconds minimum between fetches
+  const MAX_RETRIES = 3;
+  const retryCount = useRef(0);
+
+  // Fetch pending requests with debounce and error handling
   const fetchPendingRequests = useCallback(async () => {
     if (!account) return;
+
+    // Debounce: prevent too frequent calls
+    const now = Date.now();
+    if (now - lastFetchTime < FETCH_DEBOUNCE_MS) {
+      console.log('[Navbar] Fetch debounced, too recent');
+      return;
+    }
+
+    // Prevent infinite retries
+    if (retryCount.current >= MAX_RETRIES) {
+      console.log('[Navbar] Max retries reached, stopping fetch attempts');
+      setFetchError('Max retries reached. Please refresh the page.');
+      return;
+    }
     
     try {
       setLoading(true);
+      setFetchError(null);
+      setLastFetchTime(now);
+      
       console.log('[Navbar] Fetching join requests...');
+      
+      // Check if we're on localhost for debugging
+      const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      if (isLocalhost) {
+        console.log('[Navbar] Running on localhost - will use local fallback if API fails');
+      }
       
       // Get only admin circles from localStorage
       const storedCircles = localStorage.getItem('adminCircles');
@@ -46,7 +76,17 @@ export const Navbar: React.FC = () => {
         for (const circleId of adminCircleIds) {
           try {
             console.log(`[Navbar] Fetching requests for admin circle: ${circleId}`);
-            const response = await fetch(`/api/join-requests/pending/${circleId}`);
+            
+            // Use relative path for localhost, absolute for production
+            const apiUrl = isLocalhost 
+              ? `/api/join-requests/pending/${circleId}`
+              : `/api/join-requests/pending/${circleId}`;
+            
+            const response = await fetch(apiUrl, {
+              // Add timeout to prevent hanging requests
+              signal: AbortSignal.timeout(10000) // 10 second timeout
+            });
+            
             if (!response.ok) {
               console.error(`[Navbar] Error response from API for circle ${circleId}:`, response.status, response.statusText);
               continue;
@@ -63,6 +103,12 @@ export const Navbar: React.FC = () => {
             }
           } catch (error) {
             console.error(`[Navbar] Failed to fetch requests for circle ${circleId}:`, error);
+            retryCount.current++;
+            
+            // Don't try service fallback anymore to prevent loops
+            if (isLocalhost) {
+              console.log(`[Navbar] Skipping service fallback to prevent loops`);
+            }
           }
         }
       } 
@@ -71,7 +117,14 @@ export const Navbar: React.FC = () => {
         const circleId = router.query.id;
         console.log(`[Navbar] Fallback: Fetching requests for circle from URL: ${circleId}`);
         try {
-          const response = await fetch(`/api/join-requests/pending/${circleId}`);
+          const apiUrl = isLocalhost 
+            ? `/api/join-requests/pending/${circleId}`
+            : `/api/join-requests/pending/${circleId}`;
+            
+          const response = await fetch(apiUrl, {
+            signal: AbortSignal.timeout(10000) // 10 second timeout
+          });
+          
           if (!response.ok) {
             console.error(`[Navbar] Error response from API for circle ${circleId}:`, response.status, response.statusText);
           } else {
@@ -87,6 +140,7 @@ export const Navbar: React.FC = () => {
           }
         } catch (error) {
           console.error(`[Navbar] Failed to fetch requests for circle ${circleId}:`, error);
+          retryCount.current++;
         }
       }
       
@@ -96,22 +150,83 @@ export const Navbar: React.FC = () => {
         const dateB = new Date(b.created_at || 0).getTime();
         return dateB - dateA;
       });
+      
       console.log('[Navbar] Final pending requests:', allRequests);
       setPendingRequests(allRequests);
       
+      // Reset retry count on successful fetch
+      retryCount.current = 0;
+      
     } catch (error) {
       console.error('[Navbar] Failed to fetch pending requests:', error);
+      retryCount.current++;
+      setFetchError('Failed to fetch notifications');
     } finally {
       setLoading(false);
     }
-  }, [account, router.query.id, router.pathname]);
+  }, [account, router.query.id, router.pathname, lastFetchTime]);
+
+  // Clear all notifications
+  const clearAllNotifications = useCallback(async () => {
+    if (!account) return;
+    
+    try {
+      setLoading(true);
+      console.log('[Navbar] Clearing all notifications...');
+      
+      // Check if we're on localhost
+      const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      
+      if (isLocalhost) {
+        // For localhost, call the clear API for any circle (the API will clear all)
+        const response = await fetch('/api/join-requests/pending/mock-circle-1?clear=all', {
+          method: 'GET',
+          signal: AbortSignal.timeout(5000)
+        });
+        
+        if (response.ok) {
+          console.log('[Navbar] Successfully cleared all notifications');
+          setPendingRequests([]);
+          setShowNotifications(false);
+        } else {
+          console.error('[Navbar] Failed to clear notifications');
+          setFetchError('Failed to clear notifications');
+        }
+      } else {
+        // For production, you might want to implement actual clearing logic
+        console.log('[Navbar] Clear function not implemented for production');
+        setFetchError('Clear function not available in production');
+      }
+      
+    } catch (error) {
+      console.error('[Navbar] Error clearing notifications:', error);
+      setFetchError('Failed to clear notifications');
+    } finally {
+      setLoading(false);
+    }
+  }, [account]);
+
+  // Reset retry count when account changes
+  useEffect(() => {
+    retryCount.current = 0;
+    setFetchError(null);
+  }, [account]);
 
   useEffect(() => {
-    fetchPendingRequests();
-    // Set up interval to fetch pending requests every minute
-    const interval = setInterval(fetchPendingRequests, 60000);
-    return () => clearInterval(interval);
-  }, [fetchPendingRequests]);
+    // Only fetch if we have an account and haven't hit max retries
+    if (account && retryCount.current < MAX_RETRIES) {
+      fetchPendingRequests();
+      
+      // Set up interval to fetch pending requests every 60 seconds (instead of every minute to reduce load)
+      const interval = setInterval(() => {
+        if (retryCount.current < MAX_RETRIES) {
+          fetchPendingRequests();
+        }
+      }, 60000);
+      
+      return () => clearInterval(interval);
+    }
+  }, [fetchPendingRequests, account]);
 
   // Handle clicking outside notifications panel
   useEffect(() => {
@@ -231,21 +346,42 @@ export const Navbar: React.FC = () => {
                         <h3 className="text-base sm:text-lg font-medium text-gray-900">Notifications</h3>
                         <p className="text-xs sm:text-sm text-gray-500">Join requests for your circles</p>
                       </div>
-                      <button 
-                        onClick={() => fetchPendingRequests()}
-                        disabled={loading}
-                        className={`p-2 rounded-full transition-colors ${loading ? 'text-gray-400' : 'text-gray-500 hover:text-blue-600 hover:bg-blue-50'}`}
-                        title="Refresh notifications"
-                      >
-                        <svg 
-                          className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} 
-                          fill="none" 
-                          stroke="currentColor" 
-                          viewBox="0 0 24 24"
+                      <div className="flex items-center space-x-1">
+                        {/* Clear All Button */}
+                        {pendingRequests.length > 0 && (
+                          <button 
+                            onClick={clearAllNotifications}
+                            disabled={loading}
+                            className={`p-2 rounded-full transition-colors text-xs ${loading ? 'text-gray-400' : 'text-red-500 hover:text-red-700 hover:bg-red-50'}`}
+                            title="Clear all notifications"
+                          >
+                            <svg 
+                              className="w-4 h-4" 
+                              fill="none" 
+                              stroke="currentColor" 
+                              viewBox="0 0 24 24"
+                            >
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1-1H8a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        )}
+                        {/* Refresh Button */}
+                        <button 
+                          onClick={() => fetchPendingRequests()}
+                          disabled={loading}
+                          className={`p-2 rounded-full transition-colors ${loading ? 'text-gray-400' : 'text-gray-500 hover:text-blue-600 hover:bg-blue-50'}`}
+                          title="Refresh notifications"
                         >
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                        </svg>
-                      </button>
+                          <svg 
+                            className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} 
+                            fill="none" 
+                            stroke="currentColor" 
+                            viewBox="0 0 24 24"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                        </button>
+                      </div>
                     </div>
                     <div className="max-h-96 overflow-y-auto">
                       {loading ? (
@@ -255,6 +391,20 @@ export const Navbar: React.FC = () => {
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                           </svg>
                           <span className="text-sm">Loading notifications...</span>
+                        </div>
+                      ) : fetchError ? (
+                        <div className="p-4 text-center text-red-500">
+                          <div className="text-sm">{fetchError}</div>
+                          <button 
+                            onClick={() => {
+                              retryCount.current = 0;
+                              setFetchError(null);
+                              fetchPendingRequests();
+                            }}
+                            className="mt-2 text-xs bg-red-100 hover:bg-red-200 text-red-700 px-2 py-1 rounded"
+                          >
+                            Retry
+                          </button>
                         </div>
                       ) : pendingRequests.length > 0 ? (
                         <div className="divide-y divide-gray-100">

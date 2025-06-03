@@ -20,6 +20,54 @@ const ESTIMATED_GAS_FEE = 0.00021; // Gas fee in SUI
 const DEFAULT_SLIPPAGE = 0.5; // Default slippage percentage
 const BUFFER_PERCENTAGE = 1.5; // Additional buffer percentage for swap rate fluctuations
 
+// Helper function to format USD amounts - MOVED TO MODULE SCOPE
+const formatUSD = (amount: number): string => {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(amount);
+};
+
+// Format currency value based on currency type - MOVED TO MODULE SCOPE
+const formatCurrency = (amount: number, currencyType: string = 'USD') => {
+  // Map currency codes to their formatting options
+  const currencyFormats: Record<string, { 
+    symbol: string; 
+    locale: string; 
+    code: string; 
+    customFormat?: boolean;
+    position?: 'before' | 'after';
+  }> = {
+    'USD': { symbol: '$', locale: 'en-US', code: 'USD' },
+    'XAF': { symbol: 'FCFA', locale: 'fr-CM', code: 'XAF', customFormat: true, position: 'after' }, // XAF specific formatting
+    'NGN': { symbol: '₦', locale: 'en-NG', code: 'NGN' },
+    'EUR': { symbol: '€', locale: 'de-DE', code: 'EUR' },
+    'GBP': { symbol: '£', locale: 'en-GB', code: 'GBP' },
+    'CAD': { symbol: 'C$', locale: 'en-CA', code: 'CAD', customFormat: true, position: 'before' },
+    'ZAR': { symbol: 'R', locale: 'en-ZA', code: 'ZAR', customFormat: true, position: 'before' },
+    'KES': { symbol: 'KSh', locale: 'en-KE', code: 'KES', customFormat: true, position: 'before' },
+    'EGP': { symbol: 'E£', locale: 'en-US', code: 'EGP', customFormat: true, position: 'before' }, // Using en-US for EGP to avoid potential right-to-left issues with symbol
+    'MAD': { symbol: 'MAD', locale: 'en-US', code: 'MAD', customFormat: true, position: 'before' }, // Using en-US for MAD
+    'GHS': { symbol: 'GH₵', locale: 'en-GH', code: 'GHS', customFormat: true, position: 'before' } // Added GHS
+  };
+
+  const format = currencyFormats[currencyType] || currencyFormats['USD'];
+  
+  try {
+    return new Intl.NumberFormat(format.locale, {
+      style: 'currency',
+      currency: format.code,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    // Fallback for unsupported locales
+    return `${format.symbol}${amount.toFixed(2)}`;
+  }
+};
+
 // Create a new interface for contribution progress data
 interface ContributionProgressData {
   totalMembers: number;
@@ -52,17 +100,20 @@ interface Circle {
   id: string;
   name: string;
   admin: string;
-  contributionAmount: number;
-  contributionAmountUsd: number;
-  securityDeposit: number;
-  securityDepositUsd: number;
-  walletId: string; // Custody wallet ID
-  autoSwapEnabled?: boolean; // Add this field
-  isActive?: boolean; // Add isActive field
-  maxMembers?: number; // Add maxMembers field
-  nextPayoutTime?: number; // Add nextPayoutTime field
-  cycleLength?: number; // Add cycleLength field
-  pausedAfterCycle?: boolean; // Add pausedAfterCycle field
+  contributionAmount: number; // This is the SUI value
+  contributionAmountUsd: number; // This will be the TRUE USD EQUIVALENT value
+  contributionAmountLocal?: number; // NEW: Local currency value for display (e.g., XAF amount)
+  currencyType?: string; 
+  securityDeposit: number; // This is the SUI value
+  securityDepositUsd: number; // This will be the TRUE USD EQUIVALENT value
+  securityDepositLocal?: number; // NEW: Local currency value for display (e.g., XAF amount)
+  walletId: string; 
+  autoSwapEnabled?: boolean; 
+  isActive?: boolean; 
+  maxMembers?: number; 
+  nextPayoutTime?: number; 
+  cycleLength?: number; 
+  pausedAfterCycle?: boolean; 
 }
 
 // Define a type for the fields from the SUI object
@@ -96,6 +147,9 @@ interface CircleCreatedEvent {
   admin: string;
   name: string;
   contribution_amount: string;
+  currency_type?: string;                  // Currency code (e.g., "USD", "XAF", "NGN")
+  contribution_amount_local?: string;      // Amount in local currency
+  security_deposit_local?: string;         // Amount in local currency
   contribution_amount_usd: string;
   security_deposit_usd: string;
   max_members: string;
@@ -578,7 +632,14 @@ export default function ContributeToCircle() {
   const [userUsdcBalance, setUserUsdcBalance] = useState<number | null>(null);
   const [showDirectDepositOption, setShowDirectDepositOption] = useState<boolean>(false);
   const [directDepositProcessing, setDirectDepositProcessing] = useState<boolean>(false);
+  const [convertedUserUsdcBalanceDisplay, setConvertedUserUsdcBalanceDisplay] = useState<string | null>(null);
+  const [totalSuiEquivalentDisplay, setTotalSuiEquivalentDisplay] = useState<string | null>(null);
   
+  // State for local currency display of custody USDC balances
+  const [custodyUsdcTotalLocalDisplay, setCustodyUsdcTotalLocalDisplay] = useState<string | null>(null);
+  const [custodyUsdcSecurityDepositLocalDisplay, setCustodyUsdcSecurityDepositLocalDisplay] = useState<string | null>(null);
+  const [custodyUsdcContributionLocalDisplay, setCustodyUsdcContributionLocalDisplay] = useState<string | null>(null);
+
   // USDC coin type - using constants to support different environments
   const USDC_COIN_TYPE = getCoinType('USDC');
 
@@ -698,13 +759,124 @@ export default function ContributeToCircle() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [circle]);
 
+  // Effect to convert USDC balance to local currency for display
+  useEffect(() => {
+    const convertBalance = async () => {
+      if (userUsdcBalance !== null && circle?.currencyType && circle.currencyType !== 'USD') {
+        try {
+          const converted = await priceService.convertFromUSD(userUsdcBalance, circle.currencyType);
+          setConvertedUserUsdcBalanceDisplay(formatCurrency(converted, circle.currencyType));
+        } catch (error) {
+          console.error('Error converting USDC balance to local currency:', error);
+          setConvertedUserUsdcBalanceDisplay(null); // Reset or handle error display
+        }
+      } else if (userUsdcBalance !== null && circle?.currencyType === 'USD') {
+        setConvertedUserUsdcBalanceDisplay(formatCurrency(userUsdcBalance, 'USD'));
+      } else {
+        setConvertedUserUsdcBalanceDisplay(null);
+      }
+    };
+    convertBalance();
+  }, [userUsdcBalance, circle?.currencyType]);
+
+  // Effect to calculate and format total SUI equivalent balance for display
+  useEffect(() => {
+    const calculateTotalDisplay = async () => {
+      if (userBalance !== null && suiPrice > 0) {
+        let currentTotalSuiEquivalent = userBalance;
+        if (userUsdcBalance !== null && userUsdcBalance > 0) {
+          currentTotalSuiEquivalent += userUsdcBalance / suiPrice; // Convert USDC to SUI and add
+        }
+
+        let displayString = `${currentTotalSuiEquivalent.toFixed(4)} SUI`;
+        const usdEquivalent = currentTotalSuiEquivalent * suiPrice;
+
+        if (circle?.currencyType && circle.currencyType !== 'USD') {
+          try {
+            const localEquivalent = await priceService.convertFromUSD(usdEquivalent, circle.currencyType);
+            // Ensure formatCurrency receives the amount in the primary unit of the currency, not cents
+            displayString += ` (≈ ${formatCurrency(localEquivalent, circle.currencyType)})`;
+          } catch (error) {
+            console.error('Error converting total SUI equivalent to local currency:', error);
+            displayString += ` (≈ ${formatUSD(usdEquivalent)})`; // Fallback to USD display
+          }
+        } else {
+          displayString += ` (≈ ${formatUSD(usdEquivalent)})`; // Default to USD display
+        }
+        setTotalSuiEquivalentDisplay(displayString);
+
+      } else if (userBalance !== null) {
+        // Only SUI balance is available, or SUI price is missing
+        let displayString = `${userBalance.toFixed(4)} SUI`;
+        if (suiPrice > 0) {
+          const usdEquivalent = userBalance * suiPrice;
+          if (circle?.currencyType && circle.currencyType !== 'USD') {
+            try {
+              const localEquivalent = await priceService.convertFromUSD(usdEquivalent, circle.currencyType);
+              displayString += ` (≈ ${formatCurrency(localEquivalent, circle.currencyType)})`;
+            } catch (error) {
+              console.error('Error converting SUI balance to local currency:', error);
+              displayString += ` (≈ ${formatUSD(usdEquivalent)})`; // Fallback to USD
+            }
+          } else {
+            displayString += ` (≈ ${formatUSD(usdEquivalent)})`; // Default to USD
+          }
+        } else {
+          // SUI price is not available, only show SUI amount
+        }
+        setTotalSuiEquivalentDisplay(displayString);
+
+      } else {
+        setTotalSuiEquivalentDisplay(null); // No balance to display
+      }
+    };
+
+    calculateTotalDisplay();
+  }, [userBalance, userUsdcBalance, suiPrice, circle?.currencyType]);
+
+  // Effect to convert custody USDC balances to local currency for display
+  useEffect(() => {
+    const convertCustodyUsdcBalances = async () => {
+      if (!circle || !circle.currencyType) {
+        // Reset if no circle or currency type
+        setCustodyUsdcTotalLocalDisplay(custodyStablecoinBalance !== null ? formatUSD(custodyStablecoinBalance) + " USDC" : "-");
+        setCustodyUsdcSecurityDepositLocalDisplay(securityDepositBalance !== null ? formatUSD(securityDepositBalance) + " USDC" : "-");
+        setCustodyUsdcContributionLocalDisplay(contributionBalance !== null ? formatUSD(contributionBalance) + " USDC" : "-");
+        return;
+      }
+
+      const { currencyType } = circle;
+
+      // Helper to convert and format
+      const getDisplayString = async (usdAmount: number | null, originalLabel: string) => {
+        if (usdAmount === null) return "-";
+        if (currencyType === 'USD') return formatCurrency(usdAmount, 'USD');
+        try {
+          const localAmount = await priceService.convertFromUSD(usdAmount, currencyType);
+          return `${formatCurrency(localAmount, currencyType)} (approx. ${formatUSD(usdAmount)})`;
+        } catch (error) {
+          console.error(`Error converting ${originalLabel} to local currency:`, error);
+          return `${formatCurrency(usdAmount, 'USD')} (Conversion Error)`; // Fallback to USD
+        }
+      };
+
+      setCustodyUsdcTotalLocalDisplay(await getDisplayString(custodyStablecoinBalance, "total custody USDC"));
+      setCustodyUsdcSecurityDepositLocalDisplay(await getDisplayString(securityDepositBalance, "custody security deposit USDC"));
+      setCustodyUsdcContributionLocalDisplay(await getDisplayString(contributionBalance, "custody contribution USDC"));
+    };
+
+    convertCustodyUsdcBalances();
+  }, [custodyStablecoinBalance, securityDepositBalance, contributionBalance, circle?.currencyType, suiPrice]);
+
   // Fix type assertion issues in the function
   const fetchCustodyWalletSuiBalance = async () => {
     if (!circle?.walletId) return;
     
     setFetchingSuiBalance(true);
     try {
-      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      const rpcUrl = getJsonRpcUrl();
+      console.log('[Balance Fetch] Using RPC URL:', rpcUrl);
+      const client = new SuiClient({ url: rpcUrl }); // Use helper function for URL
       
       let mainSuiBalance = 0;
       let dynamicFieldSuiBalance = 0;
@@ -947,6 +1119,23 @@ export default function ContributeToCircle() {
             security_deposit_usd: circleCreationEventData.security_deposit_usd,
           };
           
+          // Try to get local currency amounts if available (new format)
+          if (circleCreationEventData.contribution_amount_local) {
+            transactionInput.contribution_amount_local = circleCreationEventData.contribution_amount_local;
+          }
+          if (circleCreationEventData.security_deposit_local) {
+            transactionInput.security_deposit_local = circleCreationEventData.security_deposit_local;
+          }
+          
+          console.log('[CONTRIBUTE DEBUG] Extracted from creation event:', {
+            contribution_amount: circleCreationEventData.contribution_amount,
+            contribution_amount_usd: circleCreationEventData.contribution_amount_usd,
+            contribution_amount_local: circleCreationEventData.contribution_amount_local,
+            security_deposit_usd: circleCreationEventData.security_deposit_usd,
+            security_deposit_local: circleCreationEventData.security_deposit_local,
+            currency_type: circleCreationEventData.currency_type
+          });
+          
           // Extract max_members from the creation event
           if (circleCreationEventData.max_members) {
             maxMembers = parseInt(circleCreationEventData.max_members, 10);
@@ -954,7 +1143,7 @@ export default function ContributeToCircle() {
           }
         }
 
-        // 2. Fetch Transaction Block for inputs (like cycle_day, potentially others)
+        // 2. Fetch Transaction Block for inputs (like currency_type, potentially others)
         if (createEvent?.id?.txDigest) {
           const txData = await client.getTransactionBlock({
             digest: createEvent.id.txDigest,
@@ -967,8 +1156,9 @@ export default function ContributeToCircle() {
             if (!transactionInput) transactionInput = {};
             // Extract relevant inputs based on expected positions (adjust if needed)
             if (inputs.length > 1 && inputs[1]?.type === 'pure') transactionInput.contribution_amount = inputs[1].value;
-            if (inputs.length > 2 && inputs[2]?.type === 'pure') transactionInput.contribution_amount_usd = inputs[2].value;
-            if (inputs.length > 4 && inputs[4]?.type === 'pure') transactionInput.security_deposit_usd = inputs[4].value;
+            if (inputs.length > 2 && inputs[2]?.type === 'pure') transactionInput.currency_type = inputs[2].value;
+            if (inputs.length > 3 && inputs[3]?.type === 'pure') transactionInput.contribution_amount_local = inputs[3].value;
+            if (inputs.length > 5 && inputs[5]?.type === 'pure') transactionInput.security_deposit_local = inputs[5].value;
             // Add any other inputs you stored this way
           }
         }
@@ -997,23 +1187,78 @@ export default function ContributeToCircle() {
 
       // --- Process Extracted Data (Prioritize sources) ---
       const configValues = {
-        contributionAmount: 0,
-        contributionAmountUsd: 0,
-        securityDeposit: 0, // SUI amount
-        securityDepositUsd: 0,
+        contributionAmount: 0, // SUI amount (MIST)
+        contributionAmountUsd: 0, // True USD equivalent in cents
+        contributionAmountLocal: 0, // Local currency amount (e.g., XAF in cents/smallest unit)
+        securityDeposit: 0, // SUI amount (MIST)
+        securityDepositUsd: 0, // True USD equivalent in cents
+        securityDepositLocal: 0, // Local currency amount (e.g., XAF in cents/smallest unit)
         autoSwapEnabled: false,
       };
 
-      // 1. Use values from transaction/event first
-      if (transactionInput) {
-        if (transactionInput.contribution_amount) configValues.contributionAmount = Number(transactionInput.contribution_amount) / 1e9;
-        if (transactionInput.contribution_amount_usd) configValues.contributionAmountUsd = Number(transactionInput.contribution_amount_usd) / 100;
-        if (transactionInput.security_deposit_usd) configValues.securityDepositUsd = Number(transactionInput.security_deposit_usd) / 100;
-      }
-      // Note: CircleCreatedEvent doesn't hold SUI amounts directly, rely on other sources or calculation
-      console.log('Contribute - Config after Tx/Event:', configValues);
+      // 1. Use values from CircleCreatedEvent first (most reliable for local vs USD distinction)
+      if (circleCreationEventData) {
+        if (circleCreationEventData.contribution_amount) configValues.contributionAmount = Number(circleCreationEventData.contribution_amount) / 1e9;
+        
+        // USD amounts from event
+        if (circleCreationEventData.contribution_amount_usd) {
+          configValues.contributionAmountUsd = Number(circleCreationEventData.contribution_amount_usd); // Already in cents
+        }
+        if (circleCreationEventData.security_deposit_usd) {
+          configValues.securityDepositUsd = Number(circleCreationEventData.security_deposit_usd); // Already in cents
+        }
+        
+        // Local currency amounts from event (these are the amounts in XAF, NGN etc, stored in their smallest unit)
+        if (circleCreationEventData.contribution_amount_local) {
+          configValues.contributionAmountLocal = Number(circleCreationEventData.contribution_amount_local);
+        } else if (configValues.contributionAmountUsd > 0 && circleCreationEventData.currency_type !== 'USD') {
+          // Fallback: If local not present but USD is, and currency is not USD, assume USD field was mistakenly local
+          // This is a temporary patch for older data structures if any.
+          // Ideally, event should always have both _local and _usd if not USD currency.
+          console.warn("[CONTRIBUTE DEBUG] Event: contribution_amount_local missing, using contribution_amount_usd as local for non-USD circle. currency:", circleCreationEventData.currency_type);
+          configValues.contributionAmountLocal = configValues.contributionAmountUsd; 
+        }
 
-      // 2. Look for config in dynamic fields
+        if (circleCreationEventData.security_deposit_local) {
+          configValues.securityDepositLocal = Number(circleCreationEventData.security_deposit_local);
+        } else if (configValues.securityDepositUsd > 0 && circleCreationEventData.currency_type !== 'USD') {
+          // Similar fallback for security deposit
+          console.warn("[CONTRIBUTE DEBUG] Event: security_deposit_local missing, using security_deposit_usd as local for non-USD circle. currency:", circleCreationEventData.currency_type);
+          configValues.securityDepositLocal = configValues.securityDepositUsd;
+        }
+      }
+      console.log('[CONTRIBUTE DEBUG] Config after CircleCreationEventData:', JSON.parse(JSON.stringify(configValues)));
+
+      // 2. Augment with transactionInput if event data was incomplete (less reliable for local/USD distinction)
+      if (transactionInput) {
+        if (configValues.contributionAmount === 0 && transactionInput.contribution_amount) configValues.contributionAmount = Number(transactionInput.contribution_amount) / 1e9;
+        
+        // If USD amounts are still zero, try from transactionInput
+        if (configValues.contributionAmountUsd === 0 && transactionInput.contribution_amount_usd) {
+          configValues.contributionAmountUsd = Number(transactionInput.contribution_amount_usd); // Assume cents
+        }
+        if (configValues.securityDepositUsd === 0 && transactionInput.security_deposit_usd) {
+          configValues.securityDepositUsd = Number(transactionInput.security_deposit_usd); // Assume cents
+        }
+
+        // If local amounts are still zero, try from transactionInput
+        if (configValues.contributionAmountLocal === 0 && transactionInput.contribution_amount_local) {
+          configValues.contributionAmountLocal = Number(transactionInput.contribution_amount_local);
+        } else if (configValues.contributionAmountLocal === 0 && configValues.contributionAmountUsd > 0 && transactionInput.currency_type !== 'USD') {
+            console.warn("[CONTRIBUTE DEBUG] TxInput: contribution_amount_local missing, using contribution_amount_usd as local for non-USD circle. currency:", transactionInput.currency_type);
+            configValues.contributionAmountLocal = configValues.contributionAmountUsd;
+        }
+
+        if (configValues.securityDepositLocal === 0 && transactionInput.security_deposit_local) {
+          configValues.securityDepositLocal = Number(transactionInput.security_deposit_local);
+        } else if (configValues.securityDepositLocal === 0 && configValues.securityDepositUsd > 0 && transactionInput.currency_type !== 'USD'){
+            console.warn("[CONTRIBUTE DEBUG] TxInput: security_deposit_local missing, using security_deposit_usd as local for non-USD circle. currency:", transactionInput.currency_type);
+            configValues.securityDepositLocal = configValues.securityDepositUsd;
+        }
+      }
+      console.log('[CONTRIBUTE DEBUG] Config after TransactionInput:', JSON.parse(JSON.stringify(configValues)));
+
+      // 3. Look for config in dynamic fields
       for (const field of dynamicFields) {
         if (!field) continue;
 
@@ -1043,22 +1288,47 @@ export default function ContributeToCircle() {
                     const configFields = valueField.fields as Record<string, SuiFieldValue>;
                     console.log('Contribute - Accessed nested configFields:', configFields);
 
-                    // Override with values from the config object
+                    // Override/set with values from the config object, prioritizing specific fields
                     if (configFields.contribution_amount) configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
-                    if (configFields.contribution_amount_usd) configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
+                    
+                    // True USD equivalent from config
+                    if (configFields.contribution_amount_usd) {
+                      configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd); // Expect cents
+                    }
+                    if (configFields.security_deposit_usd) {
+                      configValues.securityDepositUsd = Number(configFields.security_deposit_usd); // Expect cents
+                    }
+
+                    // Local currency amounts from config (these are XAF, NGN etc in their smallest unit)
+                    if (configFields.contribution_amount_local) {
+                      configValues.contributionAmountLocal = Number(configFields.contribution_amount_local);
+                    }
+                    if (configFields.security_deposit_local) {
+                      configValues.securityDepositLocal = Number(configFields.security_deposit_local);
+                    }
+                    
+                    // Fallback for older config structures: if _local is missing but _usd is present and currency is not USD, assume _usd was intended as local
+                    const currency = typeof configFields.currency_type === 'string' ? configFields.currency_type : (transactionInput?.currency_type as string || 'USD');
+                    if (configValues.contributionAmountLocal === 0 && configValues.contributionAmountUsd > 0 && currency !== 'USD') {
+                        console.warn("[CONTRIBUTE DEBUG] CircleConfig: contribution_amount_local missing, using contribution_amount_usd as local. Currency:", currency);
+                        configValues.contributionAmountLocal = configValues.contributionAmountUsd;
+                    }
+                    if (configValues.securityDepositLocal === 0 && configValues.securityDepositUsd > 0 && currency !== 'USD') {
+                        console.warn("[CONTRIBUTE DEBUG] CircleConfig: security_deposit_local missing, using security_deposit_usd as local. Currency:", currency);
+                        configValues.securityDepositLocal = configValues.securityDepositUsd;
+                    }
+
                     if (configFields.security_deposit) configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
-                    if (configFields.security_deposit_usd) configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
+                    
                     if (configFields.auto_swap_enabled !== undefined) {
                         const dynamicValue = Boolean(configFields.auto_swap_enabled);
                         console.log(`Contribute - Found auto_swap_enabled (${dynamicValue}) in dynamic field ${field.objectId}`);
                         configValues.autoSwapEnabled = dynamicValue;
                     }
-                    // Get max_members from config if available
                     if (configFields.max_members) {
                         maxMembers = Number(configFields.max_members);
                         console.log(`Contribute - Found max_members (${maxMembers}) in config field`);
                     }
-                    // Add other config fields if needed
                   } else {
                      console.warn('Contribute - Could not find nested fields in outerFields.value');
                   }
@@ -1071,101 +1341,120 @@ export default function ContributeToCircle() {
             } catch (error) {
               console.error(`Contribute - Error fetching config object ${field.objectId}:`, error);
             }
-            break; // Assuming only one config object
+            break; 
           }
         }
       }
-      console.log('Contribute - Config after Dynamic Fields:', configValues);
+      console.log('[CONTRIBUTE DEBUG] Config after Dynamic Fields (CircleConfig):', JSON.parse(JSON.stringify(configValues)));
 
-      // 3. Use direct fields from the circle object as a fallback
-      // Only update if the value hasn't been set yet (is 0 or false)
+      // 4. Use direct fields from the circle object as a final fallback if values are still 0
       if (configValues.contributionAmount === 0 && fields.contribution_amount) configValues.contributionAmount = Number(fields.contribution_amount) / 1e9;
-      if (configValues.contributionAmountUsd === 0) {
-          if (fields.contribution_amount_usd) {
-              configValues.contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
-          } else if (fields.usd_amounts && typeof fields.usd_amounts === 'object' && fields.usd_amounts !== null) {
-              // Refined type assertion for usd_amounts
-              const usdData = fields.usd_amounts as {
-                 fields?: { contribution_amount?: string; security_deposit?: string };
-                 contribution_amount?: string;
-                 security_deposit?: string;
-              };
-              const usdFields = usdData.fields || usdData;
-              if (usdFields?.contribution_amount) {
-                  configValues.contributionAmountUsd = Number(usdFields.contribution_amount) / 100;
-        }
-          }
-      }
       if (configValues.securityDeposit === 0 && fields.security_deposit) configValues.securityDeposit = Number(fields.security_deposit) / 1e9;
-      if (configValues.securityDepositUsd === 0) {
-          if (fields.security_deposit_usd) {
-              configValues.securityDepositUsd = Number(fields.security_deposit_usd) / 100;
-          } else if (fields.usd_amounts && typeof fields.usd_amounts === 'object' && fields.usd_amounts !== null) {
-              // Refined type assertion for usd_amounts
-              const usdData = fields.usd_amounts as {
-                 fields?: { contribution_amount?: string; security_deposit?: string };
-                 contribution_amount?: string;
-                 security_deposit?: string;
-              };
-              const usdFields = usdData.fields || usdData;
-              if (usdFields?.security_deposit) {
-                  configValues.securityDepositUsd = Number(usdFields.security_deposit) / 100;
-              }
-          }
-      }
-      console.log('Contribute - Config after Direct Fields Fallback:', configValues);
       
-      // 4. Calculate SUI amounts from USD if SUI amount is still zero (and price is available)
+      if (configValues.contributionAmountUsd === 0) {
+        if (fields.contribution_amount_usd) {
+          configValues.contributionAmountUsd = Number(fields.contribution_amount_usd); // Assume cents
+        } else if (fields.usd_amounts && typeof fields.usd_amounts === 'object' && fields.usd_amounts !== null) {
+          const usdData = fields.usd_amounts as { fields?: { contribution_amount?: string; }; contribution_amount?: string; };
+          const usdFieldsData = usdData.fields || usdData;
+          if (usdFieldsData?.contribution_amount) {
+            configValues.contributionAmountUsd = Number(usdFieldsData.contribution_amount); // Assume cents
+          }
+        }
+      }
+      if (configValues.securityDepositUsd === 0) {
+        if (fields.security_deposit_usd) {
+          configValues.securityDepositUsd = Number(fields.security_deposit_usd); // Assume cents
+        } else if (fields.usd_amounts && typeof fields.usd_amounts === 'object' && fields.usd_amounts !== null) {
+          const usdData = fields.usd_amounts as { fields?: { security_deposit?: string; }; security_deposit?: string; };
+          const usdFieldsData = usdData.fields || usdData;
+          if (usdFieldsData?.security_deposit) {
+            configValues.securityDepositUsd = Number(usdFieldsData.security_deposit); // Assume cents
+          }
+        }
+      }
+      // For local amounts from direct fields (less likely to be correctly structured here)
+      if (configValues.contributionAmountLocal === 0 && fields.contribution_amount_local) {
+        configValues.contributionAmountLocal = Number(fields.contribution_amount_local);
+      }
+      if (configValues.securityDepositLocal === 0 && fields.security_deposit_local) {
+        configValues.securityDepositLocal = Number(fields.security_deposit_local);
+      }
+      console.log('[CONTRIBUTE DEBUG] Config after Direct Fields Fallback:', JSON.parse(JSON.stringify(configValues)));
+      
+      // 5. Calculate SUI amounts from TRUE USD if SUI amount is still zero (and price is available)
+      // This should use the true USD equivalent for calculation
       if (configValues.contributionAmount === 0 && configValues.contributionAmountUsd > 0 && suiPrice > 0) {
-          configValues.contributionAmount = configValues.contributionAmountUsd / suiPrice;
+          configValues.contributionAmount = (configValues.contributionAmountUsd / 100) / suiPrice;
           console.log(`Contribute - Calculated contribution SUI from USD: ${configValues.contributionAmount}`);
       }
       if (configValues.securityDeposit === 0 && configValues.securityDepositUsd > 0 && suiPrice > 0) {
-          configValues.securityDeposit = configValues.securityDepositUsd / suiPrice;
+          configValues.securityDeposit = (configValues.securityDepositUsd / 100) / suiPrice;
           console.log(`Contribute - Calculated security deposit SUI from USD: ${configValues.securityDeposit}`);
       }
 
-      // Ensure walletId is set, even if event fetch failed, try direct field (less reliable)
+      // Ensure walletId is set
       if (!walletId && typeof fields.wallet_id === 'string') {
           walletId = fields.wallet_id;
           console.log('Contribute - Using wallet ID from direct field:', walletId);
       }
         
       // Set the final circle state
+      const finalCurrencyType = (transactionInput?.currency_type as string || circleCreationEventData?.currency_type || 'USD');
+      
+      // Final check: If local amounts are still 0, and it's a non-USD currency, populate from USD as a last resort.
+      // This might happen if only USD values were stored everywhere for a non-USD circle.
+      if (finalCurrencyType !== 'USD') {
+          if (configValues.contributionAmountLocal === 0 && configValues.contributionAmountUsd > 0) {
+              console.warn("[CONTRIBUTE DEBUG] Final Fallback: Setting contributionAmountLocal from contributionAmountUsd for non-USD circle. This might indicate a data issue.");
+              configValues.contributionAmountLocal = configValues.contributionAmountUsd;
+          }
+          if (configValues.securityDepositLocal === 0 && configValues.securityDepositUsd > 0) {
+              console.warn("[CONTRIBUTE DEBUG] Final Fallback: Setting securityDepositLocal from securityDepositUsd for non-USD circle. This might indicate a data issue.");
+              configValues.securityDepositLocal = configValues.securityDepositUsd;
+          }
+      }
+      
+      // If it IS a USD circle, ensure local amounts match USD amounts if local is still 0
+      if (finalCurrencyType === 'USD') {
+          if (configValues.contributionAmountLocal === 0) configValues.contributionAmountLocal = configValues.contributionAmountUsd;
+          if (configValues.securityDepositLocal === 0) configValues.securityDepositLocal = configValues.securityDepositUsd;
+      }
+      
       setCircle({
         id: id as string,
         name: typeof fields.name === 'string' ? fields.name : '',
         admin: typeof fields.admin === 'string' ? fields.admin : '',
-        contributionAmount: configValues.contributionAmount,
-        contributionAmountUsd: configValues.contributionAmountUsd,
-        securityDeposit: configValues.securityDeposit,
-        securityDepositUsd: configValues.securityDepositUsd,
-        walletId: walletId, // Use the reliably fetched walletId
+        contributionAmount: configValues.contributionAmount, // SUI MIST
+        contributionAmountUsd: configValues.contributionAmountUsd, // True USD cents
+        contributionAmountLocal: configValues.contributionAmountLocal, // Local currency cents/smallest unit (e.g. XAF 40000 for 400 FCFA)
+        currencyType: finalCurrencyType,
+        securityDeposit: configValues.securityDeposit, // SUI MIST
+        securityDepositUsd: configValues.securityDepositUsd, // True USD cents
+        securityDepositLocal: configValues.securityDepositLocal, // Local currency cents/smallest unit
+        walletId: walletId, 
         autoSwapEnabled: configValues.autoSwapEnabled,
-        isActive: isActive, // Use our correctly determined isActive value
-        maxMembers: maxMembers, // Add max members to circle object
-        pausedAfterCycle: isPausedAfterCycle, // Add paused after cycle flag
-        // Remove nextPayoutTime and cycleLength if only used for progress component
-        // nextPayoutTime: nextPayoutTime,
-        // cycleLength: cycleLength 
+        isActive: isActive, 
+        maxMembers: maxMembers, 
+        pausedAfterCycle: isPausedAfterCycle,
       });
 
-      console.log('Contribute - Final circle state:', {
+      console.log('[CONTRIBUTE DEBUG] Final circle state set:', {
         id,
         name: typeof fields.name === 'string' ? fields.name : '',
         admin: typeof fields.admin === 'string' ? fields.admin : '',
         contributionAmount: configValues.contributionAmount,
         contributionAmountUsd: configValues.contributionAmountUsd,
+        contributionAmountLocal: configValues.contributionAmountLocal,
+        currencyType: finalCurrencyType,
         securityDeposit: configValues.securityDeposit,
         securityDepositUsd: configValues.securityDepositUsd,
+        securityDepositLocal: configValues.securityDepositLocal,
         walletId,
         autoSwapEnabled: configValues.autoSwapEnabled,
         isActive,
         maxMembers,
         pausedAfterCycle: isPausedAfterCycle,
-        // Remove from log if removed from state
-        // nextPayoutTime,
-        // cycleLength
       });
 
     } catch (error) {
@@ -1178,58 +1467,78 @@ export default function ContributeToCircle() {
 
   const fetchUserWalletInfo = async () => {
     if (!userAddress || !circle || !circle.id) {
-      console.log('Skipping fetchUserWalletInfo: Missing userAddress or circle info.');
+      console.log('[Balance Fetch] Skipping fetchUserWalletInfo - missing data:', { 
+        hasUserAddress: !!userAddress, 
+        userAddress,
+        hasCircle: !!circle, 
+        circleId: circle?.id 
+      });
       return;
     }
     
+    console.log('[Balance Fetch] Starting fetchUserWalletInfo for:', { userAddress, circleId: circle.id });
     setFetchingBalance(true);
     let depositPaid = false; // Default to false
     
     try {
       const client = new SuiClient({ url: getJsonRpcUrl() }); // Use helper function for URL
       
-      // --- Get SUI Balance (Remains the same) ---
+      // --- Get SUI Balance ---
+      console.log('[Balance Fetch] Fetching SUI balance for address:', userAddress);
       const coins = await client.getCoins({ owner: userAddress, coinType: '0x2::sui::SUI' });
+      console.log('[Balance Fetch] Found coins:', coins.data.length);
+      console.log('[Balance Fetch] Coin details:', coins.data.map(coin => ({
+        coinObjectId: coin.coinObjectId,
+        balance: coin.balance
+      })));
       const totalBalance = coins.data.reduce((sum, coin) => sum + Number(coin.balance), 0) / 1e9;
+      console.log('[Balance Fetch] Total SUI balance:', totalBalance);
       setUserBalance(totalBalance);
 
       // --- Get USDC Balance (Remains the same) ---
       try {
         const usdcCoins = await client.getCoins({ owner: userAddress, coinType: USDC_COIN_TYPE });
-        const totalUsdcBalance = usdcCoins.data.reduce((sum, coin) => sum + Number(coin.balance), 0) / 1e6;
+        const totalUsdcBalance = usdcCoins.data.reduce((sum, coin) => sum + Number(coin.balance), 0) / 1e6; // This is in actual USDC units (dollars)
         setUserUsdcBalance(totalUsdcBalance);
 
         // --- Updated logic for showing direct deposit option --- 
         let showOption = false;
-        const hasEnoughForSecurity = totalUsdcBalance >= circle.securityDepositUsd;
-        const hasEnoughForContribution = totalUsdcBalance >= circle.contributionAmountUsd;
+        // circle.securityDepositUsd and circle.contributionAmountUsd from circle state are in CENTS.
+        // Convert them to dollars for comparison with totalUsdcBalance.
+        const securityDepositInDollars = (circle.securityDepositUsd || 0) / 100;
+        const contributionInDollars = (circle.contributionAmountUsd || 0) / 100;
+
+        const hasEnoughForSecurity = totalUsdcBalance >= securityDepositInDollars;
+        const hasEnoughForContribution = totalUsdcBalance >= contributionInDollars;
         const autoSwapOn = Boolean(circle.autoSwapEnabled);
         const circleActive = Boolean(circle.isActive);
         const circlePaused = Boolean(circle.pausedAfterCycle);
 
         // Log intermediate values for debugging
         console.log('[Direct Deposit Check]', {
-            userDepositPaid, // Use the state variable directly
+            userDepositPaid, 
             hasEnoughForSecurity,
             hasEnoughForContribution,
             autoSwapOn,
             circleActive,
             circlePaused,
-            securityDepositUsd: circle.securityDepositUsd,
-            contributionAmountUsd: circle.contributionAmountUsd,
-            totalUsdcBalance
+            securityDepositRequiredUSD_ForCheck: securityDepositInDollars,
+            contributionRequiredUSD_ForCheck: contributionInDollars,
+            userUsdcBalance_InDollars: totalUsdcBalance,
+            _rawCircleSecDepUsd_InCents: circle.securityDepositUsd,
+            _rawCircleContrUsd_InCents: circle.contributionAmountUsd
         });
 
         // Condition 1: Paying Security Deposit (userDepositPaid state is false)
-        if (!userDepositPaid && hasEnoughForSecurity && autoSwapOn) {
+        if (!userDepositPaid && securityDepositInDollars > 0 && hasEnoughForSecurity && autoSwapOn) {
           showOption = true;
-          console.log("Showing direct deposit for SECURITY DEPOSIT (Circle active status ignored)");
+          console.log("Logic: Showing direct deposit for SECURITY DEPOSIT because it's > 0, user has enough, and autoswap is on.");
         }
         // Condition 2: Making Regular Contribution (userDepositPaid state is true)
         // Don't allow contributions if circle is paused after cycle
-        else if (userDepositPaid && hasEnoughForContribution && autoSwapOn && circleActive && !circlePaused) {
+        else if (userDepositPaid && contributionInDollars > 0 && hasEnoughForContribution && autoSwapOn && circleActive && !circlePaused) {
            showOption = true;
-           console.log("Showing direct deposit for CONTRIBUTION (Circle must be active and not paused)");
+           console.log("Logic: Showing direct deposit for CONTRIBUTION because it's > 0, user has enough, autoswap is on, circle active & not paused.");
         }
         
         setShowDirectDepositOption(showOption);
@@ -1829,14 +2138,26 @@ export default function ContributeToCircle() {
     }
   };
 
-  // Add a helper function to calculate live security deposit amount in SUI
+  // Add a helper function to get valid security deposit amount in SUI
   const getSecurityDepositInSui = (): number => {
-    if (!circle || !circle.securityDepositUsd || typeof suiPrice !== 'number' || suiPrice <= 0) {
-      return circle?.securityDeposit || 0;
+    // Make sure we have a valid, reasonable number
+    const securityDeposit = typeof circle?.securityDeposit === 'number' && !isNaN(circle.securityDeposit)
+      ? circle.securityDeposit : 0;
+    
+    // Validate the amount is reasonable (not millions)
+    const isValidAmount = securityDeposit > 0 && securityDeposit < 1000;
+    
+    // If amount seems incorrect but we have USD value, calculate from USD
+    if (!isValidAmount && circle?.securityDepositUsd && 
+        typeof circle.securityDepositUsd === 'number' && 
+        !isNaN(circle.securityDepositUsd) && 
+        typeof suiPrice === 'number' && 
+        suiPrice > 0) {
+      return circle.securityDepositUsd / suiPrice;
     }
     
-    // Calculate based on the latest SUI price
-    return circle.securityDepositUsd / suiPrice;
+    // Return the original amount if it's valid, or 0 as a safe default
+    return isValidAmount ? securityDeposit : 0;
   };
 
   // New function to calculate total required amount including slippage and fees
@@ -1962,16 +2283,6 @@ export default function ContributeToCircle() {
     }
   };
 
-  // Helper function to format USD amounts
-  const formatUSD = (amount: number): string => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
-    }).format(amount);
-  };
-
   // Helper function to get valid contribution amount
   const getValidContributionAmount = (): number => {
     // Make sure we have a valid, reasonable number
@@ -1995,67 +2306,91 @@ export default function ContributeToCircle() {
   };
 
   // Currency display component
-  const CurrencyDisplay = ({ usd, sui, className = '' }: { usd?: number, sui?: number, className?: string }) => {
+  const CurrencyDisplay = ({ 
+    localAmount, 
+    sui, 
+    currencyType = 'USD', 
+    className = '' 
+  }: { 
+    localAmount?: number; // Renamed from usd for clarity - this is the amount in local currency
+    sui?: number; 
+    currencyType?: string;
+    className?: string;
+  }) => {
     const isPriceUnavailable = suiPrice === null;
     const isPriceStale = priceService.getFetchStatus() === 'error';
     
-    console.log('CurrencyDisplay inputs:', { usd, sui, suiPrice, isPriceUnavailable });
+    console.log('CurrencyDisplay inputs:', { localAmount, sui, currencyType, suiPrice, isPriceUnavailable });
     
     // Check for invalid inputs and provide defaults
-    if ((usd === undefined || isNaN(usd)) && (sui === undefined || isNaN(sui))) {
-      console.log('CurrencyDisplay: both usd and sui values are invalid, defaulting to 0');
-      usd = 0;
-      sui = 0;
+    let effectiveLocalAmount = localAmount;
+    let effectiveSui = sui;
+
+    if ((effectiveLocalAmount === undefined || isNaN(effectiveLocalAmount)) && (effectiveSui === undefined || isNaN(effectiveSui))) {
+      console.log('CurrencyDisplay: both localAmount and sui values are invalid, defaulting to 0');
+      effectiveLocalAmount = 0;
+      effectiveSui = 0;
     }
     
-    // Calculate values based on which parameter is provided
-    let calculatedSui: number | null = null;
-    let calculatedUsd: number | null = null;
+    // Use the provided values directly instead of converting between them
+    let displayLocalAmount: number | null = null;
+    let displaySuiAmount: number | null = null;
     
-    if (usd !== undefined && !isNaN(usd)) {
-      // If USD is provided and valid, calculate SUI based on current price
-      calculatedUsd = usd;
-      calculatedSui = suiPrice !== null && suiPrice > 0 ? usd / suiPrice : null;
-      console.log('CurrencyDisplay: using USD value to calculate SUI:', { 
-        usd: calculatedUsd, 
-        sui: calculatedSui,
-        suiPrice 
-      });
-    } else if (sui !== undefined && !isNaN(sui)) {
-      // If SUI is provided and valid, calculate USD
-      calculatedSui = sui;
-      calculatedUsd = suiPrice !== null ? sui * suiPrice : null;
-      console.log('CurrencyDisplay: using SUI value to calculate SUI:', { 
-        sui: calculatedSui, 
-        usd: calculatedUsd,
-        suiPrice 
-      });
-    } else {
-      // Default values if neither is provided or values are invalid
-      calculatedSui = 0;
-      calculatedUsd = 0;
-      console.log('CurrencyDisplay: using default values:', { 
-        sui: calculatedSui, 
-        usd: calculatedUsd 
+    if (effectiveLocalAmount !== undefined && !isNaN(effectiveLocalAmount)) {
+      displayLocalAmount = effectiveLocalAmount; 
+      console.log('CurrencyDisplay: using provided local currency amount:', { 
+        local: displayLocalAmount, 
+        currencyType
       });
     }
     
-    // Format SUI with appropriate precision if available
-    const formattedSui = calculatedSui !== null ? (
-      calculatedSui >= 1000 
-        ? calculatedSui.toLocaleString(undefined, { maximumFractionDigits: 0 }) 
-        : calculatedSui >= 100 
-          ? calculatedSui.toFixed(1) 
-          : calculatedSui.toFixed(2)
+    if (effectiveSui !== undefined && !isNaN(effectiveSui)) {
+      displaySuiAmount = effectiveSui; 
+      console.log('CurrencyDisplay: using provided SUI amount:', { 
+        sui: displaySuiAmount
+      });
+    }
+    
+    // Default values if neither is provided or values are invalid
+    if (displayLocalAmount === null || displayLocalAmount === undefined) {
+      displayLocalAmount = 0;
+    }
+    if (displaySuiAmount === null || displaySuiAmount === undefined) {
+      displaySuiAmount = 0;
+    }
+    
+    console.log('CurrencyDisplay: final display values:', { 
+      local: displayLocalAmount, 
+      sui: displaySuiAmount,
+      currencyType 
+    });
+    
+    // Special case for zero values
+    if (displayLocalAmount === 0 && displaySuiAmount === 0) {
+      return (
+        <span className={`${className}`}>
+          {formatCurrency(0, currencyType)} (0 SUI)
+        </span>
+      );
+    }
+    
+    const formattedSui = displaySuiAmount !== null ? (
+      displaySuiAmount >= 1000 
+        ? displaySuiAmount.toLocaleString(undefined, { maximumFractionDigits: 0 }) 
+        : displaySuiAmount >= 100 
+          ? displaySuiAmount.toFixed(1) 
+          : displaySuiAmount.toFixed(3) 
     ) : '—';
     
-    // Check if the component is being used inline
     const isInline = className.includes('inline');
     
+    // IMPORTANT: Divide localAmount by 100 here because it's stored in cents/smallest unit
+    const formattedLocalAmount = displayLocalAmount !== null ? formatCurrency(displayLocalAmount / 100, currencyType) : formatCurrency(0, currencyType);
+
     if (isInline) {
       return (
         <span className={className}>
-          {calculatedUsd !== null ? formatUSD(calculatedUsd) : '$—.—'} ({formattedSui} SUI)
+          {formattedLocalAmount} ({formattedSui} SUI)
           {isPriceStale && <span title="Using cached price" className="text-xs text-amber-500 ml-1">⚠️</span>}
         </span>
       );
@@ -2066,7 +2401,7 @@ export default function ContributeToCircle() {
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
             <div className={`flex flex-col ${className} cursor-help`}>
-              <span className="font-medium">{calculatedUsd !== null ? formatUSD(calculatedUsd) : '$—.—'}</span>
+              <span className="font-medium">{formattedLocalAmount}</span>
               <span className="text-sm text-gray-500">{formattedSui} SUI</span>
               {isPriceStale && <span title="Using cached price" className="text-xs text-amber-500">⚠️ Cached price</span>}
             </div>
@@ -2083,10 +2418,16 @@ export default function ContributeToCircle() {
                 ) : (
                   <p className="text-amber-400">SUI price unavailable</p>
                 )}
+                <p className="text-xs text-blue-300">
+                  Currency: {currencyType}
+                </p>
                 <p className="text-xs text-gray-400">
                   {isPriceStale 
                     ? "Using cached price - service temporarily unavailable" 
                     : "Updated price data from CoinGecko"}
+                </p>
+                <p className="text-xs text-gray-400">
+                  Note: SUI amount was calculated at circle creation time
                 </p>
               </div>
               <Tooltip.Arrow className="fill-gray-900" />
@@ -2301,9 +2642,11 @@ export default function ContributeToCircle() {
   const handleDirectUsdcDeposit = async () => {
     if (!circle || !userAddress || !userUsdcBalance) return;
     
-    // Determine if this is a security deposit or contribution
     const isSecurityDeposit = !userDepositPaid;
-    
+    // Values from circle state are in CENTS
+    const securityDepositUSDCents = circle.securityDepositUsd || 0;
+    const contributionUSDCents = circle.contributionAmountUsd || 0;
+
     // If it's a security deposit, check if it was already returned during the current pause
     if (isSecurityDeposit && circle.pausedAfterCycle && securityDepositReturnedDuringPause) {
       toast.error('You have already received your security deposit for this cycle. Please wait for the admin to resume the cycle before paying a new deposit.');
@@ -2316,13 +2659,11 @@ export default function ContributeToCircle() {
       return;
     }
     
-    // Check if user is current recipient
     if (isCurrentRecipient) {
       toast.error('You are the current recipient for this cycle. You don&apos;t need to contribute.');
       return;
     }
     
-    // Double-check if user has already contributed for this cycle
     const alreadyContributed = await checkUserContribution();
     if (alreadyContributed) {
       toast.error('You have already contributed for this cycle.');
@@ -2334,12 +2675,14 @@ export default function ContributeToCircle() {
     try {
       const toastId = toast.loading('Processing direct USDC deposit...');
       
-      // Determine amount and type based on whether security deposit is already paid
-      const isSecurityDeposit = !userDepositPaid;
-      const requiredAmount = isSecurityDeposit ? circle.securityDepositUsd : circle.contributionAmountUsd;
+      // Determine the required amount in CENTS from circle state
+      const requiredAmountInCents = isSecurityDeposit ? securityDepositUSDCents : contributionUSDCents;
+      // Convert to DOLLARS for comparison with userUsdcBalance (which is in dollars)
+      const requiredAmountInDollars = requiredAmountInCents / 100;
       
-      if (userUsdcBalance < requiredAmount) {
-        toast.error(`Insufficient USDC balance. Need ${requiredAmount.toFixed(2)} USDC but you have ${userUsdcBalance.toFixed(2)} USDC.`, { id: toastId });
+      // Compare user's USDC balance (dollars) with the required amount (dollars)
+      if (userUsdcBalance < requiredAmountInDollars) {
+        toast.error(`Insufficient USDC balance. Need ${requiredAmountInDollars.toFixed(2)} USDC but you have ${userUsdcBalance.toFixed(2)} USDC.`, { id: toastId });
         setDirectDepositProcessing(false);
         return;
       }
@@ -2353,11 +2696,10 @@ export default function ContributeToCircle() {
       console.log('Processing direct USDC deposit with parameters:', {
         circleId: circle.id,
         walletId: circle.walletId,
-        usdcAmount: requiredAmount,
+        usdcAmountInCents: requiredAmountInCents, // Log the amount in cents being sent
         isSecurityDeposit
       });
       
-      // Call API to transfer USDC directly
       const response = await fetch('/api/zkLogin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2366,7 +2708,7 @@ export default function ContributeToCircle() {
           account,
           circleId: circle.id,
           walletId: circle.walletId,
-          usdcAmount: Math.floor(requiredAmount * 1e6), // Convert to micro USDC (6 decimals)
+          usdcAmount: requiredAmountInCents, // Send amount in CENTS
           isSecurityDeposit
         }),
       });
@@ -2545,17 +2887,17 @@ export default function ContributeToCircle() {
               <div className="flex-1">
                 <h4 className="font-medium text-emerald-800">Use USDC from your wallet</h4>
                 <p className="text-sm text-emerald-700 mt-1">
-                  You have <span className="font-medium">${userUsdcBalance.toFixed(2)} USDC</span> in your wallet.
+                  You have <span className="font-medium">
+                    {convertedUserUsdcBalanceDisplay ? `${convertedUserUsdcBalanceDisplay} (approx. ${formatUSD(userUsdcBalance)})` : `${formatUSD(userUsdcBalance)} USDC`}
+                  </span> in your wallet.
                   You can directly deposit {!userDepositPaid ? 'security deposit' : 'contribution'} without swapping SUI.
                 </p>
                 <div className="mt-3">
                   <button
                     onClick={handleDirectUsdcDeposit}
-                    disabled={directDepositProcessing || 
-                            (userDepositPaid && (!circle?.isActive || circle?.pausedAfterCycle)) || 
-                            userHasContributed ||
-                            isCurrentRecipient ||
-                            (!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause)}
+                    disabled={userDepositPaid && (!circle?.isActive || circle?.pausedAfterCycle || userHasContributed || isCurrentRecipient) ||
+                            (!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause) || 
+                            (!userDepositPaid && (circle?.securityDepositUsd || 0) <= 0)}
                     className="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
                   >
                     {directDepositProcessing ? (
@@ -2567,7 +2909,7 @@ export default function ContributeToCircle() {
                         Processing...
                       </span>
                     ) : !userDepositPaid ? (
-                      `Deposit ${circle?.securityDepositUsd?.toFixed(2)} USDC as Security Deposit`
+                      `Deposit ${formatCurrency((circle?.securityDepositLocal || 0) / 100, circle?.currencyType || 'USD')} as Security Deposit`
                     ) : userHasContributed ? (
                       `Already Contributed`
                     ) : isCurrentRecipient ? (
@@ -2575,7 +2917,7 @@ export default function ContributeToCircle() {
                     ) : circle?.pausedAfterCycle ? (
                       `Circle is Paused After Cycle`
                     ) : (
-                      `Contribute ${circle?.contributionAmountUsd?.toFixed(2)} USDC Directly`
+                      `Contribute ${formatCurrency((circle?.contributionAmountLocal || 0) / 100, circle?.currencyType || 'USD')} Directly`
                     )}
                   </button>
                 </div>
@@ -2614,7 +2956,9 @@ export default function ContributeToCircle() {
                 checkUserContribution();
               }}
               disabled={userDepositPaid && (!circle?.isActive || circle?.pausedAfterCycle || userHasContributed || isCurrentRecipient) ||
-                      (!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause)}
+                      (!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause) || 
+                      (!userDepositPaid && (circle?.securityDepositUsd || 0) <= 0)}
+              circleCurrencyType={circle?.currencyType || 'USD'} // Pass the circle's currency type
             />
           </>
         ) : (
@@ -2623,7 +2967,7 @@ export default function ContributeToCircle() {
               <p className="text-sm text-gray-600 mb-2">You are about to contribute:</p>
               <div className="flex items-center">
                 <span className="bg-blue-100 text-blue-800 text-xl font-semibold rounded-lg py-2 px-4">
-                  ${circle?.contributionAmountUsd?.toFixed(2) || '0.00'} ({getValidContributionAmount().toFixed(4)} SUI)
+                  {circle?.contributionAmountLocal ? formatCurrency(circle.contributionAmountLocal / 100, circle.currencyType) : formatCurrency(0, circle?.currencyType || 'USD')} ({getValidContributionAmount().toFixed(4)} SUI)
                 </span>
               </div>
             </div>
@@ -2695,11 +3039,11 @@ export default function ContributeToCircle() {
                     </p>
                     <p className="text-sm text-amber-600">
                       You need to pay a security deposit of{' '}
-                      {(!circle || isNaN(circle.securityDeposit) || circle.securityDeposit <= 0) ? (
+                      {(!circle || isNaN(circle.securityDepositLocal || 0) || (circle.securityDepositLocal || 0) <= 0) ? (
                         'amount unavailable'
                       ) : (
                         <span className="font-semibold">
-                          <CurrencyDisplay usd={circle.securityDepositUsd} className="inline" />
+                          <CurrencyDisplay localAmount={circle.securityDepositLocal} className="inline" currencyType={circle.currencyType} />
                         </span>
                       )}{' '}
                       before contributing.
@@ -2738,7 +3082,7 @@ export default function ContributeToCircle() {
                   
                   <button
                     onClick={handlePaySecurityDeposit}
-                    disabled={isPayingDeposit || !circle || circle.securityDepositUsd <= 0 || 
+                    disabled={isPayingDeposit || !circle || (circle.securityDepositUsd || 0) <= 0 || 
                              (userBalance !== null && userBalance < getRequiredDepositAmount()) ||
                              (circle.pausedAfterCycle && securityDepositReturnedDuringPause)}
                     className="w-full py-3 px-4 rounded-lg shadow-sm text-sm font-bold text-white bg-amber-500 hover:bg-amber-600 transition-all disabled:opacity-70 disabled:cursor-not-allowed"
@@ -2899,20 +3243,40 @@ export default function ContributeToCircle() {
                 <div className="py-4 space-y-8">
                   {/* User Wallet Information */}
                   <div className="px-2">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-green-500 pl-3">Your Wallet</h3>
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-lg font-medium text-gray-900 border-l-4 border-green-500 pl-3">Your Wallet</h3>
+                      <button
+                        onClick={() => fetchUserWalletInfo()}
+                        disabled={fetchingBalance}
+                        className="text-xs bg-green-50 hover:bg-green-100 text-green-600 py-1 px-2 rounded flex items-center transition-colors disabled:opacity-50"
+                      >
+                        {fetchingBalance ? (
+                          <span className="flex items-center">
+                            <svg className="animate-spin -ml-1 mr-1 h-3 w-3 text-green-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Refreshing...
+                          </span>
+                        ) : (
+                          <span className="flex items-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            Refresh Balance
+                          </span>
+                        )}
+                      </button>
+                    </div>
                     <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg shadow-sm border border-blue-100">
                       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-3 sm:space-y-0">
                         <div>
                           <p className="text-sm text-gray-600 mb-1">Available Balance:</p>
-                          {fetchingBalance ? (
-                            <div className="animate-pulse h-6 w-32 bg-gray-200 rounded"></div>
+                          {fetchingBalance || totalSuiEquivalentDisplay === null ? (
+                            <div className="animate-pulse h-6 w-48 bg-gray-200 rounded"></div>
                           ) : (
                             <div className="text-lg font-semibold text-blue-700">
-                              {userBalance !== null ? (
-                                <CurrencyDisplay sui={userBalance} />
-                              ) : (
-                                'Unable to fetch balance'
-                              )}
+                              {totalSuiEquivalentDisplay !== null ? totalSuiEquivalentDisplay : 'Unable to fetch balance'}
                             </div>
                           )}
                         </div>
@@ -2937,12 +3301,12 @@ export default function ContributeToCircle() {
                       
                       <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
                         <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
-                        <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} />
+                        <CurrencyDisplay localAmount={circle.contributionAmountLocal} sui={circle.contributionAmount} currencyType={circle.currencyType} />
                       </div>
 
                       <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
                         <p className="text-sm text-gray-500 mb-1">Security Deposit Required</p>
-                        <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} />
+                        <CurrencyDisplay localAmount={circle.securityDepositLocal} sui={circle.securityDeposit} currencyType={circle.currencyType} />
                       </div>
 
                       <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
@@ -3051,7 +3415,7 @@ export default function ContributeToCircle() {
                           ) : (
                             <div className="flex items-center mb-2">
                               <span className="text-lg font-medium text-blue-700">
-                                {custodySuiBalance !== null ? `${custodySuiBalance.toFixed(6)} SUI` : "-"}
+                                {custodySuiBalance !== null ? `${custodySuiBalance.toFixed(4)} SUI` : "-"}
                               </span>
                               <span className="ml-2 px-2 py-1 bg-gray-100 text-gray-600 text-xs font-medium rounded-full">
                                 Total
@@ -3088,7 +3452,7 @@ export default function ContributeToCircle() {
                           ) : (
                             <div className="flex items-center mb-2">
                               <span className="text-lg font-medium text-indigo-700">
-                                {custodyStablecoinBalance !== null ? `$${custodyStablecoinBalance.toFixed(2)} USDC` : "-"}
+                                {custodyUsdcTotalLocalDisplay !== null ? custodyUsdcTotalLocalDisplay : custodyStablecoinBalance !== null ? `${formatUSD(custodyStablecoinBalance)} USDC` : "-"}
                               </span>
                               <span className="ml-2 px-2 py-1 bg-gray-100 text-gray-600 text-xs font-medium rounded-full">
                                 Total
@@ -3100,14 +3464,14 @@ export default function ContributeToCircle() {
                               <div className="flex flex-wrap items-center gap-1">
                                 <div className="w-3 h-3 bg-amber-300 rounded-sm mr-1"></div>
                                 <span className="text-sm text-gray-700">
-                                  ${securityDepositBalance?.toFixed(2) || '0.00'} USDC
+                                  {custodyUsdcSecurityDepositLocalDisplay !== null ? custodyUsdcSecurityDepositLocalDisplay : securityDepositBalance !== null ? `${formatUSD(securityDepositBalance)} USDC` : "-"}
                                 </span>
                                 <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs font-medium rounded-full">Security Deposits</span>
                               </div>
                               <div className="flex flex-wrap items-center gap-1">
                                 <div className="w-3 h-3 bg-green-300 rounded-sm mr-1"></div>
                                 <span className="text-sm text-gray-700">
-                                  ${contributionBalance?.toFixed(2) || '0.00'} USDC
+                                  {custodyUsdcContributionLocalDisplay !== null ? custodyUsdcContributionLocalDisplay : contributionBalance !== null ? `${formatUSD(contributionBalance)} USDC` : "-"}
                                 </span>
                                 <span className="px-1.5 py-0.5 bg-green-100 text-green-800 text-xs font-medium rounded-full">Available for Contributions</span>
                               </div>

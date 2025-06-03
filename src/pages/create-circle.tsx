@@ -12,14 +12,74 @@ import { SuiClient } from '@mysten/sui.js/client';
 // Add package ID constant
 const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID || '0x123';
 
+// Add supported currencies directly here since they're not in price-service
+export interface SupportedCurrency {
+  code: string;
+  name: string;
+  symbol: string;
+}
+
+export const SUPPORTED_CURRENCIES: Record<string, SupportedCurrency> = {
+  // Western currencies
+  USD: { code: 'USD', name: 'US Dollar', symbol: '$' },
+  EUR: { code: 'EUR', name: 'Euro', symbol: '€' },
+  GBP: { code: 'GBP', name: 'British Pound', symbol: '£' },
+  CAD: { code: 'CAD', name: 'Canadian Dollar', symbol: 'CA$' },
+  // African currencies
+  NGN: { code: 'NGN', name: 'Nigerian Naira', symbol: '₦' },
+  ZAR: { code: 'ZAR', name: 'South African Rand', symbol: 'R' },
+  GHS: { code: 'GHS', name: 'Ghanaian Cedi', symbol: '₵' },
+  KES: { code: 'KES', name: 'Kenyan Shilling', symbol: 'KSh' },
+  EGP: { code: 'EGP', name: 'Egyptian Pound', symbol: 'E£' },
+  MAD: { code: 'MAD', name: 'Moroccan Dirham', symbol: 'د.م.' },
+  XAF: { code: 'XAF', name: 'Central African CFA Franc', symbol: 'CFA' },
+};
+
+// Add currency helper functions
+const getSupportedCurrencies = () => ({
+  western: [
+    SUPPORTED_CURRENCIES.USD,
+    SUPPORTED_CURRENCIES.EUR,
+    SUPPORTED_CURRENCIES.GBP,
+    SUPPORTED_CURRENCIES.CAD,
+  ],
+  african: [
+    SUPPORTED_CURRENCIES.XAF, // Central African CFA Franc
+    SUPPORTED_CURRENCIES.EGP, // Egyptian Pound
+    SUPPORTED_CURRENCIES.GHS, // Ghanaian Cedi
+    SUPPORTED_CURRENCIES.KES, // Kenyan Shilling
+    SUPPORTED_CURRENCIES.MAD, // Moroccan Dirham
+    SUPPORTED_CURRENCIES.NGN, // Nigerian Naira
+    SUPPORTED_CURRENCIES.ZAR, // South African Rand
+  ]
+});
+
+const formatCurrency = (amount: number, currencyCode: string): string => {
+  const currency = SUPPORTED_CURRENCIES[currencyCode];
+  if (!currency) return `${amount.toFixed(2)} ${currencyCode}`;
+  
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: currencyCode,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    // Fallback for unsupported locales
+    return `${currency.symbol}${amount.toFixed(2)}`;
+  }
+};
+
 // Add interface for CircleCreated event
 interface CircleCreatedEvent {
   circle_id: string;
   admin: string;
   name: string;
   contribution_amount: string;
-  contribution_amount_usd: string;
-  security_deposit_usd: string;
+  currency_type: string;                  // Currency code (e.g., "USD", "XAF", "NGN")
+  contribution_amount_local: string;      // Amount in local currency
+  security_deposit_local: string;         // Amount in local currency
   max_members: string;
   cycle_length: string;
 }
@@ -31,15 +91,18 @@ type WeekDay = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'sat
 
 interface CircleFormData {
   name: string;
+  selectedCurrency: string; // NEW: Selected currency code (e.g., 'USD', 'NGN')
   contributionAmount: number; // SUI amount
-  contributionAmountUSD: number; // NEW: USD amount
+  contributionAmountUSD: number; // NEW: USD amount (deprecated, will be replaced by selectedCurrency amount)
+  contributionAmountLocal: number; // NEW: Amount in selected currency
   cycleLength: CycleLength;
   cycleDay: number | WeekDay;
   cycleType: CycleType;
   rotationStyle?: RotationStyle;
   numberOfMembers: number;
   securityDeposit: number; // SUI amount
-  securityDepositUSD: number; // NEW: USD amount
+  securityDepositUSD: number; // NEW: USD amount (deprecated, will be replaced by selectedCurrency amount)
+  securityDepositLocal: number; // NEW: Amount in selected currency
   penaltyRules: {
     latePayment: boolean;
     missedMeeting: boolean;
@@ -47,7 +110,8 @@ interface CircleFormData {
   smartGoal?: {
     goalType: 'amount' | 'date';
     targetAmount?: number;
-    targetAmountUSD?: number; // NEW: USD amount
+    targetAmountUSD?: number; // NEW: USD amount (deprecated)
+    targetAmountLocal?: number; // NEW: Amount in selected currency
     targetDate?: string;
     verificationRequired: boolean;
   };
@@ -119,7 +183,7 @@ const validateFormData = (formData: CircleFormData): string[] => {
 };
 
 // Function to prepare form data for contract
-const prepareCircleCreationData = (formData: CircleFormData, suiPrice: number) => {
+const prepareCircleCreationData = (formData: CircleFormData) => {
   // Convert cycle length to contract format
   const cycle_length = CYCLE_LENGTH_MAP[formData.cycleLength];
   
@@ -141,9 +205,17 @@ const prepareCircleCreationData = (formData: CircleFormData, suiPrice: number) =
     ? { some: BigInt(Math.round(formData.smartGoal.targetAmount * 1e9)) }
     : { none: null };
 
-  // Store the USD values (converted to cents) - This is the primary value for the contract
-  // IMPORTANT: The contract expects USD values in cents (2 decimal places)
-  // For example, $0.20 = 20 cents, $10.50 = 1050 cents
+  // Store the local currency values (converted to cents) - This is the primary value for the contract
+  // IMPORTANT: The contract expects local currency values in cents (2 decimal places)
+  // For example, $0.20 = 20 cents, ₦100.50 = 10050 kobo cents
+  const contribution_amount_local = Math.floor(formData.contributionAmountLocal * 100);
+  const security_deposit_local = Math.floor(formData.securityDepositLocal * 100);
+  const target_amount_local = formData.smartGoal?.targetAmountLocal 
+    ? Math.floor(formData.smartGoal.targetAmountLocal * 100) 
+    : 0;
+    
+  // IMPORTANT: Also include USD equivalent values for contract validation
+  // The contract uses these USD values for internal calculations and validation
   const contribution_amount_usd = Math.floor(formData.contributionAmountUSD * 100);
   const security_deposit_usd = Math.floor(formData.securityDepositUSD * 100);
   const target_amount_usd = formData.smartGoal?.targetAmountUSD 
@@ -155,14 +227,13 @@ const prepareCircleCreationData = (formData: CircleFormData, suiPrice: number) =
     ? { some: BigInt(Math.round(new Date(formData.smartGoal.targetDate).getTime() / 1000)) }
     : { none: null };
 
-  // Calculate SUI amounts based on USD values and current SUI price
+  // Calculate SUI amounts based on local currency values and current SUI price
   // IMPORTANT: These values are proper SUI amounts with 9 decimals (MIST)
-  // For example, if $0.20 USD = 0.0575 SUI, then it would be 57,500,000 MIST (0.0575 * 1e9)
-  // The contract expects values in MIST format (9 decimals)
-  const contribution_amount = BigInt(Math.round((formData.contributionAmountUSD / suiPrice) * 1e9));
+  // Use the already-converted SUI amounts from formData which were calculated via proper currency conversion
+  const contribution_amount = BigInt(Math.round(formData.contributionAmount * 1e9));
   
   // Calculate security deposit similarly
-  const security_deposit = BigInt(Math.round((formData.securityDepositUSD / suiPrice) * 1e9));
+  const security_deposit = BigInt(Math.round(formData.securityDeposit * 1e9));
 
   // Convert penalty rules to array of booleans
   const penalty_rules = [
@@ -173,8 +244,11 @@ const prepareCircleCreationData = (formData: CircleFormData, suiPrice: number) =
   return {
     name: formData.name,
     contribution_amount,
+    currency_type: formData.selectedCurrency,
+    contribution_amount_local,
     contribution_amount_usd,
     security_deposit,
+    security_deposit_local,
     security_deposit_usd,
     cycle_length,
     cycle_day,
@@ -184,6 +258,7 @@ const prepareCircleCreationData = (formData: CircleFormData, suiPrice: number) =
     penalty_rules,
     goal_type,
     target_amount,
+    target_amount_local,
     target_amount_usd,
     target_date,
     verification_required: formData.smartGoal?.verificationRequired || false,
@@ -204,8 +279,10 @@ export default function CreateCircle() {
   const [useCustomDeposit, setUseCustomDeposit] = useState(false);
   const [formData, setFormData] = useState<CircleFormData>({
     name: '',
+    selectedCurrency: 'USD',
     contributionAmount: 0,
     contributionAmountUSD: 0,
+    contributionAmountLocal: 0,
     cycleLength: 'monthly',
     cycleDay: 1, // Default to 1st of month/Monday
     cycleType: 'rotational', // Default to rotational
@@ -213,6 +290,7 @@ export default function CreateCircle() {
     numberOfMembers: 3,
     securityDeposit: 0,
     securityDepositUSD: 0,
+    securityDepositLocal: 0,
     penaltyRules: {
       latePayment: false,
       missedMeeting: false,
@@ -242,27 +320,71 @@ export default function CreateCircle() {
     return () => clearInterval(interval);
   }, []);
 
-  // Update conversion helpers to allow precise values for testnet
-  const snapToTwentyDollars = (usdAmount: number, forceSnap: boolean = false) => {
+  // Update conversion helpers to use selected currency with dynamic increments
+  const getCurrencyIncrement = (currency: string): number => {
+    // Set appropriate increments based on currency value
+    const incrementMap: Record<string, number> = {
+      // Western currencies - smaller increments
+      USD: 20,
+      EUR: 20,
+      GBP: 15,
+      CAD: 25,
+      // African currencies - larger increments to be meaningful
+      NGN: 10000,   // ₦10,000 (~$6.25)
+      ZAR: 300,     // R300 (~$16)
+      GHS: 250,     // ₵250 (~$21)
+      KES: 2500,    // KSh2,500 (~$19)
+      EGP: 500,     // ج.م500 (~$16)
+      MAD: 200,     // DH200 (~$20)
+      XAF: 12000,   // 12,000 FCFA (~$20)
+    };
+    return incrementMap[currency] || 20;
+  };
+
+  const getCurrencyMaximum = (currency: string): number => {
+    // Set appropriate maximums based on currency value
+    const maxMap: Record<string, number> = {
+      // Western currencies
+      USD: 1000,
+      EUR: 1000,
+      GBP: 800,
+      CAD: 1300,
+      // African currencies - higher maximums
+      NGN: 500000,    // ₦500,000 (~$312)
+      ZAR: 15000,     // R15,000 (~$800)
+      GHS: 12500,     // ₵12,500 (~$1,050)
+      KES: 125000,    // KSh125,000 (~$950)
+      EGP: 25000,     // ج.م25,000 (~$800)
+      MAD: 10000,     // DH10,000 (~$1,000)
+      XAF: 600000,    // 600,000 FCFA (~$1,000)
+    };
+    return maxMap[currency] || 1000;
+  };
+
+  const snapToCurrencyIncrement = (localAmount: number, currency: string, forceSnap: boolean = false) => {
+    const increment = getCurrencyIncrement(currency);
     if (forceSnap) {
-      return Math.round(usdAmount / 20) * 20; // Snap to nearest $20
+      return Math.round(localAmount / increment) * increment;
     }
-    return usdAmount; // Allow any value for testnet testing
+    return localAmount; // Allow any value for testnet testing
   };
 
-  const convertUSDtoSUI = (usdAmount: number) => {
-    if (!isPriceAvailable || suiPrice === null) return 0;
-    return Number((usdAmount / suiPrice).toFixed(6));
+  const convertLocalToSUI = async (localAmount: number) => {
+    if (!isPriceAvailable) return 0;
+    return await priceService.convertCurrencyToSUI(localAmount, formData.selectedCurrency);
   };
 
-  // Update CurrencyDisplay component to use live price
-  const SuiAmountDisplay = ({ sui, usd, className = "" }: { sui: number; usd: number; className?: string }) => {
+  // Update CurrencyDisplay component to use selected currency
+  const SuiAmountDisplay = ({ sui, local, className = "" }: { sui: number; local: number; className?: string }) => {
+    const currencyInfo = SUPPORTED_CURRENCIES[formData.selectedCurrency];
+    const symbol = currencyInfo?.symbol || formData.selectedCurrency;
+    
     return (
       <Tooltip.Provider>
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
             <span className={`cursor-help ${className}`}>
-              {formatUSD(usd)} {isPriceAvailable ? 
+              {symbol} {local.toFixed(2)} {isPriceAvailable ? 
                 <span className="text-gray-500">({sui.toFixed(2)} SUI)</span> : 
                 <span className="text-yellow-500">(SUI price unavailable)</span>}
             </span>
@@ -276,8 +398,9 @@ export default function CreateCircle() {
                 {isPriceAvailable ? (
                   <>
                     <p>Live Conversion Rate:</p>
-                    <p>1 SUI = {formatUSD(suiPrice!)}</p>
+                    <p>1 SUI = {suiPrice ? formatCurrency(suiPrice, 'USD') : 'Loading...'}</p>
                     <p className="text-xs text-gray-400">Updates every minute</p>
+                    <p className="text-xs text-blue-300">Currency: {formData.selectedCurrency}</p>
                   </>
                 ) : (
                   <>
@@ -300,6 +423,21 @@ export default function CreateCircle() {
     }
   }, [isAuthenticated, router]);
 
+  // Add effect to update SUI price when currency changes
+  useEffect(() => {
+    const fetchPriceForCurrency = async () => {
+      const price = await priceService.getSUIPrice();
+      setSuiPrice(price);
+      setIsPriceAvailable(price !== null);
+    };
+
+    fetchPriceForCurrency();
+    // Refresh price every minute for the selected currency
+    const interval = setInterval(fetchPriceForCurrency, 60000);
+
+    return () => clearInterval(interval);
+  }, [formData.selectedCurrency]);
+
   const handleInputChange = (name: keyof Omit<CircleFormData, 'penaltyRules'>, value: string | number) => {
     setFormData(prev => ({
       ...prev,
@@ -307,21 +445,35 @@ export default function CreateCircle() {
     }));
   };
 
-  // New function to handle USD amount changes and calculate SUI
-  const handleUSDInputChange = (field: 'contributionAmountUSD' | 'securityDepositUSD', value: number) => {
-    const snappedValue = snapToTwentyDollars(value);
-    const suiValue = convertUSDtoSUI(snappedValue);
+  // New function to handle local currency amount changes and calculate SUI
+  const handleLocalInputChange = async (field: 'contributionAmountLocal' | 'securityDepositLocal', value: number) => {
+    const snappedValue = snapToCurrencyIncrement(value, formData.selectedCurrency);
+    const suiValue = await convertLocalToSUI(snappedValue);
     
-    if (field === 'contributionAmountUSD') {
+    // Convert to USD for contract storage
+    let usdValue = snappedValue;
+    if (formData.selectedCurrency !== 'USD') {
+      try {
+        usdValue = await priceService.convertToUSD(snappedValue, formData.selectedCurrency);
+      } catch (error) {
+        console.error('Error converting to USD:', error);
+        // Fallback: use local value if conversion fails
+        usdValue = snappedValue;
+      }
+    }
+    
+    if (field === 'contributionAmountLocal') {
       setFormData(prev => ({
         ...prev,
-        contributionAmountUSD: snappedValue,
+        contributionAmountLocal: snappedValue,
+        contributionAmountUSD: usdValue, // Proper USD conversion
         contributionAmount: suiValue
       }));
     } else {
       setFormData(prev => ({
         ...prev,
-        securityDepositUSD: snappedValue,
+        securityDepositLocal: snappedValue,
+        securityDepositUSD: usdValue, // Proper USD conversion
         securityDeposit: suiValue
       }));
     }
@@ -359,7 +511,7 @@ export default function CreateCircle() {
     
     try {
       // Prepare data for contract with current SUI price
-      const contractData = prepareCircleCreationData(formData, suiPrice!);
+      const contractData = prepareCircleCreationData(formData);
       
       // Debug logging
       console.log("Circle Creation Data:", {
@@ -369,19 +521,35 @@ export default function CreateCircle() {
         contributionAmountMIST: contractData.contribution_amount.toString(),
         securityDepositMIST: contractData.security_deposit.toString(),
         expectedSUIAmount: (formData.contributionAmountUSD / suiPrice!).toFixed(6),
-        expectedMIST: Math.round((formData.contributionAmountUSD / suiPrice!) * 1e9)
+        expectedMIST: Math.round((formData.contributionAmountUSD / suiPrice!) * 1e9),
+        // Add cycle debugging
+        cycleLength: contractData.cycle_length,
+        cycleDay: contractData.cycle_day,
+        currency: contractData.currency_type
       });
       
       // Convert BigInt values to strings for JSON serialization
       const serializedData = {
         ...contractData,
         contribution_amount: contractData.contribution_amount.toString(),
+        contribution_amount_local: contractData.contribution_amount_local,
         contribution_amount_usd: contractData.contribution_amount_usd,
         security_deposit: contractData.security_deposit.toString(),
+        security_deposit_local: contractData.security_deposit_local,
         security_deposit_usd: contractData.security_deposit_usd,
+        // Ensure cycle_day is explicitly included
+        cycle_length: contractData.cycle_length,
+        cycle_day: contractData.cycle_day,
+        circle_type: contractData.circle_type,
+        max_members: contractData.max_members,
+        rotation_style: contractData.rotation_style,
+        penalty_rules: contractData.penalty_rules,
+        verification_required: contractData.verification_required,
+        currency_type: contractData.currency_type,
         target_amount: contractData.target_amount?.some 
           ? { some: contractData.target_amount.some.toString() }
           : { none: null },
+        target_amount_local: contractData.target_amount_local,
         target_amount_usd: contractData.target_amount_usd,
         target_date: contractData.target_date?.some
           ? { some: contractData.target_date.some.toString() }
@@ -416,7 +584,7 @@ export default function CreateCircle() {
       }
       
       // Move to invite step on success
-      setCurrentStep(2);
+      setCurrentStep(3); // Updated to step 3 for invite members
     } catch (err) {
       console.error('Error creating circle:', err);
       setError(err instanceof Error ? err.message : 'Failed to create circle. Please try again.');
@@ -522,8 +690,8 @@ export default function CreateCircle() {
 You've been invited to join "${formData.name}", a secure savings circle powered by blockchain technology.
 
 Circle Details:
-• Contribution: ${formatUSD(formData.contributionAmountUSD)} per ${formData.cycleLength}
-• Security Deposit: ${formatUSD(formData.securityDepositUSD)} (one-time, refundable)
+• Contribution: ${SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || formData.selectedCurrency} ${formData.contributionAmountLocal.toFixed(2)} per ${formData.cycleLength}
+• Security Deposit: ${SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || formData.selectedCurrency} ${formData.securityDepositLocal.toFixed(2)} (one-time, refundable)
 • Members: ${formData.numberOfMembers} people
 • Schedule: ${formData.cycleLength} contributions
 
@@ -616,7 +784,7 @@ The Njangi On-Chain Team`;
                 <button
                   onClick={() => {
                     setFormData(prev => ({ ...prev, cycleType: 'rotational' }));
-                    setCurrentStep(1);
+                    setCurrentStep(1); // Go to currency selection step
                   }}
                   className="p-6 border rounded-lg hover:border-blue-500 hover:shadow-md transition-all text-center group"
                 >
@@ -684,6 +852,152 @@ The Njangi On-Chain Team`;
               </div>
             </div>
           ) : currentStep === 1 ? (
+            // NEW: Currency Selection Step
+            <div className="space-y-6">
+              <div className="text-center">
+                <h2 className="text-2xl font-semibold text-gray-900">Choose Your Currency</h2>
+                <p className="mt-2 text-gray-600">Select the currency for contributions and deposits</p>
+              </div>
+
+              {/* Currency Selection */}
+              <div className="space-y-6">
+                {/* Western Currencies */}
+                <div>
+                  <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
+                    <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center mr-3">
+                      <svg className="w-4 h-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+                      </svg>
+                    </div>
+                    Western Currencies
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {getSupportedCurrencies().western.map((currency: SupportedCurrency) => (
+                      <button
+                        key={currency.code}
+                        onClick={() => handleInputChange('selectedCurrency', currency.code)}
+                        className={`p-4 border rounded-lg text-left transition-all ${
+                          formData.selectedCurrency === currency.code
+                            ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
+                            : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h4 className="font-medium text-gray-900">{currency.name}</h4>
+                            <p className="text-sm text-gray-500">{currency.symbol} • {currency.code}</p>
+                          </div>
+                          {formData.selectedCurrency === currency.code && (
+                            <div className="w-5 h-5 text-blue-600">
+                              <CheckIcon />
+                            </div>
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* African Currencies */}
+                <div>
+                  <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
+                    <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center mr-3">
+                      <svg className="w-4 h-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    African Currencies
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {getSupportedCurrencies().african.map((currency: SupportedCurrency) => (
+                      <button
+                        key={currency.code}
+                        onClick={() => handleInputChange('selectedCurrency', currency.code)}
+                        className={`p-4 border rounded-lg text-left transition-all ${
+                          formData.selectedCurrency === currency.code
+                            ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
+                            : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h4 className="font-medium text-gray-900">{currency.name}</h4>
+                            <p className="text-sm text-gray-500">{currency.symbol} • {currency.code}</p>
+                          </div>
+                          {formData.selectedCurrency === currency.code && (
+                            <div className="w-5 h-5 text-blue-600">
+                              <CheckIcon />
+                            </div>
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Currency Information */}
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div className="flex items-start">
+                    <div className="mr-3 mt-1">
+                      <svg className="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="text-sm font-medium text-blue-800">Stable Value Pegging</h4>
+                      <p className="mt-1 text-sm text-blue-700">
+                        All contributions and deposits will be pegged to your selected currency. 
+                        While transactions are processed in SUI, the equivalent value in {SUPPORTED_CURRENCIES[formData.selectedCurrency]?.name || 'your currency'} remains stable, 
+                        protecting members from cryptocurrency price volatility.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Navigation Buttons */}
+              <div className="flex justify-between pt-6">
+                <button
+                  onClick={() => setCurrentStep(0)}
+                  className="group inline-flex items-center px-6 py-3 text-base font-medium text-gray-700 bg-white border-2 border-gray-200 rounded-xl shadow-sm hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200"
+                >
+                  <svg 
+                    className="w-5 h-5 mr-2 text-gray-400 group-hover:text-gray-500 transition-colors duration-200" 
+                    fill="none" 
+                    viewBox="0 0 24 24" 
+                    stroke="currentColor"
+                  >
+                    <path 
+                      strokeLinecap="round" 
+                      strokeLinejoin="round" 
+                      strokeWidth={2} 
+                      d="M15 19l-7-7 7-7"
+                    />
+                  </svg>
+                  Back to Circle Type
+                </button>
+                <button
+                  onClick={() => setCurrentStep(2)} // Go to main form step
+                  className="group inline-flex items-center px-6 py-3 text-base font-medium text-white bg-blue-600 border-2 border-transparent rounded-xl shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200"
+                >
+                  Continue to Circle Setup
+                  <svg 
+                    className="w-5 h-5 ml-2 text-blue-200 group-hover:text-white transition-colors duration-200" 
+                    fill="none" 
+                    viewBox="0 0 24 24" 
+                    stroke="currentColor"
+                  >
+                    <path 
+                      strokeLinecap="round" 
+                      strokeLinejoin="round" 
+                      strokeWidth={2} 
+                      d="M9 5l7 7-7 7"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          ) : currentStep === 2 ? (
             <form onSubmit={handleSubmit} className="space-y-8">
               {/* Error Display */}
               {error && (
@@ -752,15 +1066,15 @@ The Njangi On-Chain Team`;
                       Contribution Amount
                     </label>
                     <InfoTooltip>
-                      <p>The USD amount each member contributes per cycle</p>
-                      <p className="text-gray-300 text-xs mt-1">This amount will remain stable in USD value</p>
+                      <p>The {formData.selectedCurrency} amount each member contributes per cycle</p>
+                      <p className="text-gray-300 text-xs mt-1">This amount will remain stable in {formData.selectedCurrency} value</p>
                       <p className="text-gray-300 text-xs mt-1">The SUI amount will adjust based on current price</p>
                     </InfoTooltip>
                   </div>
                   <div className="flex items-center space-x-2">
                     <SuiAmountDisplay 
                       sui={formData.contributionAmount}
-                      usd={formData.contributionAmountUSD}
+                      local={formData.contributionAmountLocal}
                       className="text-sm text-blue-600 font-medium"
                     />
                     {useCustomContribution ? (
@@ -783,7 +1097,7 @@ The Njangi On-Chain Team`;
                   </div>
                 </div>
                 
-                {/* USD Pegging Explanation */}
+                {/* Currency Pegging Explanation */}
                 <div className="px-3 py-2 bg-blue-50 border border-blue-200 rounded-md text-sm text-blue-700">
                   <div className="flex items-start">
                     <div className="mr-2 mt-0.5">
@@ -792,30 +1106,30 @@ The Njangi On-Chain Team`;
                       </svg>
                     </div>
                     <div>
-                      <p className="font-medium">USD-Pegged Contributions</p>
-                      <p className="mt-1 text-xs">All contributions and security deposits are stored in USD value and converted to SUI at the current exchange rate when transactions occur. This provides stability against SUI price fluctuations.</p>
+                      <p className="font-medium">{formData.selectedCurrency}-Pegged Contributions</p>
+                      <p className="mt-1 text-xs">All contributions and security deposits are stored in {formData.selectedCurrency} value and converted to SUI at the current exchange rate when transactions occur. This provides stability against SUI price fluctuations.</p>
                     </div>
                   </div>
                 </div>
                 
                 {useCustomContribution ? (
                   <div className="flex items-center space-x-2">
-                    <span className="text-gray-500">$</span>
+                    <span className="text-gray-500">{SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || '$'}</span>
                     <input
                       type="number"
-                      value={formData.contributionAmountUSD || ''}
-                      onChange={(e) => {
+                      value={formData.contributionAmountLocal || ''}
+                      onChange={async (e) => {
                         const value = e.target.value === '' ? 0 : parseFloat(e.target.value);
                         if (!isNaN(value)) {
-                          handleUSDInputChange('contributionAmountUSD', value);
+                          await handleLocalInputChange('contributionAmountLocal', value);
                         }
                       }}
-                      placeholder="Enter amount in USD"
+                      placeholder={`Enter amount in ${formData.selectedCurrency}`}
                       className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                       min="0"
                       step="0.01"
                     />
-                    <span className="text-gray-500">USD</span>
+                    <span className="text-gray-500">{formData.selectedCurrency}</span>
                   </div>
                 ) : (
                   <Tooltip.Provider>
@@ -824,10 +1138,10 @@ The Njangi On-Chain Team`;
                         <div className="px-2">
                           <Slider.Root
                             className="relative flex items-center select-none touch-none w-full h-5"
-                            value={[formData.contributionAmountUSD]}
-                            max={1000} // $1000 USD max
-                            step={20} // $20 USD increments
-                            onValueChange={([value]) => handleUSDInputChange('contributionAmountUSD', value)}
+                            value={[formData.contributionAmountLocal]}
+                            max={getCurrencyMaximum(formData.selectedCurrency)}
+                            step={getCurrencyIncrement(formData.selectedCurrency)}
+                            onValueChange={async ([value]) => await handleLocalInputChange('contributionAmountLocal', value)}
                           >
                             <Slider.Track className="bg-gray-200 relative grow rounded-full h-2">
                               <Slider.Range className="absolute bg-blue-500 rounded-full h-full" />
@@ -847,7 +1161,7 @@ The Njangi On-Chain Team`;
                           <div className="space-y-1">
                             <p>Drag to adjust contribution amount</p>
                             <p className="text-gray-300">
-                              {formatUSD(formData.contributionAmountUSD)} per cycle
+                              {SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || formData.selectedCurrency} {formData.contributionAmountLocal.toFixed(2)} per cycle
                             </p>
                             <p className="text-xs text-gray-400">≈ {formData.contributionAmount.toFixed(2)} SUI at current price</p>
                           </div>
@@ -1078,14 +1392,14 @@ The Njangi On-Chain Team`;
                     </label>
                     <InfoTooltip>
                       <p>One-time deposit to ensure member commitment</p>
-                      <p className="text-gray-300 text-xs mt-1">Fixed in USD value, converted to SUI at current price</p>
+                      <p className="text-gray-300 text-xs mt-1">Fixed in {formData.selectedCurrency} value, converted to SUI at current price</p>
                       <p className="text-gray-300 text-xs mt-1">Refundable when leaving the circle in good standing</p>
                     </InfoTooltip>
                   </div>
                   <div className="flex items-center space-x-2">
                     <SuiAmountDisplay 
                       sui={formData.securityDeposit}
-                      usd={formData.securityDepositUSD}
+                      local={formData.securityDepositLocal}
                       className="text-sm text-blue-600 font-medium"
                     />
                     {useCustomDeposit ? (
@@ -1108,7 +1422,7 @@ The Njangi On-Chain Team`;
                   </div>
                 </div>
                 
-                {/* USD Pegging Explanation for Security Deposit */}
+                {/* Currency Pegging Explanation for Security Deposit */}
                 <div className="px-3 py-2 bg-green-50 border border-green-200 rounded-md text-sm text-green-700">
                   <div className="flex items-start">
                     <div className="mr-2 mt-0.5">
@@ -1118,29 +1432,29 @@ The Njangi On-Chain Team`;
                     </div>
                     <div>
                       <p className="font-medium">Stable Security Deposit</p>
-                      <p className="mt-1 text-xs">The security deposit is stored as a USD value on-chain. Members will always deposit the same USD value regardless of SUI price, ensuring fairness across time.</p>
+                      <p className="mt-1 text-xs">The security deposit is stored as a {formData.selectedCurrency} value on-chain. Members will always deposit the same {formData.selectedCurrency} value regardless of SUI price, ensuring fairness across time.</p>
                     </div>
                   </div>
                 </div>
                 
                 {useCustomDeposit ? (
                   <div className="flex items-center space-x-2">
-                    <span className="text-gray-500">$</span>
+                    <span className="text-gray-500">{SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || '$'}</span>
                     <input
                       type="number"
-                      value={formData.securityDepositUSD || ''}
-                      onChange={(e) => {
+                      value={formData.securityDepositLocal || ''}
+                      onChange={async (e) => {
                         const value = e.target.value === '' ? 0 : parseFloat(e.target.value);
                         if (!isNaN(value)) {
-                          handleUSDInputChange('securityDepositUSD', value);
+                          await handleLocalInputChange('securityDepositLocal', value);
                         }
                       }}
-                      placeholder="Enter amount in USD"
+                      placeholder={`Enter amount in ${formData.selectedCurrency}`}
                       className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                       min="0"
                       step="0.01"
                     />
-                    <span className="text-gray-500">USD</span>
+                    <span className="text-gray-500">{formData.selectedCurrency}</span>
                   </div>
                 ) : (
                   <Tooltip.Provider>
@@ -1149,10 +1463,10 @@ The Njangi On-Chain Team`;
                         <div className="px-2">
                           <Slider.Root
                             className="relative flex items-center select-none touch-none w-full h-5"
-                            value={[formData.securityDepositUSD]}
-                            max={1000} // $1000 USD max
-                            step={20} // $20 USD increments
-                            onValueChange={([value]) => handleUSDInputChange('securityDepositUSD', value)}
+                            value={[formData.securityDepositLocal]}
+                            max={getCurrencyMaximum(formData.selectedCurrency)}
+                            step={getCurrencyIncrement(formData.selectedCurrency)}
+                            onValueChange={async ([value]) => await handleLocalInputChange('securityDepositLocal', value)}
                           >
                             <Slider.Track className="bg-gray-200 relative grow rounded-full h-2">
                               <Slider.Range className="absolute bg-blue-500 rounded-full h-full" />
@@ -1172,7 +1486,7 @@ The Njangi On-Chain Team`;
                           <div className="space-y-1">
                             <p>Drag to adjust security deposit</p>
                             <p className="text-gray-300">
-                              One-time deposit: {formatUSD(formData.securityDepositUSD)}
+                              One-time deposit: {SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || formData.selectedCurrency} {formData.securityDepositLocal.toFixed(2)}
                             </p>
                             <p className="text-xs text-gray-400">≈ {formData.securityDeposit.toFixed(2)} SUI at current price</p>
                           </div>
@@ -1260,35 +1574,51 @@ The Njangi On-Chain Team`;
                           Target Amount
                         </label>
                         <InfoTooltip>
-                          <p>The total USD amount your group aims to save</p>
-                          <p className="text-gray-300 text-xs mt-1">Fixed in USD value, not affected by SUI price</p>
+                          <p>The total {formData.selectedCurrency} amount your group aims to save</p>
+                          <p className="text-gray-300 text-xs mt-1">Fixed in {formData.selectedCurrency} value, not affected by SUI price</p>
                           <p className="text-gray-300 text-xs mt-1">Must be greater than individual contribution amount</p>
                         </InfoTooltip>
                       </div>
                       <div className="flex items-center space-x-2">
-                        <span className="text-gray-500">$</span>
+                        <span className="text-gray-500">{SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || '$'}</span>
                         <input
                           type="number"
-                          value={formData.smartGoal?.targetAmountUSD || ''}
-                          onChange={(e) => {
-                            const usdAmount = parseFloat(e.target.value);
-                            if (!isNaN(usdAmount)) {
+                          value={formData.smartGoal?.targetAmountLocal || ''}
+                          onChange={async (e) => {
+                            const localAmount = parseFloat(e.target.value);
+                            if (!isNaN(localAmount)) {
+                              // Convert to USD for contract storage
+                              let usdAmount = localAmount;
+                              if (formData.selectedCurrency !== 'USD') {
+                                try {
+                                  usdAmount = await priceService.convertToUSD(localAmount, formData.selectedCurrency);
+                                } catch (error) {
+                                  console.error('Error converting to USD:', error);
+                                  // Fallback: use local value if conversion fails
+                                  usdAmount = localAmount;
+                                }
+                              }
+                              
+                              // Convert to SUI
+                              const suiAmount = await convertLocalToSUI(localAmount);
+                              
                               setFormData(prev => ({
                                 ...prev,
                                 smartGoal: {
                                   ...prev.smartGoal!,
+                                  targetAmountLocal: localAmount,
                                   targetAmountUSD: usdAmount,
-                                  targetAmount: convertUSDtoSUI(usdAmount)
+                                  targetAmount: suiAmount
                                 }
                               }));
                             }
                           }}
-                          placeholder="Enter target amount in USD"
+                          placeholder={`Enter target amount in ${formData.selectedCurrency}`}
                           className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                          min={formData.securityDepositUSD}
+                          min={formData.securityDepositLocal}
                           step="100"
                         />
-                        <span className="text-gray-500">USD</span>
+                        <span className="text-gray-500">{formData.selectedCurrency}</span>
                       </div>
                       <p className="text-sm text-gray-500 mt-1">
                         ≈ {formData.smartGoal?.targetAmount?.toFixed(2) || '0'} SUI at current price
@@ -1403,23 +1733,23 @@ The Njangi On-Chain Team`;
                 </div>
               </div>
 
-              {/* Final USD Peg Summary */}
+              {/* Final Currency Peg Summary */}
               <div className="mt-8 mb-6 border border-indigo-200 bg-indigo-50 rounded-lg p-4 text-indigo-700">
                 <h3 className="font-semibold text-sm flex items-center">
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-indigo-600" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm1-11a1 1 0 1 1-2 0v2H7a1 1 0 1 0 0 2h2v2a1 1 0 1 0 2 0v-2h2a1 1 0 1 0 0-2h-2V7z" clipRule="evenodd" />
                   </svg>
-                  USD-Pegged Njangi Feature
+                  {formData.selectedCurrency}-Pegged Njangi Feature
                 </h3>
                 <div className="mt-2 text-sm">
-                  <p>This circle will store all monetary values in USD. Key benefits:</p>
+                  <p>This circle will store all monetary values in {formData.selectedCurrency}. Key benefits:</p>
                   <ul className="mt-2 list-disc list-inside space-y-1 text-xs">
-                    <li>Contribution amounts remain stable in USD terms regardless of SUI price</li>
+                    <li>Contribution amounts remain stable in {formData.selectedCurrency} terms regardless of SUI price</li>
                     <li>Members joining at different times pay the same real-world value</li>
                     <li>Security deposits maintain consistent value over time</li>
-                    <li>The UI will always show both USD and equivalent SUI amounts</li>
+                    <li>The UI will always show both {formData.selectedCurrency} and equivalent SUI amounts</li>
                   </ul>
-                  <p className="mt-2 text-xs">Current SUI price: {suiPrice ? `$${suiPrice.toFixed(4)}` : "Loading..."}</p>
+                  <p className="mt-2 text-xs">Current SUI price: {suiPrice ? formatCurrency(suiPrice, formData.selectedCurrency) : "Loading..."}</p>
                 </div>
               </div>
 
@@ -1807,12 +2137,6 @@ const getDayOrdinal = (day: number): string => {
   }
 };
 
-const formatUSD = (amount: number) => {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(amount);
-};
 
 // Add InfoIcon component
 const InfoIcon = () => (

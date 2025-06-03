@@ -224,7 +224,7 @@ module njangi::njangi_payments {
         // Get contribution amounts
         let contribution_amount_raw = circles::get_contribution_amount_raw(circle);
         let contribution_amount_readable = circles::get_contribution_amount(circle);
-        let contribution_amount_usd = circles::get_contribution_amount_usd(circle);
+        let contribution_amount_local = circles::get_contribution_amount_local(circle);
         
         // Calculate how many members are contributing (minus the recipient)
         let contributing_member_count = if (member_count > 0) { member_count - 1 } else { 0 };
@@ -957,11 +957,11 @@ module njangi::njangi_payments {
         std::debug::print(&b"Current next_payout_time AFTER update:");
         std::debug::print(&circles::get_next_payout_time(circle));
         
-        // Emit payout event (use USD amount for display)
+        // Emit payout event (use local currency amount for display)
         event::emit(PayoutProcessed {
             circle_id: circles::get_id(circle),
             recipient,
-            amount: contribution_amount_usd, // USD cents
+            amount: contribution_amount_usd, // Local currency cents
             cycle: circles::get_current_cycle(circle),
             payout_type: circles::get_goal_type(circle),
         });

@@ -9,7 +9,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import * as Dialog from '@radix-ui/react-dialog';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
-import { Eye, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink } from 'lucide-react';
+import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink } from 'lucide-react';
 import { PACKAGE_ID } from '../services/circle-service';
 // Use alias path for the modal import
 import ConfirmationModal from '@/components/ConfirmationModal';
@@ -21,9 +21,10 @@ interface Circle {
   name: string;
   admin: string;
   contributionAmount: number;
-  contributionAmountUsd: number;
+  contributionAmountUsd: number; // This will now represent local currency amount
+  currencyType?: string; // Add currency type field
   securityDeposit: number;
-  securityDepositUsd: number;
+  securityDepositUsd: number; // This will now represent local currency amount
   cycleLength: number;
   cycleDay: number;
   maxMembers: number;
@@ -41,8 +42,9 @@ interface CircleCreatedEvent {
   admin: string;
   name: string;
   contribution_amount: string;
-  contribution_amount_usd: string;
-  security_deposit_usd: string;
+  currency_type?: string;                  // Currency code (e.g., "USD", "XAF", "NGN")
+  contribution_amount_local?: string;      // Amount in local currency
+  security_deposit_local?: string;         // Amount in local currency
   max_members: string;
   cycle_length: string;
 }
@@ -52,8 +54,8 @@ interface MemberJoinedEvent {
   member: string;
   position?: number;
   // These fields may or may not be present in the event payload
-  contribution_amount_usd?: string;
-  security_deposit_usd?: string;
+  contribution_amount_local?: string;
+  security_deposit_local?: string;
 }
 
 // Add these type definitions at the top of the file with other interfaces
@@ -264,7 +266,20 @@ export default function Dashboard() {
   const [allCoins, setAllCoins] = useState<{coinType: string, symbol: string, balance: string}[]>([]);
   const [showFullAddress, setShowFullAddress] = useState(false);
   const [showToast, setShowToast] = useState(false);
-  const [circles, setCircles] = useState<Circle[]>([]);
+  const [circles, setCircles] = useState<Circle[]>(() => {
+    if (typeof window !== 'undefined' && userAddress) {
+      const cachedCircles = localStorage.getItem(`userCircles-${userAddress}`);
+      if (cachedCircles) {
+        try {
+          return JSON.parse(cachedCircles);
+        } catch (e) {
+          console.error("Error parsing cached circles:", e);
+          return [];
+        }
+      }
+    }
+    return [];
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [suiPrice, setSuiPrice] = useState<number | null>(null);
@@ -307,6 +322,59 @@ export default function Dashboard() {
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [transferStep, setTransferStep] = useState<'form' | 'review' | 'confirm' | 'success'>('form');
   const [transferResult, setTransferResult] = useState<{ digest?: string; error?: string } | null>(null);
+
+  // Add currency selection state
+  // Initialize selectedCurrency from localStorage or default to 'USD'
+  const [selectedCurrency, setSelectedCurrency] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const storedCurrency = localStorage.getItem('selectedCurrency');
+      if (storedCurrency) {
+        return storedCurrency;
+      }
+    }
+    return 'USD';
+  });
+  const [currencyRates, setCurrencyRates] = useState<Record<string, number>>({});
+  const [convertedBalances, setConvertedBalances] = useState<Record<string, number>>({});
+  const [totalWalletLocalValue, setTotalWalletLocalValue] = useState<number>(0); // New state for total wallet value
+
+  // Add balance visibility state
+  const [balanceVisible, setBalanceVisible] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('balanceVisible');
+      return stored !== null ? JSON.parse(stored) : true; // Default to visible
+    }
+    return true;
+  });
+
+  // Toggle balance visibility and persist to localStorage
+  const toggleBalanceVisibility = () => {
+    const newVisibility = !balanceVisible;
+    setBalanceVisible(newVisibility);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('balanceVisible', JSON.stringify(newVisibility));
+    }
+  };
+
+  // Helper function to display balance or hidden text
+  const formatBalanceDisplay = (balance: string | number, isMainBalance = false) => {
+    if (balanceVisible) {
+      return typeof balance === 'string' ? balance : balance.toString();
+    }
+    return isMainBalance ? '••••••' : '••••';
+  };
+
+  // useEffect to calculate total wallet value when convertedBalances changes
+  useEffect(() => {
+    if (convertedBalances && Object.keys(convertedBalances).length > 0) {
+      const totalValue = Object.values(convertedBalances).reduce((sum, value) => {
+        return sum + (value || 0); // Ensure value is a number, default to 0 if undefined/null
+      }, 0);
+      setTotalWalletLocalValue(totalValue);
+    } else {
+      setTotalWalletLocalValue(0); // Default to 0 if no converted balances
+    }
+  }, [convertedBalances]);
 
   // Update the script loading in useEffect for MoonPay SDK
   useEffect(() => {
@@ -520,6 +588,99 @@ export default function Dashboard() {
     fetchPrice();
   }, []);
 
+  // Fetch exchange rates when selected currency changes
+  useEffect(() => {
+    const fetchExchangeRates = async () => {
+      try {
+        const rate = await priceService.getExchangeRate(selectedCurrency);
+        setCurrencyRates(prev => ({
+          ...prev,
+          [selectedCurrency]: rate
+        }));
+      } catch (error) {
+        console.error('Error fetching exchange rate:', error);
+      }
+    };
+
+    if (selectedCurrency !== 'USD') {
+      fetchExchangeRates();
+    } else {
+      setCurrencyRates(prev => ({
+        ...prev,
+        USD: 1
+      }));
+    }
+
+    // Save selectedCurrency to localStorage
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('selectedCurrency', selectedCurrency);
+    }
+  }, [selectedCurrency]);
+
+  // Update converted balances when currency or balances change
+  useEffect(() => {
+    const updateConvertedBalances = async () => {
+      if (!suiPrice) return;
+
+      const newConvertedBalances: Record<string, number> = {};
+      
+      // Convert SUI balance
+      const suiBalance = Number(balance) / 1000000000;
+      const suiPriceInCurrency = await priceService.getSUIPriceInCurrency(selectedCurrency);
+      if (suiPriceInCurrency) {
+        newConvertedBalances.SUI = suiBalance * suiPriceInCurrency;
+      }
+
+      // Convert other token balances
+      for (const coin of allCoins) {
+        const tokenBalance = coin.symbol.toLowerCase() === 'usdc' 
+          ? (Number(coin.balance) / 1000000) 
+          : Number(coin.balance) / 1000000000;
+
+        if (coin.symbol === 'SUI') {
+          newConvertedBalances[coin.symbol] = newConvertedBalances.SUI || 0;
+        } else if (coin.symbol.toLowerCase() === 'usdc') {
+          // USDC is pegged to USD, so we convert from USD to target currency
+          const convertedValue = await priceService.convertFromUSD(tokenBalance, selectedCurrency);
+          newConvertedBalances[coin.symbol] = convertedValue;
+        }
+      }
+
+      setConvertedBalances(newConvertedBalances);
+    };
+
+    updateConvertedBalances();
+  }, [selectedCurrency, suiPrice, balance, allCoins]);
+
+  // Convert SUI amount to selected currency using price service
+  const convertSuiToCurrency = async (suiAmount: number): Promise<number> => {
+    try {
+      const suiPriceInCurrency = await priceService.getSUIPriceInCurrency(selectedCurrency);
+      return suiPriceInCurrency ? suiAmount * suiPriceInCurrency : 0;
+    } catch (error) {
+      console.error('Error converting SUI to currency:', error);
+      return 0;
+    }
+  };
+
+  // Get currency symbol for selected currency
+  const getCurrencySymbol = (currencyCode: string): string => {
+    const symbols: Record<string, string> = {
+      'USD': '$',
+      'XAF': '', // Will be handled by formatCurrency with proper spacing
+      'NGN': '₦',
+      'EUR': '€',
+      'GBP': '£',
+      'CAD': 'C$',
+      'ZAR': 'R',
+      'KES': 'KSh',
+      'EGP': 'E£',
+      'MAD': 'MAD',
+      'GHS': 'GH₵' // Added GHS
+    };
+    return symbols[currencyCode] || currencyCode;
+  };
+
   // Process circle data correctly after the contract restructuring
   const processCircleObject = async (objectData: EnhancedObjectData, userAddress: string, circleCreationData?: CircleCreatedEvent, client?: SuiClient) => {
     // Use optional chaining and nullish coalescing for safer access
@@ -556,8 +717,8 @@ export default function Dashboard() {
     if (circleCreationData) {
       console.log('Using creation event data for circle:', circleId);
       configValues.contributionAmount = Number(circleCreationData.contribution_amount ?? 0) / 1e9;
-      configValues.contributionAmountUsd = Number(circleCreationData.contribution_amount_usd ?? 0) / 100;
-      configValues.securityDepositUsd = Number(circleCreationData.security_deposit_usd ?? 0) / 100;
+      configValues.contributionAmountUsd = Number(circleCreationData.contribution_amount_local ?? 0) / 100;
+      configValues.securityDepositUsd = Number(circleCreationData.security_deposit_local ?? 0) / 100;
       configValues.cycleLength = Number(circleCreationData.cycle_length ?? 0);
       // DO NOT set maxMembers from creation event here, prioritize dynamic field
     }
@@ -621,14 +782,14 @@ export default function Dashboard() {
                   if ('contribution_amount' in configFields) {
                     configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
                   }
-                  if ('contribution_amount_usd' in configFields) {
-                    configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
+                  if ('contribution_amount_local' in configFields) {
+                    configValues.contributionAmountUsd = Number(configFields.contribution_amount_local) / 100;
                   }
                   if ('security_deposit' in configFields) {
                     configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
                   }
-                  if ('security_deposit_usd' in configFields) {
-                    configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
+                  if ('security_deposit_local' in configFields) {
+                    configValues.securityDepositUsd = Number(configFields.security_deposit_local) / 100;
                   }
                   if ('cycle_length' in configFields) {
                     configValues.cycleLength = Number(configFields.cycle_length);
@@ -650,8 +811,8 @@ export default function Dashboard() {
     // Direct field access with safe checks and type assertions (as fallbacks)
     configValues.contributionAmount = Number(fields.contribution_amount ?? configValues.contributionAmount * 1e9) / 1e9;
     configValues.securityDeposit = Number(fields.security_deposit ?? configValues.securityDeposit * 1e9) / 1e9;
-    configValues.contributionAmountUsd = Number(fields.contribution_amount_usd ?? configValues.contributionAmountUsd * 100) / 100;
-    configValues.securityDepositUsd = Number(fields.security_deposit_usd ?? configValues.securityDepositUsd * 100) / 100;
+    configValues.contributionAmountUsd = Number(fields.contribution_amount_local ?? configValues.contributionAmountUsd * 100) / 100;
+    configValues.securityDepositUsd = Number(fields.security_deposit_local ?? configValues.securityDepositUsd * 100) / 100;
     configValues.cycleLength = Number(fields.cycle_length ?? configValues.cycleLength);
     // Only update cycleDay from direct field if it wasn't found elsewhere
     if (configValues.cycleDay === 0 && fields.cycle_day !== undefined) { 
@@ -680,6 +841,7 @@ export default function Dashboard() {
       admin: admin,
       contributionAmount: configValues.contributionAmount,
       contributionAmountUsd: configValues.contributionAmountUsd,
+      currencyType: circleCreationData?.currency_type || 'USD', // Add currency type with fallback
       securityDeposit: configValues.securityDeposit,
       securityDepositUsd: configValues.securityDepositUsd,
       cycleLength: configValues.cycleLength,
@@ -702,9 +864,20 @@ export default function Dashboard() {
       return;
     }
     
-    console.log('Fetching circles for user:', userAddress);
-    
-    setLoading(true);
+    // setLoading(true); // setLoading true initially, potentially set to false if cache is loaded quickly.
+    // setError(''); // Reset error state
+
+    // Attempt to load from cache first (already handled by useState initializer for initial load)
+    // For subsequent calls to fetchUserCircles (e.g. manual refresh), we might re-evaluate loading state here.
+    // For now, the main loading state will primarily reflect the network fetch.
+
+    let isInitialLoadWithCache = circles.length > 0; // Check if circles were loaded from cache initially
+    if (isInitialLoadWithCache) {
+      console.log('Displaying cached circles initially, fetching fresh data in background.');
+      // Optionally, could set a different loading state like `isRevalidating` if needed for UI.
+    } else {
+      setLoading(true); // If no cache, set loading to true for the network fetch.
+    }
     setError('');
     
     try {
@@ -915,11 +1088,17 @@ export default function Dashboard() {
             }
             
             // Get the dynamic fields for this circle
-            const dynamicFieldsResult = await client.getDynamicFields({
-              parentId: parsedEvent.circle_id
-            });
-            
-            console.log(`Dynamic fields for circle ${parsedEvent.circle_id}:`, dynamicFieldsResult.data);
+            let dynamicFieldsResult;
+            try {
+              dynamicFieldsResult = await client.getDynamicFields({
+                parentId: parsedEvent.circle_id
+              });
+              console.log(`Dynamic fields for circle ${parsedEvent.circle_id}:`, dynamicFieldsResult.data);
+            } catch (error) {
+              console.error(`Error fetching dynamic fields for circle ${parsedEvent.circle_id}:`, error);
+              // Set empty dynamic fields to continue processing
+              dynamicFieldsResult = { data: [] };
+            }
             
             // Add transaction input data if we have it
             const transactionInput = transactionInputMap.get(parsedEvent.circle_id);
@@ -1000,9 +1179,16 @@ export default function Dashboard() {
             const creationData = circleCreationDataMap.get(parsedEvent.circle_id);
             
             // Get dynamic fields for this circle
-            const dynamicFieldsResult = await client.getDynamicFields({
-              parentId: parsedEvent.circle_id
-            });
+            let dynamicFieldsResult;
+            try {
+              dynamicFieldsResult = await client.getDynamicFields({
+                parentId: parsedEvent.circle_id
+              });
+            } catch (error) {
+              console.error(`Error fetching dynamic fields for member circle ${parsedEvent.circle_id}:`, error);
+              // Set empty dynamic fields to continue processing
+              dynamicFieldsResult = { data: [] };
+            }
             
             // Add transaction input data if we have it
             const transactionInput = transactionInputMap.get(parsedEvent.circle_id);
@@ -1065,8 +1251,15 @@ export default function Dashboard() {
         }
       }
       
-      // Convert map to array and set state
-      setCircles(Array.from(circleMap.values()));
+      // Convert map to array
+      const freshCirclesArray = Array.from(circleMap.values());
+
+      // Always update the circles state with fresh data and cache it
+      // The component will re-render only if the data actually changed
+      setCircles(freshCirclesArray);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(`userCircles-${userAddress}`, JSON.stringify(freshCirclesArray));
+      }
       
       // Store admin circle IDs in localStorage for use by the Navbar component
       const adminCircleIds = Array.from(circleMap.values())
@@ -1078,10 +1271,11 @@ export default function Dashboard() {
     } catch (error) {
       console.error('Error fetching circles:', error);
       setError('An error occurred while fetching circles. Please try again later.');
+      // If fetch fails, retain cached circles if they exist, otherwise circles will be empty.
     } finally {
-      setLoading(false);
+      setLoading(false); // Always set loading to false after fetch attempt completes
     }
-  }, [userAddress]);
+  }, [userAddress]); // Removed circles to prevent circular dependency
 
   useEffect(() => {
     fetchUserCircles();
@@ -1596,23 +1790,82 @@ export default function Dashboard() {
     });
   };
 
-  // Format USD value
-  const formatUSD = (amount: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
+  // Format currency value based on currency type
+  const formatCurrency = (amount: number, currencyType: string = 'USD') => {
+    // Map currency codes to their formatting options
+    const currencyFormats: Record<string, { 
+      symbol: string; 
+      locale: string; 
+      code: string; 
+      customFormat?: boolean;
+      position?: 'before' | 'after';
+    }> = {
+      'USD': { symbol: '$', locale: 'en-US', code: 'USD' },
+      'XAF': { symbol: 'FCFA', locale: 'fr-CM', code: 'XAF', customFormat: true, position: 'after' },
+      'NGN': { symbol: '₦', locale: 'en-NG', code: 'NGN' },
+      'EUR': { symbol: '€', locale: 'de-DE', code: 'EUR' },
+      'GBP': { symbol: '£', locale: 'en-GB', code: 'GBP' },
+      'CAD': { symbol: 'C$', locale: 'en-CA', code: 'CAD', customFormat: true, position: 'before' },
+      'ZAR': { symbol: 'R', locale: 'en-ZA', code: 'ZAR', customFormat: true, position: 'before' },
+      'KES': { symbol: 'KSh', locale: 'en-KE', code: 'KES', customFormat: true, position: 'before' },
+      'EGP': { symbol: 'E£', locale: 'en-US', code: 'EGP', customFormat: true, position: 'before' },
+      'MAD': { symbol: 'MAD', locale: 'en-US', code: 'MAD', customFormat: true, position: 'before' },
+      'GHS': { symbol: 'GH₵', locale: 'en-GH', code: 'GHS', customFormat: true, position: 'before' } // Added GHS
+    };
+
+    const format = currencyFormats[currencyType] || currencyFormats['USD'];
+    
+    // Format the number with proper decimals using a safe locale
+    const formattedNumber = new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: amount >= 1000 ? 0 : 2,
     }).format(amount);
+    
+    // For currencies that need custom formatting or have issues with Intl.NumberFormat
+    if (format.customFormat) {
+      if (format.position === 'after') {
+        return `${formattedNumber} ${format.symbol}`;
+      } else {
+        return `${format.symbol} ${formattedNumber}`;
+      }
+    }
+    
+    // For standard currencies, try Intl.NumberFormat with currency style using en-US locale for consistency
+    try {
+      return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: format.code,
+        minimumFractionDigits: 0,
+        maximumFractionDigits: amount >= 1000 ? 0 : 2,
+      }).format(amount);
+    } catch (error) {
+      // Fallback for unsupported locales
+      console.warn(`Currency formatting failed for ${currencyType}, using fallback`);
+      return `${format.symbol}${formattedNumber}`;
+    }
   };
 
   // Currency display component
-  const CurrencyDisplay = ({ usd, sui, className = "" }: { usd?: number; sui?: number; className?: string }) => {
+  const CurrencyDisplay = ({ 
+    usd, 
+    sui, 
+    currencyType = 'USD', 
+    className = "",
+    respectVisibility = true // New prop to control if this should respect balance visibility
+  }: { 
+    usd?: number; 
+    sui?: number; 
+    currencyType?: string;
+    className?: string;
+    respectVisibility?: boolean; // Optional prop
+  }) => {
     const isPriceUnavailable = suiPrice === null;
     
-    console.log('CurrencyDisplay inputs:', { usd, sui, suiPrice, isPriceUnavailable });
+    console.log('CurrencyDisplay inputs:', { usd, sui, currencyType, suiPrice, isPriceUnavailable });
     
     // Debug logging
     if (usd === 0 || sui === 0) {
-      console.log('Zero values detected in CurrencyDisplay:', { usd, sui });
+      console.log('Zero values detected in CurrencyDisplay:', { usd, sui, currencyType });
     }
     
     // Check for invalid inputs and provide defaults
@@ -1622,64 +1875,77 @@ export default function Dashboard() {
       sui = 0;
     }
     
-    // Calculate values based on which parameter is provided
-    let calculatedSui: number | null = null;
-    let calculatedUsd: number | null = null;
+    // Use the provided values directly instead of converting between them
+    // The local currency amount (usd parameter) and SUI amount (sui parameter) 
+    // are already stored correctly from the circle creation
+    let displayLocalAmount: number | null = null;
+    let displaySuiAmount: number | null = null;
     
     if (usd !== undefined && !isNaN(usd)) {
-      // If USD is provided and valid, calculate SUI based on current price
-      calculatedUsd = usd;
-      calculatedSui = suiPrice !== null && suiPrice > 0 ? usd / suiPrice : null;
-      console.log('CurrencyDisplay: using USD value to calculate SUI:', { 
-        usd: calculatedUsd, 
-        sui: calculatedSui,
-        suiPrice 
-      });
-    } else if (sui !== undefined && !isNaN(sui)) {
-      // If SUI is provided and valid, calculate USD
-      calculatedSui = sui;
-      calculatedUsd = suiPrice !== null ? sui * suiPrice : null;
-      console.log('CurrencyDisplay: using SUI value to calculate USD:', { 
-        sui: calculatedSui, 
-        usd: calculatedUsd,
-        suiPrice 
-      });
-    } else {
-      // Default values if neither is provided or values are invalid
-      calculatedSui = 0;
-      calculatedUsd = 0;
-      console.log('CurrencyDisplay: using default values:', { 
-        sui: calculatedSui, 
-        usd: calculatedUsd 
+      displayLocalAmount = usd; // This is actually the local currency amount
+      console.log('CurrencyDisplay: using provided local currency amount:', { 
+        local: displayLocalAmount, 
+        currencyType
       });
     }
     
+    if (sui !== undefined && !isNaN(sui)) {
+      displaySuiAmount = sui; // This is the actual SUI amount stored in the contract
+      console.log('CurrencyDisplay: using provided SUI amount:', { 
+        sui: displaySuiAmount
+      });
+    }
+    
+    // Default values if neither is provided or values are invalid
+    if (displayLocalAmount === null || displayLocalAmount === undefined) {
+      displayLocalAmount = 0;
+    }
+    if (displaySuiAmount === null || displaySuiAmount === undefined) {
+      displaySuiAmount = 0;
+    }
+    
+    console.log('CurrencyDisplay: final display values:', { 
+      local: displayLocalAmount, 
+      sui: displaySuiAmount,
+      currencyType 
+    });
+    
     // Special case for zero values - check if this is intentional or missing data
-    if (calculatedUsd === 0 && calculatedSui === 0) {
-      // Just display as "N/A" or "$0" to be clearer in UI
+    if (displayLocalAmount === 0 && displaySuiAmount === 0) {
+      // Just display as "N/A" or the zero amount in the correct currency
       return (
         <span className={`${className}`}>
-          {isPriceUnavailable ? "Data unavailable" : "$0.00 (0 SUI)"}
+          {isPriceUnavailable ? "Data unavailable" : `${formatCurrency(0, currencyType)} (0 SUI)`}
         </span>
       );
     }
     
     // Format SUI with appropriate precision if available
-    const formattedSui = calculatedSui !== null ? (
-      calculatedSui >= 1000 
-        ? calculatedSui.toLocaleString(undefined, { maximumFractionDigits: 0 }) 
-        : calculatedSui >= 100 
-          ? calculatedSui.toFixed(1) 
-          : calculatedSui.toFixed(2)
+    const formattedSui = displaySuiAmount !== null ? (
+      displaySuiAmount >= 1000 
+        ? displaySuiAmount.toLocaleString(undefined, { maximumFractionDigits: 0 }) 
+        : displaySuiAmount >= 100 
+          ? displaySuiAmount.toFixed(1) 
+          : displaySuiAmount.toFixed(3) // Show more precision for small amounts
     ) : '—';
+
+    // Check if balance should be hidden
+    if (respectVisibility && !balanceVisible) {
+      return (
+        <span className={`${className} flex items-center`}>
+          {formatBalanceDisplay('', false)}
+          <span className="text-gray-500 ml-1">({formatBalanceDisplay('', false)} SUI)</span>
+        </span>
+      );
+    }
     
     return (
       <Tooltip.Provider>
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
             <span className={`cursor-help ${className} flex items-center`}>
-              {calculatedUsd !== null ? formatUSD(calculatedUsd) : '$—.—'} 
-              <span className="text-gray-500 mr-1">({formattedSui} SUI)</span>
+              {displayLocalAmount !== null ? formatCurrency(displayLocalAmount, currencyType) : `${formatCurrency(0, currencyType)}`}
+              <span className="text-gray-500 ml-1">({formattedSui} SUI)</span>
               {isPriceLoading && <RefreshCw size={14} className="animate-spin ml-1 text-blue-500" />}
               {isPriceUnavailable && !isPriceLoading && <AlertCircle size={14} className="ml-1 text-amber-500" />}
             </span>
@@ -1690,9 +1956,9 @@ export default function Dashboard() {
               sideOffset={5}
             >
               <div className="space-y-1">
-                <p>SUI Conversion Rate:</p>
+                <p>Current SUI Conversion Rate:</p>
                 {suiPrice !== null ? (
-                  <p>1 SUI = {formatUSD(suiPrice)}</p>
+                  <p>1 SUI = {formatCurrency(suiPrice, 'USD')}</p>
                 ) : (
                   <p className="text-amber-400">SUI price unavailable</p>
                 )}
@@ -1702,6 +1968,12 @@ export default function Dashboard() {
                     : isPriceUnavailable
                       ? "Unable to fetch price data"
                       : "Using latest price from CoinGecko"}
+                </p>
+                <p className="text-xs text-blue-300">
+                  Currency: {currencyType}
+                </p>
+                <p className="text-xs text-gray-400">
+                  Note: SUI amount was calculated at circle creation time
                 </p>
               </div>
               <Tooltip.Arrow className="fill-gray-900" />
@@ -2145,62 +2417,146 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="p-6">
-                  <p className="text-sm font-medium text-gray-500">Balance</p>
-                  <p className="mt-1 text-2xl font-semibold text-blue-600">{Number(balance) / 1000000000} SUI</p>
+                  {/* Balance Header - Mobile First Design */}
+                  <div className="flex flex-col space-y-3 sm:flex-row sm:items-center sm:justify-between sm:space-y-0 mb-4">
+                    <div className="flex items-center space-x-2">
+                      <p className="text-sm font-medium text-gray-500">Balance</p>
+                      <Tooltip.Provider>
+                        <Tooltip.Root>
+                          <Tooltip.Trigger asChild>
+                            <button
+                              onClick={toggleBalanceVisibility}
+                              className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors duration-200"
+                              aria-label={balanceVisible ? 'Hide balance' : 'Show balance'}
+                            >
+                              {balanceVisible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                            </button>
+                          </Tooltip.Trigger>
+                          <Tooltip.Portal>
+                            <Tooltip.Content
+                              className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                              sideOffset={5}
+                            >
+                              {balanceVisible ? 'Hide balance' : 'Show balance'}
+                              <Tooltip.Arrow className="fill-gray-800" />
+                            </Tooltip.Content>
+                          </Tooltip.Portal>
+                        </Tooltip.Root>
+                      </Tooltip.Provider>
+                    </div>
+                    
+                    {/* Currency Selector - Better Mobile Styling */}
+                    <div className="relative w-full sm:w-auto">
+                      <select
+                        value={selectedCurrency}
+                        onChange={(e) => setSelectedCurrency(e.target.value)}
+                        className="w-full sm:w-auto text-xs bg-white border border-gray-300 rounded-lg pl-3 pr-8 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none cursor-pointer"
+                      >
+                        <option value="USD">USD ($)</option>
+                        <option value="XAF">XAF (FCFA)</option>
+                        <option value="NGN">NGN (₦)</option>
+                        <option value="EUR">EUR (€)</option>
+                        <option value="GBP">GBP (£)</option>
+                        <option value="CAD">CAD (C$)</option>
+                        <option value="ZAR">ZAR (R)</option>
+                        <option value="KES">KES (KSh)</option>
+                        <option value="EGP">EGP (E£)</option>
+                        <option value="MAD">MAD</option>
+                        <option value="GHS">GHS (GH₵)</option>
+                      </select>
+                      {/* Custom dropdown arrow */}
+                      <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                        <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-1">
+                    <p className="text-2xl font-semibold text-blue-600"> {/* Changed from text-3xl to text-2xl */}
+                      {/* Display total wallet value here, formatted with balance visibility */}
+                      {balanceVisible 
+                        ? formatCurrency(totalWalletLocalValue, selectedCurrency)
+                        : formatBalanceDisplay(totalWalletLocalValue, true)
+                      }
+                    </p>
+                    <p className="text-sm text-gray-500 mt-1"> {/* New sub-text */}
+                      Total Estimated Value
+                    </p>
+                  </div>
                   
                   {/* Add Send button */}
-                  <div className="mt-3 flex space-x-2">
+                  <div className="mt-4 flex space-x-3">
                     <button
                       onClick={() => setIsTransferDialogOpen(true)}
-                      className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
+                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
                     >
-                      <Send className="w-4 h-4 mr-1.5" />
+                      <Send className="w-4 h-4 mr-2" />
                       Send
                     </button>
                     <a
                       href={`https://faucet.sui.io/?address=${userAddress || ''}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
+                      className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
                     >
-                      <ExternalLink className="w-4 h-4 mr-1.5" />
+                      <ExternalLink className="w-4 h-4 mr-2" />
                       Faucet
                     </a>
                   </div>
                   
                   {/* Display all coins */}
-                  {allCoins.length > 1 && (
-                    <div className="mt-3">
-                      <p className="text-xs font-medium text-gray-500 mb-1">All Tokens</p>
-                      <div className="space-y-1 max-h-40 overflow-y-auto pr-2">
-                        {allCoins.map((coin, index) => (
-                          <div key={index} className="flex justify-between items-center text-sm py-1">
-                            <div className="flex items-center">
-                              <TokenIcon symbol={coin.symbol} />
-                              <span className="font-medium">{coin.symbol}</span>
+                  {allCoins.length > 0 && ( // Changed from > 1 to > 0 to always show if any coins exist
+                    <div className="mt-6">
+                      <p className="text-xs font-medium text-gray-500 mb-2">All Tokens</p>
+                      <div className="space-y-3 max-h-60 overflow-y-auto pr-2"> {/* Increased max-h slightly */}
+                        {allCoins.map((coin, index) => {
+                          const tokenBalance = coin.symbol.toLowerCase() === 'usdc' 
+                            ? (Number(coin.balance) / 1000000) 
+                            : Number(coin.balance) / 1000000000; 
+                          
+                          const convertedValue = convertedBalances[coin.symbol] || 0;
+                          
+                          return (
+                            <div key={index} className="flex items-center justify-between py-2 border-b border-gray-100 last:border-b-0">
+                              <div className="flex items-center space-x-3"> {/* Added space-x-3 for icon and name */}
+                                <TokenIcon symbol={coin.symbol} />
+                                <span className="font-medium text-sm">{coin.symbol}</span>
+                              </div>
+                              <div className="flex items-center space-x-4"> {/* Added space-x-4 for amounts and button */}
+                                <div className="text-right">
+                                  <div className="text-sm font-medium text-gray-800">
+                                    {balanceVisible 
+                                      ? tokenBalance.toFixed(coin.symbol.toLowerCase() === 'usdc' ? 2 : 4)
+                                      : formatBalanceDisplay(tokenBalance)
+                                    }
+                                  </div>
+                                  {(coin.symbol === 'SUI' || coin.symbol.toLowerCase() === 'usdc') && suiPrice && convertedValue > 0 && (
+                                    <div className="text-xs text-gray-500">
+                                      {balanceVisible 
+                                        ? formatCurrency(convertedValue, selectedCurrency)
+                                        : formatBalanceDisplay(convertedValue)
+                                      }
+                                    </div>
+                                  )}
+                                </div>
+                                {coin.symbol.toLowerCase() === 'usdc' && (
+                                  <button
+                                    onClick={() => {
+                                      console.log('Buy USDC button clicked');
+                                      openMoonPayWidget('usdc');
+                                    }}
+                                    className="text-xs bg-blue-500 hover:bg-blue-600 text-white px-3 py-1.5 rounded-md transition-colors" // Adjusted padding
+                                    title="Buy USDC with MoonPay"
+                                  >
+                                    Buy
+                                  </button>
+                                )}
+                              </div>
                             </div>
-                            <div className="flex items-center">
-                              <span className="text-gray-700 mr-2">
-                                {coin.symbol.toLowerCase() === 'usdc' 
-                                  ? (Number(coin.balance) / 1000000).toFixed(6) // Use 1e6 for USDC (6 decimals)
-                                  : Number(coin.balance) / 1000000000 // Use 1e9 for SUI and other coins
-                                }
-                              </span>
-                              {coin.symbol.toLowerCase() === 'usdc' && (
-                                <button
-                                  onClick={() => {
-                                    console.log('Buy USDC button clicked');
-                                    openMoonPayWidget('usdc');
-                                  }}
-                                  className="text-xs bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded transition-colors"
-                                  title="Buy USDC with MoonPay"
-                                >
-                                  Buy
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -2401,7 +2757,11 @@ export default function Dashboard() {
                                   <div>
                                     <p className="text-gray-500">Contribution</p>
                                     <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay usd={circle.contributionAmountUsd} />
+                                      <CurrencyDisplay 
+                                        usd={circle.contributionAmountUsd} 
+                                        sui={circle.contributionAmount}
+                                        currencyType={circle.currencyType} 
+                                      />
                                     </p>
                                   </div>
                                   <div>
@@ -2411,7 +2771,11 @@ export default function Dashboard() {
                                   <div>
                                     <p className="text-gray-500">Security Deposit</p>
                                     <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay usd={circle.securityDepositUsd} />
+                                      <CurrencyDisplay 
+                                        usd={circle.securityDepositUsd} 
+                                        sui={circle.securityDeposit}
+                                        currencyType={circle.currencyType} 
+                                      />
                                     </p>
                                   </div>
                                   <div>
@@ -2617,7 +2981,11 @@ export default function Dashboard() {
                                   <div>
                                     <p className="text-gray-500">Contribution</p>
                                     <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay usd={circle.contributionAmountUsd} />
+                                      <CurrencyDisplay 
+                                        usd={circle.contributionAmountUsd} 
+                                        sui={circle.contributionAmount}
+                                        currencyType={circle.currencyType} 
+                                      />
                                     </p>
                                   </div>
                                   <div>
@@ -2627,7 +2995,11 @@ export default function Dashboard() {
                                   <div>
                                     <p className="text-gray-500">Security Deposit</p>
                                     <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay usd={circle.securityDepositUsd} />
+                                      <CurrencyDisplay 
+                                        usd={circle.securityDepositUsd} 
+                                        sui={circle.securityDeposit}
+                                        currencyType={circle.currencyType} 
+                                      />
                                     </p>
                                   </div>
                                   <div>
@@ -2810,7 +3182,11 @@ export default function Dashboard() {
                                   <div>
                                     <p className="text-gray-500">Contribution</p>
                                     <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay usd={circle.contributionAmountUsd} />
+                                      <CurrencyDisplay 
+                                        usd={circle.contributionAmountUsd} 
+                                        sui={circle.contributionAmount}
+                                        currencyType={circle.currencyType} 
+                                      />
                                     </p>
                                   </div>
                                   <div>
@@ -2820,7 +3196,11 @@ export default function Dashboard() {
                                   <div>
                                     <p className="text-gray-500">Security Deposit</p>
                                     <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay usd={circle.securityDepositUsd} />
+                                      <CurrencyDisplay 
+                                        usd={circle.securityDepositUsd} 
+                                        sui={circle.securityDeposit}
+                                        currencyType={circle.currencyType} 
+                                      />
                                     </p>
                                   </div>
                                   <div>

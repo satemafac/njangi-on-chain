@@ -15,6 +15,7 @@ interface Circle {
   admin: string;
   contributionAmount: number;
   contributionAmountUsd: number;
+  currencyType?: string; // Add currency type field
   securityDeposit: number;
   securityDepositUsd: number;
   cycleLength: number;
@@ -34,8 +35,9 @@ interface CircleCreatedEvent {
   admin: string;
   name: string;
   contribution_amount: string;
-  contribution_amount_usd: string;
-  security_deposit_usd: string;
+  currency_type?: string;                  // Currency code (e.g., "USD", "XAF", "NGN")
+  contribution_amount_local?: string;      // Amount in local currency
+  security_deposit_local?: string;         // Amount in local currency
   max_members: string;
   cycle_length: string;
 }
@@ -71,8 +73,7 @@ export default function CircleDetails() {
         if (price !== null) {
           setSuiPrice(price);
         }
-      } catch (error) {
-        console.error('Error fetching SUI price:', error);
+      } catch {
         // Keep using the default price
       }
     };
@@ -122,8 +123,8 @@ export default function CircleDetails() {
           circleCreationEventData = createEvent.parsedJson as CircleCreatedEvent;
           transactionInput = {
             contribution_amount: circleCreationEventData.contribution_amount,
-            contribution_amount_usd: circleCreationEventData.contribution_amount_usd,
-            security_deposit_usd: circleCreationEventData.security_deposit_usd,
+            contribution_amount_local: circleCreationEventData.contribution_amount_local,
+            security_deposit_local: circleCreationEventData.security_deposit_local,
           };
         }
 
@@ -138,8 +139,8 @@ export default function CircleDetails() {
             console.log('Details - Transaction inputs:', inputs);
             if (!transactionInput) transactionInput = {};
             if (inputs.length > 1 && inputs[1]?.type === 'pure') transactionInput.contribution_amount = inputs[1].value;
-            if (inputs.length > 2 && inputs[2]?.type === 'pure') transactionInput.contribution_amount_usd = inputs[2].value;
-            if (inputs.length > 4 && inputs[4]?.type === 'pure') transactionInput.security_deposit_usd = inputs[4].value;
+            if (inputs.length > 2 && inputs[2]?.type === 'pure') transactionInput.contribution_amount_local = inputs[2].value;
+            if (inputs.length > 4 && inputs[4]?.type === 'pure') transactionInput.security_deposit_local = inputs[4].value;
             if (inputs.length > 6 && inputs[6]?.type === 'pure') transactionInput.cycle_day = inputs[6].value;
             console.log('Details - Extracted from Tx Inputs:', transactionInput);
           }
@@ -162,8 +163,8 @@ export default function CircleDetails() {
       // 1. Use values from transaction/event first
       if (transactionInput) {
         if (transactionInput.contribution_amount) configValues.contributionAmount = Number(transactionInput.contribution_amount) / 1e9;
-        if (transactionInput.contribution_amount_usd) configValues.contributionAmountUsd = Number(transactionInput.contribution_amount_usd) / 100;
-        if (transactionInput.security_deposit_usd) configValues.securityDepositUsd = Number(transactionInput.security_deposit_usd) / 100;
+        if (transactionInput.contribution_amount_local) configValues.contributionAmountUsd = Number(transactionInput.contribution_amount_local) / 100;
+        if (transactionInput.security_deposit_local) configValues.securityDepositUsd = Number(transactionInput.security_deposit_local) / 100;
         if (transactionInput.cycle_day) configValues.cycleDay = Number(transactionInput.cycle_day);
       }
       if (circleCreationEventData) {
@@ -204,13 +205,17 @@ export default function CircleDetails() {
                 if ('contribution_amount' in contentFields) {
                   configValues.contributionAmount = Number(contentFields.contribution_amount) / 1e9;
                 }
-                if ('contribution_amount_usd' in contentFields) {
+                if ('contribution_amount_local' in contentFields) {
+                  configValues.contributionAmountUsd = Number(contentFields.contribution_amount_local) / 100;
+                } else if ('contribution_amount_usd' in contentFields) {
                   configValues.contributionAmountUsd = Number(contentFields.contribution_amount_usd) / 100;
                 }
                 if ('security_deposit' in contentFields) {
                   configValues.securityDeposit = Number(contentFields.security_deposit) / 1e9;
                 }
-                if ('security_deposit_usd' in contentFields) {
+                if ('security_deposit_local' in contentFields) {
+                  configValues.securityDepositUsd = Number(contentFields.security_deposit_local) / 100;
+                } else if ('security_deposit_usd' in contentFields) {
                   configValues.securityDepositUsd = Number(contentFields.security_deposit_usd) / 100;
                 }
                 if ('cycle_length' in contentFields) {
@@ -247,13 +252,17 @@ export default function CircleDetails() {
                     if ('contribution_amount' in configFields) {
                       configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
                     }
-                    if ('contribution_amount_usd' in configFields) {
+                    if ('contribution_amount_local' in configFields) {
+                      configValues.contributionAmountUsd = Number(configFields.contribution_amount_local) / 100;
+                    } else if ('contribution_amount_usd' in configFields) {
                       configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
                     }
                     if ('security_deposit' in configFields) {
                       configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
                     }
-                    if ('security_deposit_usd' in configFields) {
+                    if ('security_deposit_local' in configFields) {
+                      configValues.securityDepositUsd = Number(configFields.security_deposit_local) / 100;
+                    } else if ('security_deposit_usd' in configFields) {
                       configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
                     }
                     if ('cycle_length' in configFields) {
@@ -275,9 +284,21 @@ export default function CircleDetails() {
 
       // 3. Use direct fields from the circle object as a fallback
       if (configValues.contributionAmount === 0 && fields.contribution_amount) configValues.contributionAmount = Number(fields.contribution_amount) / 1e9;
-      if (configValues.contributionAmountUsd === 0 && fields.contribution_amount_usd) configValues.contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
+      if (configValues.contributionAmountUsd === 0) {
+        if (fields.contribution_amount_local) {
+          configValues.contributionAmountUsd = Number(fields.contribution_amount_local) / 100;
+        } else if (fields.contribution_amount_usd) {
+          configValues.contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
+        }
+      }
       if (configValues.securityDeposit === 0 && fields.security_deposit) configValues.securityDeposit = Number(fields.security_deposit) / 1e9;
-      if (configValues.securityDepositUsd === 0 && fields.security_deposit_usd) configValues.securityDepositUsd = Number(fields.security_deposit_usd) / 100;
+      if (configValues.securityDepositUsd === 0) {
+        if (fields.security_deposit_local) {
+          configValues.securityDepositUsd = Number(fields.security_deposit_local) / 100;
+        } else if (fields.security_deposit_usd) {
+          configValues.securityDepositUsd = Number(fields.security_deposit_usd) / 100;
+        }
+      }
       // Fallback for cycle info if not found earlier
       if (configValues.cycleLength === 0 && fields.cycle_length !== undefined) configValues.cycleLength = Number(fields.cycle_length);
       if (configValues.cycleDay === 1 && fields.cycle_day !== undefined) configValues.cycleDay = Number(fields.cycle_day);
@@ -330,6 +351,7 @@ export default function CircleDetails() {
         admin: typeof fields.admin === 'string' ? fields.admin : '',
         contributionAmount: configValues.contributionAmount,
         contributionAmountUsd: configValues.contributionAmountUsd,
+        currencyType: circleCreationEventData?.currency_type || 'USD',
         securityDeposit: configValues.securityDeposit,
         securityDepositUsd: configValues.securityDepositUsd,
         cycleLength: configValues.cycleLength,
@@ -358,6 +380,44 @@ export default function CircleDetails() {
     });
   };
 
+  // Format currency value based on currency type
+  const formatCurrency = (amount: number, currencyType: string = 'USD') => {
+    // Map currency codes to their formatting options
+    const currencyFormats: Record<string, { 
+      symbol: string; 
+      locale: string; 
+      code: string; 
+      customFormat?: boolean;
+      position?: 'before' | 'after';
+    }> = {
+      'USD': { symbol: '$', locale: 'en-US', code: 'USD' },
+      'XAF': { symbol: 'FCFA', locale: 'fr-CM', code: 'XAF', customFormat: true, position: 'after' },
+      'NGN': { symbol: '₦', locale: 'en-NG', code: 'NGN' },
+      'EUR': { symbol: '€', locale: 'de-DE', code: 'EUR' },
+      'GBP': { symbol: '£', locale: 'en-GB', code: 'GBP' },
+      'CAD': { symbol: 'C$', locale: 'en-CA', code: 'CAD', customFormat: true, position: 'before' },
+      'ZAR': { symbol: 'R', locale: 'en-ZA', code: 'ZAR', customFormat: true, position: 'before' },
+      'KES': { symbol: 'KSh', locale: 'en-KE', code: 'KES', customFormat: true, position: 'before' },
+      'EGP': { symbol: 'E£', locale: 'en-US', code: 'EGP', customFormat: true, position: 'before' },
+      'MAD': { symbol: 'MAD', locale: 'en-US', code: 'MAD', customFormat: true, position: 'before' },
+      'GHS': { symbol: 'GH₵', locale: 'en-GH', code: 'GHS', customFormat: true, position: 'before' }
+    };
+
+    const format = currencyFormats[currencyType] || currencyFormats['USD'];
+    
+    try {
+      return new Intl.NumberFormat(format.locale, {
+        style: 'currency',
+        currency: format.code,
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
+      }).format(amount);
+    } catch {
+      // Fallback for unsupported locales
+      return `${format.symbol}${amount.toFixed(2)}`;
+    }
+  };
+
   // Format USD value
   const formatUSD = (amount: number) => {
     return new Intl.NumberFormat('en-US', {
@@ -367,40 +427,79 @@ export default function CircleDetails() {
   };
 
   // Currency display component
-  const CurrencyDisplay = ({ usd, sui, className = "" }: { usd?: number; sui?: number; className?: string }) => {
+  const CurrencyDisplay = ({ 
+    usd, 
+    sui, 
+    currencyType = 'USD', 
+    className = "" 
+  }: { 
+    usd?: number; 
+    sui?: number; 
+    currencyType?: string;
+    className?: string;
+  }) => {
     const isPriceStale = priceService.getFetchStatus() === 'error';
+    
+    console.log('CurrencyDisplay inputs:', { usd, sui, currencyType, suiPrice, isPriceStale });
     
     // Check for invalid inputs and provide defaults
     if ((usd === undefined || isNaN(usd)) && (sui === undefined || isNaN(sui))) {
+      console.log('CurrencyDisplay: both usd and sui values are invalid, defaulting to 0');
       usd = 0;
       sui = 0;
     }
     
-    // Calculate values based on which parameter is provided
-    let calculatedSui: number | null = null;
-    let calculatedUsd: number | null = null;
+    // Use the provided values directly instead of converting between them
+    // The local currency amount (usd parameter) and SUI amount (sui parameter) 
+    // are already stored correctly from the circle creation
+    let displayLocalAmount: number | null = null;
+    let displaySuiAmount: number | null = null;
     
     if (usd !== undefined && !isNaN(usd)) {
-      // If USD is provided and valid, calculate SUI based on current price
-      calculatedUsd = usd;
-      calculatedSui = suiPrice !== null && suiPrice > 0 ? usd / suiPrice : null;
-    } else if (sui !== undefined && !isNaN(sui)) {
-      // If SUI is provided and valid, calculate USD
-      calculatedSui = sui;
-      calculatedUsd = suiPrice !== null ? sui * suiPrice : null;
-    } else {
-      // Default values if neither is provided or values are invalid
-      calculatedSui = 0;
-      calculatedUsd = 0;
+      displayLocalAmount = usd; // This is actually the local currency amount
+      console.log('CurrencyDisplay: using provided local currency amount:', { 
+        local: displayLocalAmount, 
+        currencyType
+      });
+    }
+    
+    if (sui !== undefined && !isNaN(sui)) {
+      displaySuiAmount = sui; // This is the actual SUI amount stored in the contract
+      console.log('CurrencyDisplay: using provided SUI amount:', { 
+        sui: displaySuiAmount
+      });
+    }
+    
+    // Default values if neither is provided or values are invalid
+    if (displayLocalAmount === null || displayLocalAmount === undefined) {
+      displayLocalAmount = 0;
+    }
+    if (displaySuiAmount === null || displaySuiAmount === undefined) {
+      displaySuiAmount = 0;
+    }
+    
+    console.log('CurrencyDisplay: final display values:', { 
+      local: displayLocalAmount, 
+      sui: displaySuiAmount,
+      currencyType 
+    });
+    
+    // Special case for zero values
+    if (displayLocalAmount === 0 && displaySuiAmount === 0) {
+      return (
+        <span className={`${className}`}>
+          {formatCurrency(0, currencyType)} (0 SUI)
+        </span>
+      );
     }
     
     // Format SUI with appropriate precision if available
-    const formattedSui = calculatedSui !== null ? (
-      calculatedSui >= 1000 
-        ? calculatedSui.toLocaleString(undefined, { maximumFractionDigits: 0 }) 
-        : calculatedSui >= 100 
-          ? calculatedSui.toFixed(1) 
-          : calculatedSui.toFixed(2)
+    const formattedSui = displaySuiAmount !== null ? (
+      displaySuiAmount >= 1000 
+        ? displaySuiAmount.toLocaleString(undefined, { maximumFractionDigits: 0 }) 
+        : displaySuiAmount >= 100 
+          ? displaySuiAmount.toFixed(1) 
+          : displaySuiAmount.toFixed(3) // Show more precision for small amounts
     ) : '—';
     
     return (
@@ -408,7 +507,7 @@ export default function CircleDetails() {
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
             <span className={`cursor-help ${className} flex items-center`}>
-              {calculatedUsd !== null ? formatUSD(calculatedUsd) : '$—.—'} 
+              {displayLocalAmount !== null ? formatCurrency(displayLocalAmount, currencyType) : `${formatCurrency(0, currencyType)}`} 
               <span className="text-gray-500 mr-1">({formattedSui} SUI)</span>
               {isPriceStale && <span title="Using cached price">⚠️</span>}
             </span>
@@ -419,12 +518,18 @@ export default function CircleDetails() {
               sideOffset={5}
             >
               <div className="space-y-1">
-                <p>SUI Conversion Rate:</p>
+                <p>Current SUI Conversion Rate:</p>
                 <p>1 SUI = {formatUSD(suiPrice)}</p>
                 <p className="text-xs text-gray-400">
                   {isPriceStale 
                     ? "Using cached price - service temporarily unavailable" 
                     : "Updated price data from CoinGecko"}
+                </p>
+                <p className="text-xs text-blue-300">
+                  Currency: {currencyType}
+                </p>
+                <p className="text-xs text-gray-400">
+                  Note: SUI amount was calculated at circle creation time
                 </p>
               </div>
               <Tooltip.Arrow className="fill-gray-900" />
@@ -716,12 +821,12 @@ export default function CircleDetails() {
                       
                       <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
                         <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
-                        <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} className="font-medium" />
+                        <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} currencyType={circle.currencyType} className="font-medium" />
                       </div>
                       
                       <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
                         <p className="text-sm text-gray-500 mb-1">Security Deposit</p>
-                        <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} className="font-medium" />
+                        <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} currencyType={circle.currencyType} className="font-medium" />
                       </div>
                       
                       <div className="bg-gray-50 p-4 rounded-lg shadow-sm">

@@ -16,6 +16,7 @@ interface Circle {
   admin: string;
   contributionAmount: number; // Calculated SUI amount
   contributionAmountUsd: number; // USD amount (cents/100)
+  currencyType?: string; // Add currency type field
   securityDeposit: number; // Calculated SUI amount
   securityDepositUsd: number; // USD amount (cents/100)
   cycleLength: number;
@@ -31,9 +32,12 @@ interface CircleFields {
   admin: string;
   // Allow potentially missing direct fields after refactor
   contribution_amount?: string;
-  contribution_amount_usd?: string;
+  contribution_amount_usd?: string; // Legacy field
+  contribution_amount_local?: string; // New field
   security_deposit?: string;
-  security_deposit_usd?: string;
+  security_deposit_usd?: string; // Legacy field
+  security_deposit_local?: string; // New field
+  currency_type?: string; // New field
   cycle_length?: string;
   cycle_day?: string;
   max_members?: string;
@@ -43,14 +47,15 @@ interface CircleFields {
   [key: string]: string | number | boolean | object | unknown;
 }
 
-// Define CircleCreatedEvent interface (same as dashboard)
-interface CircleCreatedEvent {
+// Define CircleCreationEventData type
+interface CircleCreationEventData {
   circle_id: string;
   admin: string;
   name: string;
   contribution_amount: string;
-  contribution_amount_usd: string;
-  security_deposit_usd: string;
+  currency_type?: string;                  // Currency code (e.g., "USD", "XAF", "NGN")
+  contribution_amount_local?: string;      // Amount in local currency
+  security_deposit_local?: string;         // Amount in local currency
   max_members: string;
   cycle_length: string;
 }
@@ -58,6 +63,7 @@ interface CircleCreatedEvent {
 // Define type for transaction input data (same as dashboard)
 interface TransactionInputData {
   cycle_day?: number;
+  currency_type?: string;
   [key: string]: unknown;
 }
 
@@ -163,7 +169,7 @@ export default function JoinCircle() {
         
       // --- Fetch Event/Transaction Data (like dashboard) ---
       let transactionInput: TransactionInputData | undefined;
-      let circleCreationEventData: CircleCreatedEvent | undefined;
+      let circleCreationEventData: CircleCreationEventData | undefined;
 
       try {
         // 1. Fetch CircleCreated event
@@ -177,7 +183,7 @@ export default function JoinCircle() {
         console.log('Join - Found creation event:', !!createEvent);
 
         if (createEvent?.parsedJson) {
-          circleCreationEventData = createEvent.parsedJson as CircleCreatedEvent;
+          circleCreationEventData = createEvent.parsedJson as CircleCreationEventData;
         }
 
         // 2. Fetch Transaction Block for inputs (if possible)
@@ -191,10 +197,24 @@ export default function JoinCircle() {
             const tx = txData.transaction.data.transaction;
             const inputs = tx.inputs || [];
             console.log('Join - Transaction inputs:', inputs);
-            // Try to find cycle_day (adjust index if creation logic changes)
+            // Try to find cycle_day and currency_type
             if (inputs.length > 6 && inputs[6].type === 'pure' && inputs[6].valueType === 'u64') {
               transactionInput = { cycle_day: Number(inputs[6].value) };
               console.log(`Join - Found cycle_day ${transactionInput.cycle_day} from tx`);
+            }
+            // Look for currency_type in transaction inputs
+            const currencyInput = inputs.find((input) => 
+              input.type === 'pure' && 
+              'value' in input &&
+              typeof input.value === 'string' && 
+              ['USD', 'XAF', 'NGN', 'EUR', 'GBP'].includes(input.value)
+            );
+            if (currencyInput && 'value' in currencyInput) {
+              transactionInput = { 
+                ...transactionInput, 
+                currency_type: currencyInput.value as string
+              };
+              console.log(`Join - Found currency_type ${currencyInput.value} from tx`);
             }
           }
         }
@@ -217,8 +237,8 @@ export default function JoinCircle() {
       // 1. Use values from transaction/event first
       if (circleCreationEventData) {
         if (circleCreationEventData.contribution_amount) configValues.contributionAmount = Number(circleCreationEventData.contribution_amount) / 1e9;
-        if (circleCreationEventData.contribution_amount_usd) configValues.contributionAmountUsd = Number(circleCreationEventData.contribution_amount_usd) / 100;
-        if (circleCreationEventData.security_deposit_usd) configValues.securityDepositUsd = Number(circleCreationEventData.security_deposit_usd) / 100;
+        if (circleCreationEventData.contribution_amount_local) configValues.contributionAmountUsd = Number(circleCreationEventData.contribution_amount_local) / 100;
+        if (circleCreationEventData.security_deposit_local) configValues.securityDepositUsd = Number(circleCreationEventData.security_deposit_local) / 100;
         if (circleCreationEventData.cycle_length) configValues.cycleLength = Number(circleCreationEventData.cycle_length);
         if (circleCreationEventData.max_members) configValues.maxMembers = Number(circleCreationEventData.max_members);
       }
@@ -261,14 +281,14 @@ export default function JoinCircle() {
               if ('contribution_amount' in contentFields) {
                 configValues.contributionAmount = Number(contentFields.contribution_amount) / 1e9;
               }
-              if ('contribution_amount_usd' in contentFields) {
-                configValues.contributionAmountUsd = Number(contentFields.contribution_amount_usd) / 100;
+              if ('contribution_amount_local' in contentFields) {
+                configValues.contributionAmountUsd = Number(contentFields.contribution_amount_local) / 100;
               }
               if ('security_deposit' in contentFields) {
                 configValues.securityDeposit = Number(contentFields.security_deposit) / 1e9;
               }
-              if ('security_deposit_usd' in contentFields) {
-                configValues.securityDepositUsd = Number(contentFields.security_deposit_usd) / 100;
+              if ('security_deposit_local' in contentFields) {
+                configValues.securityDepositUsd = Number(contentFields.security_deposit_local) / 100;
               }
               if ('cycle_length' in contentFields) {
                 configValues.cycleLength = Number(contentFields.cycle_length);
@@ -304,14 +324,14 @@ export default function JoinCircle() {
                   if ('contribution_amount' in configFields) {
                     configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
                   }
-                  if ('contribution_amount_usd' in configFields) {
-                    configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
+                  if ('contribution_amount_local' in configFields) {
+                    configValues.contributionAmountUsd = Number(configFields.contribution_amount_local) / 100;
                   }
                   if ('security_deposit' in configFields) {
                     configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
                   }
-                  if ('security_deposit_usd' in configFields) {
-                    configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
+                  if ('security_deposit_local' in configFields) {
+                    configValues.securityDepositUsd = Number(configFields.security_deposit_local) / 100;
                   }
                   if ('cycle_length' in configFields) {
                     configValues.cycleLength = Number(configFields.cycle_length);
@@ -330,11 +350,23 @@ export default function JoinCircle() {
       }
       console.log('Join - Config after Dynamic Fields:', configValues);
 
-      // 3. Use direct fields from the circle object as a fallback (handle potential NaN)
+      // 3. Use direct fields from the circle object as a fallback
       if (configValues.contributionAmount === 0 && fields.contribution_amount) configValues.contributionAmount = Number(fields.contribution_amount) / 1e9;
-      if (configValues.contributionAmountUsd === 0 && fields.contribution_amount_usd) configValues.contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
+      if (configValues.contributionAmountUsd === 0) {
+        if (fields.contribution_amount_local) {
+          configValues.contributionAmountUsd = Number(fields.contribution_amount_local) / 100;
+        } else if (fields.contribution_amount_usd) {
+          configValues.contributionAmountUsd = Number(fields.contribution_amount_usd) / 100;
+        }
+      }
       if (configValues.securityDeposit === 0 && fields.security_deposit) configValues.securityDeposit = Number(fields.security_deposit) / 1e9;
-      if (configValues.securityDepositUsd === 0 && fields.security_deposit_usd) configValues.securityDepositUsd = Number(fields.security_deposit_usd) / 100;
+      if (configValues.securityDepositUsd === 0) {
+        if (fields.security_deposit_local) {
+          configValues.securityDepositUsd = Number(fields.security_deposit_local) / 100;
+        } else if (fields.security_deposit_usd) {
+          configValues.securityDepositUsd = Number(fields.security_deposit_usd) / 100;
+        }
+      }
       // Fallback for cycle info only if not set by higher priority sources
       if (configValues.cycleLength === 0 && fields.cycle_length !== undefined && !isNaN(Number(fields.cycle_length))) configValues.cycleLength = Number(fields.cycle_length);
       if (configValues.cycleDay === 1 && fields.cycle_day !== undefined && !isNaN(Number(fields.cycle_day))) configValues.cycleDay = Number(fields.cycle_day);
@@ -421,6 +453,7 @@ export default function JoinCircle() {
         admin: typeof fields.admin === 'string' ? fields.admin : '',
         contributionAmount: configValues.contributionAmount,
         contributionAmountUsd: configValues.contributionAmountUsd,
+        currencyType: transactionInput?.currency_type || circleCreationEventData?.currency_type || fields.currency_type || 'USD', // Get currency type from transaction input, creation event, or fields
         securityDeposit: configValues.securityDeposit,
         securityDepositUsd: configValues.securityDepositUsd,
         cycleLength: configValues.cycleLength,
@@ -589,24 +622,55 @@ export default function JoinCircle() {
     }
   };
 
-  // Helper function to calculate SUI amount from USD value
-  const calculateSuiAmount = (usdValue: number): number => {
-    if (!usdValue || !suiPrice || suiPrice <= 0) return 0;
-    return usdValue / suiPrice;
-  };
+  // Add formatCurrency function to handle different currency types
+  const formatCurrency = (amount: number, currencyType: string = 'USD') => {
+    // Map currency codes to their formatting options
+    const currencyFormats: Record<string, { 
+      symbol: string; 
+      locale: string; 
+      code: string; 
+      customFormat?: boolean;
+      position?: 'before' | 'after';
+    }> = {
+      'USD': { symbol: '$', locale: 'en-US', code: 'USD' },
+      'XAF': { symbol: 'FCFA', locale: 'fr-CM', code: 'XAF', customFormat: true, position: 'after' },
+      'NGN': { symbol: '₦', locale: 'en-NG', code: 'NGN' },
+      'EUR': { symbol: '€', locale: 'de-DE', code: 'EUR' },
+      'GBP': { symbol: '£', locale: 'en-GB', code: 'GBP' },
+      'CAD': { symbol: 'C$', locale: 'en-CA', code: 'CAD', customFormat: true, position: 'before' },
+      'ZAR': { symbol: 'R', locale: 'en-ZA', code: 'ZAR', customFormat: true, position: 'before' },
+      'KES': { symbol: 'KSh', locale: 'en-KE', code: 'KES', customFormat: true, position: 'before' },
+      'EGP': { symbol: 'E£', locale: 'en-US', code: 'EGP', customFormat: true, position: 'before' },
+      'MAD': { symbol: 'MAD', locale: 'en-US', code: 'MAD', customFormat: true, position: 'before' },
+      'GHS': { symbol: 'GH₵', locale: 'en-GH', code: 'GHS', customFormat: true, position: 'before' } // Added GHS
+    };
 
-  // Helper function to format USD amounts
-  const formatUSD = (amount: number): string => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
-    }).format(amount);
+    const format = currencyFormats[currencyType] || currencyFormats['USD'];
+    
+    // For currencies like XAF that use the symbol after the amount
+    if (currencyType === 'XAF') {
+      return `${amount.toLocaleString(format.locale, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ${format.symbol}`;
+    }
+    
+    // For other currencies, use the symbol before the amount
+    return `${format.symbol}${amount.toLocaleString(format.locale, { 
+      minimumFractionDigits: currencyType === 'USD' ? 2 : 0, 
+      maximumFractionDigits: currencyType === 'USD' ? 2 : 0 
+    })}`;
   };
 
   // Helper component to display both USD and SUI amounts
-  const CurrencyDisplay = ({ usd, sui, className = '' }: { usd?: number, sui?: number, className?: string }) => {
+  const CurrencyDisplay = ({ 
+    usd, 
+    sui, 
+    currencyType = 'USD',
+    className = '' 
+  }: { 
+    usd?: number; 
+    sui?: number; 
+    currencyType?: string;
+    className?: string;
+  }) => {
     // Ensure we have valid numbers
     const usdValue = usd !== undefined && !isNaN(usd) ? usd : 0;
     
@@ -629,7 +693,7 @@ export default function JoinCircle() {
     
     return (
       <div className={`flex flex-col ${className}`}>
-        <span className="font-medium">{formatUSD(usdValue)}</span>
+        <span className="font-medium">{formatCurrency(usdValue, currencyType)}</span>
         <span className="text-sm text-gray-500">{formattedSui} SUI</span>
       </div>
     );
@@ -664,7 +728,7 @@ export default function JoinCircle() {
     : 'Join Circle - Njangi On-Chain';
     
   const pageDescription = circle 
-    ? `Join ${circle.name}, a savings circle with ${formatUSD(circle.contributionAmountUsd)} contribution ${formatCycleInfo(circle.cycleLength, circle.cycleDay).toLowerCase()}. Currently ${circle.currentMembers}/${circle.maxMembers} members.`
+    ? `Join ${circle.name}, a savings circle with ${formatCurrency(circle.contributionAmountUsd, circle.currencyType)} contribution ${formatCycleInfo(circle.cycleLength, circle.cycleDay).toLowerCase()}. Currently ${circle.currentMembers}/${circle.maxMembers} members.`
     : 'Join a secure, transparent savings circle powered by SUI blockchain. Create and manage your community savings with automated payouts.';
 
   // Update document title when circle data is loaded
@@ -784,12 +848,12 @@ export default function JoinCircle() {
                         
                         <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
                           <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
-                          <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} />
+                          <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} currencyType={circle.currencyType} />
                         </div>
                         
                         <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
                           <p className="text-sm text-gray-500 mb-1">Security Deposit</p>
-                          <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} />
+                          <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} currencyType={circle.currencyType} />
                         </div>
                         
                         <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
@@ -808,7 +872,7 @@ export default function JoinCircle() {
                       <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Join Request</h3>
                       <div className="bg-yellow-50 p-4 rounded-md mb-6">
                         <p className="text-sm text-yellow-800">
-                          By joining this circle, you agree to contribute {formatUSD(circle.contributionAmountUsd)} ({calculateSuiAmount(circle.contributionAmountUsd).toLocaleString()} SUI) {formatCycleInfo(circle.cycleLength, circle.cycleDay).toLowerCase()}. You will also need to pay a security deposit of {formatUSD(circle.securityDepositUsd)} ({calculateSuiAmount(circle.securityDepositUsd).toLocaleString()} SUI).
+                          By joining this circle, you agree to contribute {formatCurrency(circle.contributionAmountUsd, circle.currencyType)} contribution {formatCycleInfo(circle.cycleLength, circle.cycleDay).toLowerCase()}. You will also need to pay a security deposit of {formatCurrency(circle.securityDepositUsd, circle.currencyType)}.
                         </p>
                       </div>
                       

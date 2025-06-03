@@ -1,10 +1,18 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import joinRequestDatabase from '../../../services/join-request-database';
+import databaseService from '../../../services/database-service';
 
 type ResponseData = {
   success: boolean;
   message?: string;
   data?: Record<string, unknown>;
+};
+
+// Check if we're running on localhost
+const isLocalhost = () => {
+  return process.env.NODE_ENV === 'development' || 
+         process.env.VERCEL_ENV === 'development' ||
+         !process.env.DATABASE_URL;
 };
 
 export default async function handler(
@@ -27,15 +35,55 @@ export default async function handler(
     }
 
     console.log(`[DEBUG] Creating join request for circle: ${circleId}, user: ${userAddress}`);
+    console.log(`[DEBUG] Is localhost: ${isLocalhost()}`);
 
-    // Create the join request with explicit status
-    const joinRequest = await joinRequestDatabase.createJoinRequest(
-      circleId,
-      circleName,
-      userAddress,
-      userName || 'Anonymous',
-      'pending' // Explicitly set status to 'pending'
-    );
+    let joinRequest = null;
+
+    if (isLocalhost()) {
+      // Use local SQLite database service for localhost
+      console.log('[DEBUG] Using local SQLite database service');
+      try {
+        const localRequest = {
+          circleId,
+          circleName,
+          userAddress,
+          userName: userName || 'Anonymous',
+          requestDate: Date.now(),
+          status: 'pending' as const
+        };
+        
+        joinRequest = databaseService.createJoinRequest(localRequest);
+        console.log(`[DEBUG] SQLite join request created:`, joinRequest);
+        
+        if (!joinRequest) {
+          throw new Error('Failed to create join request in SQLite database');
+        }
+      } catch (sqliteError) {
+        console.error('[DEBUG] SQLite database error:', sqliteError);
+        return res.status(500).json({
+          success: false,
+          message: 'Local database error: ' + (sqliteError as Error).message
+        });
+      }
+    } else {
+      // Use PostgreSQL database for production
+      console.log('[DEBUG] Using PostgreSQL database for production');
+      try {
+        joinRequest = await joinRequestDatabase.createJoinRequest(
+          circleId,
+          circleName,
+          userAddress,
+          userName || 'Anonymous',
+          'pending'
+        );
+      } catch (dbError) {
+        console.error('[DEBUG] PostgreSQL database error:', dbError);
+        return res.status(500).json({
+          success: false,
+          message: 'Database connection failed'
+        });
+      }
+    }
 
     console.log(`[DEBUG] Join request created successfully: ${joinRequest ? `ID: ${joinRequest.id}` : 'No ID returned'}`);
     if (joinRequest) {
@@ -48,9 +96,10 @@ export default async function handler(
     });
   } catch (error) {
     console.error('Error creating join request:', error);
+    
     return res.status(500).json({
       success: false,
-      message: 'Failed to create join request'
+      message: 'Failed to create join request: ' + (error as Error).message
     });
   }
 } 

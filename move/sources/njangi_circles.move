@@ -92,8 +92,9 @@ module njangi::njangi_circles {
         admin: address,
         name: String,
         contribution_amount: u64,
-        contribution_amount_usd: u64, // USD amount in cents
-        security_deposit_usd: u64,    // USD amount in cents
+        currency_type: String,              // Currency code (e.g., "USD", "XAF", "NGN")
+        contribution_amount_local: u64,     // Amount in local currency
+        security_deposit_local: u64,        // Amount in local currency
         max_members: u64,
         cycle_length: u64,
     }
@@ -187,9 +188,12 @@ module njangi::njangi_circles {
     public fun create_circle(
         name: vector<u8>,
         contribution_amount: u64,
-        contribution_amount_usd: u64, // USD amount in cents
+        currency_type: vector<u8>,        // Currency code (e.g., "USD", "XAF", "NGN")
+        contribution_amount_local: u64,   // Amount in local currency
+        contribution_amount_usd: u64,     // USD equivalent amount (in cents)
         security_deposit: u64,
-        security_deposit_usd: u64,    // USD amount in cents
+        security_deposit_local: u64,      // Amount in local currency
+        security_deposit_usd: u64,        // USD equivalent amount (in cents)
         cycle_length: u64,
         cycle_day: u64,
         circle_type: u8,
@@ -198,7 +202,7 @@ module njangi::njangi_circles {
         penalty_rules: vector<bool>,
         goal_type: Option<u8>,
         target_amount: Option<u64>,
-        target_amount_usd: Option<u64>, // USD amount in cents
+        target_amount_local: Option<u64>, // Amount in local currency
         target_date: Option<u64>,
         verification_required: bool,
         clock: &Clock,
@@ -258,6 +262,9 @@ module njangi::njangi_circles {
         let circle_config = config::create_circle_config(
             contribution_amount_scaled,
             security_deposit_scaled,
+            string::utf8(currency_type),
+            contribution_amount_local,
+            security_deposit_local,
             contribution_amount_usd,
             security_deposit_usd,
             cycle_length,
@@ -271,7 +278,7 @@ module njangi::njangi_circles {
         let milestone_config = config::create_milestone_config(
             goal_type,
             target_amount_scaled,
-            target_amount_usd,
+            target_amount_local,
             target_date,
             verification_required
         );
@@ -314,8 +321,9 @@ module njangi::njangi_circles {
             admin,
             name: string::utf8(name),
             contribution_amount: contribution_amount_scaled,
-            contribution_amount_usd,
-            security_deposit_usd,
+            currency_type: string::utf8(currency_type),
+            contribution_amount_local,
+            security_deposit_local,
             max_members,
             cycle_length,
         });
@@ -737,19 +745,11 @@ module njangi::njangi_circles {
         }
     }
 
-    // USD value getters (in cents)
-    public fun get_contribution_amount_usd(circle: &Circle): u64 {
-        config::get_contribution_amount_usd(&circle.id)
+    // Get currency type from circle config
+    public fun get_currency_type(circle: &Circle): String {
+        config::get_currency_type(&circle.id)
     }
 
-    public fun get_security_deposit_usd(circle: &Circle): u64 {
-        config::get_security_deposit_usd(&circle.id)
-    }
-
-    public fun get_target_amount_usd(circle: &Circle): Option<u64> {
-        config::get_target_amount_usd(&circle.id)
-    }
-    
     // ----------------------------------------------------------
     // Add to members table - shared helper to avoid table access error
     // ----------------------------------------------------------
@@ -1188,7 +1188,7 @@ module njangi::njangi_circles {
             assert!(amount == required_sui_amount, 2); // EIncorrectDepositAmount
         } else {
             // For stablecoins like USDC, validate against USD amount
-            // 20 cents ($0.20 USD) should equal 200,000 microUSDC (0.2 USDC)
+            // USD cents (e.g., 4062 = $40.62) to microUSDC = multiply by 10000
             let expected_stablecoin_amount = required_usd_cents * 10000;
             assert!(amount == expected_stablecoin_amount, 2); // EIncorrectDepositAmount
         };
@@ -1377,7 +1377,7 @@ module njangi::njangi_circles {
         assert!(option::is_none(&members::get_suspension_end_time(member)), EMemberSuspended); 
 
         // --- Amount Validation --- 
-        // Get required contribution amount in USD cents from config
+        // Get required contribution amount in USD from config
         let required_contribution_usd_cents = config::get_contribution_amount_usd(&circle.id);
         // Convert required USD cents to micro-units of the stablecoin (assuming 6 decimals for stablecoins like USDC)
         // 1 cent = 10,000 micro-units
@@ -1876,5 +1876,25 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     public fun get_current_position(circle: &Circle): u64 {
         circle.current_position
+    }
+
+    public fun get_contribution_amount_local(circle: &Circle): u64 {
+        config::get_contribution_amount_local(&circle.id)
+    }
+
+    public fun get_security_deposit_local(circle: &Circle): u64 {
+        config::get_security_deposit_local(&circle.id)
+    }
+
+    public fun get_target_amount_local(circle: &Circle): Option<u64> {
+        config::get_target_amount_local(&circle.id)
+    }
+
+    public fun get_contribution_amount_usd(circle: &Circle): u64 {
+        config::get_contribution_amount_usd(&circle.id)
+    }
+
+    public fun get_security_deposit_usd(circle: &Circle): u64 {
+        config::get_security_deposit_usd(&circle.id)
     }
 } 

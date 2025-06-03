@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import joinRequestDatabase from '../../../services/join-request-database';
+import databaseService from '../../../services/database-service';
 
 type ResponseData = {
   success: boolean;
@@ -7,6 +8,13 @@ type ResponseData = {
   data?: {
     hasPendingRequest: boolean;
   };
+};
+
+// Check if we're running on localhost
+const isLocalhost = () => {
+  return process.env.NODE_ENV === 'development' || 
+         process.env.VERCEL_ENV === 'development' ||
+         !process.env.DATABASE_URL;
 };
 
 export default async function handler(
@@ -29,11 +37,32 @@ export default async function handler(
     }
 
     console.log(`[DEBUG] Checking pending request for circle: ${circleId}, user: ${userAddress}`);
+    console.log(`[DEBUG] Is localhost: ${isLocalhost()}`);
 
-    // Check if user has a pending request
-    const hasPendingRequest = await joinRequestDatabase.checkPendingRequest(circleId, userAddress);
+    let hasPendingRequest = false;
+
+    if (isLocalhost()) {
+      // Use local SQLite database service for localhost
+      console.log('[DEBUG] Using local SQLite database service');
+      try {
+        hasPendingRequest = databaseService.userHasPendingRequest(circleId, userAddress);
+        console.log(`[DEBUG] SQLite pending request check result: ${hasPendingRequest}`);
+      } catch (sqliteError) {
+        console.error('[DEBUG] SQLite database error:', sqliteError);
+        hasPendingRequest = false;
+      }
+    } else {
+      // Use PostgreSQL database for production
+      console.log('[DEBUG] Using PostgreSQL database for production');
+      try {
+        hasPendingRequest = await joinRequestDatabase.checkPendingRequest(circleId, userAddress);
+      } catch (dbError) {
+        console.error('[DEBUG] PostgreSQL database error:', dbError);
+        hasPendingRequest = false;
+      }
+    }
     
-    console.log(`[DEBUG] Pending request check result: ${hasPendingRequest}`);
+    console.log(`[DEBUG] Final pending request check result: ${hasPendingRequest}`);
 
     return res.status(200).json({
       success: true,

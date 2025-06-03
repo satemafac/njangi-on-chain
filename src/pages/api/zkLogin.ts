@@ -495,26 +495,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           // Validate monetary values before transaction
           const contribution = BigInt(circleData.contribution_amount);
+          const contributionLocal = BigInt(circleData.contribution_amount_local || 0);
           const contributionUsd = BigInt(circleData.contribution_amount_usd || 0);
           const deposit = BigInt(circleData.security_deposit);
+          const depositLocal = BigInt(circleData.security_deposit_local || 0);
           const depositUsd = BigInt(circleData.security_deposit_usd || 0);
           
           // Debug logging to understand value conversions
           console.log("Circle Creation - Monetary Values:", {
             contributionAmountSUI: Number(contribution) / 1e9,  // Convert MIST to SUI
             contributionAmountMIST: contribution.toString(),
-            contributionUsdCents: contributionUsd.toString(),
-            contributionUsdDollars: Number(contributionUsd) / 100,
+            contributionLocalCurrency: contributionLocal.toString(),
+            contributionLocalAmount: Number(contributionLocal) / 100,
+            contributionAmountUSD: Number(contributionUsd) / 100,
             securityDepositSUI: Number(deposit) / 1e9,  // Convert MIST to SUI
             securityDepositMIST: deposit.toString(),
-            securityDepositUsdCents: depositUsd.toString(),
-            securityDepositUsdDollars: Number(depositUsd) / 100,
+            securityDepositLocalCurrency: depositLocal.toString(),
+            securityDepositLocalAmount: Number(depositLocal) / 100,
+            securityDepositUSD: Number(depositUsd) / 100,
+            currencyType: circleData.currency_type || 'USD',
             expectedFormat: "The contract expects SUI values in MIST format (9 decimals)"
           });
           
           // Basic validation for reasonable SUI amounts
-          const estSuiPrice = Number(contributionUsd) / 100 / (Number(contribution) / 1e9);
-          console.log(`Estimated SUI price from values: $${estSuiPrice.toFixed(4)} USD`);
+          if (contributionLocal > 0) {
+            const estSuiPrice = Number(contributionLocal) / 100 / (Number(contribution) / 1e9);
+            console.log(`Estimated SUI price from values: $${estSuiPrice.toFixed(4)} per SUI`);
+          }
           
           if (contribution <= BigInt(0) || deposit <= BigInt(0)) {
             return res.status(400).json({ 
@@ -522,9 +529,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
+          if (contributionLocal <= BigInt(0) || depositLocal <= BigInt(0)) {
+            return res.status(400).json({ 
+              error: 'Invalid local currency amount: Contribution and security deposit local currency values must be greater than 0'
+            });
+          }
+
           if (contributionUsd <= BigInt(0) || depositUsd <= BigInt(0)) {
             return res.status(400).json({ 
-              error: 'Invalid USD amount: Contribution and security deposit USD values must be greater than 0'
+              error: 'Invalid USD equivalent amount: USD values must be greater than 0'
             });
           }
 
@@ -563,11 +576,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Log transaction parameters for debugging
           console.log('Transaction parameters:', {
             circleType: circleData.circle_type,
-            contributionAmount: circleData.contribution_amount.toString(),
-            contributionAmountUsd: circleData.contribution_amount_usd.toString(),
-            securityDeposit: circleData.security_deposit.toString(),
-            securityDepositUsd: circleData.security_deposit_usd.toString(),
-            maxMembers: circleData.max_members
+            contributionAmount: contribution.toString(),
+            contributionAmountLocal: contributionLocal.toString(),
+            contributionAmountUSD: contributionUsd.toString(),
+            securityDeposit: deposit.toString(),
+            securityDepositLocal: depositLocal.toString(),
+            securityDepositUSD: depositUsd.toString(),
+            maxMembers: circleData.max_members,
+            // Add cycle debugging
+            cycleLength: circleData.cycle_length,
+            cycleDay: circleData.cycle_day,
+            currencyType: circleData.currency_type
           });
 
           // Attempt to send the transaction
@@ -577,23 +596,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               (txb: Transaction) => {
                 txb.setSender(session.account!.userAddr);
                 
+                // Validate cycle_day before using it
+                const cycleDay = circleData.cycle_day !== undefined ? circleData.cycle_day : 1; // Default to 1 if undefined
+                console.log('Using cycle_day value:', cycleDay);
+                
                 txb.moveCall({
                   target: `${PACKAGE_ID}::njangi_circles::create_circle`,
                   arguments: [
                     txb.pure.string(circleData.name),
                     txb.pure.u64(contribution),
-                    txb.pure.u64(contributionUsd),
+                    txb.pure.string(circleData.currency_type || 'USD'),  // currency_type: vector<u8>
+                    txb.pure.u64(contributionLocal),
+                    txb.pure.u64(contributionUsd),     // contribution_amount_usd
                     txb.pure.u64(deposit),
-                    txb.pure.u64(depositUsd),
+                    txb.pure.u64(depositLocal),
+                    txb.pure.u64(depositUsd),          // security_deposit_usd
                     txb.pure.u64(circleData.cycle_length),
-                    txb.pure.u64(circleData.cycle_day),
+                    txb.pure.u64(cycleDay), // Use validated cycleDay
                     txb.pure.u8(circleData.circle_type),
                     txb.pure.u64(circleData.max_members),
                     txb.pure.u8(circleData.rotation_style),
                     txb.pure.vector('bool', circleData.penalty_rules),
                     txb.pure.option('u8', circleData.goal_type?.some),
                     txb.pure.option('u64', circleData.target_amount?.some ? BigInt(circleData.target_amount.some) : null),
-                    txb.pure.option('u64', circleData.target_amount_usd?.some ? BigInt(circleData.target_amount_usd.some) : null),
+                    txb.pure.option('u64', circleData.target_amount_local?.some ? BigInt(circleData.target_amount_local.some) : null),
                     txb.pure.option('u64', circleData.target_date?.some ? BigInt(circleData.target_date.some) : null),
                     txb.pure.bool(circleData.verification_required),
                     txb.object("0x6")  // Clock object
@@ -3608,10 +3634,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     
                     // Extract the contribution_amount_usd field
                     const configFields = valueField.fields as Record<string, unknown>;
-                    const contributionAmountUsd = Number(configFields.contribution_amount_usd || 0);
+                    const contributionAmountUsd = Number(configFields.contribution_amount_local || configFields.contribution_amount_usd || 0);
                     
-                    console.log('Found contribution_amount_usd in CircleConfig:', contributionAmountUsd);
-                    console.log('Raw value from config:', configFields.contribution_amount_usd);
+                    console.log('Found contribution_amount_local in CircleConfig:', contributionAmountUsd);
+                    console.log('Raw value from config:', configFields.contribution_amount_local || configFields.contribution_amount_usd);
                     
                     // The contribution_amount_usd is in CENTS (e.g., 20 = $0.20)
                     // Convert cents to microUSDC (1 cent = 10,000 microUSDC)
