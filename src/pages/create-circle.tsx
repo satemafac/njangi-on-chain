@@ -832,10 +832,10 @@ The Njangi On-Chain Team`;
               <div className="flex justify-center mt-8">
                 <button
                   onClick={() => router.push('/dashboard')}
-                  className="group inline-flex items-center px-6 py-3 text-base font-medium text-gray-700 bg-white border-2 border-gray-200 rounded-xl shadow-sm hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200"
+                  className="group inline-flex items-center px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base font-medium text-gray-700 bg-white border-2 border-gray-200 rounded-lg sm:rounded-xl shadow-sm hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200"
                 >
                   <svg 
-                    className="w-5 h-5 mr-2 text-gray-400 group-hover:text-gray-500 transition-colors duration-200" 
+                    className="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-gray-400 group-hover:text-gray-500 transition-colors duration-200" 
                     fill="none" 
                     viewBox="0 0 24 24" 
                     stroke="currentColor"
@@ -956,13 +956,13 @@ The Njangi On-Chain Team`;
               </div>
 
               {/* Navigation Buttons */}
-              <div className="flex justify-between pt-6">
+              <div className="flex flex-col sm:flex-row justify-between pt-6 space-y-3 sm:space-y-0">
                 <button
                   onClick={() => setCurrentStep(0)}
-                  className="group inline-flex items-center px-6 py-3 text-base font-medium text-gray-700 bg-white border-2 border-gray-200 rounded-xl shadow-sm hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200"
+                  className="group inline-flex items-center justify-center px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base font-medium text-gray-700 bg-white border-2 border-gray-200 rounded-lg sm:rounded-xl shadow-sm hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200"
                 >
                   <svg 
-                    className="w-5 h-5 mr-2 text-gray-400 group-hover:text-gray-500 transition-colors duration-200" 
+                    className="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-gray-400 group-hover:text-gray-500 transition-colors duration-200" 
                     fill="none" 
                     viewBox="0 0 24 24" 
                     stroke="currentColor"
@@ -978,11 +978,11 @@ The Njangi On-Chain Team`;
                 </button>
                 <button
                   onClick={() => setCurrentStep(2)} // Go to main form step
-                  className="group inline-flex items-center px-6 py-3 text-base font-medium text-white bg-blue-600 border-2 border-transparent rounded-xl shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200"
+                  className="group inline-flex items-center justify-center px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base font-medium text-white bg-blue-600 border-2 border-transparent rounded-lg sm:rounded-xl shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200"
                 >
                   Continue to Circle Setup
                   <svg 
-                    className="w-5 h-5 ml-2 text-blue-200 group-hover:text-white transition-colors duration-200" 
+                    className="w-4 h-4 sm:w-5 sm:h-5 ml-2 text-blue-200 group-hover:text-white transition-colors duration-200" 
                     fill="none" 
                     viewBox="0 0 24 24" 
                     stroke="currentColor"
@@ -1037,7 +1037,7 @@ The Njangi On-Chain Team`;
 
               {/* Group Name */}
               <div className="space-y-2">
-                <div className="flex items-center">
+                <div className="flex items-center flex-wrap">
                   <label htmlFor="name" className="block text-sm font-medium text-gray-700">
                     Group Name
                   </label>
@@ -1060,8 +1060,8 @@ The Njangi On-Chain Team`;
 
               {/* Contribution Amount */}
               <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <div className="flex items-center">
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-2 sm:space-y-0">
+                  <div className="flex items-center flex-wrap">
                     <label className="block text-sm font-medium text-gray-700">
                       Contribution Amount
                     </label>
@@ -1071,7 +1071,7 @@ The Njangi On-Chain Team`;
                       <p className="text-gray-300 text-xs mt-1">The SUI amount will adjust based on current price</p>
                     </InfoTooltip>
                   </div>
-                  <div className="flex items-center space-x-2">
+                  <div className="flex items-center space-x-2 flex-wrap">
                     <SuiAmountDisplay 
                       sui={formData.contributionAmount}
                       local={formData.contributionAmountLocal}
@@ -1081,7 +1081,7 @@ The Njangi On-Chain Team`;
                       <button
                         type="button"
                         onClick={() => setUseCustomContribution(false)}
-                        className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                        className="text-xs sm:text-sm text-blue-600 hover:text-blue-700 font-medium whitespace-nowrap"
                       >
                         Use Slider
                       </button>
@@ -1089,7 +1089,7 @@ The Njangi On-Chain Team`;
                       <button
                         type="button"
                         onClick={() => setUseCustomContribution(true)}
-                        className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                        className="text-xs sm:text-sm text-blue-600 hover:text-blue-700 font-medium whitespace-nowrap"
                       >
                         Custom Amount
                       </button>
@@ -1176,7 +1176,7 @@ The Njangi On-Chain Team`;
               {/* Add Rotation Style selector when cycleType is rotational */}
               {formData.cycleType === 'rotational' && (
                 <div className="space-y-2">
-                  <div className="flex items-center">
+                  <div className="flex items-center flex-wrap">
                     <label className="block text-sm font-medium text-gray-700">
                       Rotation Style
                     </label>
@@ -1229,7 +1229,7 @@ The Njangi On-Chain Team`;
 
               {/* Cycle Length Select */}
               <div className="space-y-2">
-                <div className="flex items-center">
+                <div className="flex items-center flex-wrap">
                   <label className="block text-sm font-medium text-gray-700">
                     Cycle Length
                   </label>
@@ -1306,7 +1306,7 @@ The Njangi On-Chain Team`;
 
               {/* Cycle Day Select */}
               <div className="space-y-2">
-                <div className="flex items-center">
+                <div className="flex items-center flex-wrap">
                   <label className="block text-sm font-medium text-gray-700">
                     {/* Treat bi-weekly like weekly for label */} 
                     {(formData.cycleLength === 'weekly' || formData.cycleLength === 'bi-weekly') ? 'Day of Week' : 'Day of Month'}
@@ -1385,8 +1385,8 @@ The Njangi On-Chain Team`;
 
               {/* Security Deposit */}
               <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <div className="flex items-center">
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-2 sm:space-y-0">
+                  <div className="flex items-center flex-wrap">
                     <label className="block text-sm font-medium text-gray-700">
                       Security Deposit
                     </label>
@@ -1396,7 +1396,7 @@ The Njangi On-Chain Team`;
                       <p className="text-gray-300 text-xs mt-1">Refundable when leaving the circle in good standing</p>
                     </InfoTooltip>
                   </div>
-                  <div className="flex items-center space-x-2">
+                  <div className="flex items-center space-x-2 flex-wrap">
                     <SuiAmountDisplay 
                       sui={formData.securityDeposit}
                       local={formData.securityDepositLocal}
@@ -1406,7 +1406,7 @@ The Njangi On-Chain Team`;
                       <button
                         type="button"
                         onClick={() => setUseCustomDeposit(false)}
-                        className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                        className="text-xs sm:text-sm text-blue-600 hover:text-blue-700 font-medium whitespace-nowrap"
                       >
                         Use Slider
                       </button>
@@ -1414,7 +1414,7 @@ The Njangi On-Chain Team`;
                       <button
                         type="button"
                         onClick={() => setUseCustomDeposit(true)}
-                        className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                        className="text-xs sm:text-sm text-blue-600 hover:text-blue-700 font-medium whitespace-nowrap"
                       >
                         Custom Amount
                       </button>
@@ -1688,7 +1688,7 @@ The Njangi On-Chain Team`;
 
               {/* Penalty Rules */}
               <div className="space-y-4">
-                <div className="flex items-center">
+                <div className="flex items-center flex-wrap">
                   <h3 className="text-sm font-medium text-gray-700">Penalty Rules</h3>
                   <InfoTooltip>
                     <p>Optional rules to maintain group discipline</p>
@@ -2141,12 +2141,12 @@ const getDayOrdinal = (day: number): string => {
 // Add InfoIcon component
 const InfoIcon = () => (
   <svg 
-    width="16" 
-    height="16" 
+    width="14" 
+    height="14" 
     viewBox="0 0 16 16" 
     fill="none" 
     xmlns="http://www.w3.org/2000/svg"
-    className="text-gray-400 hover:text-gray-500"
+    className="text-gray-400 hover:text-gray-500 w-3.5 h-3.5 sm:w-4 sm:h-4"
   >
     <path 
       d="M8 16A8 8 0 1 1 8 0a8 8 0 0 1 0 16zm0-1.5a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13z" 
@@ -2163,13 +2163,13 @@ const InfoTooltip = ({ children }: { children: React.ReactNode }) => (
   <Tooltip.Provider>
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
-        <span className="ml-1.5 inline-flex items-center cursor-help">
+        <span className="ml-1 sm:ml-1.5 inline-flex items-center cursor-help">
           <InfoIcon />
         </span>
       </Tooltip.Trigger>
       <Tooltip.Portal>
         <Tooltip.Content
-          className="bg-gray-900 text-white px-3 py-2 rounded text-sm max-w-xs"
+          className="bg-gray-900 text-white px-2 sm:px-3 py-1.5 sm:py-2 rounded text-xs sm:text-sm max-w-xs z-50"
           sideOffset={5}
         >
           <div className="space-y-1">
