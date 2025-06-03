@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 
-const PACKAGE_ID = '0x0d6163a7b5fe319bbd500294f226c88d3662c69af7661666e5abbf3b301f9e90';
+const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID || '0x0d6163a7b5fe319bbd500294f226c88d3662c69af7661666e5abbf3b301f9e90';
 const SUI_TESTNET_RPC = 'https://fullnode.testnet.sui.io:443';
 
 type ResponseData = {
@@ -24,6 +24,8 @@ export default async function handler(
 
   try {
     console.log('[API] Fetching circle count from blockchain...');
+    console.log(`[API] Using PACKAGE_ID: ${PACKAGE_ID}`);
+    console.log(`[API] Environment NEXT_PUBLIC_PACKAGE_ID: ${process.env.NEXT_PUBLIC_PACKAGE_ID || 'Not set'}`);
     
     let circleCount = 0;
 
