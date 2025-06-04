@@ -20,10 +20,10 @@ export default function Document() {
         
         {/* Open Graph / Facebook */}
         <meta property="og:type" content="website" />
-        <meta property="og:url" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/" />
+        <meta property="og:url" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`} />
         <meta property="og:title" content="Njangi On-Chain - Community Savings Circles" />
-        <meta property="og:description" content="Join secure, transparent savings circles powered by SUI blockchain. Create and manage your community savings with automated payouts and full transparency." />
-        <meta property="og:image" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/og-image.png" />
+        <meta property="og:description" content="Join secure, transparent savings circles on the Sui blockchain. Bringing traditional community savings to Web3." />
+        <meta property="og:image" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/og-image.png`} />
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
         <meta property="og:image:alt" content="Njangi On-Chain logo with the text 'Community Savings Circles on SUI Blockchain'" />
@@ -31,10 +31,10 @@ export default function Document() {
         
         {/* Twitter */}
         <meta property="twitter:card" content="summary_large_image" />
-        <meta property="twitter:url" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/" />
+        <meta property="twitter:url" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`} />
         <meta property="twitter:title" content="Njangi On-Chain - Community Savings Circles" />
-        <meta property="twitter:description" content="Join secure, transparent savings circles powered by SUI blockchain. Create and manage your community savings with automated payouts and full transparency." />
-        <meta property="twitter:image" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/og-image.png" />
+        <meta property="twitter:description" content="Join secure, transparent savings circles on the Sui blockchain. Bringing traditional community savings to Web3." />
+        <meta property="twitter:image" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/og-image.png`} />
         <meta name="twitter:image:alt" content="Njangi On-Chain logo with the text 'Community Savings Circles on SUI Blockchain'" />
         
         {/* Web App capabilities */}

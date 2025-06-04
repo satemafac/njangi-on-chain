@@ -127,10 +127,10 @@ export default function Home() {
         
         {/* Open Graph / Facebook */}
         <meta property="og:type" content="website" />
-        <meta property="og:url" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/" />
+        <meta property="og:url" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`} />
         <meta property="og:title" content="Njangi On-Chain - Secure Blockchain Savings Circles" />
-        <meta property="og:description" content="Join the world's first blockchain-based Njangi platform. Create secure, transparent savings circles with zkLogin authentication on Sui blockchain." />
-        <meta property="og:image" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/njangi-on-chain-logo.png" />
+        <meta property="og:description" content="Empowering communities with secure, transparent, and culturally rich savings circles. Built on Sui blockchain with zkLogin for seamless authentication." />
+        <meta property="og:image" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/njangi-on-chain-logo.png`} />
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
         <meta property="og:site_name" content="Njangi On-Chain" />
@@ -138,10 +138,10 @@ export default function Home() {
         
         {/* Twitter */}
         <meta property="twitter:card" content="summary_large_image" />
-        <meta property="twitter:url" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/" />
+        <meta property="twitter:url" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`} />
         <meta property="twitter:title" content="Njangi On-Chain - Secure Blockchain Savings Circles" />
-        <meta property="twitter:description" content="Join the world's first blockchain-based Njangi platform. Create secure, transparent savings circles with zkLogin authentication on Sui blockchain." />
-        <meta property="twitter:image" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/njangi-on-chain-logo.png" />
+        <meta property="twitter:description" content="Empowering communities with secure, transparent, and culturally rich savings circles. Built on Sui blockchain with zkLogin for seamless authentication." />
+        <meta property="twitter:image" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/njangi-on-chain-logo.png`} />
         <meta property="twitter:site" content="@njangi_on_chain" />
         <meta property="twitter:creator" content="@njangi_on_chain" />
         
@@ -152,7 +152,7 @@ export default function Home() {
         <meta name="apple-mobile-web-app-title" content="Njangi On-Chain" />
         
         {/* Canonical URL */}
-        <link rel="canonical" href="https://njangi-on-chain-1014e48e59ae.herokuapp.com/" />
+        <link rel="canonical" href={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`} />
         
         {/* Google Fonts */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -171,8 +171,8 @@ export default function Home() {
               "@context": "https://schema.org",
               "@type": "WebApplication",
               "name": "Njangi On-Chain",
-              "description": "Secure blockchain-based savings circles platform built on Sui blockchain with zkLogin authentication",
-              "url": "https://njangi-on-chain-1014e48e59ae.herokuapp.com/",
+              "description": "Secure, transparent savings circles on Sui blockchain",
+              "url": `${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`,
               "applicationCategory": "FinanceApplication",
               "operatingSystem": "Web",
               "offers": {
@@ -180,10 +180,10 @@ export default function Home() {
                 "price": "0",
                 "priceCurrency": "USD"
               },
-              "author": {
+              "publisher": {
                 "@type": "Organization",
                 "name": "Njangi On-Chain",
-                "url": "https://njangi-on-chain-1014e48e59ae.herokuapp.com/",
+                "url": `${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`,
                 "sameAs": [
                   "https://x.com/njangi_on_chain",
                   "https://www.instagram.com/njangionchain"

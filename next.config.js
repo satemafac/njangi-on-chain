@@ -1,6 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Add environment variables
+  env: {
+    NEXT_PUBLIC_BASE_URL: process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com',
+  },
   images: {
     domains: [
       'lh3.googleusercontent.com',  // Google profile pictures

@@ -793,15 +793,15 @@ export default function JoinCircle() {
         <meta property="og:title" content={pageTitle} />
         <meta property="og:description" content={pageDescription} />
         <meta property="og:type" content="website" />
-        <meta property="og:url" content={`https://njangi-on-chain-1014e48e59ae.herokuapp.com/circle/${id}/join`} />
-        <meta property="og:image" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/og-image.png" />
+        <meta property="og:url" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/circle/${id}/join`} />
+        <meta property="og:image" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/og-image.png`} />
         <meta property="og:site_name" content="Njangi On-Chain" />
         
         {/* Twitter Card */}
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content={pageTitle} />
-        <meta name="twitter:description" content={pageDescription} />
-        <meta name="twitter:image" content="https://njangi-on-chain-1014e48e59ae.herokuapp.com/og-image.png" />
+        <meta name="twitter:title" content={`Join ${circle?.name || 'Circle'} - Njangi On-Chain`} />
+        <meta name="twitter:description" content={`Join this secure savings circle with ${circle?.maxMembers || 'multiple'} members. Built on Sui blockchain for maximum transparency and security.`} />
+        <meta name="twitter:image" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/og-image.png`} />
         
         {/* WhatsApp specific - improves preview on WhatsApp */}
         <meta property="og:image:width" content="1200" />

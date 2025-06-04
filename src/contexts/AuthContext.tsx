@@ -165,8 +165,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     // Clear sessionStorage to reset UI state between sessions
     sessionStorage.removeItem('testnetBannerDismissed');
     
-    // Redirect to home page after logout
-    window.location.href = '/';
+    // Redirect to home page after logout - use custom domain
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com';
+    window.location.href = baseUrl;
   };
 
   const handleCallback = async (jwt: string) => {
