@@ -242,6 +242,11 @@ export default function Home() {
                     <span className="text-sm font-medium">{name}</span>
                   </span>
                 ))}
+                {/* Add the slogan with special styling */}
+                <span className="inline-flex items-center bg-white bg-opacity-20 rounded-full px-4 py-1 border border-white border-opacity-30">
+                  <span className="w-2 h-2 bg-yellow-300 rounded-full mr-3 animate-pulse"></span>
+                  <span className="text-sm font-bold text-yellow-100">✨ Life Is Njangi ✨</span>
+                </span>
               </span>
             ))}
           </div>
@@ -268,6 +273,18 @@ export default function Home() {
               <span className="block">Welcome to</span>
               <span className="block text-blue-600">Njangi On-Chain</span>
             </h1>
+            
+            {/* Stylish Slogan */}
+            <div className="mt-6 mb-4">
+              <div className="inline-flex items-center">
+                <div className="h-px bg-gradient-to-r from-transparent via-blue-400 to-transparent w-8 sm:w-12"></div>
+                <span className="px-4 text-lg sm:text-xl font-semibold text-blue-600 bg-blue-50 rounded-full py-2 border border-blue-200 shadow-sm">
+                  ✨ Life Is Njangi ✨
+                </span>
+                <div className="h-px bg-gradient-to-r from-transparent via-blue-400 to-transparent w-8 sm:w-12"></div>
+              </div>
+            </div>
+            
             <p className="mt-3 max-w-md mx-auto text-base text-gray-500 sm:text-lg md:mt-5 md:text-xl md:max-w-3xl">
               Empowering communities with secure, transparent, and culturally rich savings circles.
               Built on Sui blockchain with zkLogin for seamless authentication.
@@ -822,7 +839,7 @@ export default function Home() {
               <div>
                 <span className="text-lg font-semibold">Njangi On-Chain</span>
                 <p className="text-xs text-gray-400 mt-1">
-                  Empowering communities with secure, transparent savings on Sui blockchain.
+                  Life Is Njangi • Empowering communities with secure, transparent savings on Sui blockchain.
                 </p>
               </div>
             </div>
