@@ -154,6 +154,11 @@ export default function Home() {
         {/* Canonical URL */}
         <link rel="canonical" href="https://njangi-on-chain-1014e48e59ae.herokuapp.com/" />
         
+        {/* Google Fonts */}
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Exo+2:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+        
         {/* Favicon */}
         <link rel="icon" href="/favicon.ico" />
         <link rel="apple-touch-icon" href="/njangi-on-chain-logo.png" />
@@ -243,9 +248,9 @@ export default function Home() {
                   </span>
                 ))}
                 {/* Add the slogan with special styling */}
-                <span className="inline-flex items-center bg-white bg-opacity-20 rounded-full px-4 py-1 border border-white border-opacity-30">
-                  <span className="w-2 h-2 bg-yellow-300 rounded-full mr-3 animate-pulse"></span>
-                  <span className="text-sm font-bold text-yellow-100">✨ Life Is Njangi ✨</span>
+                <span className="inline-flex items-center bg-white bg-opacity-25 rounded-full px-4 py-1 border border-white border-opacity-40 backdrop-blur-sm">
+                  <span className="w-1.5 h-1.5 bg-yellow-300 rounded-full mr-3 animate-pulse"></span>
+                  <span className="text-xs font-medium text-yellow-50 uppercase" style={{ fontFamily: "'Orbitron', 'Exo 2', monospace", fontWeight: '500', letterSpacing: '2px' }}>Life Is Njangi</span>
                 </span>
               </span>
             ))}
@@ -277,11 +282,11 @@ export default function Home() {
             {/* Stylish Slogan */}
             <div className="mt-6 mb-4">
               <div className="inline-flex items-center">
-                <div className="h-px bg-gradient-to-r from-transparent via-blue-400 to-transparent w-8 sm:w-12"></div>
-                <span className="px-4 text-lg sm:text-xl font-semibold text-blue-600 bg-blue-50 rounded-full py-2 border border-blue-200 shadow-sm">
-                  ✨ Life Is Njangi ✨
+                <div className="h-px bg-gradient-to-r from-transparent via-blue-300 to-transparent w-20 sm:w-32"></div>
+                <span className="px-10 py-1 text-xs sm:text-sm font-medium text-blue-700 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-full border border-blue-100 shadow-sm mx-4 uppercase" style={{ fontFamily: "'Orbitron', 'Exo 2', monospace", fontWeight: '600', letterSpacing: '4px', lineHeight: '1.3' }}>
+                  Life Is Njangi
                 </span>
-                <div className="h-px bg-gradient-to-r from-transparent via-blue-400 to-transparent w-8 sm:w-12"></div>
+                <div className="h-px bg-gradient-to-r from-transparent via-blue-300 to-transparent w-20 sm:w-32"></div>
               </div>
             </div>
             
