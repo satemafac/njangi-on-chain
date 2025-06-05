@@ -3706,27 +3706,22 @@ export default function ManageCircle() {
     
     setIsChangingYieldStrategy(true);
     try {
-      // Get the user's account data from local storage (similar to other functions)
-      const accountDataStr = localStorage.getItem('accountData');
-      if (!accountDataStr) {
+      // Use account from useAuth hook like other functions in this component
+      if (!account) {
         toast.error('Authentication required. Please login again.');
         setIsChangingYieldStrategy(false);
         return;
       }
-
-      const accountData = JSON.parse(accountDataStr);
       
       // Call the zkLogin API to create or update yield config
       const response = await fetch('/api/zkLogin', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'createYieldConfig', // This creates a new config; in future we can add updateYieldConfig
-          account: accountData,
+          action: 'createYieldConfig',
+          account,
           circleId: circle.id,
-          strategy: strategy,
+          strategy,
           autoCompound: true
         }),
       });
@@ -3734,14 +3729,11 @@ export default function ManageCircle() {
       const result = await response.json();
 
       if (!response.ok) {
-        if (result.requireRelogin) {
-          localStorage.removeItem('accountData');
-          toast.error('Session expired. Please login again.');
-          // Redirect to login or refresh page
-          window.location.reload();
-          return;
-        }
-        throw new Error(result.error || 'Failed to update yield strategy');
+        console.error('Failed to update yield strategy:', result);
+        const errorDetail = parseMoveError(result.error || '');
+        toast.error(`Failed to update yield strategy: ${errorDetail.message}`);
+        setIsChangingYieldStrategy(false);
+        return;
       }
 
       // Update local state
@@ -3757,7 +3749,7 @@ export default function ManageCircle() {
 
     } catch (error) {
       console.error('Error changing yield strategy:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to update yield strategy');
+      toast.error('Failed to update yield strategy. Please try again.');
     } finally {
       setIsChangingYieldStrategy(false);
     }
