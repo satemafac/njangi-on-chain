@@ -3762,10 +3762,32 @@ export default function ManageCircle() {
     }
   };
 
-  // Calculate total security deposits available for yield
+  // Calculate total security deposits available for yield (returns number)
   const calculateTotalSecurityDeposits = () => {
-    if (!circle || !usdcSecurityDepositBalance) return 0;
-    return usdcSecurityDepositBalance;
+    if (!circle) return 0;
+    
+    // Return total security deposits in SUI equivalent for yield calculations
+    // This reflects what's actually deposited and available for yield generation
+    let totalDepositsSui = 0;
+    
+    // Add actual SUI security deposits from custody wallet
+    if (suiSecurityDepositBalance) {
+      totalDepositsSui += suiSecurityDepositBalance;
+    }
+    
+    // Add actual USDC security deposits from custody wallet (convert to SUI equivalent)
+    if (usdcSecurityDepositBalance && suiPrice) {
+      totalDepositsSui += usdcSecurityDepositBalance / suiPrice;
+    }
+    
+    console.log('Security deposits calculation (SUI equivalent):', {
+      suiSecurityDepositBalance,
+      usdcSecurityDepositBalance,
+      suiPrice,
+      totalCalculatedSui: totalDepositsSui
+    });
+    
+    return totalDepositsSui;
   };
 
   // Function to fetch existing yield configuration
