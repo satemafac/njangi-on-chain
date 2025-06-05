@@ -783,9 +783,14 @@ export default function Home() {
             </div>
             
             <div className="text-center mt-8">
-              <Link href="/faq" className="text-blue-600 hover:text-blue-800 font-medium">
-                View all FAQs
-              </Link>
+              <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                <Link href="/learn" className="text-blue-600 hover:text-blue-800 font-medium">
+                  Learn About Savings Circles →
+                </Link>
+                <Link href="/faq" className="text-blue-600 hover:text-blue-800 font-medium">
+                  View all FAQs
+                </Link>
+              </div>
             </div>
           </div>
         </div>
@@ -820,8 +825,14 @@ export default function Home() {
           <p className="mt-4 text-xl text-blue-100">
             Join thousands of users worldwide who are already saving together securely on the blockchain.
           </p>
-          <div className="mt-8">
+          <div className="mt-8 flex flex-col sm:flex-row gap-4 justify-center items-center">
             <LoginButton />
+            <Link 
+              href="/learn" 
+              className="border-2 border-white text-white px-8 py-3 rounded-lg font-semibold hover:bg-white hover:text-blue-600 transition-colors"
+            >
+              Learn How It Works
+            </Link>
           </div>
           <p className="mt-4 text-sm text-blue-200">
             Get started in less than 2 minutes with your social account • No crypto experience required
