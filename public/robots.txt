@@ -1,0 +1,66 @@
+User-agent: *
+Allow: /
+
+# High-priority cultural/educational content
+Allow: /what-is-njangi
+Allow: /blockchain-rosca
+Allow: /tontine-blockchain
+Allow: /sou-sou-crypto
+Allow: /chitfunds-blockchain
+Allow: /esusu-sui-blockchain
+Allow: /stokvel-crypto
+Allow: /chama-blockchain
+Allow: /paluwagan-sui
+Allow: /arisan-crypto
+Allow: /pandero-blockchain
+Allow: /equb-sui-blockchain
+
+# Important pages
+Allow: /dashboard
+Allow: /create-circle
+Allow: /faq
+Allow: /blog
+
+# Allow all cultural variations
+Allow: /african-savings-circles
+Allow: /asian-savings-groups
+Allow: /latin-american-savings
+Allow: /caribbean-sou-sou
+
+# Competitive content
+Allow: /njangi-vs-mynjangi
+Allow: /blockchain-njangi-platforms
+
+# Block certain admin/internal pages
+Disallow: /callback
+Disallow: /auth/
+Disallow: /api/
+Disallow: /_next/
+Disallow: /admin/
+
+# Block test/dev environments
+Disallow: /*?test=*
+Disallow: /*?debug=*
+
+# Sitemap location
+Sitemap: https://njangionchain.com/sitemap.xml
+Sitemap: https://www.njangionchain.com/sitemap.xml
+
+# Crawl-delay for respectful crawling
+Crawl-delay: 1
+
+# Allow popular search engines
+User-agent: Googlebot
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+User-agent: DuckDuckBot
+Allow: /
+
+User-agent: facebookexternalhit
+Allow: /
+
+User-agent: Twitterbot
+Allow: / 
