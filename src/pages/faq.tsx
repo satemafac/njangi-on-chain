@@ -146,20 +146,20 @@ export default function FAQPage() {
         <title>Frequently Asked Questions | Njangi On-Chain - Blockchain Savings Circles</title>
         <meta name="description" content="Get answers to common questions about Njangi On-Chain, blockchain savings circles, security, how it works, and cultural traditions. Learn about zkLogin, smart contracts, and global community savings." />
         <meta name="keywords" content="njangi faq, blockchain savings questions, rosca help, tontine guide, sou sou help, zkLogin security, smart contract savings" />
-        <link rel="canonical" href="https://njangi.com/faq" />
+        <link rel="canonical" href="https://njangionchain.com/faq" />
         
         {/* Open Graph / Facebook */}
         <meta property="og:type" content="website" />
         <meta property="og:title" content="FAQ - Njangi On-Chain Blockchain Savings Circles" />
         <meta property="og:description" content="Get answers to common questions about blockchain savings circles and community finance." />
-        <meta property="og:url" content="https://njangi.com/faq" />
-        <meta property="og:image" content="https://njangi.com/images/faq-hero.jpg" />
+        <meta property="og:url" content="https://njangionchain.com/faq" />
+        <meta property="og:image" content="https://njangionchain.com/images/faq-hero.jpg" />
 
         {/* Twitter */}
         <meta property="twitter:card" content="summary_large_image" />
         <meta property="twitter:title" content="FAQ - Njangi On-Chain" />
         <meta property="twitter:description" content="Get answers to common questions about blockchain savings circles." />
-        <meta property="twitter:image" content="https://njangi.com/images/faq-hero.jpg" />
+        <meta property="twitter:image" content="https://njangionchain.com/images/faq-hero.jpg" />
       </Head>
 
       <div className="min-h-screen bg-gray-50">

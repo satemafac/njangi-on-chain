@@ -11,20 +11,20 @@ export default function BlockchainRoscaPage() {
         <title>Blockchain ROSCA: The Future of Community Savings | Digital ROSCA Platform</title>
         <meta name="description" content="Discover how blockchain technology revolutionizes traditional ROSCAs (Rotating Savings and Credit Associations) worldwide. Join secure, transparent digital savings circles." />
         <meta name="keywords" content="blockchain rosca, digital rosca, rotating savings blockchain, community savings, cryptocurrency rosca, smart contract savings" />
-        <link rel="canonical" href="https://njangi.com/learn/blockchain-rosca" />
+        <link rel="canonical" href="https://njangionchain.com/learn/blockchain-rosca" />
         
         {/* Open Graph / Facebook */}
         <meta property="og:type" content="article" />
         <meta property="og:title" content="Blockchain ROSCA: The Future of Community Savings" />
         <meta property="og:description" content="Discover how blockchain technology revolutionizes traditional ROSCAs worldwide." />
-        <meta property="og:url" content="https://njangi.com/learn/blockchain-rosca" />
-        <meta property="og:image" content="https://njangi.com/images/blockchain-rosca.jpg" />
+        <meta property="og:url" content="https://njangionchain.com/learn/blockchain-rosca" />
+        <meta property="og:image" content="https://njangionchain.com/images/blockchain-rosca.jpg" />
 
         {/* Twitter */}
         <meta property="twitter:card" content="summary_large_image" />
         <meta property="twitter:title" content="Blockchain ROSCA: The Future of Community Savings" />
         <meta property="twitter:description" content="Discover how blockchain technology revolutionizes traditional ROSCAs worldwide." />
-        <meta property="twitter:image" content="https://njangi.com/images/blockchain-rosca.jpg" />
+        <meta property="twitter:image" content="https://njangionchain.com/images/blockchain-rosca.jpg" />
       </Head>
 
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50">

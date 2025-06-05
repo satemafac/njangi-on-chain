@@ -11,20 +11,20 @@ export default function WhatIsNjangiPage() {
         <title>What is Njangi? - Cameroon&#39;s Traditional Savings Circle Goes Blockchain | Njangi Platform</title>
         <meta name="description" content="Discover how Njangi works and how blockchain technology revolutionizes traditional Cameroon savings circles. Join secure, transparent Njangi on the Sui blockchain platform." />
         <meta name="keywords" content="njangi, what is njangi, njangi meaning, cameroon savings, blockchain rosca, digital njangi, rotating savings cameroon" />
-        <link rel="canonical" href="https://njangi.com/learn/what-is-njangi" />
+        <link rel="canonical" href="https://njangionchain.com/learn/what-is-njangi" />
         
         {/* Open Graph / Facebook */}
         <meta property="og:type" content="article" />
         <meta property="og:title" content="What is Njangi? - Cameroon's Traditional Savings Circle Goes Blockchain" />
         <meta property="og:description" content="Discover how Njangi works and how blockchain technology revolutionizes traditional Cameroon savings circles." />
-        <meta property="og:url" content="https://njangi.com/learn/what-is-njangi" />
-        <meta property="og:image" content="https://njangi.com/images/njangi-hero.jpg" />
+        <meta property="og:url" content="https://njangionchain.com/learn/what-is-njangi" />
+        <meta property="og:image" content="https://njangionchain.com/images/njangi-hero.jpg" />
 
         {/* Twitter */}
         <meta property="twitter:card" content="summary_large_image" />
         <meta property="twitter:title" content="What is Njangi? - Cameroon's Traditional Savings Circle Goes Blockchain" />
         <meta property="twitter:description" content="Discover how Njangi works and how blockchain technology revolutionizes traditional Cameroon savings circles." />
-        <meta property="twitter:image" content="https://njangi.com/images/njangi-hero.jpg" />
+        <meta property="twitter:image" content="https://njangionchain.com/images/njangi-hero.jpg" />
 
         {/* Article specific */}
         <meta property="article:published_time" content="2025-06-05T00:00:00.000Z" />

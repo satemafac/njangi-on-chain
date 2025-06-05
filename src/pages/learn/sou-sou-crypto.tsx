@@ -11,7 +11,7 @@ export default function SouSouCryptoPage() {
         <title>Sou Sou Crypto: Caribbean & West African Savings Circles Meet Blockchain</title>
         <meta name="description" content="Discover how Sou Sou, Partner, and Susu traditions from the Caribbean and West Africa are revolutionized through cryptocurrency and blockchain technology." />
         <meta name="keywords" content="sou sou crypto, caribbean savings circle, susu blockchain, partner system, west african susu, cryptocurrency savings, sou sou smart contract" />
-        <link rel="canonical" href="https://njangi.com/learn/sou-sou-crypto" />
+        <link rel="canonical" href="https://njangionchain.com/learn/sou-sou-crypto" />
       </Head>
 
       <div className="min-h-screen bg-gradient-to-br from-orange-50 to-red-50">

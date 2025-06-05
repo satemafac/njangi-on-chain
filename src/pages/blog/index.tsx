@@ -104,20 +104,20 @@ export default function BlogIndexPage() {
         <title>Blockchain Savings Circle Blog | Insights & Stories from the Community</title>
         <meta name="description" content="Latest insights, success stories, and educational content about blockchain savings circles, traditional ROSCAs, and community finance from around the world." />
         <meta name="keywords" content="blockchain savings blog, rosca news, njangi stories, tontine insights, sou sou success, community finance blog" />
-        <link rel="canonical" href="https://njangi.com/blog" />
+        <link rel="canonical" href="https://njangionchain.com/blog" />
         
         {/* Open Graph / Facebook */}
         <meta property="og:type" content="website" />
         <meta property="og:title" content="Blockchain Savings Circle Blog | Community Finance Insights" />
         <meta property="og:description" content="Latest insights and stories about blockchain savings circles and community finance." />
-        <meta property="og:url" content="https://njangi.com/blog" />
-        <meta property="og:image" content="https://njangi.com/images/blog-hero.jpg" />
+        <meta property="og:url" content="https://njangionchain.com/blog" />
+        <meta property="og:image" content="https://njangionchain.com/images/blog-hero.jpg" />
 
         {/* Twitter */}
         <meta property="twitter:card" content="summary_large_image" />
         <meta property="twitter:title" content="Blockchain Savings Circle Blog" />
         <meta property="twitter:description" content="Latest insights and stories about blockchain savings circles and community finance." />
-        <meta property="twitter:image" content="https://njangi.com/images/blog-hero.jpg" />
+        <meta property="twitter:image" content="https://njangionchain.com/images/blog-hero.jpg" />
       </Head>
 
       <div className="min-h-screen bg-gray-50">

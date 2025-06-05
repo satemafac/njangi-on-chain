@@ -11,7 +11,7 @@ export default function TontineBlockchainPage() {
         <title>Tontine Blockchain: Revolutionizing African Finance | Digital Tontine Platform</title>
         <meta name="description" content="Discover how blockchain technology transforms traditional African tontines into secure, transparent digital savings circles. Learn about French African tontine traditions." />
         <meta name="keywords" content="tontine blockchain, digital tontine, african tontine, blockchain tontine, crypto tontine, tontine smart contract, african savings circle blockchain" />
-        <link rel="canonical" href="https://njangi.com/learn/tontine-blockchain" />
+        <link rel="canonical" href="https://njangionchain.com/learn/tontine-blockchain" />
       </Head>
 
       <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-50">

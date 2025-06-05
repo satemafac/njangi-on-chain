@@ -8,20 +8,20 @@ export default function TraditionalSavingsVsBlockchainPost() {
         <title>Traditional Savings Circles vs. Blockchain: What&#39;s the Real Difference?</title>
         <meta name="description" content="A comprehensive comparison of how traditional ROSCAs, Njangi, Tontines, and Sou Sou systems stack up against their blockchain counterparts." />
         <meta name="keywords" content="traditional savings vs blockchain, rosca comparison, njangi blockchain, tontine vs smart contract, sou sou crypto" />
-        <link rel="canonical" href="https://njangi.com/blog/traditional-savings-vs-blockchain" />
+        <link rel="canonical" href="https://njangionchain.com/blog/traditional-savings-vs-blockchain" />
         
         {/* Open Graph / Facebook */}
         <meta property="og:type" content="article" />
         <meta property="og:title" content="Traditional Savings Circles vs. Blockchain: What's the Real Difference?" />
         <meta property="og:description" content="A comprehensive comparison of traditional and blockchain savings circles." />
-        <meta property="og:url" content="https://njangi.com/blog/traditional-savings-vs-blockchain" />
-        <meta property="og:image" content="https://njangi.com/images/blog/traditional-vs-blockchain.jpg" />
+        <meta property="og:url" content="https://njangionchain.com/blog/traditional-savings-vs-blockchain" />
+        <meta property="og:image" content="https://njangionchain.com/images/blog/traditional-vs-blockchain.jpg" />
 
         {/* Twitter */}
         <meta property="twitter:card" content="summary_large_image" />
         <meta property="twitter:title" content="Traditional Savings Circles vs. Blockchain" />
         <meta property="twitter:description" content="A comprehensive comparison of traditional and blockchain savings circles." />
-        <meta property="twitter:image" content="https://njangi.com/images/blog/traditional-vs-blockchain.jpg" />
+        <meta property="twitter:image" content="https://njangionchain.com/images/blog/traditional-vs-blockchain.jpg" />
       </Head>
 
       <div className="min-h-screen bg-gray-50">
