@@ -107,3 +107,51 @@ frontend-fix3/
 salt-service/
 walrus-sites/
 zklogin-sessions.json
+
+# Added by Task Master AI
+dev-debug.log
+
+# TaskMaster AI files (development only)
+.taskmaster/
+.taskmaster.env.example
+
+# Cursor AI files (development only)
+.cursor/
+.roo/
+.roomodes
+.windsurfrules
+
+# Demo components (development only)
+src/components/YieldManagement/demo/
+src/components/*/demo/
+
+# Move build artifacts (generated)
+move/build/
+move/Move.lock
+
+# Database files (local development)
+*.db-shm
+*.db-wal
+join-requests.db*
+
+# Development scripts (not needed in production)
+scripts/get-navi-*.js
+scripts/debug-*.js
+scripts/test-*.js
+
+# Development documentation (optional in production)
+src/pages/*.md
+
+# Dependency directories
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+# OS specific
+# Task files
+tasks.json
+tasks/ 

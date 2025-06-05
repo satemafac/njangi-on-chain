@@ -17,6 +17,7 @@ export const Navbar: React.FC = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [lastFetchTime, setLastFetchTime] = useState<number>(0);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [logoError, setLogoError] = useState(false);
 
   // Debounce mechanism to prevent infinite loops
   const FETCH_DEBOUNCE_MS = 5000; // 5 seconds minimum between fetches
@@ -253,14 +254,28 @@ export const Navbar: React.FC = () => {
         <div className="flex justify-between h-14 sm:h-16">
           <div className="flex items-center">
             <Link href="/dashboard" className="flex items-center">
-              <Image
-                src="/njangi-on-chain-logo.png"
-                alt="Njangi on-chain"
-                width={64}
-                height={64}
-                className="mr-2 sm:mr-3 w-12 h-12 sm:w-16 sm:h-16 object-contain"
-                priority
-              />
+              {!logoError ? (
+                <Image
+                  src="/njangi-on-chain-logo.png"
+                  alt="Njangi on-chain"
+                  width={64}
+                  height={64}
+                  className="mr-2 sm:mr-3 w-12 h-12 sm:w-16 sm:h-16 object-contain"
+                  priority
+                  unoptimized
+                  onError={(e) => {
+                    console.error('Logo failed to load:', e);
+                    setLogoError(true);
+                  }}
+                  onLoad={() => {
+                    console.log('Logo loaded successfully');
+                  }}
+                />
+              ) : (
+                <div className="mr-2 sm:mr-3 w-12 h-12 sm:w-16 sm:h-16 bg-blue-100 flex items-center justify-center rounded">
+                  <span className="text-blue-600 font-bold text-xs">N</span>
+                </div>
+              )}
               <h1 className="text-base sm:text-xl font-semibold text-blue-600">Njangi on-chain</h1>
             </Link>
           </div>

@@ -12,6 +12,8 @@ import StablecoinSwapForm from '../../../../components/StablecoinSwapForm';
 import RotationOrderList from '../../../../components/RotationOrderList';
 import ConfirmationModal from '../../../../components/ConfirmationModal';
 import { ZkLoginClient, ZkLoginError } from '../../../../services/zkLoginClient';
+import { YieldStrategySection } from '../../../../components/YieldManagement';
+import type { YieldStrategy } from '../../../../components/YieldManagement/types/yield.types';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -269,6 +271,10 @@ export default function ManageCircle() {
   const [isProcessingPayout, setIsProcessingPayout] = useState(false);
   const [payoutCoinType, setPayoutCoinType] = useState<'sui' | 'stablecoin'>('sui');
   const [payoutProgress, setPayoutProgress] = useState<{current: number, total: number}>({current: 0, total: 0});
+
+  // Yield management state
+  const [selectedYieldStrategy, setSelectedYieldStrategy] = useState<YieldStrategy>('conservative');
+  const [isChangingYieldStrategy, setIsChangingYieldStrategy] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -3694,6 +3700,75 @@ export default function ManageCircle() {
     );
   };
 
+  // Handle yield strategy changes
+  const handleYieldStrategyChange = async (strategy: YieldStrategy) => {
+    if (!circle || isChangingYieldStrategy) return;
+    
+    setIsChangingYieldStrategy(true);
+    try {
+      // Get the user's account data from local storage (similar to other functions)
+      const accountDataStr = localStorage.getItem('accountData');
+      if (!accountDataStr) {
+        toast.error('Authentication required. Please login again.');
+        setIsChangingYieldStrategy(false);
+        return;
+      }
+
+      const accountData = JSON.parse(accountDataStr);
+      
+      // Call the zkLogin API to create or update yield config
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'createYieldConfig', // This creates a new config; in future we can add updateYieldConfig
+          account: accountData,
+          circleId: circle.id,
+          strategy: strategy,
+          autoCompound: true
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        if (result.requireRelogin) {
+          localStorage.removeItem('accountData');
+          toast.error('Session expired. Please login again.');
+          // Redirect to login or refresh page
+          window.location.reload();
+          return;
+        }
+        throw new Error(result.error || 'Failed to update yield strategy');
+      }
+
+      // Update local state
+      setSelectedYieldStrategy(strategy);
+      
+      toast.success(`Yield strategy updated to ${strategy}! Transaction: ${result.digest?.slice(0, 8)}...`);
+
+      console.log('Yield strategy change successful:', {
+        strategy,
+        transactionDigest: result.digest,
+        gasUsed: result.gasUsed
+      });
+
+    } catch (error) {
+      console.error('Error changing yield strategy:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to update yield strategy');
+    } finally {
+      setIsChangingYieldStrategy(false);
+    }
+  };
+
+  // Calculate total security deposits available for yield
+  const calculateTotalSecurityDeposits = () => {
+    if (!circle || !usdcSecurityDepositBalance) return 0;
+    return usdcSecurityDepositBalance;
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <main className="max-w-7xl mx-auto py-4 sm:py-6 px-4 sm:px-6 lg:px-8">
@@ -4908,6 +4983,19 @@ export default function ManageCircle() {
                     securityDepositLocalDisplay={manageCustodyUsdcSecurityDepositLocalDisplay}
                     contributionLocalDisplay={manageCustodyUsdcContributionLocalDisplay}
                   />}
+                </div>
+
+                {/* Yield Management Section */}
+                <div className="pt-4 sm:pt-6 border-t border-gray-200 px-1 sm:px-2 mt-2 sm:mt-6">
+                  {circle && (
+                    <YieldStrategySection
+                      currentStrategy={selectedYieldStrategy}
+                      onStrategyChange={handleYieldStrategyChange}
+                      totalSecurityDeposits={calculateTotalSecurityDeposits()}
+                      isLoading={isChangingYieldStrategy || loading}
+                      disabled={!circle.isActive || circle.paused}
+                    />
+                  )}
                 </div>
 
                 {/* Add this after the existing admin action buttons */}

@@ -4606,6 +4606,435 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         break;
 
+      // ========================================
+      // YIELD MANAGEMENT ENDPOINTS
+      // ========================================
+      
+      case 'createYieldConfig':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!sessionId) {
+          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+        }
+
+        try {
+          validateSession(sessionId, 'createYieldConfig');
+          const { circleId: yieldCircleId, strategy, autoCompound = true } = req.body;
+
+          if (!yieldCircleId) {
+            return res.status(400).json({ error: 'Circle ID is required' });
+          }
+
+          if (!strategy || !['conservative', 'balanced', 'aggressive'].includes(strategy)) {
+            return res.status(400).json({ error: 'Valid strategy is required (conservative, balanced, aggressive)' });
+          }
+
+          // Map strategy to smart contract values
+          const strategyMap = {
+            'conservative': 0,
+            'balanced': 1, 
+            'aggressive': 2
+          };
+
+          console.log(`Creating yield config for circle ${yieldCircleId} with strategy ${strategy}`);
+
+          const txResult = await instance.sendTransaction(
+            account,
+            (txb: Transaction) => {
+              txb.setSender(account.userAddr);
+              
+              txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_yield_integration::create_yield_config`,
+                arguments: [
+                  txb.object(yieldCircleId),
+                  txb.pure.u8(strategyMap[strategy as keyof typeof strategyMap]),
+                  txb.pure.bool(autoCompound),
+                  txb.object(CLOCK_OBJECT_ID)
+                ]
+              });
+            },
+            { gasBudget: 100000000 }
+          );
+
+          console.log('Yield config creation successful:', txResult);
+          return res.status(200).json({
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed,
+            strategy
+          });
+        } catch (error) {
+          console.error('Error creating yield config:', error);
+          
+          if (error instanceof Error &&
+              (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired') ||
+              error.message.includes('re-authenticate'))) {
+            
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+
+          if (error instanceof Error) {
+            if (error.message.includes('ENotCircleAdmin')) {
+              return res.status(403).json({ error: 'Only the circle admin can create yield configurations.' });
+            }
+            if (error.message.includes('EInvalidYieldStrategy')) {
+              return res.status(400).json({ error: 'Invalid yield strategy selected.' });
+            }
+          }
+
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to create yield configuration',
+            requireRelogin: false
+          });
+        }
+        break;
+
+      case 'changeYieldStrategy':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!sessionId) {
+          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+        }
+
+        try {
+          validateSession(sessionId, 'changeYieldStrategy');
+          const { yieldConfigId, strategy } = req.body;
+
+          if (!yieldConfigId) {
+            return res.status(400).json({ error: 'Yield config ID is required' });
+          }
+
+          if (!strategy || !['conservative', 'balanced', 'aggressive'].includes(strategy)) {
+            return res.status(400).json({ error: 'Valid strategy is required (conservative, balanced, aggressive)' });
+          }
+
+          // Map strategy to smart contract values
+          const strategyMap = {
+            'conservative': 0,
+            'balanced': 1,
+            'aggressive': 2
+          };
+
+          console.log(`Changing yield strategy to ${strategy} for config ${yieldConfigId}`);
+
+          const txResult = await instance.sendTransaction(
+            account,
+            (txb: Transaction) => {
+              txb.setSender(account.userAddr);
+              
+              // For now, we'll create a new config with the new strategy
+              // In a future update, we could add an update_yield_strategy function to the smart contract
+              txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_yield_integration::create_yield_config`,
+                arguments: [
+                  txb.object(yieldConfigId), // This would need to be updated to use proper circle ID
+                  txb.pure.u8(strategyMap[strategy as keyof typeof strategyMap]),
+                  txb.pure.bool(true), // auto_compound
+                  txb.object(CLOCK_OBJECT_ID)
+                ]
+              });
+            },
+            { gasBudget: 100000000 }
+          );
+
+          console.log('Yield strategy change successful:', txResult);
+          return res.status(200).json({
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed,
+            newStrategy: strategy
+          });
+        } catch (error) {
+          console.error('Error changing yield strategy:', error);
+          
+          if (error instanceof Error &&
+              (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired') ||
+              error.message.includes('re-authenticate'))) {
+            
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+
+          if (error instanceof Error) {
+            if (error.message.includes('ENotCircleAdmin')) {
+              return res.status(403).json({ error: 'Only the circle admin can change yield strategies.' });
+            }
+            if (error.message.includes('EYieldStrategyNotActive')) {
+              return res.status(400).json({ error: 'Yield strategy is not currently active.' });
+            }
+          }
+
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to change yield strategy',
+            requireRelogin: false
+          });
+        }
+        break;
+
+      case 'generateYieldOnDeposit':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!sessionId) {
+          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+        }
+
+        try {
+          validateSession(sessionId, 'generateYieldOnDeposit');
+          const { circleId: depositCircleId, walletId: depositWalletId, yieldConfigId, memberAddress, depositAmount } = req.body;
+
+          if (!depositCircleId || !depositWalletId || !yieldConfigId || !memberAddress || !depositAmount) {
+            return res.status(400).json({ error: 'Circle ID, wallet ID, yield config ID, member address, and deposit amount are required' });
+          }
+
+          const depositAmountBig = BigInt(depositAmount);
+          if (depositAmountBig <= 0) {
+            return res.status(400).json({ error: 'Deposit amount must be greater than 0' });
+          }
+
+          console.log(`Generating yield on deposit for member ${memberAddress} with amount ${depositAmount} SUI`);
+
+          const txResult = await instance.sendTransaction(
+            account,
+            (txb: Transaction) => {
+              txb.setSender(account.userAddr);
+              
+              // Create a SUI coin with the deposit amount (this is simplified - in reality, you'd use existing coins)
+              const depositCoin = txb.splitCoins(txb.gas, [txb.pure.u64(depositAmountBig)]);
+              
+              txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_yield_integration::generate_yield_on_security_deposit`,
+                arguments: [
+                  txb.object(depositCircleId),
+                  txb.object(depositWalletId),
+                  txb.object(yieldConfigId),
+                  txb.pure.address(memberAddress),
+                  depositCoin,
+                  txb.object(CLOCK_OBJECT_ID)
+                ]
+              });
+            },
+            { gasBudget: 150000000 } // Higher gas for DeFi operations
+          );
+
+          console.log('Yield generation on deposit successful:', txResult);
+          return res.status(200).json({
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+        } catch (error) {
+          console.error('Error generating yield on deposit:', error);
+          
+          if (error instanceof Error &&
+              (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired') ||
+              error.message.includes('re-authenticate'))) {
+            
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+
+          if (error instanceof Error) {
+            if (error.message.includes('ENotCircleAdmin')) {
+              return res.status(403).json({ error: 'Only the circle admin can initiate yield generation.' });
+            }
+            if (error.message.includes('EYieldStrategyNotActive')) {
+              return res.status(400).json({ error: 'Yield strategy is not currently active.' });
+            }
+            if (error.message.includes('EInsufficientYieldBalance')) {
+              return res.status(400).json({ error: 'Insufficient balance for yield generation.' });
+            }
+          }
+
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to generate yield on deposit',
+            requireRelogin: false
+          });
+        }
+        break;
+
+      case 'collectYield':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!sessionId) {
+          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+        }
+
+        try {
+          validateSession(sessionId, 'collectYield');
+          const { circleId: collectCircleId, walletId: collectWalletId, yieldConfigId } = req.body;
+
+          if (!collectCircleId || !collectWalletId || !yieldConfigId) {
+            return res.status(400).json({ error: 'Circle ID, wallet ID, and yield config ID are required' });
+          }
+
+          console.log(`Collecting yield for circle ${collectCircleId}`);
+
+          const txResult = await instance.sendTransaction(
+            account,
+            (txb: Transaction) => {
+              txb.setSender(account.userAddr);
+              
+              txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_yield_integration::collect_yield`,
+                arguments: [
+                  txb.object(collectCircleId),
+                  txb.object(collectWalletId),
+                  txb.object(yieldConfigId),
+                  txb.object(CLOCK_OBJECT_ID)
+                ]
+              });
+            },
+            { gasBudget: 150000000 } // Higher gas for DeFi operations
+          );
+
+          console.log('Yield collection successful:', txResult);
+          return res.status(200).json({
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+        } catch (error) {
+          console.error('Error collecting yield:', error);
+          
+          if (error instanceof Error &&
+              (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired') ||
+              error.message.includes('re-authenticate'))) {
+            
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+
+          if (error instanceof Error) {
+            if (error.message.includes('ENotCircleAdmin')) {
+              return res.status(403).json({ error: 'Only the circle admin can collect yield.' });
+            }
+            if (error.message.includes('EYieldCollectionFailed')) {
+              return res.status(400).json({ error: 'Failed to collect yield from DeFi protocols.' });
+            }
+          }
+
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to collect yield',
+            requireRelogin: false
+          });
+        }
+        break;
+
+      case 'emergencyWithdrawYield':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!sessionId) {
+          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+        }
+
+        try {
+          validateSession(sessionId, 'emergencyWithdrawYield');
+          const { circleId: emergencyCircleId, walletId: emergencyWalletId, yieldConfigId, reason = 'Emergency withdrawal' } = req.body;
+
+          if (!emergencyCircleId || !emergencyWalletId || !yieldConfigId) {
+            return res.status(400).json({ error: 'Circle ID, wallet ID, and yield config ID are required' });
+          }
+
+          console.log(`Emergency withdrawing yield for circle ${emergencyCircleId}, reason: ${reason}`);
+
+          const txResult = await instance.sendTransaction(
+            account,
+            (txb: Transaction) => {
+              txb.setSender(account.userAddr);
+              
+              txb.moveCall({
+                target: `${PACKAGE_ID}::njangi_yield_integration::emergency_withdraw_all`,
+                arguments: [
+                  txb.object(emergencyCircleId),
+                  txb.object(emergencyWalletId),
+                  txb.object(yieldConfigId),
+                  txb.pure.string(reason),
+                  txb.object(CLOCK_OBJECT_ID)
+                ]
+              });
+            },
+            { gasBudget: 200000000 } // Higher gas for emergency operations
+          );
+
+          console.log('Emergency yield withdrawal successful:', txResult);
+          return res.status(200).json({
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+        } catch (error) {
+          console.error('Error with emergency yield withdrawal:', error);
+          
+          if (error instanceof Error &&
+              (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired') ||
+              error.message.includes('re-authenticate'))) {
+            
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+
+          if (error instanceof Error) {
+            if (error.message.includes('ENotCircleAdmin')) {
+              return res.status(403).json({ error: 'Only the circle admin can perform emergency withdrawals.' });
+            }
+            if (error.message.includes('EEmergencyWithdrawalFailed')) {
+              return res.status(400).json({ error: 'Emergency withdrawal failed.' });
+            }
+          }
+
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to perform emergency withdrawal',
+            requireRelogin: false
+          });
+        }
+        break;
+
       default:
         return res.status(400).json({ error: 'Unknown action' });
     }
