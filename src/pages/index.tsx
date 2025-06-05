@@ -161,7 +161,13 @@ export default function Home() {
         
         {/* Favicon */}
         <link rel="icon" href="/favicon.ico" />
+        <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32x32.png" />
+        <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16x16.png" />
+        <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
         <link rel="apple-touch-icon" href="/njangi-on-chain-logo.png" />
+        <link rel="manifest" href="/site.webmanifest" />
+        <meta name="msapplication-TileColor" content="#2563eb" />
+        <meta name="theme-color" content="#2563eb" />
         
         {/* Structured Data */}
         <script
@@ -184,6 +190,12 @@ export default function Home() {
                 "@type": "Organization",
                 "name": "Njangi On-Chain",
                 "url": `${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`,
+                "logo": {
+                  "@type": "ImageObject",
+                  "url": `${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/njangi-on-chain-logo.png`,
+                  "width": 512,
+                  "height": 512
+                },
                 "sameAs": [
                   "https://x.com/njangi_on_chain",
                   "https://www.instagram.com/njangionchain"
@@ -204,6 +216,33 @@ export default function Home() {
                 "SUI",
                 "Bitcoin"
               ]
+            })
+          }}
+        />
+        
+        {/* Additional Organization Schema for Google */}
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@type": "Organization",
+              "name": "Njangi On-Chain",
+              "alternateName": "Njangi",
+              "url": `${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`,
+              "logo": `${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/njangi-on-chain-logo.png`,
+              "description": "The world's first blockchain-based Njangi platform for secure community savings circles",
+              "foundingDate": "2024",
+              "industry": "Financial Technology",
+              "sameAs": [
+                "https://x.com/njangi_on_chain",
+                "https://www.instagram.com/njangionchain"
+              ],
+              "contactPoint": {
+                "@type": "ContactPoint",
+                "email": "njangionchain@gmail.com",
+                "contactType": "Customer Service"
+              }
             })
           }}
         />
