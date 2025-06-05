@@ -39,6 +39,7 @@ export default function Document() {
         
         {/* Web App capabilities */}
         <meta name="theme-color" content="#3B82F6" /> {/* Blue-600 color */}
+        <meta name="google-site-verification" content="f6bd3c31267ded21" />
       </Head>
       <body>
         <Main />
