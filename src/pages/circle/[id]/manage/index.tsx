@@ -317,6 +317,13 @@ export default function ManageCircle() {
     }
   }, [circle]);
 
+  // Load existing yield configuration when circle is loaded
+  useEffect(() => {
+    if (circle && id) {
+      fetchYieldConfiguration();
+    }
+  }, [circle, id]);
+
   const fetchCircleDetails = async () => {
     if (!id || !userAddress) return;
     console.log('Manage - Fetching circle details for:', id);
@@ -3759,6 +3766,56 @@ export default function ManageCircle() {
   const calculateTotalSecurityDeposits = () => {
     if (!circle || !usdcSecurityDepositBalance) return 0;
     return usdcSecurityDepositBalance;
+  };
+
+  // Function to fetch existing yield configuration
+  const fetchYieldConfiguration = async () => {
+    if (!id) return;
+    
+    try {
+      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      
+      // Query for YieldConfigCreated events for this circle
+      const yieldEvents = await client.queryEvents({
+        query: { MoveEventType: `${PACKAGE_ID}::njangi_yield_integration::YieldConfigCreated` },
+        limit: 50
+      });
+      
+      // Find the most recent event for this circle
+      const circleYieldEvent = yieldEvents.data
+        .filter(event => (event.parsedJson as { circle_id?: string })?.circle_id === id)
+        .sort((a, b) => Number(b.timestampMs) - Number(a.timestampMs))[0];
+      
+      if (circleYieldEvent?.parsedJson) {
+        const eventData = circleYieldEvent.parsedJson as {
+          config_id: string;
+          strategy: number;
+          navi_allocation: string;
+          cetus_allocation: string;
+        };
+        const strategyNumber = Number(eventData.strategy);
+        
+        // Map strategy number to strategy name
+        const strategyMap: Record<number, YieldStrategy> = {
+          0: 'conservative',  // 100% NAVI
+          1: 'balanced',      // 70% NAVI, 30% Cetus  
+          2: 'aggressive'     // 50% NAVI, 50% Cetus
+        };
+        
+        const strategyName = strategyMap[strategyNumber] || 'conservative';
+        setSelectedYieldStrategy(strategyName);
+        
+        console.log('Loaded existing yield configuration:', {
+          configId: eventData.config_id,
+          strategy: strategyName,
+          naviAllocation: eventData.navi_allocation,
+          cetusAllocation: eventData.cetus_allocation
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching yield configuration:', error);
+      // Keep default conservative strategy if fetch fails
+    }
   };
 
   return (
