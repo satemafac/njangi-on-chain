@@ -5064,7 +5064,8 @@ export default function ManageCircle() {
                       onStrategyChange={handleYieldStrategyChange}
                       totalSecurityDeposits={calculateTotalSecurityDeposits()}
                       isLoading={isChangingYieldStrategy || loading}
-                      disabled={!circle.isActive || circle.paused}
+                      disabled={!circle?.isActive || circle?.paused}
+                      walletId={circle.custody?.walletId}
                     />
                   )}
                 </div>

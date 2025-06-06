@@ -1066,60 +1066,457 @@ export class ZkLoginClient {
     walletId: string
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
     try {
-      console.log(`ZkLoginClient: Paying out stablecoin security deposit for member ${memberAddress} in circle ${circleId} with wallet ${walletId}`);
+      console.log('Paying out security deposit (stablecoin) with account:', {
+        address: account.userAddr,
+        circleId,
+        memberAddress,
+        walletId,
+        hasProofPoints: !!account.zkProofs?.proofPoints,
+        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
+        hasHeaderBase64: !!account.zkProofs?.headerBase64,
+        maxEpoch: account.maxEpoch
+      });
 
-      // Ensure address has 0x prefix
-      const normalizedAddress = memberAddress.startsWith('0x') ? memberAddress : `0x${memberAddress}`;
-      console.log(`ZkLoginClient: Paying out stablecoin security deposit for member ${normalizedAddress} in circle ${circleId} with wallet ${walletId}`);
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'payoutSecurityDepositStablecoin',
+          account,
+          circleId,
+          memberAddress,
+          walletId
+        })
+      });
+      
+      const responseData: ZkLoginResponse = await response.json();
 
-      // Verify the account has valid proof data
-      if (!account.zkProofs?.proofPoints || 
-          !account.zkProofs.issBase64Details || 
-          !account.zkProofs.headerBase64) {
+      // Handle authentication errors (401)
+      if (response.status === 401) {
+        console.error('Authentication error:', responseData);
         throw new ZkLoginError(
-          'Missing required authentication data. Please login again.',
+          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
           true
         );
       }
+      
+      // Handle server errors (500)
+      if (!response.ok) {
+        console.error('Security deposit payout failed:', responseData);
+        throw new ZkLoginError(
+          responseData.error || 'Security deposit payout failed', 
+          !!responseData.requireRelogin
+        );
+      }
+      
+      // Even for successful response, check if we have a digest
+      if (!responseData.digest) {
+        throw new ZkLoginError('No transaction digest received from server', false);
+      }
+      
+      console.log('Security deposit payout succeeded:', responseData);
+      return {
+        digest: responseData.digest,
+        requireRelogin: responseData.requireRelogin
+      };
+    } catch (error) {
+      console.error('Security deposit payout error in client:', error);
+      // Rethrow ZkLoginError as is
+      if (error instanceof ZkLoginError) {
+        throw error;
+      }
+      // Otherwise wrap in a new error
+      throw new ZkLoginError(String(error), false);
+    }
+  }
+
+  // ============================================
+  // CETUS DEX INTEGRATION METHODS
+  // ============================================
+
+  /**
+   * Add liquidity to Cetus DEX pool for yield generation
+   * @param account ZkLogin account data
+   * @param walletId The custody wallet ID
+   * @param liquidityParams Parameters for liquidity provision
+   */
+  public async addCetusLiquidity(
+    account: AccountData,
+    walletId: string,
+    liquidityParams: {
+      poolId: string;
+      suiAmount: number;
+      usdcAmount: number;
+      tickLower?: number;
+      tickUpper?: number;
+      slippage?: number;
+    }
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    try {
+      console.log('Adding Cetus liquidity with account:', {
+        address: account.userAddr,
+        walletId,
+        liquidityParams,
+        hasProofPoints: !!account.zkProofs?.proofPoints,
+        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
+        hasHeaderBase64: !!account.zkProofs?.headerBase64,
+        maxEpoch: account.maxEpoch
+      });
 
       const response = await fetch('/api/zkLogin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          action: 'payoutSecurityDepositStablecoin', 
+          action: 'addCetusLiquidity',
           account, 
-          circleId,
-          memberAddress: normalizedAddress,
-          walletId
-        }),
+          walletId,
+          liquidityParams
+        })
       });
+      
+      const responseData: ZkLoginResponse = await response.json();
 
-      // Handle errors from the API
-      if (!response.ok) {
-        const errorData = await response.json();
-        if (response.status === 401) {
-          throw new ZkLoginError(
-            errorData.error || 'Authentication failed. Please login again.',
-            true
-          );
-        } else {
-          throw new Error(errorData.error || 'Failed to process stablecoin security deposit payout');
-        }
+      // Handle authentication errors (401)
+      if (response.status === 401) {
+        console.error('Authentication error:', responseData);
+        throw new ZkLoginError(
+          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
+          true
+        );
       }
-
-      // Return the transaction digest
-      const result = await response.json();
-      return { 
-        digest: result.digest,
-        requireRelogin: result.requireRelogin
+      
+      // Handle server errors (500)
+      if (!response.ok) {
+        console.error('Add Cetus liquidity failed:', responseData);
+        throw new ZkLoginError(
+          responseData.error || 'Failed to add Cetus liquidity', 
+          !!responseData.requireRelogin
+        );
+      }
+      
+      // Check if we have a digest
+      if (!responseData.digest) {
+        throw new ZkLoginError('No transaction digest received from server', false);
+      }
+      
+      console.log('Add Cetus liquidity succeeded:', responseData);
+      return {
+        digest: responseData.digest,
+        requireRelogin: responseData.requireRelogin
       };
     } catch (error) {
-      console.error('Error in payoutSecurityDepositStablecoin:', error);
+      console.error('Add Cetus liquidity error in client:', error);
       if (error instanceof ZkLoginError) {
         throw error;
-      } else {
-        throw new Error(error instanceof Error ? error.message : 'Unknown error occurred');
       }
+      throw new ZkLoginError(String(error), false);
+    }
+  }
+
+  /**
+   * Remove liquidity from Cetus DEX pool
+   * @param account ZkLogin account data
+   * @param walletId The custody wallet ID
+   * @param removeParams Parameters for liquidity removal
+   */
+  public async removeCetusLiquidity(
+    account: AccountData,
+    walletId: string,
+    removeParams: {
+      positionId: string;
+      liquidity: string;
+      amountAMin?: string;
+      amountBMin?: string;
+    }
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    try {
+      console.log('Removing Cetus liquidity with account:', {
+        address: account.userAddr,
+        walletId,
+        removeParams,
+        hasProofPoints: !!account.zkProofs?.proofPoints,
+        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
+        hasHeaderBase64: !!account.zkProofs?.headerBase64,
+        maxEpoch: account.maxEpoch
+      });
+
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'removeCetusLiquidity',
+          account,
+          walletId,
+          removeParams
+        })
+      });
+      
+      const responseData: ZkLoginResponse = await response.json();
+      
+      // Handle authentication errors (401)
+        if (response.status === 401) {
+        console.error('Authentication error:', responseData);
+          throw new ZkLoginError(
+          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
+            true
+          );
+      }
+      
+      // Handle server errors (500)
+      if (!response.ok) {
+        console.error('Remove Cetus liquidity failed:', responseData);
+        throw new ZkLoginError(
+          responseData.error || 'Failed to remove Cetus liquidity', 
+          !!responseData.requireRelogin
+        );
+      }
+
+      // Check if we have a digest
+      if (!responseData.digest) {
+        throw new ZkLoginError('No transaction digest received from server', false);
+      }
+      
+      console.log('Remove Cetus liquidity succeeded:', responseData);
+      return { 
+        digest: responseData.digest,
+        requireRelogin: responseData.requireRelogin
+      };
+    } catch (error) {
+      console.error('Remove Cetus liquidity error in client:', error);
+      if (error instanceof ZkLoginError) {
+        throw error;
+      }
+      throw new ZkLoginError(String(error), false);
+    }
+  }
+
+  /**
+   * Collect fees from Cetus DEX liquidity positions
+   * @param account ZkLogin account data
+   * @param walletId The custody wallet ID
+   * @param collectParams Parameters for fee collection
+   */
+  public async collectCetusFees(
+    account: AccountData,
+    walletId: string,
+    collectParams: {
+      positionId: string;
+    }
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    try {
+      console.log('Collecting Cetus fees with account:', {
+        address: account.userAddr,
+        walletId,
+        collectParams,
+        hasProofPoints: !!account.zkProofs?.proofPoints,
+        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
+        hasHeaderBase64: !!account.zkProofs?.headerBase64,
+        maxEpoch: account.maxEpoch
+      });
+
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'collectCetusFees',
+          account,
+          walletId,
+          collectParams
+        })
+      });
+      
+      const responseData: ZkLoginResponse = await response.json();
+      
+      // Handle authentication errors (401)
+      if (response.status === 401) {
+        console.error('Authentication error:', responseData);
+        throw new ZkLoginError(
+          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
+          true
+        );
+      }
+      
+      // Handle server errors (500)
+      if (!response.ok) {
+        console.error('Collect Cetus fees failed:', responseData);
+        throw new ZkLoginError(
+          responseData.error || 'Failed to collect Cetus fees', 
+          !!responseData.requireRelogin
+        );
+      }
+      
+      // Check if we have a digest
+      if (!responseData.digest) {
+        throw new ZkLoginError('No transaction digest received from server', false);
+      }
+      
+      console.log('Collect Cetus fees succeeded:', responseData);
+      return {
+        digest: responseData.digest,
+        requireRelogin: responseData.requireRelogin
+      };
+    } catch (error) {
+      console.error('Collect Cetus fees error in client:', error);
+      if (error instanceof ZkLoginError) {
+        throw error;
+      }
+      throw new ZkLoginError(String(error), false);
+    }
+  }
+
+  /**
+   * Configure Cetus DEX yield settings for a custody wallet
+   * @param account ZkLogin account data
+   * @param walletId The custody wallet ID
+   * @param yieldConfig Configuration for Cetus yield generation
+   */
+  public async configureCetusYield(
+    account: AccountData,
+    walletId: string,
+    yieldConfig: {
+      enabled: boolean;
+      autoCompound: boolean;
+      targetAPR: number;
+      minimumLiquidityAmount: number;
+      collectFeesInterval: number; // in hours
+      slippageTolerance: number;
+    }
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    try {
+      console.log('Configuring Cetus yield with account:', {
+        address: account.userAddr,
+        walletId,
+        yieldConfig,
+        hasProofPoints: !!account.zkProofs?.proofPoints,
+        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
+        hasHeaderBase64: !!account.zkProofs?.headerBase64,
+        maxEpoch: account.maxEpoch
+      });
+
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'configureCetusYield',
+          account,
+          walletId,
+          yieldConfig
+        })
+      });
+      
+      const responseData: ZkLoginResponse = await response.json();
+      
+      // Handle authentication errors (401)
+      if (response.status === 401) {
+        console.error('Authentication error:', responseData);
+        throw new ZkLoginError(
+          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
+          true
+        );
+      }
+      
+      // Handle server errors (500)
+      if (!response.ok) {
+        console.error('Configure Cetus yield failed:', responseData);
+        throw new ZkLoginError(
+          responseData.error || 'Failed to configure Cetus yield', 
+          !!responseData.requireRelogin
+        );
+      }
+      
+      // Check if we have a digest
+      if (!responseData.digest) {
+        throw new ZkLoginError('No transaction digest received from server', false);
+      }
+      
+      console.log('Configure Cetus yield succeeded:', responseData);
+      return {
+        digest: responseData.digest,
+        requireRelogin: responseData.requireRelogin
+      };
+    } catch (error) {
+      console.error('Configure Cetus yield error in client:', error);
+      if (error instanceof ZkLoginError) {
+        throw error;
+      }
+      throw new ZkLoginError(String(error), false);
+    }
+  }
+
+  /**
+   * Rebalance Cetus DEX liquidity position for optimal yield
+   * @param account ZkLogin account data
+   * @param walletId The custody wallet ID
+   * @param rebalanceParams Parameters for rebalancing
+   */
+  public async rebalanceCetusPosition(
+    account: AccountData,
+    walletId: string,
+    rebalanceParams: {
+      currentPositionId: string;
+      newTickLower: number;
+      newTickUpper: number;
+      slippage?: number;
+    }
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    try {
+      console.log('Rebalancing Cetus position with account:', {
+        address: account.userAddr,
+        walletId,
+        rebalanceParams,
+        hasProofPoints: !!account.zkProofs?.proofPoints,
+        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
+        hasHeaderBase64: !!account.zkProofs?.headerBase64,
+        maxEpoch: account.maxEpoch
+      });
+
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'rebalanceCetusPosition',
+          account,
+          walletId,
+          rebalanceParams
+        })
+      });
+      
+      const responseData: ZkLoginResponse = await response.json();
+      
+      // Handle authentication errors (401)
+      if (response.status === 401) {
+        console.error('Authentication error:', responseData);
+        throw new ZkLoginError(
+          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
+          true
+        );
+      }
+      
+      // Handle server errors (500)
+      if (!response.ok) {
+        console.error('Rebalance Cetus position failed:', responseData);
+        throw new ZkLoginError(
+          responseData.error || 'Failed to rebalance Cetus position', 
+          !!responseData.requireRelogin
+        );
+      }
+      
+      // Check if we have a digest
+      if (!responseData.digest) {
+        throw new ZkLoginError('No transaction digest received from server', false);
+      }
+      
+      console.log('Rebalance Cetus position succeeded:', responseData);
+      return {
+        digest: responseData.digest,
+        requireRelogin: responseData.requireRelogin
+      };
+    } catch (error) {
+      console.error('Rebalance Cetus position error in client:', error);
+      if (error instanceof ZkLoginError) {
+        throw error;
+      }
+      throw new ZkLoginError(String(error), false);
     }
   }
 } 

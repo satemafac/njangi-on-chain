@@ -7,8 +7,26 @@ edition = "2024"
 [dependencies]
 Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "041c5f2bae2fe52079e44b70514333532d69f4e6" }
 Pyth = { git = "https://github.com/pyth-network/pyth-crosschain.git", subdir = "target_chains/sui/contracts", rev = "sui-contract-testnet" }
-Wormhole = { git = "https://github.com/wormhole-foundation/wormhole.git", subdir = "sui/wormhole", rev = "sui-upgrade-testnet" }
+# Note: Wormhole is a dependency of Pyth, so we don't need to include it explicitly to avoid conflicts
+
+# CETUS INTEGRATION VIA DIRECT PACKAGE ADDRESSES (No dependency conflicts!)
+# Instead of Git dependencies, we'll use direct package addresses from testnet
+# This is the standard approach for Move smart contracts and avoids version conflicts
+# Source: https://cetus-1.gitbook.io/cetus-developer-docs/developer/dev-overview
+
+# DeFi Protocol Integration Dependencies (Testnet)
+# Real Cetus DEX integration will use on-chain package addresses
+# Cetus = { git = "https://github.com/CetusProtocol/cetus-clmm-interface.git", subdir = "sui", rev = "main" }
+
+# TODO: Add actual NAVI Protocol package ID once identified from testnet explorer
+# NAVI Protocol will be added for mainnet deployment
 
 # TestUSDC is now included in the Sui framework directly
 [addresses]
 njangi = "0x0"
+# Official Cetus testnet package addresses from documentation
+cetus_clmm = "0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12"
+cetus_published_at = "0xb2a1d27337788bda89d350703b8326952413bd94b35b9b573ac8401b9803d018"  
+cetus_integrate = "0x2918cf39850de6d5d94d8196dc878c8c722cd79db659318e00bff57fbb4e2ede"
+cetus_config = "0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca"
+# navi_protocol = "0x..." # TODO: Add NAVI testnet package address

@@ -493,64 +493,88 @@ export default function Dashboard() {
     }
   }, [isAuthenticated, router]);
 
-  useEffect(() => {
-    const fetchBalance = async () => {
-      if (userAddress) {
-        const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
-        
-        // Fetch SUI balance for the primary balance display
-        const suiBalance = await client.getBalance({
-          owner: userAddress,
-          coinType: '0x2::sui::SUI'
+  // Add refresh balance state
+  const [isRefreshingBalance, setIsRefreshingBalance] = useState(false);
+
+  // Extract fetchBalance into a reusable function
+  const fetchBalance = useCallback(async () => {
+    if (!userAddress) return;
+    
+    try {
+      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      
+      // Fetch SUI balance for the primary balance display
+      const suiBalance = await client.getBalance({
+        owner: userAddress,
+        coinType: '0x2::sui::SUI'
+      });
+      setBalance(suiBalance.totalBalance);
+      
+      // Fetch all coins
+      try {
+        const allCoinsData = await client.getAllCoins({
+          owner: userAddress
         });
-        setBalance(suiBalance.totalBalance);
         
-        // Fetch all coins
-        try {
-          const allCoinsData = await client.getAllCoins({
-            owner: userAddress
-          });
+        // Create a map to aggregate coins by symbol
+        const coinMap = new Map<string, {coinType: string, symbol: string, balance: string}>();
+        
+        // Process the coins
+        allCoinsData.data.forEach(coin => {
+          // Extract coin symbol from the type string (e.g., "0x2::sui::SUI" -> "SUI")
+          const typeStr = coin.coinType;
+          const typeMatch = typeStr.match(/::([^:]+)$/);
+          const symbol = typeMatch ? typeMatch[1] : typeStr;
           
-          // Create a map to aggregate coins by symbol
-          const coinMap = new Map<string, {coinType: string, symbol: string, balance: string}>();
-          
-          // Process the coins
-          allCoinsData.data.forEach(coin => {
-            // Extract coin symbol from the type string (e.g., "0x2::sui::SUI" -> "SUI")
-            const typeStr = coin.coinType;
-            const typeMatch = typeStr.match(/::([^:]+)$/);
-            const symbol = typeMatch ? typeMatch[1] : typeStr;
-            
-            // If this symbol already exists in our map, add to its balance
-            if (coinMap.has(symbol)) {
-              const existingCoin = coinMap.get(symbol)!;
-              const newBalance = BigInt(existingCoin.balance) + BigInt(coin.balance);
-              coinMap.set(symbol, {
-                ...existingCoin,
-                balance: newBalance.toString()
-              });
-            } else {
-              // Otherwise, add it as a new entry
-              coinMap.set(symbol, {
-                coinType: coin.coinType,
-                symbol: symbol,
-                balance: coin.balance
-              });
-            }
-          });
-          
-          // Convert the map back to an array
-          const processedCoins = Array.from(coinMap.values());
-          
-          console.log('Aggregated coins by symbol:', processedCoins);
-          setAllCoins(processedCoins);
-        } catch (error) {
-          console.error('Error fetching all coins:', error);
-        }
+          // If this symbol already exists in our map, add to its balance
+          if (coinMap.has(symbol)) {
+            const existingCoin = coinMap.get(symbol)!;
+            const newBalance = BigInt(existingCoin.balance) + BigInt(coin.balance);
+            coinMap.set(symbol, {
+              ...existingCoin,
+              balance: newBalance.toString()
+            });
+          } else {
+            // Otherwise, add it as a new entry
+            coinMap.set(symbol, {
+              coinType: coin.coinType,
+              symbol: symbol,
+              balance: coin.balance
+            });
+          }
+        });
+        
+        // Convert the map back to an array
+        const processedCoins = Array.from(coinMap.values());
+        
+        console.log('Aggregated coins by symbol:', processedCoins);
+        setAllCoins(processedCoins);
+      } catch (error) {
+        console.error('Error fetching all coins:', error);
       }
-    };
-    fetchBalance();
+    } catch (error) {
+      console.error('Error fetching balance:', error);
+      toast.error('Failed to refresh balance');
+    }
   }, [userAddress]);
+
+  // Handle manual balance refresh
+  const handleRefreshBalance = async () => {
+    setIsRefreshingBalance(true);
+    try {
+      await fetchBalance();
+      toast.success('Balance refreshed successfully');
+    } catch (error) {
+      console.error('Error refreshing balance:', error);
+      toast.error('Failed to refresh balance');
+    } finally {
+      setIsRefreshingBalance(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchBalance();
+  }, [userAddress, fetchBalance]);
 
   // Fetch SUI price - only on page load, no interval
   useEffect(() => {
@@ -2438,6 +2462,33 @@ export default function Dashboard() {
                               sideOffset={5}
                             >
                               {balanceVisible ? 'Hide balance' : 'Show balance'}
+                              <Tooltip.Arrow className="fill-gray-800" />
+                            </Tooltip.Content>
+                          </Tooltip.Portal>
+                        </Tooltip.Root>
+                      </Tooltip.Provider>
+                      
+                      {/* Add Refresh Balance Button */}
+                      <Tooltip.Provider>
+                        <Tooltip.Root>
+                          <Tooltip.Trigger asChild>
+                            <button
+                              onClick={handleRefreshBalance}
+                              disabled={isRefreshingBalance}
+                              className={`p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors duration-200 ${
+                                isRefreshingBalance ? 'opacity-50 cursor-not-allowed' : ''
+                              }`}
+                              aria-label="Refresh balance"
+                            >
+                              <RefreshCw className={`w-4 h-4 ${isRefreshingBalance ? 'animate-spin' : ''}`} />
+                            </button>
+                          </Tooltip.Trigger>
+                          <Tooltip.Portal>
+                            <Tooltip.Content
+                              className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                              sideOffset={5}
+                            >
+                              {isRefreshingBalance ? 'Refreshing...' : 'Refresh balance'}
                               <Tooltip.Arrow className="fill-gray-800" />
                             </Tooltip.Content>
                           </Tooltip.Portal>
