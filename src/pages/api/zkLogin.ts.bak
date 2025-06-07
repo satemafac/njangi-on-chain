@@ -4822,8 +4822,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               // Create a SUI coin with the deposit amount (this is simplified - in reality, you'd use existing coins)
               const depositCoin = txb.splitCoins(txb.gas, [txb.pure.u64(depositAmountBig)]);
               
-              // Call generate_yield_on_security_deposit - now returns only YieldReceipt
-              const yieldReceipt = txb.moveCall({
+              txb.moveCall({
                 target: `${PACKAGE_ID}::njangi_yield_integration::generate_yield_on_security_deposit`,
                 arguments: [
                   txb.object(depositCircleId),
@@ -4834,9 +4833,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   txb.object(CLOCK_OBJECT_ID)
                 ]
               });
-              
-              // Transfer the YieldReceipt to the member
-              txb.transferObjects([yieldReceipt], memberAddress);
             },
             { gasBudget: 150000000 } // Higher gas for DeFi operations
           );
@@ -5162,9 +5158,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               const [depositCoin] = txb.splitCoins(txb.gas, [depositAmount]);
               
               // Call generate_yield_on_security_deposit with the created YieldConfig
-              // This function now returns only YieldReceipt (no longer returns Option<Coin<SUI>>)
-              // We need to capture the return value and transfer the YieldReceipt
-              const yieldReceipt = txb.moveCall({
+              // This function returns (Option<Coin<SUI>>, YieldReceipt)
+              // In SUI TypeScript SDK, we don't destructure return values
+              txb.moveCall({
                 target: `${PACKAGE_ID}::njangi_yield_integration::generate_yield_on_security_deposit`,
                 arguments: [
                   txb.object(yieldData.circle_id), // circle: &Circle
@@ -5175,10 +5171,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   txb.object(CLOCK_OBJECT_ID), // clock: &Clock
                 ]
               });
-              
-              // Transfer the YieldReceipt to the user to avoid UnusedValueWithoutDrop error
-              // The YieldReceipt has `key, store` but not `drop`, so it must be transferred
-              txb.transferObjects([yieldReceipt], account.userAddr);
+
+              // The result is a tuple (Option<Coin<SUI>>, YieldReceipt)
+              // Transfer the YieldReceipt (result[1]) to the user since it cannot be dropped
+              txb.transferObjects([result], account.userAddr);
 
               console.log('Security deposit yield generation prepared');
             },

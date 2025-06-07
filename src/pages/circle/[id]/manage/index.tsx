@@ -5066,6 +5066,7 @@ export default function ManageCircle() {
                       isLoading={isChangingYieldStrategy || loading}
                       disabled={!circle?.isActive || circle?.paused}
                       walletId={circle.custody?.walletId}
+                      circleId={id as string}
                     />
                   )}
                 </div>

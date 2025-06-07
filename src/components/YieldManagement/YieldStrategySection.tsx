@@ -6,6 +6,7 @@ import { StrategySelector } from './components/StrategySelector';
 import { STRATEGY_CONFIGS } from './config/strategies';
 import { cetusService } from '../../services/cetus-service';
 import ConfirmationModal from '../ConfirmationModal';
+import { priceService } from '../../services/price-service';
 
 // Define interfaces locally since they're not exported from cetus-service
 interface CetusPosition {
@@ -58,6 +59,22 @@ interface YieldStrategySectionProps {
   isLoading?: boolean;
   disabled?: boolean;
   walletId?: string; // Add wallet ID for fetching real yield data
+  circleId?: string; // Add circle ID for contract calls
+}
+
+// Type definitions for API responses
+interface YieldConfigResult {
+  txHash: string;
+  digest: string;
+  status: string;
+  yieldStrategy?: string;
+  nextStep?: string;
+  configId?: string;
+  details?: {
+    expectedAPY?: string;
+    autoCompound?: boolean;
+    naviAllocation?: string;
+  };
 }
 
 export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
@@ -66,7 +83,8 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
   totalSecurityDeposits = 0,
   isLoading = false,
   disabled = false,
-  walletId
+  walletId,
+  circleId
 }) => {
   const [selectedStrategy, setSelectedStrategy] = useState<YieldStrategy>(currentStrategy);
   const [isChangingStrategy, setIsChangingStrategy] = useState(false);
@@ -91,11 +109,31 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
     confirmText?: string;
     variant?: 'primary' | 'danger' | 'warning';
   } | null>(null);
+  
+  // Add state for live SUI price
+  const [currentSuiPrice, setCurrentSuiPrice] = useState<number>(2.5); // Default fallback
 
   // Update local state when props change
   useEffect(() => {
     setSelectedStrategy(currentStrategy);
   }, [currentStrategy]);
+
+  // Fetch live SUI price on component mount
+  useEffect(() => {
+    const fetchSuiPrice = async () => {
+      try {
+        const price = await priceService.getSUIPrice();
+        if (price) {
+          setCurrentSuiPrice(price);
+        }
+      } catch (error) {
+        console.error('Error fetching SUI price:', error);
+        // Keep default fallback price of 2.5
+      }
+    };
+
+    fetchSuiPrice();
+  }, []);
 
   // Fetch Cetus yield data when wallet ID is available
   useEffect(() => {
@@ -109,11 +147,11 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
         // Fetch user's liquidity positions
         const positions = await cetusService.getUserLiquidityPositions(walletId);
         
-        // Enhance positions with display data
+        // Enhance positions with display data using live price
         const enhancedPositions = positions.map(position => ({
           ...position,
           poolName: 'SUI-USDC',
-          earnedFees: (Number(position.feeEarned.coinA) / 1e9) + (Number(position.feeEarned.coinB) / 1e6) * 2.5
+          earnedFees: (Number(position.feeEarned.coinA) / 1e9) + (Number(position.feeEarned.coinB) / 1e6) * currentSuiPrice
         }));
         setCetusPositions(enhancedPositions);
 
@@ -121,12 +159,12 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
         if (positions.length > 0) {
           const yieldDataRaw = await cetusService.calculateYieldFromPositions(walletId);
           
-          // Enhance yield data with display-friendly properties
+          // Enhance yield data with display-friendly properties using live price
           const enhancedYieldData: YieldData = {
             ...yieldDataRaw,
             totalLiquidity: yieldDataRaw.positionValue.sui,
             earnedFees: yieldDataRaw.totalFeesEarned.sui,
-            earnedFeesUSD: yieldDataRaw.totalFeesEarned.sui * 2.5 + yieldDataRaw.totalFeesEarned.usdc,
+            earnedFeesUSD: yieldDataRaw.totalFeesEarned.sui * currentSuiPrice + yieldDataRaw.totalFeesEarned.usdc,
             currentAPR: yieldDataRaw.apr
           };
           setCetusYieldData(enhancedYieldData);
@@ -146,7 +184,7 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
     };
 
     fetchCetusData();
-  }, [walletId, isLoading]);
+  }, [walletId, isLoading, currentSuiPrice]); // Add currentSuiPrice as dependency
 
   const handleStrategySelect = async (strategy: YieldStrategy) => {
     if (disabled || isChangingStrategy) return;
@@ -170,7 +208,7 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
 
   // Handler for adding liquidity to Cetus
   const handleAddLiquidityToCetus = async () => {
-    if (!walletId || disabled) return;
+    if (!walletId || !circleId || disabled) return;
 
     setIsAddingLiquidity(true);
     setAddLiquidityError(null);
@@ -178,105 +216,202 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
     try {
       // Calculate optimal liquidity amounts based on available security deposits
       const suiAmount = Math.floor(totalSecurityDeposits); // Use 100% of security deposits
-      const minUsdcAmount = suiAmount * 2.5; // Approximate USDC equivalent (1 SUI ≈ $2.50)
+      
+      // Use current SUI price from state (already fetched and kept updated)
+      const minUsdcAmount = suiAmount * currentSuiPrice; // Use live price for USDC equivalent
       
       // Handle insufficient funds gracefully
       if (suiAmount < 1) {
-        setAddLiquidityError('Insufficient security deposits for liquidity provision. Minimum 1 SUI required in total security deposits.');
+        setAddLiquidityError('Insufficient security deposits for yield configuration. Circle needs active members with security deposits.');
         setIsAddingLiquidity(false);
         return;
       }
 
-      // Prepare the add liquidity transaction using Cetus service
-      console.log('Preparing Cetus add liquidity transaction:', {
-        walletAddress: walletId,
+      // Prepare the yield configuration transaction
+      console.log('Preparing yield configuration transaction:', {
+        circleId: circleId,
+        custodyWalletId: walletId,
         suiAmount,
-        estimatedUsdcAmount: minUsdcAmount
+        estimatedUsdcAmount: minUsdcAmount,
+        suiPriceUsed: currentSuiPrice
       });
 
       // Use Cetus service to prepare the transaction
       const poolId = '0xb01b068bd0360bb3308b81eb42386707e460b7818816709b7f51e1635d542d40'; // SUI-USDC pool
       
-      // For now, we'll prepare the transaction parameters and show them to the user
-      // In a full implementation, this would connect to a wallet and execute the transaction
-      const transactionDetails = {
-        poolId,
-        coinTypeA: '0x2::sui::SUI',
-        coinTypeB: '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN', // Testnet USDC
-        amountA: suiAmount * 1e9, // Convert to base units (1 SUI = 1e9 MIST)
-        amountB: minUsdcAmount * 1e6, // Convert to base units (1 USDC = 1e6)
-        tickLower: -60000, // Wide range for simplicity
-        tickUpper: 60000,
-        slippage: 0.5 // 0.5% slippage tolerance
-      };
-
-      // Show confirmation modal instead of browser confirm
-      const confirmMessage = (
-        <div className="space-y-4">
-          <div className="bg-blue-50 p-4 rounded-lg">
-            <h4 className="font-medium text-blue-900 mb-2">Transaction Details:</h4>
-            <ul className="text-sm text-blue-800 space-y-1">
-              <li>• Pool: SUI-USDC (Testnet)</li>
-              <li>• SUI Amount: {suiAmount} SUI</li>
-              <li>• Est. USDC Equivalent: ~{minUsdcAmount.toFixed(2)} USDC</li>
-              <li>• Fee Tier: 0.3%</li>
-              <li>• Price Range: Wide Range (Full Range)</li>
-            </ul>
-          </div>
-          <div className="bg-green-50 p-4 rounded-lg">
-            <h4 className="font-medium text-green-900 mb-2">This will:</h4>
-            <ul className="text-sm text-green-800 space-y-1">
-              <li>✅ Create a real Cetus LP position</li>
-              <li>✅ Start earning actual trading fees immediately</li>
-              <li>✅ Generate real yield for your circle</li>
-              <li>✅ Allow withdrawal anytime</li>
-            </ul>
-          </div>
-          <div className="bg-yellow-50 p-3 rounded-lg">
-            <p className="text-sm text-yellow-800">
-              <strong>Note:</strong> This requires connecting a wallet with sufficient SUI and USDC balances.
-            </p>
-          </div>
-        </div>
-      );
-
       // Store transaction details for modal confirmation
-      const handleConfirmTransaction = () => {
-        // Here's where wallet connection and transaction execution would happen
-        console.log('User confirmed - would now connect wallet and execute transaction');
-        console.log('Transaction parameters:', transactionDetails);
-        
-        // Show success message
-        setConfirmModalData({
-          title: '🎉 Transaction Prepared Successfully!',
-          message: (
-            <div className="space-y-3">
-              <p>In a full implementation, this would now connect to your Sui wallet and execute the real Cetus add liquidity transaction on testnet.</p>
-              <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="text-sm text-gray-600">Next steps would be:</p>
-                <ol className="text-sm text-gray-600 mt-2 space-y-1">
-                  <li>1. Connect to wallet (Sui Wallet, Martian, etc.)</li>
-                  <li>2. Check balances for SUI and USDC</li>
-                  <li>3. If insufficient USDC, offer to swap SUI for USDC first</li>
-                  <li>4. Execute addLiquidity transaction via Cetus SDK</li>
-                  <li>5. Update UI with new position</li>
-                </ol>
+      const handleConfirmTransaction = async () => {
+        try {
+          setIsAddingLiquidity(true);
+          setShowConfirmModal(false); // Close the confirmation modal
+          
+          // Get the current user session and account data
+          const account = JSON.parse(localStorage.getItem('account') || '{}');
+          if (!account.userAddr) {
+            throw new Error('No authenticated user found. Please log in first.');
+          }
+
+          console.log('Initiating yield configuration transaction:', {
+            userAddress: account.userAddr,
+            circleId: circleId,
+            custodyWalletId: walletId,
+            suiAmount,
+            estimatedUsdcAmount: minUsdcAmount,
+            suiPrice: currentSuiPrice
+          });
+
+          // Prepare the yield integration transaction
+          const transactionData = {
+            action: 'addCetusLiquidity',
+            account,
+            yieldData: {
+              sui_amount: (suiAmount * 1e9).toString(), // Convert to MIST (base units)
+              usdc_amount: (minUsdcAmount * 1e6).toString(), // Convert to base units
+              pool_id: poolId,
+              circle_id: circleId, // Use the actual Circle object ID
+              custody_wallet_id: walletId, // Use the custody wallet ID from props
+              tick_lower: -60000, // Wide range
+              tick_upper: 60000,   // Wide range
+              slippage_tolerance: 50, // 0.5% in basis points
+              total_security_deposits: totalSecurityDeposits // Pass the actual total
+            }
+          };
+
+          // Send transaction via zkLogin API
+          const response = await fetch('/api/zkLogin', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(transactionData)
+          });
+
+          const result = await response.json();
+
+          if (!response.ok) {
+            throw new Error(result.error || 'Transaction failed');
+          }
+
+          // Success! Show success modal
+          setConfirmModalData({
+            title: '🎉 Yield Configuration Created Successfully!',
+            message: (
+              <div className="space-y-3">
+                <p className="text-green-700">Your yield integration foundation has been established!</p>
+                <div className="bg-green-50 p-3 rounded-lg">
+                  <h4 className="font-medium text-green-900 mb-2">Configuration Details:</h4>
+                  <ul className="text-sm text-green-800 space-y-1">
+                    <li>• Strategy: {result.yieldStrategy || 'Conservative (100% NAVI Protocol)'}</li>
+                    <li>• Expected APY: {result.details?.expectedAPY || '6.81%'}</li>
+                    <li>• Auto-Compound: {result.details?.autoCompound ? 'Enabled' : 'Disabled'}</li>
+                    <li>• NAVI Allocation: {result.details?.naviAllocation || '100%'}</li>
+                    <li>• Configuration ID: {result.configId || 'Generated'}</li>
+                  </ul>
+                </div>
+                <div className="bg-blue-50 p-3 rounded-lg">
+                  <h4 className="font-medium text-blue-900 mb-2">Next Step:</h4>
+                  <p className="text-sm text-blue-800">
+                    {result.nextStep || 'Processing security deposits for yield generation...'}
+                  </p>
+                </div>
+                <div className="text-xs text-gray-500">
+                  <strong>Transaction Hash:</strong> {result.txHash}
+                </div>
               </div>
-            </div>
-          ),
-          onConfirm: () => {},
-          confirmText: 'OK',
-          variant: 'primary'
-        });
-        setShowConfirmModal(true);
+            ),
+            confirmText: 'Process Security Deposits',
+            onConfirm: async () => {
+              // Step 2: Process the actual security deposits
+              await processSecurityDeposits(result);
+            }
+          });
+          setShowConfirmModal(true);
+
+        } catch (error) {
+          console.error('Transaction failed:', error);
+          setAddLiquidityError(error instanceof Error ? error.message : 'Failed to add liquidity');
+          
+          // Check if it's an insufficient balance error
+          const isInsufficientBalance = error instanceof Error && 
+            (error.message.includes('InsufficientCoinBalance') || 
+             error.message.includes('Insufficient SUI balance'));
+          
+          // Show error modal
+          setConfirmModalData({
+            title: '❌ Transaction Failed',
+            message: (
+              <div className="space-y-3">
+                <p className="text-red-700">
+                  {isInsufficientBalance 
+                    ? 'Transaction failed due to insufficient SUI balance.' 
+                    : 'Failed to add liquidity to Cetus pool.'}
+                </p>
+                <div className="bg-red-50 p-3 rounded-lg">
+                  <p className="text-sm text-red-800">
+                    <strong>Error:</strong> {error instanceof Error ? error.message : 'Unknown error occurred'}
+                  </p>
+                </div>
+                {isInsufficientBalance ? (
+                  <div className="bg-yellow-50 p-3 rounded-lg">
+                    <h4 className="font-medium text-yellow-900 mb-2">💡 How to fix this:</h4>
+                    <ul className="text-sm text-yellow-800 space-y-1">
+                      <li>• Get SUI from the testnet faucet: <a href="https://discord.gg/sui" target="_blank" rel="noopener noreferrer" className="underline">Sui Discord #devnet-faucet</a></li>
+                      <li>• You need at least 0.2 SUI total (for gas + demonstration)</li>
+                      <li>• Current demonstration uses only 0.1 SUI + gas fees</li>
+                      <li>• In production, this would use your full security deposit balance</li>
+                    </ul>
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-600">
+                    Please check your account status and try again. Make sure you&apos;re connected to testnet.
+                  </p>
+                )}
+              </div>
+            ),
+            onConfirm: () => {},
+            confirmText: isInsufficientBalance ? 'Get Testnet SUI' : 'Try Again',
+            variant: 'danger'
+          });
+          setShowConfirmModal(true);
+        } finally {
+          setIsAddingLiquidity(false);
+        }
       };
 
       // Show the confirmation modal
       setConfirmModalData({
-        title: '🚀 Ready to Add Liquidity to Cetus DEX!',
-        message: confirmMessage,
+        title: '🚀 Create Yield Configuration for Circle',
+        message: (
+          <div className="space-y-4">
+            <div className="bg-blue-50 p-4 rounded-lg">
+              <h4 className="font-medium text-blue-900 mb-2">Yield Configuration Setup:</h4>
+              <ul className="text-sm text-blue-800 space-y-1">
+                <li>• Strategy: Conservative (100% NAVI Protocol)</li>
+                <li>• Expected APY: 6.81% annually</li>
+                <li>• Auto-Compound: Enabled</li>
+                <li>• Available Security Deposits: {totalSecurityDeposits.toFixed(2)} SUI</li>
+                <li>• Target Protocols: NAVI Protocol</li>
+              </ul>
+            </div>
+            <div className="bg-green-50 p-4 rounded-lg">
+              <h4 className="font-medium text-green-900 mb-2">This will:</h4>
+              <ul className="text-sm text-green-800 space-y-1">
+                <li>✅ Create the yield configuration for your circle</li>
+                <li>✅ Enable security deposits to start earning real yield</li>
+                <li>✅ Set up automated compound earnings</li>
+                <li>✅ Prepare the foundation for DeFi integration</li>
+              </ul>
+            </div>
+            <div className="bg-yellow-50 p-3 rounded-lg">
+              <p className="text-sm text-yellow-800">
+                <strong>Note:</strong> This creates the configuration foundation. Once members join and pay security deposits, 
+                those deposits will automatically start generating yield through NAVI Protocol&apos;s 6.81% APY.
+              </p>
+            </div>
+          </div>
+        ),
         onConfirm: handleConfirmTransaction,
-        confirmText: 'Proceed with Wallet Connection',
+        confirmText: 'Proceed with zkLogin Transaction',
         variant: 'primary'
       });
       setShowConfirmModal(true);
@@ -307,6 +442,163 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
   // Format USD value for display
   const formatUSDValue = (value: number | undefined): string => {
     return `$${(value ?? 0).toFixed(2)}`;
+  };
+
+  const processSecurityDeposits = async (configResult: YieldConfigResult) => {
+    try {
+      setIsAddingLiquidity(true);
+      setAddLiquidityError(null);
+      
+      console.log('Processing security deposits for yield generation...');
+      console.log('Config result from previous step:', configResult);
+      
+      // Extract the real YieldConfig ID from the transaction result
+      const configId = await findYieldConfigId(configResult.txHash);
+      
+      if (!configId) {
+        throw new Error('Could not find YieldConfig ID from transaction. Please try again.');
+      }
+      
+      console.log('Found YieldConfig ID:', configId);
+      
+      // Calculate deposit amount (use portion of security deposits for demonstration)
+      const depositAmountSui = 0.1; // Start with 0.1 SUI for testing
+      const depositAmountMist = Math.floor(depositAmountSui * 1e9); // Convert to MIST
+      
+      // Prepare security deposit processing transaction
+      const processTransactionData = {
+        action: 'processSecurityDeposits',
+        account: JSON.parse(localStorage.getItem('account') || '{}'),
+        yieldData: {
+          config_id: configId,
+          circle_id: circleId,
+          custody_wallet_id: walletId,
+          deposit_amount: depositAmountMist.toString(),
+          total_security_deposits: totalSecurityDeposits,
+          expected_apy: '12-18%',
+          strategy: 'Cetus Liquidity Provision'
+        }
+      };
+
+      console.log('Sending security deposit processing request:', processTransactionData);
+
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(processTransactionData),
+      });
+
+      const processResult = await response.json();
+
+      if (response.ok && processResult.status === 'success') {
+        // Success! Security deposits are now earning yield
+        setConfirmModalData({
+          title: '🎉 Security Deposits Now Earning Yield!',
+          message: (
+            <div className="space-y-3">
+              <p className="text-green-700">Your security deposits are now generating real yield!</p>
+              <div className="bg-green-50 p-3 rounded-lg">
+                <h4 className="font-medium text-green-900 mb-2">Yield Generation Active:</h4>
+                <ul className="text-sm text-green-800 space-y-1">
+                  <li>• Deposit Amount: {depositAmountSui} SUI</li>
+                  <li>• Strategy: {processResult.yieldDetails?.strategy || 'Cetus Liquidity Provision'}</li>
+                  <li>• Expected APY: {processResult.yieldDetails?.expectedAPY || '12-18%'}</li>
+                  <li>• Pool Type: {processResult.yieldDetails?.poolType || 'SUI/USDC LP'}</li>
+                  <li>• Status: {processResult.yieldDetails?.startedEarning ? '✅ Earning' : '⏳ Setting up'}</li>
+                </ul>
+              </div>
+              <div className="bg-blue-50 p-3 rounded-lg">
+                <h4 className="font-medium text-blue-900 mb-2">What&apos;s Happening:</h4>
+                <p className="text-sm text-blue-800">
+                  Your SUI has been deposited into yield-generating protocols and will start earning returns immediately. 
+                  Yield will compound automatically according to your strategy.
+                </p>
+              </div>
+              <div className="text-xs text-gray-500">
+                <strong>Transaction Hash:</strong> {processResult.txHash}
+              </div>
+            </div>
+          ),
+          confirmText: 'Done',
+          onConfirm: () => {
+            setConfirmModalData(null);
+          }
+        });
+      } else {
+        throw new Error(processResult.error || 'Failed to process security deposits');
+      }
+
+    } catch (error) {
+      console.error('Security deposit processing error:', error);
+      setAddLiquidityError(
+        error instanceof Error 
+          ? `Security deposit processing failed: ${error.message}` 
+          : 'Failed to process security deposits for yield generation'
+      );
+      setConfirmModalData(null);
+    } finally {
+      setIsAddingLiquidity(false);
+    }
+  };
+
+  // Helper function to find YieldConfig ID from transaction events
+  const findYieldConfigId = async (txHash: string): Promise<string | null> => {
+    try {
+      // Query the transaction to get the created objects
+      const response = await fetch(`https://fullnode.testnet.sui.io:443`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'sui_getTransactionBlock',
+          params: [
+            txHash,
+            {
+              showEvents: true,
+              showObjectChanges: true
+            }
+          ]
+        })
+      });
+
+      const data = await response.json();
+      
+      // Look for YieldConfig creation in events
+      if (data.result?.events) {
+        const yieldConfigEvent = data.result.events.find((event: {
+          type?: string;
+          parsedJson?: { config_id?: string };
+        }) => 
+          event.type?.includes('YieldConfigCreated')
+        );
+        
+        if (yieldConfigEvent?.parsedJson?.config_id) {
+          return yieldConfigEvent.parsedJson.config_id;
+        }
+      }
+
+      // Look for YieldConfig creation in object changes
+      if (data.result?.objectChanges) {
+        const yieldConfigObject = data.result.objectChanges.find((change: {
+          type?: string;
+          objectType?: string;
+          objectId?: string;
+        }) => 
+          change.type === 'created' && 
+          change.objectType?.includes('YieldConfig')
+        );
+        
+        if (yieldConfigObject?.objectId) {
+          return yieldConfigObject.objectId;
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Error finding YieldConfig ID:', error);
+      return null;
+    }
   };
 
   if (isLoading) {
@@ -459,7 +751,7 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
               <div className="text-gray-600 text-sm mb-2">
                 {disabled 
                   ? "Yield management will be available once the circle administrator activates the circle."
-                  : "No active Cetus positions found. Start earning real yield from DEX trading fees!"
+                  : "No yield configuration found. Set up real DeFi yield generation for your security deposits!"
                 }
               </div>
               
@@ -487,10 +779,10 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
                   ? (
                     <span className="flex items-center">
                       <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                      Processing...
+                      Creating Configuration...
                     </span>
                   )
-                  : 'Add Liquidity to Cetus'
+                  : 'Create Yield Configuration'
                 }
               </button>
             </div>
@@ -519,7 +811,7 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
               <div className="font-semibold text-green-600">
                 +{potentialMonthlyEarnings.toFixed(4)} SUI
               </div>
-              <div className="text-xs text-gray-500">≈ ${(potentialMonthlyEarnings * 2.5).toFixed(2)}</div>
+              <div className="text-xs text-gray-500">≈ ${(potentialMonthlyEarnings * currentSuiPrice).toFixed(2)}</div>
             </div>
           </div>
         </div>
