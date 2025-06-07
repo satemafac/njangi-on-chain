@@ -4819,10 +4819,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             (txb: Transaction) => {
               txb.setSender(account.userAddr);
               
-              // Create a SUI coin with the deposit amount (this is simplified - in reality, you'd use existing coins)
-              const depositCoin = txb.splitCoins(txb.gas, [txb.pure.u64(depositAmountBig)]);
-              
-              // Call generate_yield_on_security_deposit - now returns only YieldReceipt
+              // FIXED: Now we pass the deposit amount directly - the function will withdraw from custody wallet
+              // Call generate_yield_on_security_deposit - now returns only YieldReceipt  
               const yieldReceipt = txb.moveCall({
                 target: `${PACKAGE_ID}::njangi_yield_integration::generate_yield_on_security_deposit`,
                 arguments: [
@@ -4830,7 +4828,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   txb.object(depositWalletId),
                   txb.object(yieldConfigId),
                   txb.pure.address(memberAddress),
-                  depositCoin,
+                  txb.pure.u64(depositAmountBig), // Pass amount directly instead of coin
                   txb.object(CLOCK_OBJECT_ID)
                 ]
               });
@@ -5157,13 +5155,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             (txb: Transaction) => {
               txb.setSender(account.userAddr);
               
-              // Split some coins for the deposit (using available balance)
+              // FIXED: Pass deposit amount directly - function will withdraw from custody wallet
               const depositAmount = BigInt(yieldData.deposit_amount); // Amount in MIST
-              const [depositCoin] = txb.splitCoins(txb.gas, [depositAmount]);
               
               // Call generate_yield_on_security_deposit with the created YieldConfig
-              // This function now returns only YieldReceipt (no longer returns Option<Coin<SUI>>)
-              // We need to capture the return value and transfer the YieldReceipt
+              // This function now returns only YieldReceipt and withdraws directly from custody wallet
               const yieldReceipt = txb.moveCall({
                 target: `${PACKAGE_ID}::njangi_yield_integration::generate_yield_on_security_deposit`,
                 arguments: [
@@ -5171,7 +5167,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   txb.object(yieldData.custody_wallet_id), // wallet: &mut CustodyWallet
                   txb.object(yieldData.config_id), // config: &mut YieldConfig (shared object)
                   txb.pure.address(account.userAddr), // member_addr: address
-                  depositCoin, // deposit_coin: Coin<SUI>
+                  txb.pure.u64(depositAmount), // deposit_amount: u64 (withdrawn from custody wallet)
                   txb.object(CLOCK_OBJECT_ID), // clock: &Clock
                 ]
               });

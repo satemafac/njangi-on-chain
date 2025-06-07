@@ -91,14 +91,15 @@ module njangi::njangi_yield_integration {
     // Error codes
     // ----------------------------------------------------------
     const ENotCircleAdmin: u64 = 100;
-    const EYieldStrategyNotActive: u64 = 101;
-    const EInsufficientYieldBalance: u64 = 102;
-    const EInvalidYieldStrategy: u64 = 103;
-    const ENaviIntegrationFailed: u64 = 104;
-    const EEmergencyWithdrawalFailed: u64 = 105;
-    const EYieldCollectionFailed: u64 = 106;
-    const EInvalidAllocationPercentage: u64 = 107;
-    const ECircleNotCompleted: u64 = 108;
+const EYieldStrategyNotActive: u64 = 101;
+const EInsufficientYieldBalance: u64 = 102;
+const EInvalidYieldStrategy: u64 = 103;
+const ENaviIntegrationFailed: u64 = 104;
+const EEmergencyWithdrawalFailed: u64 = 105;
+const EYieldCollectionFailed: u64 = 106;
+const EInvalidAllocationPercentage: u64 = 107;
+const ECircleNotCompleted: u64 = 108;
+const EInsufficientFunds: u64 = 109;
     
     // ----------------------------------------------------------
     // Constants
@@ -264,10 +265,10 @@ module njangi::njangi_yield_integration {
     // ----------------------------------------------------------
     public fun generate_yield_on_security_deposit(
         circle: &Circle,
-        _wallet: &mut CustodyWallet,
+        wallet: &mut CustodyWallet,
         config: &mut YieldConfig,
         member_addr: address,
-        mut deposit_coin: Coin<SUI>, // Made mutable
+        deposit_amount: u64,
         clock: &Clock,
         ctx: &mut TxContext
     ): YieldReceipt {
@@ -286,9 +287,14 @@ module njangi::njangi_yield_integration {
         assert!(config.circle_id == circles::get_id(circle), EInvalidYieldStrategy);
         
         // Verify wallet belongs to this circle
-        assert!(custody::get_circle_id(_wallet) == circles::get_id(circle), EInvalidYieldStrategy);
+        assert!(custody::get_circle_id(wallet) == circles::get_id(circle), EInvalidYieldStrategy);
         
-        let deposit_amount = coin::value(&deposit_coin);
+        // CRITICAL FIX: Actually withdraw SUI from the custody wallet dynamic fields
+        // Security deposits are stored in dynamic fields, not main balance!
+        let mut deposit_coin = custody::withdraw_from_dynamic_fields(wallet, deposit_amount, ctx);
+        
+        // Verify we got the right amount
+        assert!(coin::value(&deposit_coin) == deposit_amount, EInsufficientFunds);
         
         // Calculate allocation amounts
         let navi_amount = (deposit_amount * config.navi_allocation_percentage) / BASIS_POINTS;
