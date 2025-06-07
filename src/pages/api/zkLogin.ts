@@ -111,7 +111,7 @@ function validateSession(sessionId: string | undefined, action: string): SetupDa
   }
 
   // Different validation rules based on action
-  if (action === 'sendTransaction' || action === 'deleteCircle') {
+  if (action === 'sendTransaction' || action === 'deleteCircle' || action === 'sendTokens') {
     if (!session.ephemeralPrivateKey) {
       throw new Error('Invalid session: missing ephemeral key');
     }
@@ -5209,6 +5209,237 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res.status(500).json({ 
             error: errorMessage,
             step: 'security_deposit_processing_failed'
+          });
+        }
+
+      case 'sendTokens':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!sessionId) {
+          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+        }
+
+        try {
+          // Extract transfer parameters from request body
+          const { recipientAddress, amount, coinType, memo } = req.body;
+
+          // Validate required parameters
+          if (!recipientAddress || !amount || !coinType) {
+            return res.status(400).json({
+              error: 'Missing required parameters: recipientAddress, amount, coinType'
+            });
+          }
+
+          // Validate session
+          const session = validateSession(sessionId, 'sendTokens');
+          
+          if (!session.account) {
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Invalid session: No account data found. Please authenticate first.',
+              requireRelogin: true
+            });
+          }
+
+          // Verify session matches account data
+          if (session.account.userAddr !== account.userAddr || 
+              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: 'Session mismatch: Please refresh your authentication',
+              requireRelogin: true
+            });
+          }
+
+          // Validate addresses
+          const isValidAddress = (addr: string): boolean => {
+            if (!addr) return false;
+            const cleanAddr = addr.startsWith('0x') ? addr.slice(2) : addr;
+            const hexRegex = /^[0-9a-fA-F]+$/;
+            return hexRegex.test(cleanAddr) && (cleanAddr.length === 64 || cleanAddr.length === 40);
+          };
+
+          if (!isValidAddress(recipientAddress)) {
+            return res.status(400).json({
+              error: 'Invalid recipient address format'
+            });
+          }
+
+          const normalizedRecipient = recipientAddress.startsWith('0x') ? recipientAddress : `0x${recipientAddress}`;
+          const transferAmount = BigInt(amount);
+
+          if (transferAmount <= 0) {
+            return res.status(400).json({
+              error: 'Amount must be greater than 0'
+            });
+          }
+
+          // Prevent self-transfer
+          if (normalizedRecipient.toLowerCase() === session.account.userAddr.toLowerCase()) {
+            return res.status(400).json({
+              error: 'Cannot transfer to your own address'
+            });
+          }
+
+          console.log('Executing token transfer:', {
+            from: session.account.userAddr,
+            to: normalizedRecipient,
+            amount: transferAmount.toString(),
+            coinType,
+            memo
+          });
+
+          // For non-SUI transfers, pre-select coins
+          const selectedCoins: { objectId: string; balance: bigint }[] = [];
+          
+          if (coinType !== '0x2::sui::SUI') {
+            const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+            
+            // Get user's coins for this type
+            const coins = await suiClient.getCoins({
+              owner: session.account.userAddr,
+              coinType: coinType
+            });
+
+            if (coins.data.length === 0) {
+              return res.status(400).json({
+                error: `No ${coinType} coins found in your wallet`
+              });
+            }
+
+            // Sort coins by balance (largest first) for efficient selection
+            const sortedCoins = coins.data.sort((a, b) => 
+              Number(BigInt(b.balance) - BigInt(a.balance))
+            );
+
+            let totalSelected = BigInt(0);
+
+            // Select coins to cover the transfer amount
+            for (const coin of sortedCoins) {
+              if (totalSelected >= transferAmount) break;
+              
+              const coinBalance = BigInt(coin.balance);
+              selectedCoins.push({ objectId: coin.coinObjectId, balance: coinBalance });
+              totalSelected += coinBalance;
+              
+              if (totalSelected >= transferAmount) {
+                break;
+              }
+            }
+
+            if (totalSelected < transferAmount) {
+              return res.status(400).json({
+                error: `Insufficient balance. Available: ${totalSelected.toString()}, Required: ${transferAmount.toString()}`
+              });
+            }
+          }
+
+          // Execute the transfer using zkLogin service
+          const result = await instance.sendTransaction(
+            session.account,
+            (txb) => {
+              if (coinType === '0x2::sui::SUI') {
+                // For SUI transfers, split from gas
+                const [coin] = txb.splitCoins(txb.gas, [transferAmount]);
+                txb.transferObjects([coin], normalizedRecipient);
+              } else {
+                // For other coin types, use pre-selected coins
+                if (selectedCoins.length === 0) {
+                  throw new Error('No coins selected for transfer');
+                }
+
+                if (selectedCoins.length === 1) {
+                  // Single coin case
+                  const coinBalance = selectedCoins[0].balance;
+                  
+                  if (coinBalance === transferAmount) {
+                    // Transfer the entire coin
+                    txb.transferObjects([txb.object(selectedCoins[0].objectId)], normalizedRecipient);
+                  } else {
+                    // Split the coin and transfer the exact amount
+                    const [splitCoin] = txb.splitCoins(
+                      txb.object(selectedCoins[0].objectId), 
+                      [transferAmount]
+                    );
+                    txb.transferObjects([splitCoin], normalizedRecipient);
+                  }
+                } else {
+                  // Multiple coins case - merge them first
+                  const primaryCoin = selectedCoins[0];
+                  const otherCoins = selectedCoins.slice(1);
+                  
+                  // Merge all coins into the primary coin
+                  if (otherCoins.length > 0) {
+                    txb.mergeCoins(
+                      txb.object(primaryCoin.objectId),
+                      otherCoins.map(coin => txb.object(coin.objectId))
+                    );
+                  }
+                  
+                  // Calculate total balance
+                  const totalSelected = selectedCoins.reduce((sum, coin) => sum + coin.balance, BigInt(0));
+                  
+                  // Now split the exact amount from the merged coin
+                  if (totalSelected === transferAmount) {
+                    // Transfer the entire merged coin
+                    txb.transferObjects([txb.object(primaryCoin.objectId)], normalizedRecipient);
+                  } else {
+                    // Split the exact amount
+                    const [splitCoin] = txb.splitCoins(
+                      txb.object(primaryCoin.objectId), 
+                      [transferAmount]
+                    );
+                    txb.transferObjects([splitCoin], normalizedRecipient);
+                  }
+                }
+              }
+
+              // Add memo as a custom event if provided
+              if (memo) {
+                console.log('Transfer memo:', memo);
+              }
+            },
+            {
+              gasBudget: 10000000, // 0.01 SUI
+            }
+          );
+
+          if (result.status === 'success') {
+            console.log('Token transfer successful:', result.digest);
+            return res.status(200).json({
+              digest: result.digest,
+              gasUsed: result.gasUsed
+            });
+          } else {
+            console.error('Token transfer failed:', result.error);
+            return res.status(500).json({
+              error: result.error || 'Transfer failed'
+            });
+          }
+
+        } catch (error) {
+          console.error('Error in sendTokens action:', error);
+          
+          // Handle authentication errors
+          if (error instanceof Error && 
+              (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired'))) {
+            
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            
+            return res.status(401).json({
+              error: 'Authentication error: Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+          
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Transfer failed'
           });
         }
 

@@ -48,6 +48,15 @@ interface AuthContextType {
   setError: (error: string | null) => void;
   resetIdleTimer: () => void;
   activateCircle: (circleId: string) => Promise<string>;
+  sendTokens: (transferData: {
+    recipientAddress: string;
+    amount: string;
+    coinType: string;
+    memo?: string;
+  }) => Promise<{
+    success: boolean;
+    digest?: string;
+  }>;
 }
 
 // Create the context with default values
@@ -71,7 +80,8 @@ const AuthContext = createContext<AuthContextType>({
   setIsAuthenticated: () => {},
   setError: () => {},
   resetIdleTimer: () => {},
-  activateCircle: async () => ''
+  activateCircle: async () => '',
+  sendTokens: async () => ({ success: false }),
 });
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
@@ -329,6 +339,55 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  const sendTokens = async (transferData: {
+    recipientAddress: string;
+    amount: string;
+    coinType: string;
+    memo?: string;
+  }) => {
+    if (!account) throw new Error('Not logged in');
+    // Reset idle timer on transaction
+    resetIdleTimerWithLogging();
+    
+    console.log('AuthContext: Sending token transfer request');
+    
+    try {
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'sendTokens', 
+          account,
+          ...transferData
+        })
+      });
+      
+      const responseData = await response.json();
+      console.log('AuthContext: Send tokens response:', responseData);
+      
+      if (!response.ok) {
+        if (response.status === 401) {
+          // Authentication error
+          const message = responseData.error || 'Authentication failed. Please login again.';
+          throw new Error(message);
+        } else {
+          // Other server errors
+          const errorMessage = responseData.error || 'Failed to send tokens';
+          throw new Error(errorMessage);
+        }
+      }
+      
+      // Success case
+      return { 
+        success: true, 
+        digest: responseData.digest || '' 
+      };
+    } catch (error) {
+      console.error('Error in AuthContext.sendTokens:', error);
+      throw error;
+    }
+  };
+
   return (
     <AuthContext.Provider value={{ 
       account,
@@ -350,7 +409,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setPendingAction,
       isLocalDevMode,
       setLocalDevMode: setIsLocalDevMode,
-      withdrawWalletFunds
+      withdrawWalletFunds,
+      sendTokens
     }}>
       {children}
     </AuthContext.Provider>

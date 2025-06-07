@@ -261,7 +261,7 @@ interface RecentContact {
 
 export default function Dashboard() {
   const router = useRouter();
-  const { isAuthenticated, userAddress, account, deleteCircle: authDeleteCircle } = useAuth();
+  const { isAuthenticated, userAddress, account, deleteCircle: authDeleteCircle, sendTokens } = useAuth();
   const [balance, setBalance] = useState<string>('0');
   const [allCoins, setAllCoins] = useState<{coinType: string, symbol: string, balance: string}[]>([]);
   const [showFullAddress, setShowFullAddress] = useState(false);
@@ -2196,21 +2196,13 @@ export default function Dashboard() {
         recipientAddress = '0x' + recipientAddress;
       }
 
-      // Call the transfer API
-      const response = await fetch('/api/transfer-tokens', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          recipientAddress,
-          amount: amountInSmallestUnit.toString(),
-          coinType: selectedCoin.coinType,
-          memo: transferForm.memo || undefined,
-        }),
+      // Use AuthContext sendTokens method instead of direct API call
+      const result = await sendTokens({
+        recipientAddress,
+        amount: amountInSmallestUnit.toString(),
+        coinType: selectedCoin.coinType,
+        memo: transferForm.memo || undefined,
       });
-
-      const result = await response.json();
 
       if (result.success) {
         setTransferResult({ digest: result.digest });
@@ -2245,7 +2237,7 @@ export default function Dashboard() {
 
         toast.success('Transfer completed successfully!');
       } else {
-        throw new Error(result.error || 'Transfer failed');
+        throw new Error('Transfer failed');
       }
     } catch (error) {
       console.error('Transfer error:', error);
