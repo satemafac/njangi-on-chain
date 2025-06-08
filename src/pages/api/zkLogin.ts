@@ -5115,6 +5115,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               const [suiCoin] = txb.splitCoins(txb.gas, [depositAmountMist]);
               
               // STEP 2C: Add liquidity using real Cetus protocol (exactly like your successful transaction)
+              // FIXED: Removed clock argument - it's not used in add_liquidity_by_fix_coin, only in router::deposit
               txb.moveCall({
                 target: `0x2918cf39850de6d5d94d8196dc878c8c722cd79db659318e00bff57fbb4e2ede::pool_script_v2::add_liquidity_by_fix_coin`,
                 typeArguments: [
@@ -5122,16 +5123,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   '0x2::sui::SUI' // SUI
                 ],
                 arguments: [
-                  txb.object('0x9774e359588ead122af1c7e7f64e14ade261cfeecdb5d0eb4a5b3b4c8ab8bd3e'), // global_config
-                  txb.object('0xc85a680b78a0f1421c82165e451353fd61109d096e60370688f369aa243f4dbd'), // pool
-                  cetusPosition, // position from step 2A
-                  txb.object('0xcaaf1cc66ecfd1616c4951ad42007db05ac2b609ea9e678f4f1a7f4db9ca8b04'), // haSUI coin (you'll need to provide this)
-                  suiCoin, // SUI coin from step 2B
-                  txb.pure.u64(BigInt('10839626178')), // amount_a_limit (from successful tx)
-                  txb.pure.u64(BigInt('10000000000')), // amount_b_limit (from successful tx)
-                  txb.pure.u64(BigInt('10839626178')), // sqrt_price_limit (from successful tx)
-                  txb.pure.bool(true), // fix_amount_a (from successful tx)
-                  txb.object(CLOCK_OBJECT_ID), // clock
+                  txb.object('0x9774e359588ead122af1c7e7f64e14ade261cfeecdb5d0eb4a5b3b4c8ab8bd3e'), // global_config (Input 0)
+                  txb.object('0xc85a680b78a0f1421c82165e451353fd61109d096e60370688f369aa243f4dbd'), // pool (Input 1)
+                  cetusPosition, // position from step 2A (Result 0)
+                  txb.object('0xcaaf1cc66ecfd1616c4951ad42007db05ac2b609ea9e678f4f1a7f4db9ca8b04'), // haSUI coin (Input 4)
+                  suiCoin, // SUI coin from step 2B (Result 1)
+                  txb.pure.u64(BigInt('10839626178')), // amount_a_limit (Input 6)
+                  txb.pure.u64(BigInt('10000000000')), // amount_b_limit (Input 7)
+                  txb.pure.u64(BigInt('10839626178')), // sqrt_price_limit (Input 8)
+                  txb.pure.bool(true), // fix_amount_a (Input 9) - matches successful transaction
                 ]
               });
               
