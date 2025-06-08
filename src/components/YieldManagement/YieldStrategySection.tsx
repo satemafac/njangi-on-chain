@@ -461,9 +461,11 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
       
       console.log('Found YieldConfig ID:', configId);
       
-      // Calculate deposit amount (use portion of security deposits for demonstration)
-      const depositAmountSui = 0.1; // Start with 0.1 SUI for testing
+      // Calculate deposit amount - use ALL available security deposits for maximum yield
+      const depositAmountSui = totalSecurityDeposits || 0.1; // Use full security deposit amount
       const depositAmountMist = Math.floor(depositAmountSui * 1e9); // Convert to MIST
+      
+      console.log(`Processing ALL security deposits for yield: ${depositAmountSui} SUI (${depositAmountMist} MIST)`);
       
       // Prepare security deposit processing transaction
       const processTransactionData = {
