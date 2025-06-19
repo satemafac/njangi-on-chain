@@ -2,7 +2,6 @@
 
 import { SuiClient } from '@mysten/sui.js/client';
 import { TransactionBlock } from '@mysten/sui.js/transactions';
-import { realTimeAPRService } from './real-time-apr-service';
 
 interface CetusPoolData {
   address: string;
