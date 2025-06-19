@@ -879,7 +879,58 @@ export default function Dashboard() {
     };
   };
 
-  // Update fetchUserCircles to handle potential undefined IDs
+  // Helper function to get all package IDs used by this user for circle creation
+  const getUserPackageIds = async (client: SuiClient, userAddress: string): Promise<string[]> => {
+    try {
+      console.log('Fetching user transactions to discover package IDs...');
+      
+      // Query all transactions from this user
+      const transactions = await client.queryTransactionBlocks({
+        filter: {
+          FromAddress: userAddress
+        },
+        options: {
+          showInput: true,
+          showEffects: false,
+          showEvents: false,
+          showObjectChanges: false
+        },
+        limit: 100 // Adjust if needed
+      });
+      
+      const packageIds = new Set<string>();
+      packageIds.add(PACKAGE_ID); // Always include the current package ID
+      
+      // Look through transactions for create_circle function calls
+      for (const tx of transactions.data) {
+        if (tx.transaction?.data?.transaction?.kind === 'ProgrammableTransaction') {
+          const programmableTx = tx.transaction.data.transaction;
+          
+          for (const transaction of programmableTx.transactions || []) {
+            if ('MoveCall' in transaction) {
+              const moveCall = transaction.MoveCall;
+              
+              // Check if this is a create_circle function call
+              if (moveCall.function === 'create_circle' && moveCall.module === 'njangi_circles') {
+                console.log('Found create_circle transaction with package:', moveCall.package);
+                packageIds.add(moveCall.package);
+              }
+            }
+          }
+        }
+      }
+      
+      const packageIdArray = Array.from(packageIds);
+      console.log('Discovered package IDs for user:', packageIdArray);
+      return packageIdArray;
+    } catch (error) {
+      console.error('Error fetching user package IDs:', error);
+      // Fallback to current package ID only
+      return [PACKAGE_ID];
+    }
+  };
+
+  // Update fetchUserCircles to handle multiple package IDs
   const fetchUserCircles = useCallback(async () => {
     console.log('fetchUserCircles starting...');
     
@@ -888,17 +939,9 @@ export default function Dashboard() {
       return;
     }
     
-    // setLoading(true); // setLoading true initially, potentially set to false if cache is loaded quickly.
-    // setError(''); // Reset error state
-
-    // Attempt to load from cache first (already handled by useState initializer for initial load)
-    // For subsequent calls to fetchUserCircles (e.g. manual refresh), we might re-evaluate loading state here.
-    // For now, the main loading state will primarily reflect the network fetch.
-
     let isInitialLoadWithCache = circles.length > 0; // Check if circles were loaded from cache initially
     if (isInitialLoadWithCache) {
       console.log('Displaying cached circles initially, fetching fresh data in background.');
-      // Optionally, could set a different loading state like `isRevalidating` if needed for UI.
     } else {
       setLoading(true); // If no cache, set loading to true for the network fetch.
     }
@@ -910,44 +953,70 @@ export default function Dashboard() {
         url: 'https://fullnode.testnet.sui.io:443'
       });
       
-      // Log package ID for debugging
-      console.log('Using package ID:', PACKAGE_ID);
+      // Get all package IDs used by this user
+      const userPackageIds = await getUserPackageIds(client, userAddress);
+      console.log('Querying events for package IDs:', userPackageIds);
       
-      // Get Circle Created events for admin of circles
-      const circleEvents = await client.queryEvents({
-        query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleCreated`
-        },
-        limit: 100
-      });
+      // Arrays to collect events from all packages
+      let allCircleEvents: any[] = [];
+      let allMemberEvents: any[] = [];
+      let allActivationEvents: any[] = [];
+      let allWalletEvents: any[] = [];
       
-      // Get Member Joined events
-      const memberEvents = await client.queryEvents({
-        query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circles::MemberJoined`
-        },
-        limit: 100
-      });
+      // Query events for each package ID
+      for (const packageId of userPackageIds) {
+        console.log(`Querying events for package ${packageId}`);
+        
+        try {
+          // Get Circle Created events for this package
+          const circleEvents = await client.queryEvents({
+            query: {
+              MoveEventType: `${packageId}::njangi_circles::CircleCreated`
+            },
+            limit: 100
+          });
+          allCircleEvents.push(...circleEvents.data);
+          
+          // Get Member Joined events for this package
+          const memberEvents = await client.queryEvents({
+            query: {
+              MoveEventType: `${packageId}::njangi_circles::MemberJoined`
+            },
+            limit: 100
+          });
+          allMemberEvents.push(...memberEvents.data);
+          
+          // Get circle activation events for this package
+          const activationEvents = await client.queryEvents({
+            query: {
+              MoveEventType: `${packageId}::njangi_circles::CircleActivated`
+            },
+            limit: 50
+          });
+          allActivationEvents.push(...activationEvents.data);
+          
+          // Get wallet creation events for this package
+          const walletEvents = await client.queryEvents({
+            query: {
+              MoveEventType: `${packageId}::njangi_custody::CustodyWalletCreated`
+            },
+            limit: 100
+          });
+          allWalletEvents.push(...walletEvents.data);
+        } catch (error) {
+          console.error(`Error querying events for package ${packageId}:`, error);
+          // Continue with other packages even if one fails
+        }
+      }
       
-      // Get circle activation events
-      const activationEvents = await client.queryEvents({
-        query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleActivated`
-        },
-        limit: 50
-      });
-      
-      // Get wallet creation events to map circle IDs to wallet IDs
-      const walletEvents = await client.queryEvents({
-        query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyWalletCreated`
-        },
-        limit: 100
-      });
+      console.log(`Found ${allCircleEvents.length} circle events across all packages`);
+      console.log(`Found ${allMemberEvents.length} member events across all packages`);
+      console.log(`Found ${allActivationEvents.length} activation events across all packages`);
+      console.log(`Found ${allWalletEvents.length} wallet events across all packages`);
       
       // Create a map of circle IDs to wallet IDs
       const circleWalletMap = new Map<string, string>();
-      for (const event of walletEvents.data) {
+      for (const event of allWalletEvents) {
         if (event.parsedJson && typeof event.parsedJson === 'object') {
           const eventJson = event.parsedJson as { circle_id?: string, wallet_id?: string };
           if (eventJson.circle_id && eventJson.wallet_id) {
@@ -1006,7 +1075,7 @@ export default function Dashboard() {
       
       // Create a set of activated circle IDs for quick lookup
       const activatedCircleIds = new Set<string>();
-      for (const event of activationEvents.data) {
+      for (const event of allActivationEvents) {
         if (event.parsedJson && typeof event.parsedJson === 'object') {
           const eventJson = event.parsedJson as { circle_id?: string };
           if (eventJson.circle_id) {
@@ -1020,7 +1089,7 @@ export default function Dashboard() {
       const memberCountMap = new Map<string, Set<string>>();
       
       // Process all member events to build the member count map
-      for (const event of memberEvents.data) {
+      for (const event of allMemberEvents) {
         if (event.parsedJson && typeof event.parsedJson === 'object') {
           const eventJson = event.parsedJson as { circle_id?: string, member?: string };
           if (eventJson.circle_id && eventJson.member) {
@@ -1040,7 +1109,7 @@ export default function Dashboard() {
       // Also store transaction data to extract cycle_day which isn't in the event
       const transactionInputMap = new Map<string, TransactionInputData>();
       
-      for (const event of circleEvents.data) {
+      for (const event of allCircleEvents) {
         if (event.parsedJson) {
           const parsedEvent = event.parsedJson as CircleCreatedEvent;
           if (parsedEvent.circle_id) {
@@ -1087,7 +1156,7 @@ export default function Dashboard() {
       const circleMap = new Map<string, Circle>();
       
       // Process created circles (admin)
-      for (const event of circleEvents.data) {
+      for (const event of allCircleEvents) {
         const parsedEvent = event.parsedJson as CircleCreatedEvent;
         if (parsedEvent?.admin === userAddress) {
           try {
@@ -1186,7 +1255,7 @@ export default function Dashboard() {
       }
       
       // Process joined circles (member)
-      for (const event of memberEvents.data) {
+      for (const event of allMemberEvents) {
         const parsedEvent = event.parsedJson as MemberJoinedEvent;
         if (parsedEvent?.member === userAddress && !circleMap.has(parsedEvent.circle_id)) {
           // This means the user is a member but not the admin of this circle

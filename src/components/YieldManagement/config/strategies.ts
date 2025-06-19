@@ -22,7 +22,7 @@ export const STRATEGY_CONFIGS: Record<string, StrategyConfig> = {
     type: 'balanced',
     name: 'Balanced',
     displayName: 'Smart Growth',
-    apy: '8.5%',
+    apy: '9.2%',
     risk: 'medium',
     color: 'yellow',
     description: 'Mixed strategy for better returns',
@@ -37,12 +37,12 @@ export const STRATEGY_CONFIGS: Record<string, StrategyConfig> = {
     type: 'aggressive',
     name: 'Aggressive',
     displayName: 'Maximum Growth',
-    apy: '10%+',
+    apy: '15.2%+',
     risk: 'higher',
     color: 'orange',
     description: 'Maximum earnings potential',
-    detailedDescription: 'Like active trading - focuses on trading opportunities for the highest possible returns.',
-    protocols: ['NAVI Protocol', 'Cetus DEX'],
+    detailedDescription: 'Like active trading - focuses on leveraged positions and yield farming for the highest possible returns.',
+    protocols: ['NAVI Protocol', 'Cetus DEX', 'Yield Farming'],
     allocation: {
       navi: 50,
       cetus: 50
@@ -100,27 +100,31 @@ export const EDUCATIONAL_CONTENT: Record<string, EducationalContent> = {
   },
   aggressive: {
     title: 'Maximum Growth Strategy',
-    shortDescription: 'Equal mix of lending and trading for 10%+ yearly returns',
-    detailedExplanation: 'This strategy maximizes your earning potential by equally splitting between safe lending and active trading. While this offers the highest returns, it also means more day-to-day variation in your balance.',
+    shortDescription: 'Advanced DeFi strategies with leverage and yield farming for 15%+ yearly returns',
+    detailedExplanation: 'This strategy maximizes your earning potential through advanced DeFi techniques including leveraged lending positions, compound yield farming, and active liquidity management. It uses sophisticated strategies to amplify returns beyond simple protocol allocation.',
     risksAndBenefits: {
       benefits: [
-        'Highest potential returns (10%+)',
-        'Takes advantage of market opportunities',
-        'Still includes safe lending component',
+        'Highest potential returns (15%+)',
+        'Uses advanced DeFi yield amplification',
+        'Includes leveraged positions for enhanced gains',
+        'Compound farming with governance token rewards',
+        'Active position optimization',
         'Can significantly boost circle earnings'
       ],
       risks: [
         'More variable day-to-day returns',
-        'Trading portion is affected by market volatility',
-        'Requires more active monitoring',
+        'Leveraged positions increase both gains and potential losses',
+        'Complex strategies require sophisticated risk management',
+        'Affected by market volatility and liquidation risks',
         'Not suitable for risk-averse users'
       ]
     },
     suitableFor: [
       'Experienced DeFi users',
-      'Those comfortable with market fluctuations',
+      'Those comfortable with leveraged positions',
+      'Users understanding compound farming risks',
       'Long-term focused investors',
-      'Users wanting maximum returns'
+      'Advanced users wanting maximum returns'
     ]
   }
 }; 

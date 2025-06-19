@@ -34,6 +34,7 @@
     "@mysten/wallet-kit": "^0.8.6",
     "@mysten/wallet-standard": "^0.13.23",
     "@mysten/zklogin": "^0.8.1",
+    "@n8n/n8n-nodes-langchain": "^0.3.0",
     "@pythnetwork/pyth-sui-js": "^2.1.0",
     "@radix-ui/react-alert-dialog": "^1.1.7",
     "@radix-ui/react-label": "^2.1.1",

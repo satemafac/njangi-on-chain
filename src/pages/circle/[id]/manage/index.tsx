@@ -13,6 +13,8 @@ import RotationOrderList from '../../../../components/RotationOrderList';
 import ConfirmationModal from '../../../../components/ConfirmationModal';
 import { ZkLoginClient, ZkLoginError } from '../../../../services/zkLoginClient';
 import { YieldStrategySection } from '../../../../components/YieldManagement';
+import { yieldTrackingService, TrackedYieldData } from '../../../../services/yield-tracking-service';
+
 import type { YieldStrategy } from '../../../../components/YieldManagement/types/yield.types';
 
 // Define a proper Circle type to fix linter errors
@@ -275,6 +277,8 @@ export default function ManageCircle() {
   // Yield management state
   const [selectedYieldStrategy, setSelectedYieldStrategy] = useState<YieldStrategy>('conservative');
   const [isChangingYieldStrategy, setIsChangingYieldStrategy] = useState(false);
+  const [trackedYields, setTrackedYields] = useState<TrackedYieldData[]>([]);
+  const [isLoadingYieldData, setIsLoadingYieldData] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -323,6 +327,39 @@ export default function ManageCircle() {
       fetchYieldConfiguration();
     }
   }, [circle, id]);
+
+  // Function to fetch yield data - memoized so it can be called from other functions
+  const fetchYieldData = useCallback(async () => {
+    if (!userAddress) {
+      setIsLoadingYieldData(false);
+      return;
+    }
+
+    setIsLoadingYieldData(true);
+    try {
+      // Use the new dynamic method with custody wallet and circle filtering
+      console.log('Fetching yield data for circle:', { userAddress, circleId: id, custodyWalletId: circle?.custody?.walletId });
+      
+      const allYieldData = await yieldTrackingService.getAllUserYieldData(
+        userAddress, 
+        circle?.custody?.walletId, // custody wallet ID
+        id as string // circle ID
+      );
+      
+      console.log('Dynamic yield data found for this circle:', allYieldData);
+      setTrackedYields(allYieldData);
+    } catch (err) {
+      console.error('Error fetching yield data:', err);
+      setTrackedYields([]);
+    } finally {
+      setIsLoadingYieldData(false);
+    }
+  }, [userAddress, id, circle?.custody?.walletId]);
+
+  // Fetch yield data when user address is available
+  useEffect(() => {
+    fetchYieldData();
+  }, [fetchYieldData]); // Use fetchYieldData as dependency since it's memoized
 
   const fetchCircleDetails = async () => {
     if (!id || !userAddress) return;
@@ -932,6 +969,15 @@ export default function ManageCircle() {
     //   setLoading(false);
     // }
   }, [id]);
+
+  // Function to refresh all data after yield configuration is created
+  const handleYieldConfigCreated = useCallback(() => {
+    // Refresh all relevant data after yield configuration is created
+    fetchYieldData();
+    fetchCustodyWalletSuiBalance();
+    fetchCustodyWalletUsdcBalance();
+    fetchCircleDetails(); // This will update the circle data including security deposits
+  }, [fetchYieldData]);
 
   // Call the admin_approve_member function on the blockchain
   const callAdminApproveMember = async (circleId: string, memberAddress: string): Promise<boolean> => {
@@ -2295,6 +2341,8 @@ export default function ManageCircle() {
       fetchCustodyWalletSuiBalance();
       fetchCustodyWalletUsdcBalance();
     };
+
+
     
     return (
       <div className="bg-white rounded-lg shadow-md overflow-hidden">
@@ -2407,12 +2455,49 @@ export default function ManageCircle() {
                                 </span>
                               </div>
                             )}
+                            
+                            {/* Show yield information if available */}
+                            {!isLoadingYieldData && trackedYields.length > 0 && (
+                              <div className="mt-2 p-2 bg-gradient-to-r from-green-50 to-blue-50 rounded-md border border-green-200">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center">
+                                    <div className="w-3 h-3 bg-gradient-to-r from-green-400 to-blue-400 rounded-full mr-2 animate-pulse"></div>
+                                    <span className="text-xs font-medium text-green-800">
+                                      Earning Yield: {trackedYields.reduce((sum, y) => sum + y.positionValue.current, 0).toFixed(6)} SUI
+                                    </span>
+                                  </div>
+                                  <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
+                                    +{trackedYields.reduce((sum, y) => sum + y.earnings.currentAPR, 0) / trackedYields.length}% APR
+                                  </span>
+                                </div>
+                                <div className="mt-1 text-xs text-green-700">
+                                  Total Earnings: +{trackedYields.reduce((sum, y) => sum + y.earnings.totalEarned, 0).toFixed(6)} SUI
+                                </div>
+                              </div>
+                            )}
                           </div>
                         )}
                         
                         {!fetchingSuiBalance && (suiContributionBalance === null || suiContributionBalance === 0) && 
                           (suiSecurityDepositBalance === null || suiSecurityDepositBalance === 0) && (
+                          <div>
+                            {!isLoadingYieldData && trackedYields.length > 0 ? (
+                              <div className="p-2 bg-gradient-to-r from-green-50 to-blue-50 rounded-md border border-green-200">
+                                <div className="flex items-center">
+                                  <div className="w-3 h-3 bg-gradient-to-r from-green-400 to-blue-400 rounded-full mr-2 animate-pulse"></div>
+                                  <span className="text-xs font-medium text-green-800">
+                                    Security deposits deployed in yield strategies
+                                  </span>
+                                </div>
+                                <div className="mt-1 text-xs text-green-700">
+                                  {trackedYields.reduce((sum, y) => sum + y.positionValue.current, 0).toFixed(6)} SUI earning 
+                                  +{(trackedYields.reduce((sum, y) => sum + y.earnings.currentAPR, 0) / trackedYields.length).toFixed(2)}% APR
+                                </div>
+                              </div>
+                            ) : (
                           <p className="text-sm text-gray-500 mt-1">No SUI balances available</p>
+                            )}
+                          </div>
                         )}
                       </div>
                       
@@ -5067,6 +5152,8 @@ export default function ManageCircle() {
                       disabled={!circle?.isActive || circle?.paused}
                       walletId={circle.custody?.walletId}
                       circleId={id as string}
+                      userAddress={userAddress || undefined}
+                      onYieldConfigCreated={handleYieldConfigCreated}
                     />
                   )}
                 </div>

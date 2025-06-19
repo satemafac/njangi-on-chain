@@ -4,53 +4,12 @@ import React, { useState, useEffect } from 'react';
 import { YieldStrategy } from './types/yield.types';
 import { StrategySelector } from './components/StrategySelector';
 import { STRATEGY_CONFIGS } from './config/strategies';
-import { cetusService } from '../../services/cetus-service';
+
 import ConfirmationModal from '../ConfirmationModal';
 import { priceService } from '../../services/price-service';
+import { yieldTrackingService, TrackedYieldData } from '../../services/yield-tracking-service';
 
-// Define interfaces locally since they're not exported from cetus-service
-interface CetusPosition {
-  positionId: string;
-  poolAddress: string;
-  coinTypeA: string;
-  coinTypeB: string;
-  liquidity: string;
-  poolName?: string; // Add for display
-  feeEarned: {
-    coinA: string;
-    coinB: string;
-  };
-  tickLower: number;
-  tickUpper: number;
-  earnedFees?: number; // Add for display
-  [key: string]: unknown;
-}
 
-interface YieldData {
-  totalFeesEarned: {
-    sui: number;
-    usdc: number;
-  };
-  apr: number;
-  positionValue: {
-    sui: number;
-    usdc: number;
-    totalUsd: number;
-  };
-  lastCollectionTime: number;
-  // Add display-friendly properties
-  totalLiquidity?: number;
-  earnedFees?: number;
-  earnedFeesUSD?: number;
-  currentAPR?: number;
-}
-
-interface PoolStatistics {
-  tvl: number;
-  volume24h: number;
-  fees24h: number;
-  apr: number;
-}
 
 interface YieldStrategySectionProps {
   currentStrategy?: YieldStrategy;
@@ -60,6 +19,8 @@ interface YieldStrategySectionProps {
   disabled?: boolean;
   walletId?: string; // Add wallet ID for fetching real yield data
   circleId?: string; // Add circle ID for contract calls
+  userAddress?: string; // Add user address for yield tracking
+  onYieldConfigCreated?: () => void; // Add callback for when yield config is successfully created
 }
 
 // Type definitions for API responses
@@ -84,17 +45,18 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
   isLoading = false,
   disabled = false,
   walletId,
-  circleId
+  circleId,
+  userAddress,
+  onYieldConfigCreated
 }) => {
   const [selectedStrategy, setSelectedStrategy] = useState<YieldStrategy>(currentStrategy);
   const [isChangingStrategy, setIsChangingStrategy] = useState(false);
   
-  // New state for Cetus yield data
-  const [cetusPositions, setCetusPositions] = useState<CetusPosition[]>([]);
-  const [cetusYieldData, setCetusYieldData] = useState<YieldData | null>(null);
-  const [poolStats, setPoolStats] = useState<PoolStatistics | null>(null);
-  const [isLoadingCetusData, setIsLoadingCetusData] = useState(false);
-  const [cetusError, setCetusError] = useState<string | null>(null);
+  // Add states for yield tracking
+  const [trackedYields, setTrackedYields] = useState<TrackedYieldData[]>([]);
+  const [isLoadingYieldData, setIsLoadingYieldData] = useState(true);
+  const [yieldDataError, setYieldDataError] = useState<string | null>(null);
+  const [lastYieldUpdate, setLastYieldUpdate] = useState<Date | null>(null);
   
   // Add states for liquidity management
   const [isAddingLiquidity, setIsAddingLiquidity] = useState(false);
@@ -112,6 +74,9 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
   
   // Add state for live SUI price
   const [currentSuiPrice, setCurrentSuiPrice] = useState<number>(2.5); // Default fallback
+
+  // Add state for strategy selection during creation
+  const [selectedStrategyForCreation, setSelectedStrategyForCreation] = useState<YieldStrategy>('conservative');
 
   // Update local state when props change
   useEffect(() => {
@@ -135,56 +100,42 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
     fetchSuiPrice();
   }, []);
 
-  // Fetch Cetus yield data when wallet ID is available
+  // Fetch yield data
   useEffect(() => {
-    const fetchCetusData = async () => {
-      if (!walletId || isLoading) return;
+    const fetchYieldData = async () => {
+      if (!userAddress) {
+        setIsLoadingYieldData(false);
+        return;
+      }
 
-      setIsLoadingCetusData(true);
-      setCetusError(null);
+      setIsLoadingYieldData(true);
+      setYieldDataError(null);
 
       try {
-        // Fetch user's liquidity positions
-        const positions = await cetusService.getUserLiquidityPositions(walletId);
+        // Use the new dynamic method with custody wallet and circle filtering
+        console.log('Fetching yield data with parameters:', {
+          userAddress,
+          custodyWalletId: walletId,
+          circleId
+        });
         
-        // Enhance positions with display data using live price
-        const enhancedPositions = positions.map(position => ({
-          ...position,
-          poolName: 'SUI-USDC',
-          earnedFees: (Number(position.feeEarned.coinA) / 1e9) + (Number(position.feeEarned.coinB) / 1e6) * currentSuiPrice
-        }));
-        setCetusPositions(enhancedPositions);
-
-        // Calculate yield from positions
-        if (positions.length > 0) {
-          const yieldDataRaw = await cetusService.calculateYieldFromPositions(walletId);
-          
-          // Enhance yield data with display-friendly properties using live price
-          const enhancedYieldData: YieldData = {
-            ...yieldDataRaw,
-            totalLiquidity: yieldDataRaw.positionValue.sui,
-            earnedFees: yieldDataRaw.totalFeesEarned.sui,
-            earnedFeesUSD: yieldDataRaw.totalFeesEarned.sui * currentSuiPrice + yieldDataRaw.totalFeesEarned.usdc,
-            currentAPR: yieldDataRaw.apr
-          };
-          setCetusYieldData(enhancedYieldData);
-        }
-
-        // Fetch pool statistics for the main SUI-USDC pool
-        const poolId = '0xb01b068bd0360bb3308b81eb42386707e460b7818816709b7f51e1635d542d40';
-        const stats = await cetusService.getPoolStatistics(poolId);
-        setPoolStats(stats);
-
-      } catch (error) {
-        console.error('Error fetching Cetus data:', error);
-        setCetusError(error instanceof Error ? error.message : 'Failed to load Cetus yield data');
+        const allYieldData = await yieldTrackingService.getAllUserYieldData(userAddress, walletId, circleId);
+        console.log('Yield data found for circle:', allYieldData);
+        
+        setTrackedYields(allYieldData);
+        setLastYieldUpdate(new Date());
+      } catch (err) {
+        console.error('Error fetching yield data:', err);
+        setYieldDataError(err instanceof Error ? err.message : 'Failed to load yield data');
       } finally {
-        setIsLoadingCetusData(false);
+        setIsLoadingYieldData(false);
       }
     };
 
-    fetchCetusData();
-  }, [walletId, isLoading, currentSuiPrice]); // Add currentSuiPrice as dependency
+    fetchYieldData();
+  }, [userAddress, walletId, circleId]);
+
+
 
   const handleStrategySelect = async (strategy: YieldStrategy) => {
     if (disabled || isChangingStrategy) return;
@@ -206,7 +157,7 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
     }
   };
 
-  // Handler for adding liquidity to Cetus
+  // Handler for adding liquidity to Cetus with strategy selection
   const handleAddLiquidityToCetus = async () => {
     if (!walletId || !circleId || disabled) return;
 
@@ -227,13 +178,17 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
         return;
       }
 
+      // Get strategy configuration for display
+      const strategyConfig = STRATEGY_CONFIGS[selectedStrategyForCreation];
+
       // Prepare the yield configuration transaction
       console.log('Preparing yield configuration transaction:', {
         circleId: circleId,
         custodyWalletId: walletId,
         suiAmount,
         estimatedUsdcAmount: minUsdcAmount,
-        suiPriceUsed: currentSuiPrice
+        suiPriceUsed: currentSuiPrice,
+        selectedStrategy: selectedStrategyForCreation
       });
 
       // Use Cetus service to prepare the transaction
@@ -257,7 +212,8 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
             custodyWalletId: walletId,
             suiAmount,
             estimatedUsdcAmount: minUsdcAmount,
-            suiPrice: currentSuiPrice
+            suiPrice: currentSuiPrice,
+            strategy: selectedStrategyForCreation
           });
 
           // Prepare the yield integration transaction
@@ -273,7 +229,8 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
               tick_lower: -60000, // Wide range
               tick_upper: 60000,   // Wide range
               slippage_tolerance: 50, // 0.5% in basis points
-              total_security_deposits: totalSecurityDeposits // Pass the actual total
+              total_security_deposits: totalSecurityDeposits, // Pass the actual total
+              strategy: selectedStrategyForCreation // Include selected strategy
             }
           };
 
@@ -301,10 +258,11 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
                 <div className="bg-green-50 p-3 rounded-lg">
                   <h4 className="font-medium text-green-900 mb-2">Configuration Details:</h4>
                   <ul className="text-sm text-green-800 space-y-1">
-                    <li>• Strategy: {result.yieldStrategy || 'Conservative (100% NAVI Protocol)'}</li>
-                    <li>• Expected APY: {result.details?.expectedAPY || '6.81%'}</li>
+                    <li>• Strategy: {strategyConfig.displayName} ({result.yieldStrategy || strategyConfig.apy})</li>
+                    <li>• Expected APY: {result.details?.expectedAPY || strategyConfig.apy}</li>
                     <li>• Auto-Compound: {result.details?.autoCompound ? 'Enabled' : 'Disabled'}</li>
-                    <li>• NAVI Allocation: {result.details?.naviAllocation || '100%'}</li>
+                    <li>• NAVI Allocation: {result.details?.naviAllocation || strategyConfig.allocation.navi + '%'}</li>
+                    <li>• Cetus Allocation: {strategyConfig.allocation.cetus}%</li>
                     <li>• Configuration ID: {result.configId || 'Generated'}</li>
                   </ul>
                 </div>
@@ -378,7 +336,7 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
         }
       };
 
-      // Show the confirmation modal
+      // Show the confirmation modal with strategy selection
       setConfirmModalData({
         title: '🚀 Create Yield Configuration for Circle',
         message: (
@@ -386,11 +344,12 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
             <div className="bg-blue-50 p-4 rounded-lg">
               <h4 className="font-medium text-blue-900 mb-2">Yield Configuration Setup:</h4>
               <ul className="text-sm text-blue-800 space-y-1">
-                <li>• Strategy: Conservative (100% NAVI Protocol)</li>
-                <li>• Expected APY: 6.81% annually</li>
+                <li>• Strategy: {strategyConfig.displayName} ({strategyConfig.apy})</li>
+                <li>• Risk Level: {strategyConfig.risk}</li>
                 <li>• Auto-Compound: Enabled</li>
                 <li>• Available Security Deposits: {totalSecurityDeposits.toFixed(2)} SUI</li>
-                <li>• Target Protocols: NAVI Protocol</li>
+                <li>• NAVI Allocation: {strategyConfig.allocation.navi}%</li>
+                <li>• Cetus Allocation: {strategyConfig.allocation.cetus}%</li>
               </ul>
             </div>
             <div className="bg-green-50 p-4 rounded-lg">
@@ -405,7 +364,7 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
             <div className="bg-yellow-50 p-3 rounded-lg">
               <p className="text-sm text-yellow-800">
                 <strong>Note:</strong> This creates the configuration foundation. Once members join and pay security deposits, 
-                those deposits will automatically start generating yield through NAVI Protocol&apos;s 6.81% APY.
+                those deposits will automatically start generating yield through the selected strategy.
               </p>
             </div>
           </div>
@@ -433,16 +392,6 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
 
   const currentConfig = STRATEGY_CONFIGS[selectedStrategy];
   const potentialMonthlyEarnings = calculatePotentialEarnings(selectedStrategy, totalSecurityDeposits);
-
-  // Format yield values for display
-  const formatYieldValue = (value: number | undefined, decimals: number = 4): string => {
-    return (value ?? 0).toFixed(decimals);
-  };
-
-  // Format USD value for display
-  const formatUSDValue = (value: number | undefined): string => {
-    return `$${(value ?? 0).toFixed(2)}`;
-  };
 
   const processSecurityDeposits = async (configResult: YieldConfigResult) => {
     try {
@@ -494,6 +443,13 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
 
       if (response.ok && processResult.status === 'success') {
         // Success! Security deposits are now earning yield
+        
+        // Trigger the refresh callback immediately upon success
+        if (onYieldConfigCreated) {
+          console.log('Triggering yield config created callback for refresh...');
+          onYieldConfigCreated();
+        }
+        
         setConfirmModalData({
           title: '🎉 Security Deposits Now Earning Yield!',
           message: (
@@ -620,213 +576,357 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
   }
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-6">
-      {/* Real Cetus Yield Display Section */}
-      {walletId && (
-        <div className="bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-lg p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center space-x-2">
-              <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center">
-                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                </svg>
-              </div>
-              <h3 className="text-lg font-semibold text-gray-900">Real Cetus DEX Yield</h3>
-              <span className="px-2 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full">
-                LIVE
-              </span>
+    <div className="bg-white rounded-2xl sm:rounded-lg border border-gray-200 p-4 sm:p-6 space-y-6 sm:space-y-6">
+      {/* Pro Tips - Mobile Friendly */}
+      <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200 rounded-xl p-4 md:p-6">
+        <div className="flex items-start space-x-3">
+          <div className="flex-shrink-0 mt-1">
+            <div className="w-8 h-8 md:w-6 md:h-6 bg-gradient-to-r from-yellow-400 to-orange-400 rounded-full flex items-center justify-center">
+              <svg className="w-4 h-4 md:w-3 md:h-3 text-white font-bold" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+              </svg>
             </div>
-            {isLoadingCetusData && (
-              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500"></div>
-            )}
           </div>
-
-          {cetusError ? (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-              <div className="flex items-center space-x-2">
-                <svg className="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <span className="text-red-700 text-sm">{cetusError}</span>
+          <div className="flex-1 min-w-0">
+            <h4 className="text-base md:text-sm font-semibold text-yellow-800 mb-3 md:mb-2">💡 Yield Strategy Tips</h4>
+            <div className="space-y-2 text-sm md:text-xs text-yellow-700">
+              <div className="flex items-start space-x-2">
+                <span className="text-yellow-500 mt-1">•</span>
+                                 <span>Start with Conservative strategy if you&apos;re new to DeFi</span>
               </div>
+              <div className="flex items-start space-x-2">
+                <span className="text-yellow-500 mt-1">•</span>
+                <span><strong>Real-time APR:</strong> Rates from live Cetus DEX analytics</span>
+                </div>
+              <div className="flex items-start space-x-2">
+                <span className="text-yellow-500 mt-1">•</span>
+                <span>Change strategies anytime without penalties</span>
+              </div>
+              <div className="flex items-start space-x-2">
+                <span className="text-yellow-500 mt-1">•</span>
+                <span>All earnings distributed to circle members automatically</span>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              {/* Active Positions */}
-              <div className="text-center">
-                <div className="text-sm text-gray-600">Active Positions</div>
-                <div className="font-bold text-2xl text-blue-600">
-                  {isLoadingCetusData ? '...' : cetusPositions.length}
-                </div>
-                <div className="text-xs text-gray-500">Liquidity pools</div>
-              </div>
-
-              {/* Total Liquidity Provided */}
-              <div className="text-center">
-                <div className="text-sm text-gray-600">Total Liquidity</div>
-                <div className="font-bold text-2xl text-purple-600">
-                  {isLoadingCetusData ? '...' : 
-                    cetusYieldData ? formatYieldValue(cetusYieldData.totalLiquidity) : '0.0000'} SUI
-                </div>
-                <div className="text-xs text-gray-500">In Cetus pools</div>
-              </div>
-
-              {/* Earned Fees */}
-              <div className="text-center">
-                <div className="text-sm text-gray-600">Earned Fees</div>
-                <div className="font-bold text-2xl text-green-600">
-                  +{isLoadingCetusData ? '...' : 
-                    cetusYieldData ? formatYieldValue(cetusYieldData.earnedFees) : '0.0000'} SUI
-                </div>
-                <div className="text-xs text-gray-500">
-                  ≈ {isLoadingCetusData ? '...' : 
-                    cetusYieldData ? formatUSDValue(cetusYieldData.earnedFeesUSD) : '$0.00'}
-                </div>
-              </div>
-
-              {/* Current APR */}
-              <div className="text-center">
-                <div className="text-sm text-gray-600">Current APR</div>
-                <div className="font-bold text-2xl text-indigo-600">
-                  {isLoadingCetusData ? '...' : 
-                    cetusYieldData ? formatYieldValue(cetusYieldData.currentAPR, 2) : '0.00'}%
-                </div>
-                <div className="text-xs text-gray-500">From trading fees</div>
-              </div>
             </div>
-          )}
+          </div>
+        </div>
+      </div>
 
-          {/* Pool Statistics */}
-          {poolStats && !cetusError && (
-            <div className="mt-4 pt-4 border-t border-blue-200">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                <div>
-                  <span className="text-gray-600">Pool TVL:</span>
-                  <span className="ml-2 font-medium">{formatUSDValue(poolStats.tvl)}</span>
-                </div>
-                <div>
-                  <span className="text-gray-600">24h Volume:</span>
-                  <span className="ml-2 font-medium">{formatUSDValue(poolStats.volume24h)}</span>
-                </div>
-                <div>
-                  <span className="text-gray-600">24h Fees:</span>
-                  <span className="ml-2 font-medium text-green-600">{formatUSDValue(poolStats.fees24h)}</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Position Details */}
-          {cetusPositions.length > 0 && !cetusError && (
-            <div className="mt-4 pt-4 border-t border-blue-200">
-              <h4 className="text-sm font-medium text-gray-900 mb-3">Your Liquidity Positions</h4>
-              <div className="space-y-2">
-                {cetusPositions.slice(0, 3).map((position, index) => (
-                  <div key={position.positionId} className="flex justify-between items-center bg-white bg-opacity-60 rounded-lg p-3">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center">
-                        <span className="text-xs font-medium text-blue-600">{index + 1}</span>
-                      </div>
-                      <div>
-                        <div className="text-sm font-medium">{position.poolName}</div>
-                        <div className="text-xs text-gray-500">Position #{position.positionId.slice(0, 8)}...</div>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm font-medium">{formatYieldValue(Number(position.liquidity) / 1e9)} SUI</div>
-                      <div className="text-xs text-green-600">+{formatYieldValue(position.earnedFees)} fees</div>
-                    </div>
+      {/* Combined Yield Tracking and Configuration Section */}
+      {walletId && userAddress && (
+        <div className="space-y-6">
+          {/* Show Active Yield Positions if they exist */}
+          {!isLoadingYieldData && trackedYields.length > 0 && (
+            <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-6">
+              {/* Header */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <div className="w-8 h-8 bg-gradient-to-r from-green-500 to-blue-500 rounded-full flex items-center justify-center">
+                    <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                    </svg>
                   </div>
-                ))}
-                {cetusPositions.length > 3 && (
-                  <div className="text-center text-sm text-gray-500 py-2">
-                    +{cetusPositions.length - 3} more positions
+                  <h3 className="text-lg font-semibold text-gray-900">Your Active Yield Positions</h3>
+                  <span className="px-2 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full">
+                    {trackedYields.length} Active
+                  </span>
+                </div>
+                {lastYieldUpdate && (
+                  <div className="text-xs text-gray-500">
+                    Updated: {lastYieldUpdate.toLocaleTimeString()}
                   </div>
                 )}
               </div>
+
+              {/* Summary Cards - Mobile Optimized */}
+              {(() => {
+                const totalValue = trackedYields.reduce((sum, data) => sum + data.positionValue.current, 0);
+                const totalEarnings = trackedYields.reduce((sum, data) => sum + data.earnings.totalEarned, 0);
+                const totalInitial = trackedYields.reduce((sum, data) => sum + data.positionValue.initial, 0);
+                const averageAPR = trackedYields.length > 0 
+                  ? trackedYields.reduce((sum, data) => sum + data.earnings.currentAPR, 0) / trackedYields.length
+                  : 0;
+
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-5 sm:p-4 text-center">
+                      <div className="text-sm sm:text-xs text-gray-600 mb-2 sm:mb-1">Total Value</div>
+                      <div className="font-bold text-2xl sm:text-xl text-blue-600 mb-1">{totalValue.toFixed(6)} SUI</div>
+                      <div className="text-sm sm:text-xs text-gray-500">${(totalValue * currentSuiPrice).toFixed(2)}</div>
+                    </div>
+                    
+                    <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-2xl p-5 sm:p-4 text-center">
+                      <div className="text-sm sm:text-xs text-gray-600 mb-2 sm:mb-1">Total Earnings</div>
+                      <div className="font-bold text-2xl sm:text-xl text-green-600 mb-1">+{totalEarnings.toFixed(6)} SUI</div>
+                      <div className="text-sm sm:text-xs text-gray-500">${(totalEarnings * currentSuiPrice).toFixed(2)}</div>
+                    </div>
+                    
+                    <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-2xl p-5 sm:p-4 text-center">
+                      <div className="text-sm sm:text-xs text-gray-600 mb-2 sm:mb-1">Growth</div>
+                      <div className="font-bold text-2xl sm:text-xl text-purple-600 mb-1">
+                        {(totalInitial > 0 ? (totalEarnings / totalInitial) * 100 : 0).toFixed(2)}%
+                      </div>
+                      <div className="text-sm sm:text-xs text-gray-500">Total return</div>
+                    </div>
+                    
+                    <div className="bg-gradient-to-r from-orange-50 to-red-50 border border-orange-200 rounded-2xl p-5 sm:p-4 text-center">
+                      <div className="text-sm sm:text-xs text-gray-600 mb-2 sm:mb-1">Avg APR</div>
+                      <div className="font-bold text-2xl sm:text-xl text-orange-600 mb-1">{averageAPR.toFixed(2)}%</div>
+                      <div className="text-sm sm:text-xs text-gray-500">Current rate</div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Individual Position Details - Mobile Optimized */}
+              <div className="space-y-4 sm:space-y-6">
+                <h4 className="text-lg sm:text-md font-semibold text-gray-900">Position Details</h4>
+                {trackedYields.map((yieldData, index) => (
+                  <div key={yieldData.position.yieldReceiptId} className="border border-gray-200 rounded-2xl p-5 sm:p-4 bg-gray-50/30">
+                    {/* Header - Mobile Optimized */}
+                    <div className="flex items-start justify-between mb-4 sm:mb-3">
+                      <div className="flex items-start space-x-3">
+                        <div className="w-8 h-8 sm:w-6 sm:h-6 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center flex-shrink-0 mt-1 sm:mt-0">
+                          <span className="text-sm sm:text-xs font-medium text-white">{index + 1}</span>
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold text-base sm:text-sm text-gray-900">
+                            {yieldData.position.strategy === 0 ? 'Conservative' : 
+                             yieldData.position.strategy === 1 ? 'Balanced' : 'Aggressive'} Strategy
+                          </div>
+                          <div className="text-sm sm:text-xs text-gray-500 truncate">
+                            Receipt: {yieldData.position.yieldReceiptId.slice(0, 12)}...
+                          </div>
+                        </div>
+                      </div>
+                      <span className="px-3 py-1.5 sm:px-2 sm:py-1 text-sm sm:text-xs font-medium rounded-full bg-green-100 text-green-800 flex-shrink-0">
+                        ACTIVE
+                      </span>
+                    </div>
+
+                    {/* Key Metrics - Mobile Stack */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-3 mb-5 sm:mb-4">
+                      <div className="bg-white rounded-xl p-4 sm:p-3 border border-gray-100">
+                        <div className="text-sm sm:text-xs text-gray-600 mb-1">Initial Deposit</div>
+                        <div className="font-bold text-lg sm:text-base text-gray-900">{yieldData.position.totalDeposit.toFixed(6)} SUI</div>
+                        <div className="text-sm sm:text-xs text-gray-500">${(yieldData.position.totalDeposit * currentSuiPrice).toFixed(2)}</div>
+                      </div>
+                      
+                      <div className="bg-white rounded-xl p-4 sm:p-3 border border-gray-100">
+                        <div className="text-sm sm:text-xs text-gray-600 mb-1">Current Value</div>
+                        <div className="font-bold text-lg sm:text-base text-blue-600">{yieldData.positionValue.current.toFixed(6)} SUI</div>
+                        <div className="text-sm sm:text-xs text-gray-500">${(yieldData.positionValue.current * currentSuiPrice).toFixed(2)}</div>
+                      </div>
+                      
+                      <div className="bg-white rounded-xl p-4 sm:p-3 border border-gray-100">
+                        <div className="text-sm sm:text-xs text-gray-600 mb-1">Earnings</div>
+                        <div className="font-bold text-lg sm:text-base text-green-600">+{yieldData.earnings.totalEarned.toFixed(6)} SUI</div>
+                        <div className="text-sm sm:text-xs text-gray-500">
+                          C: {yieldData.earnings.cetusEarnings.toFixed(4)} | N: {yieldData.earnings.naviEarnings.toFixed(4)}
+                        </div>
+                      </div>
+                      
+                      <div className="bg-white rounded-xl p-4 sm:p-3 border border-gray-100">
+                        <div className="text-sm sm:text-xs text-gray-600 mb-1">APR</div>
+                        <div className="font-bold text-lg sm:text-base text-orange-600">{yieldData.earnings.currentAPR.toFixed(2)}%</div>
+                        <div className="text-sm sm:text-xs text-gray-500">
+                          +{yieldData.earnings.projectedMonthly.toFixed(4)} SUI/mo
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Detailed Info - Collapsible on Mobile */}
+                    <details className="group">
+                      <summary className="flex items-center justify-between cursor-pointer list-none p-3 sm:p-2 bg-white rounded-xl border border-gray-100 hover:bg-gray-50 transition-colors">
+                        <span className="text-sm sm:text-xs font-medium text-gray-700">Strategy & Position Details</span>
+                        <svg className="w-5 h-5 sm:w-4 sm:h-4 text-gray-400 group-open:rotate-180 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </summary>
+                      <div className="mt-3 p-4 sm:p-3 bg-white rounded-xl border border-gray-100 space-y-4 sm:space-y-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-3">
+                        <div>
+                            <span className="text-sm sm:text-xs font-medium text-gray-700 block mb-2">Strategy Allocation:</span>
+                            <div className="space-y-1 text-sm sm:text-xs text-gray-600">
+                              <div className="flex justify-between">
+                                <span>Cetus:</span>
+                                <span className="font-medium">{yieldData.position.cetusAmount.toFixed(6)} SUI ({((yieldData.position.cetusAmount / yieldData.position.totalDeposit) * 100).toFixed(1)}%)</span>
+                          </div>
+                              <div className="flex justify-between">
+                                <span>NAVI:</span>
+                                <span className="font-medium">{yieldData.position.naviAmount.toFixed(6)} SUI ({((yieldData.position.naviAmount / yieldData.position.totalDeposit) * 100).toFixed(1)}%)</span>
+                          </div>
+                        </div>
+                          </div>
+                          <div>
+                            <span className="text-sm sm:text-xs font-medium text-gray-700 block mb-2">Position Info:</span>
+                            <div className="space-y-1 text-sm sm:text-xs text-gray-600">
+                              <div className="flex justify-between">
+                                <span>Auto-compound:</span>
+                                <span className="font-medium">{yieldData.position.autoCompound ? 'Yes' : 'No'}</span>
+                          </div>
+                              <div className="flex justify-between">
+                                <span>Created:</span>
+                                <span className="font-medium">{new Date(yieldData.position.timestamp).toLocaleDateString()}</span>
+                        </div>
+                      </div>
+                    </div>
+                        </div>
+                      </div>
+                    </details>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
-          {/* Call to Action for No Positions */}
-          {cetusPositions.length === 0 && !cetusError && !isLoadingCetusData && (
-            <div className="mt-4 pt-4 border-t border-blue-200 text-center">
-              <div className="text-gray-600 text-sm mb-2">
-                {disabled 
-                  ? "Yield management will be available once the circle administrator activates the circle."
-                  : "No yield configuration found. Set up real DeFi yield generation for your security deposits!"
-                }
-              </div>
-              
-              {/* Show error if any */}
-              {addLiquidityError && (
-                <div className="mb-2 text-xs text-red-600 bg-red-50 p-2 rounded">
-                  {addLiquidityError}
+          {/* Configuration Setup - Mobile Optimized */}
+          {!isLoadingYieldData && (
+            <div className="bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-2xl p-6 sm:p-8">
+              <div className="text-center">
+                <div className="text-gray-600 text-base sm:text-sm mb-6 sm:mb-4 leading-relaxed">
+                  {disabled 
+                    ? "Yield management will be available once the circle administrator activates the circle."
+                    : totalSecurityDeposits === 0
+                    ? trackedYields.length > 0
+                      ? "Waiting for new security deposits. Your existing positions continue earning yield!"
+                      : "No security deposits available. Circle members need to join and pay security deposits before yield generation can begin."
+                    : trackedYields.length > 0
+                    ? "Create additional yield configurations or modify existing strategies for your security deposits."
+                    : "No yield configuration found. Set up real DeFi yield generation for your security deposits!"
+                  }
                 </div>
-              )}
-              
-              <button 
-                onClick={() => disabled ? null : handleAddLiquidityToCetus()}
-                disabled={disabled || isAddingLiquidity}
-                className={`px-4 py-2 text-sm rounded-lg transition-colors ${
-                  disabled
-                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                    : isAddingLiquidity
-                    ? 'bg-blue-400 text-white cursor-wait'
-                    : 'bg-gradient-to-r from-blue-500 to-purple-500 text-white hover:from-blue-600 hover:to-purple-600'
-                }`}
-              >
-                {disabled 
-                  ? 'Circle Not Active' 
-                  : isAddingLiquidity 
-                  ? (
-                    <span className="flex items-center">
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                
+                {/* Strategy Selection - Mobile Optimized */}
+                {!disabled && totalSecurityDeposits > 0 && trackedYields.length === 0 && (
+                  <div className="mb-8 sm:mb-6">
+                    <h4 className="text-lg sm:text-sm font-semibold sm:font-medium text-gray-700 mb-4 sm:mb-3">Select Your Yield Strategy</h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-3">
+                      {Object.entries(STRATEGY_CONFIGS).map(([key, config]) => (
+                        <button
+                          key={key}
+                          onClick={() => setSelectedStrategyForCreation(key as YieldStrategy)}
+                          className={`p-5 sm:p-3 rounded-2xl sm:rounded-lg border-2 transition-all duration-200 ${
+                            selectedStrategyForCreation === key
+                              ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-lg sm:shadow-none'
+                              : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:shadow-md'
+                          }`}
+                        >
+                          <div className="text-base sm:text-sm font-semibold sm:font-medium">{config.displayName}</div>
+                          <div className="text-sm sm:text-xs text-gray-500 mt-2 sm:mt-1 font-medium">{config.apy}</div>
+                          <div className="text-sm sm:text-xs mt-2 sm:mt-1 capitalize font-medium">{config.risk} risk</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {/* Show error if any */}
+                {addLiquidityError && (
+                  <div className="mb-4 sm:mb-2 text-sm sm:text-xs text-red-600 bg-red-50 p-4 sm:p-2 rounded-xl sm:rounded">
+                    {addLiquidityError}
+                  </div>
+                )}
+                
+                <button 
+                  onClick={() => (disabled || totalSecurityDeposits === 0) ? null : handleAddLiquidityToCetus()}
+                  disabled={disabled || isAddingLiquidity || totalSecurityDeposits === 0}
+                  className={`w-full sm:w-auto px-8 sm:px-4 py-4 sm:py-2 text-base sm:text-sm font-semibold sm:font-medium rounded-2xl sm:rounded-lg transition-all duration-200 ${
+                    disabled || totalSecurityDeposits === 0
+                      ? 'bg-gradient-to-r from-blue-500 to-purple-500 text-white opacity-50 cursor-not-allowed'
+                      : isAddingLiquidity
+                      ? 'bg-gradient-to-r from-blue-400 to-purple-400 text-white cursor-wait'
+                      : 'bg-gradient-to-r from-blue-500 to-purple-500 text-white hover:from-blue-600 hover:to-purple-600 hover:shadow-lg transform hover:scale-105 sm:hover:scale-100 active:scale-95'
+                  }`}
+                >
+                  {isAddingLiquidity ? (
+                    <span className="flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-5 w-5 sm:h-4 sm:w-4 border-b-2 border-white mr-3 sm:mr-2"></div>
                       Creating Configuration...
                     </span>
-                  )
-                  : 'Create Yield Configuration'
-                }
-              </button>
+                  ) : (
+                    trackedYields.length > 0
+                      ? 'Create Additional Yield Configuration'
+                      : 'Create Yield Configuration'
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Loading state */}
+          {isLoadingYieldData && (
+            <div className="bg-white rounded-lg border border-gray-200 p-6">
+              <div className="animate-pulse">
+                <div className="h-6 bg-gray-200 rounded w-1/3 mb-4"></div>
+                <div className="space-y-3">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-20 bg-gray-200 rounded"></div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Error state */}
+          {yieldDataError && (
+            <div className="bg-white rounded-lg border border-gray-200 p-6">
+              <div className="text-center">
+                <div className="text-red-500 mb-2">
+                  <svg className="mx-auto h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <h3 className="text-lg font-medium text-gray-900 mb-2">Error Loading Yield Data</h3>
+                <p className="text-gray-600 text-sm">{yieldDataError}</p>
+              </div>
             </div>
           )}
         </div>
       )}
 
-      {/* Current Status Summary */}
+      {/* Current Status Summary - Mobile Optimized */}
       {totalSecurityDeposits > 0 && (
-        <div className="bg-gradient-to-r from-green-50 to-blue-50 border border-green-200 rounded-lg p-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
-            <div>
-              <div className="text-sm text-gray-600">Current Strategy</div>
-              <div className="font-semibold text-gray-900">{currentConfig.displayName}</div>
-              <div className="text-xs text-gray-500">({currentConfig.apy} yearly)</div>
+        <div className="bg-gradient-to-r from-green-50 to-blue-50 border border-green-200 rounded-2xl p-5 sm:p-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 sm:gap-4 text-center">
+            <div className="bg-white/70 rounded-xl p-4 sm:p-3">
+              <div className="text-sm text-gray-600 mb-2 sm:mb-1">Current Strategy</div>
+              <div className="font-bold text-lg sm:text-base text-gray-900">{currentConfig.displayName}</div>
+              <div className="text-sm sm:text-xs text-gray-500 mt-1">({currentConfig.apy} yearly)</div>
             </div>
-            <div>
-              <div className="text-sm text-gray-600">Security Deposits</div>
-              <div className="font-semibold text-gray-900">
+            <div className="bg-white/70 rounded-xl p-4 sm:p-3">
+              <div className="text-sm text-gray-600 mb-2 sm:mb-1">Security Deposits</div>
+              <div className="font-bold text-lg sm:text-base text-gray-900">
                 {totalSecurityDeposits.toFixed(2)} SUI
               </div>
-              <div className="text-xs text-gray-500">Earning income</div>
+              <div className="text-sm sm:text-xs text-gray-500 mt-1">Earning income</div>
             </div>
-            <div>
-              <div className="text-sm text-gray-600">Est. Monthly Earnings</div>
-              <div className="font-semibold text-green-600">
+            <div className="bg-white/70 rounded-xl p-4 sm:p-3">
+              <div className="text-sm text-gray-600 mb-2 sm:mb-1">Est. Monthly Earnings</div>
+              <div className="font-bold text-lg sm:text-base text-green-600">
                 +{potentialMonthlyEarnings.toFixed(4)} SUI
               </div>
-              <div className="text-xs text-gray-500">≈ ${(potentialMonthlyEarnings * currentSuiPrice).toFixed(2)}</div>
+              <div className="text-sm sm:text-xs text-gray-500 mt-1">≈ ${(potentialMonthlyEarnings * currentSuiPrice).toFixed(2)}</div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Strategy Selector */}
-      <StrategySelector
-        selectedStrategy={selectedStrategy}
-        onStrategySelect={handleStrategySelect}
-        disabled={disabled || isChangingStrategy}
-        showDetailedInfo={true}
-        totalDeposits={totalSecurityDeposits}
-      />
+      {/* Strategy Selector - Only show when there are existing yield configurations */}
+      {trackedYields.length > 0 && (
+        <div>
+          <h4 className="text-lg font-semibold text-gray-900 mb-4">Modify Strategy</h4>
+          <p className="text-sm text-gray-600 mb-4">
+            You can change your yield strategy at any time. Changes will apply to future earnings.
+          </p>
+          <StrategySelector
+            selectedStrategy={selectedStrategy}
+            onStrategySelect={handleStrategySelect}
+            disabled={disabled || isChangingStrategy}
+            showDetailedInfo={true}
+            totalDeposits={totalSecurityDeposits}
+          />
+        </div>
+      )}
 
       {/* Loading state during strategy change */}
       {isChangingStrategy && (
@@ -840,43 +940,9 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
         </div>
       )}
 
-      {/* No deposits message */}
-      {totalSecurityDeposits === 0 && (
-        <div className="text-center py-8 border-2 border-dashed border-gray-300 rounded-lg">
-          <div className="text-gray-400 mb-2">
-            <svg className="mx-auto h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
-            </svg>
-          </div>
-          <h3 className="text-lg font-medium text-gray-900 mb-1">No Security Deposits Yet</h3>
-          <p className="text-gray-500 text-sm">
-            Once members join and pay security deposits, you can start earning additional income with these strategies.
-          </p>
-        </div>
-      )}
 
-      {/* Quick Tips */}
-      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-        <div className="flex">
-          <div className="flex-shrink-0">
-            <svg className="h-5 w-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-            </svg>
-          </div>
-          <div className="ml-3">
-            <h4 className="text-sm font-medium text-yellow-800">Pro Tips</h4>
-            <div className="mt-1 text-sm text-yellow-700">
-              <ul className="list-disc space-y-1 ml-4">
-                <li>Start with Conservative strategy if you&apos;re new to DeFi</li>
-                <li>You can change strategies anytime without penalties</li>
-                <li>All earnings are automatically distributed to circle members</li>
-                <li>Security deposits remain available for emergency withdrawals</li>
-                <li><strong>NEW:</strong> Real Cetus yield shows actual earnings from DEX trading fees</li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      </div>
+
+
 
       {/* Confirmation Modal */}
       {showConfirmModal && confirmModalData && (
