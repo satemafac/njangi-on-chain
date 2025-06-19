@@ -1,0 +1,68 @@
+# Heroku .slugignore - exclude files/directories from the build slug
+
+# Development directories
+backend-fix3/
+frontend-fix3/
+walrus-sites/
+walrus-blobs/
+
+# Build artifacts and caches  
+.next/cache/
+out-static/
+*.zip
+*.tar.gz
+
+# Documentation and notes
+*.md
+CLAUDE.md
+docs/
+DeFi_Integration_Research.md
+ENOKI_MIGRATION.md
+stablecoin_notes.md
+zklogin-services.md
+ZKLOGIN-SERVICES-README.md
+
+# Database and service files
+salt-database.json
+data/
+
+# Development scripts and configs
+test-*.js
+test-*.json
+test-*.cjs
+db-check.cjs
+package-db-check.json
+download-*.sh
+start-*.sh
+*.config.yaml
+*.config.yml
+client_config.yaml
+sites-config.yaml
+wasp_config.yaml
+
+# Docker files (not needed for Heroku)
+Dockerfile*
+docker-compose.yml
+
+# Git and editor files
+.git/
+.vscode/
+.cursor/
+
+# Logs and temporary files  
+*.log
+tmp/
+temp/
+
+# Move contract source (not needed in production web app)
+move/sources/
+move/build/
+Move.lock
+
+# ZKLogin utilities
+zklogin-utils/
+zklogin-switch.sh
+heroku-zklogin-services.sh
+
+# Other services
+salt-service/ 
