@@ -122,6 +122,9 @@ export class WhatsAppService {
       let session = this.getSession(phoneNumber);
       if (!session) {
         session = this.createSession(phoneNumber);
+        // Send welcome message for new users
+        await this.sendWelcomeMessage(phoneNumber);
+        return;
       }
 
       // Update last activity
@@ -133,6 +136,12 @@ export class WhatsAppService {
         messageType: message.type,
         content: messageText,
       });
+
+      // Check if this is a greeting message
+      if (this.isGreeting(messageText.toLowerCase())) {
+        await this.sendWelcomeMessage(phoneNumber);
+        return;
+      }
 
       // Check if user is in an active conversation flow
       const activeFlow = this.conversationFlow.getCurrentFlow(phoneNumber);
@@ -149,6 +158,35 @@ export class WhatsAppService {
       logger.error(`Error processing message from ${phoneNumber}:`, error);
       await this.sendErrorMessage(phoneNumber, errorMessages.NETWORK_ERROR);
     }
+  }
+
+  /**
+   * Check if message is a greeting
+   */
+  private isGreeting(message: string): boolean {
+    const greetings = ['hello', 'hi', 'hey', 'hola', 'good morning', 'good afternoon', 'good evening'];
+    return greetings.some(greeting => message.includes(greeting));
+  }
+
+  /**
+   * Send welcome message to new users
+   */
+  private async sendWelcomeMessage(phoneNumber: string): Promise<void> {
+    const welcomeMessage = `Welcome to Njangi! 🎉
+
+I'm your Njangi assistant. To get started, you'll need to authenticate your account.
+
+Type /auth to connect your phone number to a blockchain address.
+
+After authentication, I can help you:
+• Create new savings circles
+• Join existing circles
+• Make contributions
+• Check your status
+
+Type /help to see all available commands.`;
+
+    await this.sendTextMessage(phoneNumber, welcomeMessage);
   }
 
   /**

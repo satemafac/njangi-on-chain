@@ -754,7 +754,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   details: 'No wallet ID found in events for this circle.'
                 });
               }
-            } catch (error) {
+        } catch (error) {
               console.error('Error finding wallet ID from events:', error);
               return res.status(500).json({ 
                 error: 'Failed to find wallet data for this circle',
@@ -1687,7 +1687,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   routeError.message.includes('504') ||
                   routeError.message.includes('network') ||
                   routeError.message.includes('connection')) {
-                return res.status(503).json({
+          return res.status(503).json({ 
                   error: 'Network timeout or connection issue. Please try again later.',
                   requireRelogin: false
                 });
@@ -1845,7 +1845,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               status: txResult.status,
               gasUsed: txResult.gasUsed
             });
-        } catch (error) {
+  } catch (error) {
           console.error('Error configuring stablecoin swap:', error);
           
           // Handle specific error types
@@ -1878,7 +1878,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
             
           // Generic error handling
-            return res.status(500).json({ 
+    return res.status(500).json({ 
             error: error instanceof Error ? error.message : 'Unknown error during stablecoin configuration'
           });
         }
