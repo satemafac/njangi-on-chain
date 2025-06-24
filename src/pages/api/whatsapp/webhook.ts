@@ -5,6 +5,22 @@ import { whatsappConfig, validateWhatsAppConfig } from '../../../config/whatsapp
 
 const whatsappService = WhatsAppService.getInstance();
 
+// Helper function to read raw body
+function getRawBody(req: NextApiRequest): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', chunk => {
+      data += chunk;
+    });
+    req.on('end', () => {
+      resolve(data);
+    });
+    req.on('error', err => {
+      reject(err);
+    });
+  });
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     // Validate WhatsApp configuration
@@ -54,7 +70,7 @@ function handleWebhookVerification(req: NextApiRequest, res: NextApiResponse) {
 async function handleWebhookMessage(req: NextApiRequest, res: NextApiResponse) {
   try {
     // Get the raw body for signature verification
-    const rawBody = JSON.stringify(req.body);
+    const rawBody = await getRawBody(req);
     const signature = req.headers['x-hub-signature-256'] as string;
 
     // Verify webhook signature for security
@@ -63,7 +79,8 @@ async function handleWebhookMessage(req: NextApiRequest, res: NextApiResponse) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const payload: WhatsAppWebhookPayload = req.body;
+    // Parse the JSON payload
+    const payload: WhatsAppWebhookPayload = JSON.parse(rawBody);
 
     // Validate payload structure
     if (!payload.object || payload.object !== 'whatsapp_business_account') {
@@ -90,12 +107,10 @@ async function handleWebhookMessage(req: NextApiRequest, res: NextApiResponse) {
 
 /**
  * Configuration for Next.js API route
- * We need to get the raw body for signature verification
+ * Disable body parser to get raw body for signature verification
  */
 export const config = {
   api: {
-    bodyParser: {
-      sizeLimit: '1mb',
-    },
+    bodyParser: false,
   },
 } 
