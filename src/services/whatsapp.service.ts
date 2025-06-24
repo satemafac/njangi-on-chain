@@ -16,10 +16,12 @@ import {
   whatsappConfig, 
   whatsappApiUrl, 
   sessionConfig, 
-  errorMessages,
-  successMessages
+  errorMessages
 } from '../config/whatsapp.config';
 import { WhatsAppAuthBridgeService } from './whatsapp-auth-bridge.service';
+import { WhatsAppCommandParserService } from './whatsapp-command-parser.service';
+import { WhatsAppConversationFlowService } from './whatsapp-conversation-flow.service';
+import { ParsedCommand } from '../types/whatsapp-commands';
 
 // Configure logger
 const logger = createLogger({
@@ -39,9 +41,13 @@ export class WhatsAppService {
   private sessions: Map<string, WhatsAppUserSession> = new Map();
   private auditLogs: WhatsAppAuditLog[] = [];
   private authBridge: WhatsAppAuthBridgeService;
+  private commandParser: WhatsAppCommandParserService;
+  private conversationFlow: WhatsAppConversationFlowService;
 
   private constructor() {
     this.authBridge = WhatsAppAuthBridgeService.getInstance();
+    this.commandParser = WhatsAppCommandParserService.getInstance();
+    this.conversationFlow = WhatsAppConversationFlowService.getInstance();
     this.initializeService();
   }
 
@@ -128,14 +134,202 @@ export class WhatsAppService {
         content: messageText,
       });
 
-      // For now, just send a simple response
-      // This will be expanded with command parsing and flow management
-      await this.sendWelcomeMessage(phoneNumber);
+      // Check if user is in an active conversation flow
+      const activeFlow = this.conversationFlow.getCurrentFlow(phoneNumber);
+      
+      if (activeFlow) {
+        // Handle ongoing conversation
+        await this.handleConversationInput(phoneNumber, messageText);
+      } else {
+        // Parse new command
+        await this.handleNewCommand(phoneNumber, messageText);
+      }
 
     } catch (error) {
       logger.error(`Error processing message from ${phoneNumber}:`, error);
       await this.sendErrorMessage(phoneNumber, errorMessages.NETWORK_ERROR);
     }
+  }
+
+  /**
+   * Handle input during active conversation flow
+   */
+  private async handleConversationInput(phoneNumber: string, input: string): Promise<void> {
+    const result = this.conversationFlow.processInput(phoneNumber, input);
+    
+    if (result.isComplete) {
+      // Conversation finished
+      if (result.success && result.result) {
+        // Execute the completed command
+        await this.executeCompletedCommand(phoneNumber, result.result);
+      } else {
+        // Conversation failed or cancelled
+        await this.sendTextMessage(phoneNumber, result.message);
+      }
+    } else {
+      // Continue conversation
+      let response = result.message;
+      if (result.nextPrompt) {
+        response += '\n\n' + result.nextPrompt;
+      }
+      await this.sendTextMessage(phoneNumber, response);
+    }
+  }
+
+  /**
+   * Handle new command from user
+   */
+  private async handleNewCommand(phoneNumber: string, messageText: string): Promise<void> {
+    const parsedCommand = this.commandParser.parseMessage(messageText);
+    
+    logger.info(`Parsed command for ${phoneNumber}:`, parsedCommand);
+
+    // Handle invalid commands
+    if (!parsedCommand.isValid) {
+      if (parsedCommand.type === 'help') {
+        await this.sendHelpMessage(phoneNumber);
+      } else {
+        await this.sendTextMessage(
+          phoneNumber, 
+          `❌ ${parsedCommand.errors.join(', ')}\n\nType /help to see available commands.`
+        );
+      }
+      return;
+    }
+
+    // Check authentication requirement
+    if (parsedCommand.requiresAuth && !this.isUserAuthenticated(phoneNumber)) {
+      await this.sendAuthenticationRequired(phoneNumber);
+      return;
+    }
+
+    // Handle multi-step commands
+    if (parsedCommand.requiresMultiStep) {
+      const prompt = this.conversationFlow.startFlow(phoneNumber, parsedCommand.type);
+      await this.sendTextMessage(phoneNumber, prompt);
+      return;
+    }
+
+    // Handle single-step commands
+    await this.executeSingleStepCommand(phoneNumber, parsedCommand);
+  }
+
+  /**
+   * Execute single-step commands immediately
+   */
+  private async executeSingleStepCommand(phoneNumber: string, parsedCommand: ParsedCommand): Promise<void> {
+    switch (parsedCommand.type) {
+      case 'help':
+        await this.sendHelpMessage(phoneNumber);
+        break;
+
+      case 'auth':
+        await this.handleAuthenticationCommand(phoneNumber);
+        break;
+
+      case 'status':
+        await this.handleStatusCommand(phoneNumber);
+        break;
+
+      case 'circles':
+        await this.handleCirclesCommand(phoneNumber);
+        break;
+
+      case 'balance':
+        await this.handleBalanceCommand(phoneNumber);
+        break;
+
+      case 'join':
+        await this.handleJoinCommand(phoneNumber, parsedCommand.parameters);
+        break;
+
+      case 'contribute':
+        await this.handleContributeCommand(phoneNumber, parsedCommand.parameters);
+        break;
+
+      default:
+        await this.sendTextMessage(
+          phoneNumber, 
+          `🚧 The "${parsedCommand.type}" command is coming soon!\n\nType /help to see available commands.`
+        );
+    }
+  }
+
+  /**
+   * Execute completed multi-step commands
+   */
+  private async executeCompletedCommand(phoneNumber: string, commandData: Record<string, unknown>): Promise<void> {
+    // This would integrate with your circle creation logic
+    await this.sendTextMessage(
+      phoneNumber,
+      `🎉 Circle creation completed!\n\n📋 **Summary:**\n• Type: ${commandData.circleType}\n• Currency: ${commandData.currency}\n• Name: ${commandData.name}\n• Contribution: ${commandData.contributionAmount} ${commandData.currency}\n• Cycle: ${commandData.cycleLength}\n\n🔗 Circle will be created on the blockchain. You'll receive a confirmation shortly.`
+    );
+  }
+
+  /**
+   * Send help message
+   */
+  private async sendHelpMessage(phoneNumber: string): Promise<void> {
+    const helpText = this.commandParser.generateHelpMessage();
+    await this.sendTextMessage(phoneNumber, helpText);
+  }
+
+  /**
+   * Handle status command
+   */
+  private async handleStatusCommand(phoneNumber: string): Promise<void> {
+    if (!this.isUserAuthenticated(phoneNumber)) {
+      await this.sendAuthenticationRequired(phoneNumber);
+      return;
+    }
+
+    const userAddress = this.getUserSuiAddress(phoneNumber);
+    await this.sendTextMessage(
+      phoneNumber,
+      `📊 **Your Status**\n\n🏦 Sui Address: ${userAddress}\n📱 Phone: ${phoneNumber}\n\n💡 Type /circles to see your circles or /balance to check balances.`
+    );
+  }
+
+  /**
+   * Handle circles command
+   */
+  private async handleCirclesCommand(phoneNumber: string): Promise<void> {
+    await this.sendTextMessage(
+      phoneNumber,
+      `🔄 **Your Circles**\n\n🚧 Circle listing is coming soon!\n\nFor now, you can:\n• /create - Start a new circle\n• /join [circle-id] - Join an existing circle`
+    );
+  }
+
+  /**
+   * Handle balance command
+   */
+  private async handleBalanceCommand(phoneNumber: string): Promise<void> {
+    await this.sendTextMessage(
+      phoneNumber,
+      `💰 **Your Balance**\n\n🚧 Balance checking is coming soon!\n\nThis will show your:\n• Wallet balances\n• Circle contributions\n• Pending payouts`
+    );
+  }
+
+  /**
+   * Handle join command
+   */
+  private async handleJoinCommand(phoneNumber: string, parameters: Record<string, unknown>): Promise<void> {
+    const circleId = parameters.circleId;
+    await this.sendTextMessage(
+      phoneNumber,
+      `🤝 **Join Circle**\n\n🚧 Circle joining is coming soon!\n\nYou want to join circle: ${circleId}\n\nThis will check circle availability and start the joining process.`
+    );
+  }
+
+  /**
+   * Handle contribute command
+   */
+  private async handleContributeCommand(phoneNumber: string, parameters: Record<string, unknown>): Promise<void> {
+    const { amount, currency, circleId } = parameters;
+    await this.sendTextMessage(
+      phoneNumber,
+      `💰 **Make Contribution**\n\n🚧 Contributions are coming soon!\n\nYou want to contribute:\n• Amount: ${amount} ${currency}\n• Circle: ${circleId || 'default'}\n\nThis will process your contribution to the circle.`
+    );
   }
 
   /**
@@ -260,25 +454,6 @@ export class WhatsAppService {
       
       return null;
     }
-  }
-
-  /**
-   * Send welcome message to new users
-   */
-  private async sendWelcomeMessage(phoneNumber: string): Promise<void> {
-    // Check if user is authenticated
-    const isAuthenticated = this.authBridge.isPhoneNumberAuthenticated(phoneNumber);
-    
-    let welcomeText: string;
-    
-    if (isAuthenticated) {
-      const status = this.authBridge.getAuthenticationStatus(phoneNumber);
-      welcomeText = `Welcome back to Njangi! 🎉\n\n${successMessages.AUTHENTICATION_SUCCESS}\n\nYour Sui Address: ${status.suiAddress}\n\nI can help you:\n• Create new savings circles (/create)\n• Join existing circles (/join)\n• Make contributions (/contribute)\n• Check your status (/status)\n\nType /help to see all available commands.`;
-    } else {
-      welcomeText = `Welcome to Njangi! 🎉\n\nI'm your Njangi assistant. To get started, you'll need to authenticate your account.\n\nType /auth to connect your phone number to a blockchain address.\n\nAfter authentication, I can help you:\n• Create new savings circles\n• Join existing circles\n• Make contributions\n• Check your status\n\nType /help to see all available commands.`;
-    }
-    
-    await this.sendTextMessage(phoneNumber, welcomeText);
   }
 
   /**
