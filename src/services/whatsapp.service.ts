@@ -22,6 +22,7 @@ import { WhatsAppAuthBridgeService } from './whatsapp-auth-bridge.service';
 import { WhatsAppCommandParserService } from './whatsapp-command-parser.service';
 import { WhatsAppConversationFlowService } from './whatsapp-conversation-flow.service';
 import { ParsedCommand } from '../types/whatsapp-commands';
+import { AccountData } from './zkLoginService';
 
 // Configure logger
 const logger = createLogger({
@@ -504,7 +505,31 @@ Type /help to see all available commands.`;
         const status = this.authBridge.getAuthenticationStatus(phoneNumber);
         await this.sendTextMessage(
           phoneNumber, 
-          `✅ You're already authenticated!\n\nSui Address: ${status.suiAddress}\nProvider: ${status.provider}\nLast authenticated: ${status.lastAuthenticated?.toLocaleString()}`
+          `✅ **You're Already Authenticated!**
+
+🏦 Sui Address: ${status.suiAddress}
+🔐 Provider: ${status.provider}
+📅 Last authenticated: ${status.lastAuthenticated?.toLocaleString()}
+
+You can now use all commands:
+• /circles - View your circles
+• /balance - Check balances
+• /create - Start a new circle
+• /status - View account status`
+        );
+        return;
+      }
+
+      // Check if there's a pending authentication (prevent spam)
+      const session = this.getSession(phoneNumber);
+      if (session?.pendingAuth && session.pendingAuth > Date.now() - (5 * 60 * 1000)) { // 5 minutes
+        await this.sendTextMessage(
+          phoneNumber,
+          `⏳ **Authentication In Progress**
+
+You recently requested authentication. Please check your browser or complete the authentication process.
+
+If you didn't receive a link or it expired, wait 5 minutes before trying again.`
         );
         return;
       }
@@ -513,9 +538,26 @@ Type /help to see all available commands.`;
       const result = await this.authBridge.initiateAuthentication(phoneNumber, provider);
 
       if (result.success && result.authUrl) {
+        // Mark session as having pending auth
+        this.updateSession(phoneNumber, { pendingAuth: Date.now() });
+        
+        // Register callback for when authentication completes
+        this.authBridge.registerCompletionCallback(phoneNumber, (phone, success, account) => {
+          this.handleAuthenticationCompletion(phone, success, account);
+        });
+        
         await this.sendTextMessage(
           phoneNumber,
-          `🔐 Please complete your authentication:\n\n👉 ${result.authUrl}\n\nThis link will expire in 30 minutes. After authenticating, you'll be able to manage your Njangi circles!`
+          `🔐 **Complete Your Authentication**
+
+Please click this link to authenticate your account:
+👉 ${result.authUrl}
+
+⏰ This link expires in 30 minutes
+🔒 You'll sign in with ${provider}
+✅ After completion, you'll receive a confirmation here
+
+**Important:** Complete the authentication in your browser, then return to WhatsApp for confirmation.`
         );
       } else {
         await this.sendErrorMessage(phoneNumber, result.error || 'Failed to start authentication');
@@ -524,6 +566,39 @@ Type /help to see all available commands.`;
     } catch (error) {
       logger.error(`Authentication command failed for ${phoneNumber}:`, error);
       await this.sendErrorMessage(phoneNumber, errorMessages.NETWORK_ERROR);
+    }
+  }
+
+  /**
+   * Handle authentication completion callback
+   */
+  private async handleAuthenticationCompletion(phoneNumber: string, success: boolean, account?: AccountData): Promise<void> {
+    try {
+      // Clear pending auth from session
+      this.updateSession(phoneNumber, { pendingAuth: undefined });
+
+      if (success && account) {
+        // Update session with authentication data
+        this.updateSession(phoneNumber, { 
+          isAuthenticated: true,
+          suiAddress: account.userAddr,
+          authenticatedAt: new Date(),
+          zkLoginProof: {
+            provider: account.provider,
+            userAddr: account.userAddr,
+            zkProofs: account.zkProofs,
+            userSalt: account.userSalt,
+            sub: account.sub,
+            aud: account.aud,
+          }
+        });
+
+        logger.info(`Authentication completed for ${phoneNumber} via callback`);
+      } else {
+        logger.warn(`Authentication failed for ${phoneNumber} via callback`);
+      }
+    } catch (error) {
+      logger.error(`Error handling authentication completion for ${phoneNumber}:`, error);
     }
   }
 

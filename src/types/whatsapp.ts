@@ -153,6 +153,7 @@ export interface WhatsAppUserSession {
   commandData?: Record<string, unknown>;
   tempAuthToken?: string;
   zkLoginProof?: Record<string, unknown>;
+  pendingAuth?: number; // Timestamp of pending authentication request
 }
 
 // Command Types

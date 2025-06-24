@@ -50,6 +50,7 @@ export class WhatsAppAuthBridgeService {
   private authTokens: Map<string, WhatsAppAuthToken> = new Map();
   private phoneToSuiMappings: Map<string, PhoneNumberMapping> = new Map();
   private zkLoginClient: ZkLoginClient;
+  private completionCallbacks: Map<string, (phoneNumber: string, success: boolean, account?: AccountData) => void> = new Map();
 
   private constructor() {
     this.zkLoginClient = ZkLoginClient.getInstance();
@@ -194,6 +195,17 @@ export class WhatsAppAuthBridgeService {
 
       logger.info(`Authentication completed for ${phoneNumber} -> ${accountData.userAddr}`);
 
+      // Trigger completion callback if registered
+      const callback = this.completionCallbacks.get(phoneNumber);
+      if (callback) {
+        try {
+          callback(phoneNumber, true, accountData);
+          this.completionCallbacks.delete(phoneNumber);
+        } catch (callbackError) {
+          logger.error(`Error in completion callback for ${phoneNumber}:`, callbackError);
+        }
+      }
+
       return {
         success: true,
         suiAddress: accountData.userAddr,
@@ -202,6 +214,18 @@ export class WhatsAppAuthBridgeService {
 
     } catch (error) {
       logger.error(`Authentication completion failed for ${phoneNumber}:`, error);
+      
+      // Trigger failure callback if registered
+      const callback = this.completionCallbacks.get(phoneNumber);
+      if (callback) {
+        try {
+          callback(phoneNumber, false);
+          this.completionCallbacks.delete(phoneNumber);
+        } catch (callbackError) {
+          logger.error(`Error in failure callback for ${phoneNumber}:`, callbackError);
+        }
+      }
+      
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Authentication completion failed',
@@ -377,5 +401,31 @@ export class WhatsAppAuthBridgeService {
       this.phoneToSuiMappings.set(mapping.phoneNumber, mapping);
     });
     logger.info(`Imported ${mappings.length} phone number mappings`);
+  }
+
+  /**
+   * Register a callback to be called when authentication completes
+   */
+  public registerCompletionCallback(
+    phoneNumber: string, 
+    callback: (phoneNumber: string, success: boolean, account?: AccountData) => void
+  ): void {
+    this.completionCallbacks.set(phoneNumber, callback);
+    logger.info(`Registered completion callback for ${phoneNumber}`);
+  }
+
+  /**
+   * Remove completion callback for a phone number
+   */
+  public removeCompletionCallback(phoneNumber: string): void {
+    this.completionCallbacks.delete(phoneNumber);
+  }
+
+  /**
+   * Clear pending authentication for a phone number
+   */
+  public clearPendingAuth(phoneNumber: string): void {
+    // This method can be called by WhatsApp service to clear pending auth state
+    logger.info(`Cleared pending auth for ${phoneNumber}`);
   }
 } 
