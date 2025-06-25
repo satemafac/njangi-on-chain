@@ -62,23 +62,11 @@ export default function WhatsAppAuth() {
         message: 'Completing authentication...',
       }));
 
-      // Complete authentication through the auth bridge
-      const response = await fetch('/api/whatsapp/auth/complete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, phone, jwt: jwtToken }),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || 'Authentication failed');
-      }
-
-      // Update auth context with account data
+      // Follow the same flow as LoginButton.tsx - just call handleCallback with the JWT
+      // This will process the zkLogin authentication normally
       await handleCallback(jwtToken);
 
-      // Notify WhatsApp that authentication was successful
+      // After successful authentication, notify WhatsApp
       await fetch('/api/whatsapp/auth/notify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -104,6 +92,21 @@ export default function WhatsAppAuth() {
 
     } catch (error) {
       console.error('Authentication completion failed:', error);
+      
+      // Notify WhatsApp of failure
+      await fetch('/api/whatsapp/auth/notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          token, 
+          phone, 
+          success: false,
+          message: error instanceof Error ? error.message : 'Authentication failed' 
+        }),
+      }).catch(err => {
+        console.warn('Failed to notify WhatsApp of auth failure:', err);
+      });
+
       setAuthState({
         status: 'error',
         message: error instanceof Error ? error.message : 'Authentication failed',

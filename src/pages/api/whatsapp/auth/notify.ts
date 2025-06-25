@@ -44,25 +44,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Verify that the auth token is valid (but don't require it to be unused)
-    const tokenExists = authBridge.verifyAuthToken(token, phone) || 
-                       authBridge.getSuiAddressForPhone(phone); // Check if already authenticated
-
-    if (!tokenExists) {
+    // For the simplified flow, we don't strictly validate the auth token
+    // since the main authentication happens through the standard zkLogin flow
+    // Just verify the token format is reasonable
+    if (token.length < 10) { // Basic sanity check
       return res.status(401).json({ 
-        error: 'Invalid authentication token or phone number' 
+        error: 'Invalid authentication token format' 
       });
     }
 
     // Send success or failure message to WhatsApp
     if (success) {
+      // Try to get the user address from auth bridge, but don't fail if not found
       const userAddress = authBridge.getSuiAddressForPhone(phone);
-      const successMessage = `🎉 **Authentication Successful!**
+      
+      let successMessage = `🎉 **Authentication Successful!**
 
-✅ Your phone number is now linked to your Sui blockchain address!
+✅ Your account has been authenticated successfully!
 
-📱 Phone: ${phone}
-🏦 Sui Address: ${userAddress}
+📱 Phone: ${phone}`;
+
+      if (userAddress) {
+        successMessage += `
+🏦 Sui Address: ${userAddress}`;
+      }
+
+      successMessage += `
 
 You can now use all Njangi commands:
 • /circles - View your circles

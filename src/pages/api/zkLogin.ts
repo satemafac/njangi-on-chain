@@ -225,20 +225,52 @@ async function getAggregatorSDK(): Promise<AggregatorClient> {
 
 // Function to get the JSON RPC URL
 function getJsonRpcUrl(): string {
-  return process.env.SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443';
+  const rpcUrl = process.env.SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443';
+  
+  // Validate the URL format
+  try {
+    new URL(rpcUrl);
+    return rpcUrl;
+  } catch (error) {
+    console.error('Invalid SUI_RPC_URL:', rpcUrl, 'Error:', error);
+    // Fallback to default if environment variable is malformed
+    const fallbackUrl = 'https://fullnode.testnet.sui.io:443';
+    console.log('Using fallback RPC URL:', fallbackUrl);
+    return fallbackUrl;
+  }
+}
+
+// Helper function to safely create SuiClient instances
+function createSuiClient(): SuiClient {
+  try {
+    const rpcUrl = getJsonRpcUrl();
+    console.log('Creating SuiClient with URL:', rpcUrl);
+    return new SuiClient({ url: rpcUrl });
+  } catch (error) {
+    console.error('Error creating SuiClient:', error);
+    if (error instanceof Error && error.message.includes('Failed to parse URL')) {
+      console.error('❌ Failed to parse URL from SuiClient creation. URL:', getJsonRpcUrl());
+    }
+    throw error;
+  }
 }
 
 // When using swapAndDepositCetus, replace accessing the private suiClient directly with the proper API
 const getEpochData = async (): Promise<{ epoch: string }> => {
-  const suiClient = new SuiClient({ url: getJsonRpcUrl() });
-  return await suiClient.getLatestSuiSystemState();
+  try {
+    const suiClient = createSuiClient();
+    return await suiClient.getLatestSuiSystemState();
+  } catch (error) {
+    console.error('Error in getEpochData:', error);
+    throw error;
+  }
 };
 
 // Add this helper function after getEpochData
 const checkPoolLiquidity = async () => {
   try {
     console.log('Checking available liquidity in SUI-USDC pools...');
-    const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+    const suiClient = createSuiClient();
     
     // First check which pools actually exist
     const validPools = [];
