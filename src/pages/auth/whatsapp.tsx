@@ -7,7 +7,7 @@ export default function WhatsAppAuth() {
   const router = useRouter();
   const { handleCallback } = useAuth();
   const [authState, setAuthState] = useState<{
-    status: 'loading' | 'authenticating' | 'success' | 'error';
+    status: 'loading' | 'needLogin' | 'authenticating' | 'success' | 'error';
     message: string;
     token?: string;
     phone?: string;
@@ -41,16 +41,17 @@ export default function WhatsAppAuth() {
     const tokenStr = Array.isArray(token) ? token[0] : token;
     const phoneStr = Array.isArray(phone) ? phone[0] : phone;
 
-    setAuthState({
-      status: 'authenticating',
-      message: `Preparing authentication for ${phoneStr}...`,
-      token: tokenStr,
-      phone: phoneStr,
-    });
-
     // If JWT is present, complete authentication
     if (jwt) {
       completeAuthentication(tokenStr, phoneStr, Array.isArray(jwt) ? jwt[0] : jwt);
+    } else {
+      // No JWT token, user needs to login first
+      setAuthState({
+        status: 'needLogin',
+        message: `Please complete authentication for ${phoneStr}`,
+        token: tokenStr,
+        phone: phoneStr,
+      });
     }
   }, [router.query]);
 
@@ -123,6 +124,18 @@ export default function WhatsAppAuth() {
     }
   };
 
+  // Handle successful login from LoginButton
+  useEffect(() => {
+    // Listen for authentication success from AuthContext
+    // The LoginButton will trigger handleCallback which should work normally
+    // We just need to redirect back with the JWT token
+    
+    // Check if we have successfully authenticated and have the required params
+    if (authState.status === 'needLogin' && authState.token && authState.phone) {
+      // We'll handle this when the user clicks the login button and gets redirected back with JWT
+    }
+  }, [authState]);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
       <div className="max-w-md w-full">
@@ -144,6 +157,32 @@ export default function WhatsAppAuth() {
               <div className="text-center">
                 <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-4"></div>
                 <p className="text-gray-600">{authState.message}</p>
+              </div>
+            )}
+
+            {authState.status === 'needLogin' && (
+              <div className="text-center">
+                <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                </div>
+                <p className="text-gray-600 mb-6">{authState.message}</p>
+                
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                  <p className="text-sm text-blue-800">
+                    Choose your preferred login method to complete your Njangi authentication for WhatsApp.
+                  </p>
+                </div>
+
+                {/* Login Button Component */}
+                <LoginButton />
+                
+                <div className="mt-6 text-center">
+                  <p className="text-xs text-gray-500">
+                    After logging in, you&apos;ll be redirected back to complete your WhatsApp setup.
+                  </p>
+                </div>
               </div>
             )}
 
@@ -198,7 +237,7 @@ export default function WhatsAppAuth() {
                       onClick={() => window.close()}
                       className="flex-1 bg-gray-200 text-gray-800 py-2 px-4 rounded-lg hover:bg-gray-300 transition-colors text-sm"
                     >
-                      Close Tab
+                      Close Page
                     </button>
                   </div>
                 </div>
@@ -209,44 +248,50 @@ export default function WhatsAppAuth() {
               <div className="text-center">
                 <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
                   <svg className="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
                   </svg>
                 </div>
                 <p className="text-red-600 font-medium mb-2">Authentication Failed</p>
                 <p className="text-gray-600 text-sm mb-4">{authState.message}</p>
                 
-                <div className="space-y-3">
-                  <button
-                    onClick={retryAuthentication}
-                    className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors"
-                  >
-                    Try Again
-                  </button>
-                  
-                  <div className="text-sm text-gray-500">
-                    Or authenticate with a social provider:
+                <div className="space-y-4">
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                    <div className="flex items-start">
+                      <div className="flex-shrink-0">
+                        <svg className="w-5 h-5 text-red-600 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01" />
+                        </svg>
+                      </div>
+                      <div className="ml-3">
+                        <p className="text-sm font-medium text-red-800">
+                          What to do next
+                        </p>
+                        <p className="text-sm text-red-700 mt-1">
+                          You can try again or return to WhatsApp to request a new authentication link.
+                        </p>
+                      </div>
+                    </div>
                   </div>
                   
-                  <LoginButton />
+                  <div className="flex space-x-3">
+                    {authState.token && authState.phone && (
+                      <button
+                        onClick={retryAuthentication}
+                        className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors text-sm"
+                      >
+                        Try Again
+                      </button>
+                    )}
+                    <button
+                      onClick={() => window.close()}
+                      className="flex-1 bg-gray-200 text-gray-800 py-2 px-4 rounded-lg hover:bg-gray-300 transition-colors text-sm"
+                    >
+                      Close Page
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
-
-            {authState.status === 'authenticating' && !router.query.jwt && (
-              <div className="border rounded-lg p-4 bg-blue-50">
-                <p className="text-sm text-blue-800 mb-3">
-                  Please complete your authentication by signing in with one of the following providers:
-                </p>
-                <LoginButton />
-              </div>
-            )}
-          </div>
-
-          {/* Footer */}
-          <div className="mt-8 pt-6 border-t border-gray-200 text-center">
-            <p className="text-xs text-gray-500">
-              Secure authentication powered by zkLogin
-            </p>
           </div>
         </div>
       </div>
