@@ -22,7 +22,6 @@ import { WhatsAppAuthBridgeService } from './whatsapp-auth-bridge.service';
 import { WhatsAppCommandParserService } from './whatsapp-command-parser.service';
 import { WhatsAppConversationFlowService } from './whatsapp-conversation-flow.service';
 import { ParsedCommand } from '../types/whatsapp-commands';
-import { AccountData } from './zkLoginService';
 
 // Configure logger
 const logger = createLogger({
@@ -534,34 +533,25 @@ If you didn't receive a link or it expired, wait 5 minutes before trying again.`
         return;
       }
 
-      // Initiate authentication
-      const result = await this.authBridge.initiateAuthentication(phoneNumber, provider);
+      // Create simple auth URL that redirects to standard login flow
+      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com';
+      const authUrl = `${baseUrl}/auth?whatsapp_phone=${encodeURIComponent(phoneNumber)}`;
 
-      if (result.success && result.authUrl) {
-        // Mark session as having pending auth
-        this.updateSession(phoneNumber, { pendingAuth: Date.now() });
-        
-        // Register callback for when authentication completes
-        this.authBridge.registerCompletionCallback(phoneNumber, (phone, success, account) => {
-          this.handleAuthenticationCompletion(phone, success, account);
-        });
-        
-        await this.sendTextMessage(
-          phoneNumber,
-          `🔐 **Complete Your Authentication**
+      // Mark session as having pending auth
+      this.updateSession(phoneNumber, { pendingAuth: Date.now() });
+      
+      await this.sendTextMessage(
+        phoneNumber,
+        `🔐 **Complete Your Authentication**
 
 Please click this link to authenticate your account:
-👉 ${result.authUrl}
+👉 ${authUrl}
 
-⏰ This link expires in 30 minutes
 🔒 You'll sign in with ${provider}
 ✅ After completion, you'll receive a confirmation here
 
 **Important:** Complete the authentication in your browser, then return to WhatsApp for confirmation.`
-        );
-      } else {
-        await this.sendErrorMessage(phoneNumber, result.error || 'Failed to start authentication');
-      }
+      );
 
     } catch (error) {
       logger.error(`Authentication command failed for ${phoneNumber}:`, error);
@@ -569,38 +559,6 @@ Please click this link to authenticate your account:
     }
   }
 
-  /**
-   * Handle authentication completion callback
-   */
-  private async handleAuthenticationCompletion(phoneNumber: string, success: boolean, account?: AccountData): Promise<void> {
-    try {
-      // Clear pending auth from session
-      this.updateSession(phoneNumber, { pendingAuth: undefined });
-
-      if (success && account) {
-        // Update session with authentication data
-        this.updateSession(phoneNumber, { 
-          isAuthenticated: true,
-          suiAddress: account.userAddr,
-          authenticatedAt: new Date(),
-          zkLoginProof: {
-            provider: account.provider,
-            userAddr: account.userAddr,
-            zkProofs: account.zkProofs,
-            userSalt: account.userSalt,
-            sub: account.sub,
-            aud: account.aud,
-          }
-        });
-
-        logger.info(`Authentication completed for ${phoneNumber} via callback`);
-      } else {
-        logger.warn(`Authentication failed for ${phoneNumber} via callback`);
-      }
-    } catch (error) {
-      logger.error(`Error handling authentication completion for ${phoneNumber}:`, error);
-    }
-  }
 
   /**
    * Check if user is authenticated for restricted commands

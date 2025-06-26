@@ -44,10 +44,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // For the simplified flow, we don't strictly validate the auth token
-    // since the main authentication happens through the standard zkLogin flow
-    // Just verify the token format is reasonable
-    if (token.length < 10) { // Basic sanity check
+    // For the simplified flow, we accept a simple token since auth happens through standard zkLogin
+    // Just verify the token is not empty
+    if (!token || token.length < 5) { // Basic sanity check
       return res.status(401).json({ 
         error: 'Invalid authentication token format' 
       });

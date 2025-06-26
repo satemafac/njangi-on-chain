@@ -188,28 +188,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     // Reset idle timer after successful login
     resetIdleTimerWithLogging();
     
-    // Check if we're in a WhatsApp auth flow and need to redirect back
-    const currentUrl = new URL(window.location.href);
-    let whatsAppToken = currentUrl.searchParams.get('token');
-    let whatsAppPhone = currentUrl.searchParams.get('phone');
-    
-    // Also check sessionStorage for WhatsApp auth parameters (set during OAuth flow)
-    if (!whatsAppToken && !whatsAppPhone) {
-      whatsAppToken = sessionStorage.getItem('whatsapp_auth_token');
-      whatsAppPhone = sessionStorage.getItem('whatsapp_auth_phone');
-    }
-    
-    if (whatsAppToken && whatsAppPhone) {
-      // Clear sessionStorage since we're completing the auth
-      sessionStorage.removeItem('whatsapp_auth_token');
-      sessionStorage.removeItem('whatsapp_auth_phone');
-      
-      // Redirect back to WhatsApp auth page with JWT token
-      const redirectUrl = `/auth/whatsapp?token=${whatsAppToken}&phone=${encodeURIComponent(whatsAppPhone)}&jwt=${jwt}`;
-      window.location.href = redirectUrl;
-      return accountData;
-    }
-    
     return accountData;
   };
 
