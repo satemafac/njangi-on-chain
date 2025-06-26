@@ -181,7 +181,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const handleCallback = async (jwt: string) => {
+    console.log('🔄 AuthContext: handleCallback called');
     const accountData = await zkLogin.handleCallback(jwt);
+    console.log('✅ AuthContext: zkLogin callback completed, user address:', accountData.userAddr);
+    
     setAccount(accountData);
     setUserAddress(accountData.userAddr);
     setIsAuthenticated(true);
@@ -190,29 +193,39 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     
     // Check for WhatsApp phone number and send notification
     const whatsappPhone = sessionStorage.getItem('whatsapp_phone');
+    console.log('📱 AuthContext: Checking for WhatsApp phone:', whatsappPhone ? `Found: ${whatsappPhone}` : 'Not found');
+    
     if (whatsappPhone) {
-      console.log('Sending WhatsApp notification for:', whatsappPhone);
+      console.log('📤 AuthContext: Sending WhatsApp notification for:', whatsappPhone);
       
       try {
         // Send notification to WhatsApp with account data so server can register mapping
-        
-        await fetch('/api/whatsapp/auth/notify', {
+        const response = await fetch('/api/whatsapp/auth/notify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             token: 'direct-auth',
             phone: whatsappPhone, 
             success: true,
-            message: 'Authentication completed successfully! You can now use all Njangi commands.' 
+            message: 'Authentication completed successfully! You can now use all Njangi commands.',
+            userAddress: accountData.userAddr // Add user address for debugging
           }),
         });
         
+        if (response.ok) {
+          console.log('✅ AuthContext: WhatsApp notification sent successfully');
+        } else {
+          const errorText = await response.text();
+          console.error('❌ AuthContext: WhatsApp notification failed:', response.status, errorText);
+        }
+        
         // Clear the session storage
         sessionStorage.removeItem('whatsapp_phone');
-        console.log('WhatsApp notification sent successfully');
       } catch (err) {
-        console.error('Failed to send WhatsApp notification:', err);
+        console.error('❌ AuthContext: Failed to send WhatsApp notification:', err);
       }
+    } else {
+      console.log('ℹ️ AuthContext: No WhatsApp phone found, skipping notification');
     }
     
     return accountData;

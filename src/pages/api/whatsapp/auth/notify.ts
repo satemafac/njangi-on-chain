@@ -15,6 +15,9 @@ interface NotifyRequest {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
+    console.log('📨 WhatsApp Auth Notify API called:', req.method);
+    console.log('📝 Request body:', JSON.stringify(req.body, null, 2));
+
     // Only allow POST requests
     if (req.method !== 'POST') {
       res.setHeader('Allow', ['POST']);
