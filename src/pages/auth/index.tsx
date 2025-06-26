@@ -46,48 +46,15 @@ export default function AuthPage() {
     if (isAuthenticated && account) {
       setAuthState({
         status: 'redirecting',
-        message: 'Authentication successful! Sending confirmation...',
+        message: 'Authentication successful! Redirecting...',
       });
 
-      // If this was a WhatsApp auth flow, send notification
-      const phoneFromSession = sessionStorage.getItem('whatsapp_phone');
-      const phoneFromUrl = whatsappPhone;
-      const phone = phoneFromUrl || phoneFromSession;
-
-      if (phone) {
-        // Send notification to WhatsApp
-        fetch('/api/whatsapp/auth/notify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            token: 'direct-auth', // Simple token since we're not using complex auth bridge
-            phone, 
-            success: true,
-            message: 'Authentication completed successfully! You can now use all Njangi commands.' 
-          }),
-        }).then(() => {
-          // Clear the session storage
-          sessionStorage.removeItem('whatsapp_phone');
-          
-          // Redirect to a success page or dashboard after a delay
-          setTimeout(() => {
-            router.push('/dashboard');
-          }, 3000);
-        }).catch(err => {
-          console.error('Failed to notify WhatsApp:', err);
-          // Still redirect to dashboard even if notification fails
-          setTimeout(() => {
-            router.push('/dashboard');
-          }, 3000);
-        });
-      } else {
-        // Regular auth flow, just redirect to dashboard
-        setTimeout(() => {
-          router.push('/dashboard');
-        }, 2000);
-      }
+      // Just redirect to dashboard - callback page handles WhatsApp notifications
+      setTimeout(() => {
+        router.push('/dashboard');
+      }, 2000);
     }
-  }, [isAuthenticated, account, whatsappPhone, router]);
+  }, [isAuthenticated, account, router]);
 
   if (authState.status === 'loading') {
     return (
