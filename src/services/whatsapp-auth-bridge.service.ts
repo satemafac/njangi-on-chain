@@ -387,6 +387,22 @@ export class WhatsAppAuthBridgeService {
   }
 
   /**
+   * Register a direct phone number to Sui address mapping (for simplified auth flows)
+   */
+  public registerDirectMapping(phoneNumber: string, accountData: AccountData): void {
+    const mapping: PhoneNumberMapping = {
+      phoneNumber,
+      suiAddress: accountData.userAddr,
+      accountData,
+      lastAuthenticated: new Date(),
+      verificationStatus: 'verified',
+    };
+
+    this.phoneToSuiMappings.set(phoneNumber, mapping);
+    logger.info(`Direct mapping registered: ${phoneNumber} -> ${accountData.userAddr}`);
+  }
+
+  /**
    * Export phone mappings for backup/restore
    */
   public exportMappings(): PhoneNumberMapping[] {

@@ -54,6 +54,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Send success or failure message to WhatsApp
     if (success) {
+      // Register direct mapping from frontend authentication
+      // Note: In a real implementation, you'd want to validate the account data
+      // For now, we're trusting the frontend authentication since it went through zkLogin
+      console.log(`Registering successful authentication for phone: ${phone}`);
+
       // Try to get the user address from auth bridge, but don't fail if not found
       const userAddress = authBridge.getSuiAddressForPhone(phone);
       

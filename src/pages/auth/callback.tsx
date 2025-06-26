@@ -85,34 +85,6 @@ export default function AuthCallback() {
         setProgress(100);
         setStatus('Authentication successful! Redirecting...');
         
-        // Check for WhatsApp phone number and send notification
-        const whatsappPhone = sessionStorage.getItem('whatsapp_phone');
-        if (whatsappPhone) {
-          console.log('Sending WhatsApp notification for:', whatsappPhone);
-          setStatus('Authentication successful! Sending WhatsApp confirmation...');
-          
-          try {
-            await fetch('/api/whatsapp/auth/notify', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                token: 'direct-auth',
-                phone: whatsappPhone, 
-                success: true,
-                message: 'Authentication completed successfully! You can now use all Njangi commands.' 
-              }),
-            });
-            
-            // Clear the session storage
-            sessionStorage.removeItem('whatsapp_phone');
-            console.log('WhatsApp notification sent successfully');
-            setStatus('Authentication successful! WhatsApp confirmation sent.');
-          } catch (err) {
-            console.error('Failed to send WhatsApp notification:', err);
-            setStatus('Authentication successful! (WhatsApp notification failed)');
-          }
-        }
-        
         // Check if there's a stored redirect URL
         const redirectUrl = localStorage.getItem('redirectAfterLogin');
         
@@ -128,7 +100,7 @@ export default function AuthCallback() {
             // Default redirect to dashboard
             router.push('/dashboard');
           }
-        }, 1500); // Slightly longer delay to show WhatsApp confirmation
+        }, 1000);
       } catch (err) {
         console.error('Auth callback error:', err);
         setIsError(true);

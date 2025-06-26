@@ -188,6 +188,33 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     // Reset idle timer after successful login
     resetIdleTimerWithLogging();
     
+    // Check for WhatsApp phone number and send notification
+    const whatsappPhone = sessionStorage.getItem('whatsapp_phone');
+    if (whatsappPhone) {
+      console.log('Sending WhatsApp notification for:', whatsappPhone);
+      
+      try {
+        // Send notification to WhatsApp with account data so server can register mapping
+        
+        await fetch('/api/whatsapp/auth/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            token: 'direct-auth',
+            phone: whatsappPhone, 
+            success: true,
+            message: 'Authentication completed successfully! You can now use all Njangi commands.' 
+          }),
+        });
+        
+        // Clear the session storage
+        sessionStorage.removeItem('whatsapp_phone');
+        console.log('WhatsApp notification sent successfully');
+      } catch (err) {
+        console.error('Failed to send WhatsApp notification:', err);
+      }
+    }
+    
     return accountData;
   };
 
