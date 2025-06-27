@@ -4,8 +4,8 @@ import { LoginButton } from '../../components/LoginButton';
 import { useAuth } from '../../contexts/AuthContext';
 
 export default function WhatsAppAuth() {
-  const router = useRouter();
   const { handleCallback } = useAuth();
+  const router = useRouter();
   const [authState, setAuthState] = useState<{
     status: 'loading' | 'needLogin' | 'authenticating' | 'success' | 'error';
     message: string;
@@ -15,49 +15,6 @@ export default function WhatsAppAuth() {
     status: 'loading',
     message: 'Initializing authentication...',
   });
-
-  useEffect(() => {
-    const { token, phone, error, jwt } = router.query;
-
-    // Handle error from URL parameters
-    if (error) {
-      setAuthState({
-        status: 'error',
-        message: Array.isArray(error) ? error[0] : error,
-      });
-      return;
-    }
-
-    // Validate required parameters
-    if (!token || !phone) {
-      setAuthState({
-        status: 'error',
-        message: 'Missing authentication parameters. Please request a new authentication link from WhatsApp.',
-      });
-      return;
-    }
-
-    // Store token and phone for authentication
-    const tokenStr = Array.isArray(token) ? token[0] : token;
-    const phoneStr = Array.isArray(phone) ? phone[0] : phone;
-
-    // Store WhatsApp auth data in localStorage for callback detection
-    localStorage.setItem('whatsappAuthToken', tokenStr);
-    localStorage.setItem('whatsappAuthPhone', phoneStr);
-
-    // If JWT is present, complete authentication
-    if (jwt) {
-      completeAuthentication(tokenStr, phoneStr, Array.isArray(jwt) ? jwt[0] : jwt);
-    } else {
-      // No JWT token, user needs to login first
-      setAuthState({
-        status: 'needLogin',
-        message: `Please complete authentication for ${phoneStr}`,
-        token: tokenStr,
-        phone: phoneStr,
-      });
-    }
-  }, [router.query, completeAuthentication]);
 
   const completeAuthentication = useCallback(async (token: string, phone: string, jwtToken: string) => {
     try {
@@ -120,6 +77,28 @@ export default function WhatsAppAuth() {
       });
     }
   }, [handleCallback]);
+
+  // Check URL parameters for authentication flow
+  useEffect(() => {
+    const { token, phone, jwt } = router.query;
+    
+    const tokenStr = Array.isArray(token) ? token[0] : token;
+    const phoneStr = Array.isArray(phone) ? phone[0] : phone;
+    const jwtStr = Array.isArray(jwt) ? jwt[0] : jwt;
+    
+    if (tokenStr && phoneStr && jwtStr) {
+      // Complete authentication flow
+      completeAuthentication(tokenStr, phoneStr, jwtStr);
+    } else if (tokenStr && phoneStr) {
+      // Show login interface
+      setAuthState({
+        status: 'needLogin',
+        message: `Please complete authentication for ${phoneStr}`,
+        token: tokenStr,
+        phone: phoneStr,
+      });
+    }
+  }, [router.query, completeAuthentication]);
 
   const retryAuthentication = () => {
     if (authState.token && authState.phone) {
