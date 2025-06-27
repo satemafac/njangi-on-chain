@@ -1,10 +1,8 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import { LoginButton } from '../../components/LoginButton';
-import { useAuth } from '../../contexts/AuthContext';
 
 export default function WhatsAppAuth() {
-  const { handleCallback } = useAuth();
   const router = useRouter();
   const [authState, setAuthState] = useState<{
     status: 'loading' | 'needLogin' | 'authenticating' | 'success' | 'error';
@@ -24,12 +22,25 @@ export default function WhatsAppAuth() {
         message: 'Completing authentication...',
       }));
 
-      // Follow the same flow as LoginButton.tsx - just call handleCallback with the JWT
-      // This will process the zkLogin authentication normally
-      await handleCallback(jwtToken);
+      // Use the WhatsApp-specific authentication completion endpoint
+      // This integrates with the StatelessWhatsAppAuthService
+      const response = await fetch('/api/whatsapp/auth/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          token, 
+          phone: phone.startsWith('+') ? phone : `+${phone}`, 
+          jwt: jwtToken 
+        }),
+      });
 
-      // After successful authentication, notify WhatsApp
-      // Ensure phone number has + prefix for international format
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Authentication completion failed');
+      }
+
+      // Authentication successful, now notify WhatsApp
       const formattedPhone = phone.startsWith('+') ? phone : `+${phone}`;
       
       await fetch('/api/whatsapp/auth/notify', {
@@ -47,7 +58,7 @@ export default function WhatsAppAuth() {
 
       setAuthState({
         status: 'success',
-        message: `Authentication successful! You can now return to WhatsApp and manage your Njangi circles.`,
+        message: `Authentication successful! Your Sui address: ${result.suiAddress}\n\nYou can now return to WhatsApp and manage your Njangi circles.`,
         token,
         phone,
       });
@@ -59,7 +70,6 @@ export default function WhatsAppAuth() {
       console.error('Authentication completion failed:', error);
       
       // Notify WhatsApp of failure
-      // Ensure phone number has + prefix for international format
       const formattedPhone = phone.startsWith('+') ? phone : `+${phone}`;
       
       await fetch('/api/whatsapp/auth/notify', {
@@ -82,7 +92,7 @@ export default function WhatsAppAuth() {
         phone,
       });
     }
-  }, [handleCallback]);
+  }, []);
 
   // Check URL parameters for authentication flow
   useEffect(() => {

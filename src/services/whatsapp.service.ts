@@ -538,21 +538,23 @@ Type /help to see all available commands.`;
    * Check if user is authenticated for restricted commands
    */
   public isUserAuthenticated(phoneNumber: string): boolean {
-    return this.authBridge.isPhoneNumberAuthenticated(phoneNumber);
+    return this.statelessAuth.isPhoneAuthenticated(phoneNumber);
   }
 
   /**
    * Get user's Sui address
    */
   public getUserSuiAddress(phoneNumber: string): string | null {
-    return this.authBridge.getSuiAddressForPhone(phoneNumber);
+    return this.statelessAuth.getSuiAddressForPhone(phoneNumber);
   }
 
   /**
    * Get user's account data
    */
   public getUserAccountData(phoneNumber: string) {
-    return this.authBridge.getAccountDataForPhone(phoneNumber);
+    // For stateless auth, we can return the session data
+    const session = this.statelessAuth.getWhatsAppSession(phoneNumber);
+    return session.isAuthenticated ? { userAddr: session.suiAddress } : null;
   }
 
   /**
