@@ -95,8 +95,24 @@ async function handleWebhookMessage(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Invalid payload entry' });
     }
 
-    // Process the webhook message using the command executor for modern flow
-    await commandExecutor.processWebhookMessage(payload);
+    // Process each entry in the webhook payload
+    for (const entry of payload.entry) {
+      if (entry.changes) {
+        for (const change of entry.changes) {
+          if (change.field === 'messages' && change.value?.messages) {
+            for (const message of change.value.messages) {
+              if (message.type === 'text' && message.text?.body) {
+                const phoneNumber = message.from;
+                const messageText = message.text.body;
+                
+                // Process the message using the command executor
+                await commandExecutor.processMessage(phoneNumber, messageText);
+              }
+            }
+          }
+        }
+      }
+    }
 
     // Return success response
     return res.status(200).json({ success: true });
