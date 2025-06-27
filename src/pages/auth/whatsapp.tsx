@@ -29,12 +29,15 @@ export default function WhatsAppAuth() {
       await handleCallback(jwtToken);
 
       // After successful authentication, notify WhatsApp
+      // Ensure phone number has + prefix for international format
+      const formattedPhone = phone.startsWith('+') ? phone : `+${phone}`;
+      
       await fetch('/api/whatsapp/auth/notify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           token, 
-          phone, 
+          phone: formattedPhone, 
           success: true,
           message: 'Authentication completed successfully! You can now use all Njangi commands.' 
         }),
@@ -56,12 +59,15 @@ export default function WhatsAppAuth() {
       console.error('Authentication completion failed:', error);
       
       // Notify WhatsApp of failure
+      // Ensure phone number has + prefix for international format
+      const formattedPhone = phone.startsWith('+') ? phone : `+${phone}`;
+      
       await fetch('/api/whatsapp/auth/notify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           token, 
-          phone, 
+          phone: formattedPhone, 
           success: false,
           message: error instanceof Error ? error.message : 'Authentication failed' 
         }),
