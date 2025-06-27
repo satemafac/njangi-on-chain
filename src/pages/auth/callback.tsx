@@ -92,12 +92,15 @@ export default function AuthCallback() {
         if (whatsappToken && whatsappPhone) {
           // This is a WhatsApp authentication - notify WhatsApp of success
           try {
+            // Ensure phone number has + prefix for international format
+            const formattedPhone = whatsappPhone.startsWith('+') ? whatsappPhone : `+${whatsappPhone}`;
+            
             await fetch('/api/whatsapp/auth/notify', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ 
                 token: whatsappToken, 
-                phone: whatsappPhone, 
+                phone: formattedPhone, 
                 success: true,
                 message: 'Authentication completed successfully! You can now use all Njangi commands.' 
               }),
@@ -145,12 +148,15 @@ export default function AuthCallback() {
         if (whatsappToken && whatsappPhone) {
           // Notify WhatsApp of failure
           try {
+            // Ensure phone number has + prefix for international format
+            const formattedPhone = whatsappPhone.startsWith('+') ? whatsappPhone : `+${whatsappPhone}`;
+            
             await fetch('/api/whatsapp/auth/notify', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ 
                 token: whatsappToken, 
-                phone: whatsappPhone, 
+                phone: formattedPhone, 
                 success: false,
                 message: err instanceof Error ? err.message : 'Authentication failed' 
               }),
