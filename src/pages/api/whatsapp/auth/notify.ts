@@ -17,6 +17,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     console.log('📨 WhatsApp Auth Notify API called:', req.method);
     console.log('📝 Request body:', JSON.stringify(req.body, null, 2));
+    
+    // Debug WhatsApp configuration
+    const hasAccessToken = !!process.env.WHATSAPP_ACCESS_TOKEN;
+    const hasPhoneNumberId = !!process.env.WHATSAPP_PHONE_NUMBER_ID;
+    console.log('🔧 WhatsApp Config:', { 
+      hasAccessToken, 
+      hasPhoneNumberId,
+      phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID ? `${process.env.WHATSAPP_PHONE_NUMBER_ID.substring(0, 8)}...` : 'missing'
+    });
 
     // Only allow POST requests
     if (req.method !== 'POST') {
@@ -56,6 +65,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Send success or failure message to WhatsApp
+    let messageResult;
+    
     if (success) {
       // Register direct mapping from frontend authentication
       // Note: In a real implementation, you'd want to validate the account data
@@ -86,7 +97,7 @@ You can now use all Njangi commands:
 
 Welcome to Njangi! 🚀`;
 
-      await whatsAppService.sendTextMessage(phone, successMessage);
+      messageResult = await whatsAppService.sendTextMessage(phone, successMessage);
     } else {
       const errorMessage = `❌ **Authentication Failed**
 
@@ -96,12 +107,35 @@ Please try again by typing /auth
 
 If you continue to have issues, please contact support.`;
 
-      await whatsAppService.sendTextMessage(phone, errorMessage);
+      messageResult = await whatsAppService.sendTextMessage(phone, errorMessage);
     }
 
+    // Check if the WhatsApp message was actually sent
+    if (!messageResult) {
+      console.error(`❌ Failed to send WhatsApp notification to ${phone}. This could be due to:`);
+      console.error('  - Invalid or expired WhatsApp access token');
+      console.error('  - Phone number not opted in to receive messages');
+      console.error('  - WhatsApp Business API rate limits');
+      console.error('  - Network connectivity issues');
+      console.error('  - Invalid phone number format or permissions');
+      
+      return res.status(500).json({ 
+        error: 'Failed to send WhatsApp notification. Please check server logs for details.',
+        success: false,
+        details: 'WhatsApp service returned null - message was not delivered'
+      });
+    }
+
+    const messageId = messageResult.messages?.[0]?.id;
+    console.log(`✅ Successfully sent WhatsApp notification to ${phone}`);
+    if (messageId) {
+      console.log(`📱 WhatsApp Message ID: ${messageId}`);
+    }
+    
     return res.status(200).json({
       success: true,
       message: 'Notification sent to WhatsApp successfully',
+      messageId: messageId
     });
 
   } catch (error) {
