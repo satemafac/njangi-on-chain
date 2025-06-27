@@ -1,8 +1,10 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import { LoginButton } from '../../components/LoginButton';
+import { useAuth } from '../../contexts/AuthContext';
 
 export default function WhatsAppAuth() {
+  const { handleCallback } = useAuth();
   const router = useRouter();
   const [authState, setAuthState] = useState<{
     status: 'loading' | 'needLogin' | 'authenticating' | 'success' | 'error';
@@ -22,43 +24,38 @@ export default function WhatsAppAuth() {
         message: 'Completing authentication...',
       }));
 
-      // Use the WhatsApp-specific authentication completion endpoint
-      // This integrates with the StatelessWhatsAppAuthService
-      const response = await fetch('/api/whatsapp/auth/complete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          token, 
-          phone: phone.startsWith('+') ? phone : `+${phone}`, 
-          jwt: jwtToken 
-        }),
-      });
+      // Follow the same flow as LoginButton.tsx - just call handleCallback with the JWT
+      // This will process the zkLogin authentication normally
+      const accountData = await handleCallback(jwtToken);
 
-      const result = await response.json();
-
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || 'Authentication completion failed');
-      }
-
-      // Authentication successful, now notify WhatsApp
+      // After successful authentication, notify WhatsApp
       const formattedPhone = phone.startsWith('+') ? phone : `+${phone}`;
       
-      await fetch('/api/whatsapp/auth/notify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          token, 
-          phone: formattedPhone, 
-          success: true,
-          message: 'Authentication completed successfully! You can now use all Njangi commands.' 
-        }),
-      }).catch(err => {
-        console.warn('Failed to notify WhatsApp of auth success:', err);
-      });
+      try {
+        const notifyResponse = await fetch('/api/whatsapp/auth/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            token, 
+            phone: formattedPhone, 
+            success: true,
+            userAddress: accountData.userAddr,
+            message: 'Authentication completed successfully! You can now use all Njangi commands.' 
+          }),
+        });
+
+        if (!notifyResponse.ok) {
+          console.warn('Failed to notify WhatsApp of auth success:', await notifyResponse.text());
+        } else {
+          console.log('Successfully notified WhatsApp of authentication success');
+        }
+      } catch (notifyError) {
+        console.warn('Failed to notify WhatsApp of auth success:', notifyError);
+      }
 
       setAuthState({
         status: 'success',
-        message: `Authentication successful! Your Sui address: ${result.suiAddress}\n\nYou can now return to WhatsApp and manage your Njangi circles.`,
+        message: `Authentication successful! Your Sui address: ${accountData.userAddr}\n\nYou can now return to WhatsApp and manage your Njangi circles.`,
         token,
         phone,
       });
@@ -72,18 +69,20 @@ export default function WhatsAppAuth() {
       // Notify WhatsApp of failure
       const formattedPhone = phone.startsWith('+') ? phone : `+${phone}`;
       
-      await fetch('/api/whatsapp/auth/notify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          token, 
-          phone: formattedPhone, 
-          success: false,
-          message: error instanceof Error ? error.message : 'Authentication failed' 
-        }),
-      }).catch(err => {
-        console.warn('Failed to notify WhatsApp of auth failure:', err);
-      });
+      try {
+        await fetch('/api/whatsapp/auth/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            token, 
+            phone: formattedPhone, 
+            success: false,
+            message: error instanceof Error ? error.message : 'Authentication failed' 
+          }),
+        });
+      } catch (notifyError) {
+        console.warn('Failed to notify WhatsApp of auth failure:', notifyError);
+      }
 
       setAuthState({
         status: 'error',
@@ -92,7 +91,7 @@ export default function WhatsAppAuth() {
         phone,
       });
     }
-  }, []);
+  }, [handleCallback]);
 
   // Check URL parameters for authentication flow
   useEffect(() => {
