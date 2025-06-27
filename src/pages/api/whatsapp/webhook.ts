@@ -1,9 +1,11 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { WhatsAppService } from '../../../services/whatsapp.service';
+import { WhatsAppCommandExecutorService } from '../../../services/whatsapp-command-executor.service';
 import { WhatsAppWebhookPayload } from '../../../types/whatsapp';
 import { whatsappConfig, validateWhatsAppConfig } from '../../../config/whatsapp.config';
 
 const whatsappService = WhatsAppService.getInstance();
+const commandExecutor = WhatsAppCommandExecutorService.getInstance();
 
 // Helper function to read raw body
 function getRawBody(req: NextApiRequest): Promise<string> {
@@ -93,8 +95,8 @@ async function handleWebhookMessage(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Invalid payload entry' });
     }
 
-    // Process the webhook message
-    await whatsappService.handleWebhookMessage(payload);
+    // Process the webhook message using the command executor for modern flow
+    await commandExecutor.processWebhookMessage(payload);
 
     // Return success response
     return res.status(200).json({ success: true });

@@ -19,6 +19,7 @@ import {
   errorMessages
 } from '../config/whatsapp.config';
 import { WhatsAppAuthBridgeService } from './whatsapp-auth-bridge.service';
+import { StatelessWhatsAppAuthService } from './whatsapp-stateless-auth.service';
 import { WhatsAppCommandParserService } from './whatsapp-command-parser.service';
 import { WhatsAppConversationFlowService } from './whatsapp-conversation-flow.service';
 import { ParsedCommand } from '../types/whatsapp-commands';
@@ -41,11 +42,13 @@ export class WhatsAppService {
   private sessions: Map<string, WhatsAppUserSession> = new Map();
   private auditLogs: WhatsAppAuditLog[] = [];
   private authBridge: WhatsAppAuthBridgeService;
+  private statelessAuth: StatelessWhatsAppAuthService;
   private commandParser: WhatsAppCommandParserService;
   private conversationFlow: WhatsAppConversationFlowService;
 
   private constructor() {
     this.authBridge = WhatsAppAuthBridgeService.getInstance();
+    this.statelessAuth = StatelessWhatsAppAuthService.getInstance();
     this.commandParser = WhatsAppCommandParserService.getInstance();
     this.conversationFlow = WhatsAppConversationFlowService.getInstance();
     this.initializeService();
@@ -499,16 +502,16 @@ Type /help to see all available commands.`;
    */
   public async handleAuthenticationCommand(phoneNumber: string, provider: 'Google' | 'Facebook' | 'Apple' = 'Google'): Promise<void> {
     try {
-      // Check if already authenticated
-      if (this.authBridge.isPhoneNumberAuthenticated(phoneNumber)) {
-        const status = this.authBridge.getAuthenticationStatus(phoneNumber);
+      // Check if already authenticated using stateless auth service
+      if (this.statelessAuth.isAuthenticated(phoneNumber)) {
+        const userInfo = this.statelessAuth.getUserInfo(phoneNumber);
         await this.sendTextMessage(
           phoneNumber, 
           `✅ **You're Already Authenticated!**
 
-🏦 Sui Address: ${status.suiAddress}
-🔐 Provider: ${status.provider}
-📅 Last authenticated: ${status.lastAuthenticated?.toLocaleString()}
+🏦 Sui Address: ${userInfo?.suiAddress || 'Unknown'}
+🔐 Provider: ${userInfo?.provider || 'Unknown'}
+📅 Last authenticated: ${userInfo?.authenticatedAt?.toLocaleString() || 'Unknown'}
 
 You can now use all commands:
 • /circles - View your circles
@@ -533,9 +536,8 @@ If you didn't receive a link or it expired, wait 5 minutes before trying again.`
         return;
       }
 
-      // Create simple auth URL that redirects to standard login flow
-      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com';
-      const authUrl = `${baseUrl}/auth?whatsapp_phone=${encodeURIComponent(phoneNumber)}`;
+      // Generate authentication URL using stateless auth service
+      const authUrl = await this.statelessAuth.generateAuthenticationUrl(phoneNumber, provider);
 
       // Mark session as having pending auth
       this.updateSession(phoneNumber, { pendingAuth: Date.now() });
