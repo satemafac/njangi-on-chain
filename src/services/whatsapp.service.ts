@@ -500,67 +500,39 @@ Type /help to see all available commands.`;
   /**
    * Handle authentication command
    */
-  public async handleAuthenticationCommand(phoneNumber: string, provider: 'Google' | 'Facebook' | 'Apple' = 'Google'): Promise<void> {
+  public async handleAuthenticationCommand(phoneNumber: string): Promise<void> {
     try {
       // Check if already authenticated using stateless auth service
-      if (this.statelessAuth.isAuthenticated(phoneNumber)) {
-        const userInfo = this.statelessAuth.getUserInfo(phoneNumber);
+      if (this.statelessAuth.isPhoneAuthenticated(phoneNumber)) {
+        const suiAddress = this.statelessAuth.getSuiAddressForPhone(phoneNumber);
         await this.sendTextMessage(
           phoneNumber, 
-          `✅ **You're Already Authenticated!**
-
-🏦 Sui Address: ${userInfo?.suiAddress || 'Unknown'}
-🔐 Provider: ${userInfo?.provider || 'Unknown'}
-📅 Last authenticated: ${userInfo?.authenticatedAt?.toLocaleString() || 'Unknown'}
-
-You can now use all commands:
-• /circles - View your circles
-• /balance - Check balances
-• /create - Start a new circle
-• /status - View account status`
+          `✅ You're already authenticated!\n\n📱 Phone: ${phoneNumber}\n🔗 Address: ${suiAddress || 'Not available'}\n\nYou can now use all Njangi commands. Type /help to see available options.`
         );
         return;
       }
 
-      // Check if there's a pending authentication (prevent spam)
-      const session = this.getSession(phoneNumber);
-      if (session?.pendingAuth && session.pendingAuth > Date.now() - (5 * 60 * 1000)) { // 5 minutes
+      // Start authentication flow using stateless auth service
+      const authResult = await this.statelessAuth.handleAuthenticationRequest(phoneNumber, 'Google');
+      
+      if (authResult.success && authResult.authUrl) {
+        // Send authentication link
         await this.sendTextMessage(
           phoneNumber,
-          `⏳ **Authentication In Progress**
-
-You recently requested authentication. Please check your browser or complete the authentication process.
-
-If you didn't receive a link or it expired, wait 5 minutes before trying again.`
+          `🔐 **Authentication Required**\n\nPlease click the link below to authenticate with your Google account:\n\n${authResult.authUrl}\n\nAfter authentication, you'll be able to use all Njangi features!`
         );
-        return;
+      } else {
+        await this.sendTextMessage(
+          phoneNumber,
+          `❌ Authentication setup failed. Please try again later or contact support.`
+        );
       }
-
-      // Generate authentication URL using stateless auth service
-      const authUrl = await this.statelessAuth.generateAuthenticationUrl(phoneNumber, provider);
-
-      // Mark session as having pending auth
-      this.updateSession(phoneNumber, { pendingAuth: Date.now() });
-      
-      await this.sendTextMessage(
-        phoneNumber,
-        `🔐 **Complete Your Authentication**
-
-Please click this link to authenticate your account:
-👉 ${authUrl}
-
-🔒 You'll sign in with ${provider}
-✅ After completion, you'll receive a confirmation here
-
-**Important:** Complete the authentication in your browser, then return to WhatsApp for confirmation.`
-      );
 
     } catch (error) {
       logger.error(`Authentication command failed for ${phoneNumber}:`, error);
       await this.sendErrorMessage(phoneNumber, errorMessages.NETWORK_ERROR);
     }
   }
-
 
   /**
    * Check if user is authenticated for restricted commands
