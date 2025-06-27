@@ -85,7 +85,38 @@ export default function AuthCallback() {
         setProgress(100);
         setStatus('Authentication successful! Redirecting...');
         
-        // Check if there's a stored redirect URL
+        // Check if this is a WhatsApp authentication
+        const whatsappToken = localStorage.getItem('whatsappAuthToken');
+        const whatsappPhone = localStorage.getItem('whatsappAuthPhone');
+        
+        if (whatsappToken && whatsappPhone) {
+          // This is a WhatsApp authentication - notify WhatsApp of success
+          try {
+            await fetch('/api/whatsapp/auth/notify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                token: whatsappToken, 
+                phone: whatsappPhone, 
+                success: true,
+                message: 'Authentication completed successfully! You can now use all Njangi commands.' 
+              }),
+            });
+            
+            // Clear WhatsApp auth data
+            localStorage.removeItem('whatsappAuthToken');
+            localStorage.removeItem('whatsappAuthPhone');
+            
+            setStatus('Success! You can now return to WhatsApp.');
+            
+            // Don't auto-redirect for WhatsApp users - let them manually return
+            return;
+          } catch (error) {
+            console.warn('Failed to notify WhatsApp of auth success:', error);
+          }
+        }
+        
+        // Check if there's a stored redirect URL for non-WhatsApp users
         const redirectUrl = localStorage.getItem('redirectAfterLogin');
         
         // Short delay before redirecting to show completion
@@ -106,6 +137,32 @@ export default function AuthCallback() {
         setIsError(true);
         setStatus('Authentication failed');
         setError(err instanceof Error ? err.message : 'Authentication failed');
+        
+        // Check if this is a WhatsApp authentication failure
+        const whatsappToken = localStorage.getItem('whatsappAuthToken');
+        const whatsappPhone = localStorage.getItem('whatsappAuthPhone');
+        
+        if (whatsappToken && whatsappPhone) {
+          // Notify WhatsApp of failure
+          try {
+            await fetch('/api/whatsapp/auth/notify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                token: whatsappToken, 
+                phone: whatsappPhone, 
+                success: false,
+                message: err instanceof Error ? err.message : 'Authentication failed' 
+              }),
+            });
+          } catch (notifyError) {
+            console.warn('Failed to notify WhatsApp of auth failure:', notifyError);
+          }
+          
+          // Clear WhatsApp auth data
+          localStorage.removeItem('whatsappAuthToken');
+          localStorage.removeItem('whatsappAuthPhone');
+        }
         
         // Short delay before redirecting on error
         setTimeout(() => {

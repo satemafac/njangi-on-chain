@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import { LoginButton } from '../../components/LoginButton';
 import { useAuth } from '../../contexts/AuthContext';
@@ -41,6 +41,10 @@ export default function WhatsAppAuth() {
     const tokenStr = Array.isArray(token) ? token[0] : token;
     const phoneStr = Array.isArray(phone) ? phone[0] : phone;
 
+    // Store WhatsApp auth data in localStorage for callback detection
+    localStorage.setItem('whatsappAuthToken', tokenStr);
+    localStorage.setItem('whatsappAuthPhone', phoneStr);
+
     // If JWT is present, complete authentication
     if (jwt) {
       completeAuthentication(tokenStr, phoneStr, Array.isArray(jwt) ? jwt[0] : jwt);
@@ -53,9 +57,9 @@ export default function WhatsAppAuth() {
         phone: phoneStr,
       });
     }
-  }, [router.query]);
+  }, [router.query, completeAuthentication]);
 
-  const completeAuthentication = async (token: string, phone: string, jwtToken: string) => {
+  const completeAuthentication = useCallback(async (token: string, phone: string, jwtToken: string) => {
     try {
       setAuthState(prev => ({
         ...prev,
@@ -115,7 +119,7 @@ export default function WhatsAppAuth() {
         phone,
       });
     }
-  };
+  }, [handleCallback]);
 
   const retryAuthentication = () => {
     if (authState.token && authState.phone) {
