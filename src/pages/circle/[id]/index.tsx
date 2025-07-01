@@ -6,7 +6,7 @@ import { toast } from 'react-hot-toast';
 import { ArrowLeft, Copy, Link } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../services/price-service';
-import { PACKAGE_ID } from '../../../services/circle-service';
+import { getCirclePackageId } from '../../../services/circle-service';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -81,12 +81,16 @@ export default function CircleDetails() {
   }, []);
 
   const fetchCircleDetails = async () => {
-    if (!id) return;
+    if (!id || !userAddress) return;
     console.log('Details - Fetching circle details:', id);
     const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
     
     try {
       setLoading(true);
+      
+      // Determine package ID for this circle
+      const determinedPackageId = await getCirclePackageId(id as string, userAddress);
+      console.log('Details - Using package ID:', determinedPackageId);
       // Get object data
       const objectData = await client.getObject({
         id: id as string,
@@ -111,7 +115,7 @@ export default function CircleDetails() {
 
         try {
         const circleEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleCreated` },
+          query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleCreated` },
             limit: 50
           });
         const createEvent = circleEvents.data.find(event => 
@@ -310,7 +314,7 @@ export default function CircleDetails() {
       let isActive = false;
       try {
         const activationEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleActivated` },
+          query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleActivated` },
           limit: 50
         });
         isActive = activationEvents.data.some(event => 
@@ -327,7 +331,7 @@ export default function CircleDetails() {
       if (typeof fields.admin === 'string') memberAddresses.add(fields.admin);
       try {
         const memberEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::MemberJoined` },
+          query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
           limit: 1000
         });
         const circleMemberEvents = memberEvents.data.filter(event => 

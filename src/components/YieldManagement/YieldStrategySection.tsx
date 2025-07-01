@@ -21,6 +21,7 @@ interface YieldStrategySectionProps {
   circleId?: string; // Add circle ID for contract calls
   userAddress?: string; // Add user address for yield tracking
   onYieldConfigCreated?: () => void; // Add callback for when yield config is successfully created
+  packageId?: string; // Add package ID for multi-package support
 }
 
 // Type definitions for API responses
@@ -47,7 +48,8 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
   walletId,
   circleId,
   userAddress,
-  onYieldConfigCreated
+  onYieldConfigCreated,
+  packageId
 }) => {
   const [selectedStrategy, setSelectedStrategy] = useState<YieldStrategy>(currentStrategy);
   const [isChangingStrategy, setIsChangingStrategy] = useState(false);
@@ -220,6 +222,7 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
           const transactionData = {
             action: 'addCetusLiquidity',
             account,
+            packageId: packageId, // Include the circle's package ID
             yieldData: {
               sui_amount: (suiAmount * 1e9).toString(), // Convert to MIST (base units)
               usdc_amount: (minUsdcAmount * 1e6).toString(), // Convert to base units
@@ -230,7 +233,8 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
               tick_upper: 60000,   // Wide range
               slippage_tolerance: 50, // 0.5% in basis points
               total_security_deposits: totalSecurityDeposits, // Pass the actual total
-              strategy: selectedStrategyForCreation // Include selected strategy
+              strategy: selectedStrategyForCreation, // Include selected strategy
+              package_id: packageId // Also include in yieldData for backward compatibility
             }
           };
 
@@ -420,6 +424,7 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
       const processTransactionData = {
         action: 'processSecurityDeposits',
         account: JSON.parse(localStorage.getItem('account') || '{}'),
+        packageId: packageId, // Include the circle's package ID
         yieldData: {
           config_id: configId,
           circle_id: circleId,
@@ -427,7 +432,8 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
           deposit_amount: depositAmountMist.toString(),
           total_security_deposits: totalSecurityDeposits,
           expected_apy: '12-18%',
-          strategy: 'Cetus Liquidity Provision'
+          strategy: 'Cetus Liquidity Provision',
+          package_id: packageId // Also include in yieldData for backward compatibility
         }
       };
 
@@ -502,6 +508,9 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
   // Helper function to find YieldConfig ID from transaction events
   const findYieldConfigId = async (txHash: string): Promise<string | null> => {
     try {
+      console.log('[findYieldConfigId] Starting search for YieldConfig ID in transaction:', txHash);
+      console.log('[findYieldConfigId] Using packageId:', packageId);
+      
       // Query the transaction to get the created objects
       const response = await fetch(`https://fullnode.testnet.sui.io:443`, {
         method: 'POST',
@@ -521,40 +530,90 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
       });
 
       const data = await response.json();
+      console.log('[findYieldConfigId] Transaction data received:', JSON.stringify(data, null, 2));
       
       // Look for YieldConfig creation in events
       if (data.result?.events) {
+        console.log('[findYieldConfigId] Found events:', data.result.events.length);
+        
+        const expectedEventType = packageId 
+          ? `${packageId}::njangi_yield_integration::YieldConfigCreated`
+          : 'YieldConfigCreated';
+        
+        console.log('[findYieldConfigId] Looking for event type:', expectedEventType);
+        
+        // Log all event types for debugging
+        data.result.events.forEach((event: { type?: string; parsedJson?: unknown }, index: number) => {
+          console.log(`[findYieldConfigId] Event ${index}:`, {
+            type: event.type,
+            parsedJson: event.parsedJson
+          });
+        });
+        
         const yieldConfigEvent = data.result.events.find((event: {
           type?: string;
           parsedJson?: { config_id?: string };
         }) => 
-          event.type?.includes('YieldConfigCreated')
+          packageId 
+            ? event.type === expectedEventType
+            : event.type?.includes('YieldConfigCreated')
         );
         
         if (yieldConfigEvent?.parsedJson?.config_id) {
+          console.log('[findYieldConfigId] Found YieldConfig ID in events:', yieldConfigEvent.parsedJson.config_id);
           return yieldConfigEvent.parsedJson.config_id;
+        } else {
+          console.log('[findYieldConfigId] No matching YieldConfigCreated event found');
         }
+      } else {
+        console.log('[findYieldConfigId] No events found in transaction');
       }
 
       // Look for YieldConfig creation in object changes
       if (data.result?.objectChanges) {
+        console.log('[findYieldConfigId] Found object changes:', data.result.objectChanges.length);
+        
+        const expectedObjectType = packageId 
+          ? `${packageId}::njangi_yield_integration::YieldConfig`
+          : 'YieldConfig';
+        
+        console.log('[findYieldConfigId] Looking for object type:', expectedObjectType);
+        
+        // Log all object changes for debugging
+        data.result.objectChanges.forEach((change: { type?: string; objectType?: string; objectId?: string }, index: number) => {
+          console.log(`[findYieldConfigId] Object change ${index}:`, {
+            type: change.type,
+            objectType: change.objectType,
+            objectId: change.objectId
+          });
+        });
+        
         const yieldConfigObject = data.result.objectChanges.find((change: {
           type?: string;
           objectType?: string;
           objectId?: string;
         }) => 
-          change.type === 'created' && 
-          change.objectType?.includes('YieldConfig')
+          change.type === 'created' && (
+            packageId 
+              ? change.objectType === expectedObjectType
+              : change.objectType?.includes('YieldConfig')
+          )
         );
         
         if (yieldConfigObject?.objectId) {
+          console.log('[findYieldConfigId] Found YieldConfig ID in object changes:', yieldConfigObject.objectId);
           return yieldConfigObject.objectId;
+        } else {
+          console.log('[findYieldConfigId] No matching YieldConfig object change found');
         }
+      } else {
+        console.log('[findYieldConfigId] No object changes found in transaction');
       }
 
+      console.log('[findYieldConfigId] YieldConfig ID not found, returning null');
       return null;
     } catch (error) {
-      console.error('Error finding YieldConfig ID:', error);
+      console.error('[findYieldConfigId] Error finding YieldConfig ID:', error);
       return null;
     }
   };

@@ -7,7 +7,7 @@ import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, Alert
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
-import { PACKAGE_ID } from '../../../../services/circle-service';
+import { PACKAGE_ID, getCirclePackageId } from '../../../../services/circle-service';
 import StablecoinSwapForm from '../../../../components/StablecoinSwapForm';
 import RotationOrderList from '../../../../components/RotationOrderList';
 import ConfirmationModal from '../../../../components/ConfirmationModal';
@@ -54,6 +54,167 @@ interface Member {
   position?: number; // Add position field
   depositPaid?: boolean; // Add depositPaid field
 }
+
+// Debug logging utility
+const DEBUG = process.env.NODE_ENV === 'development';
+const debugLog = (message: string, data?: unknown) => {
+  if (DEBUG) {
+    console.log(`[CircleManage] ${message}`, data || '');
+  }
+};
+
+// Utility function to get shortened address for logs
+const shortenAddress = (address: string) => {
+  if (!address) return '';
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+};
+
+// Utility function to extract configuration from transaction inputs
+const extractConfigFromTransactionInputs = (inputs: { type?: string; value?: unknown }[]): Record<string, unknown> => {
+  const transactionInput: Record<string, unknown> = {};
+  
+  if (inputs.length > 1 && inputs[1]?.type === 'pure') transactionInput.contribution_amount = inputs[1].value;
+  if (inputs.length > 2 && inputs[2]?.type === 'pure') transactionInput.currency_type = inputs[2].value;
+  if (inputs.length > 3 && inputs[3]?.type === 'pure') transactionInput.contribution_amount_local = inputs[3].value;
+  if (inputs.length > 4 && inputs[4]?.type === 'pure') transactionInput.security_deposit = inputs[4].value;
+  if (inputs.length > 5 && inputs[5]?.type === 'pure') transactionInput.security_deposit_local = inputs[5].value;
+  if (inputs.length > 6 && inputs[6]?.type === 'pure') transactionInput.cycle_day = inputs[6].value;
+  
+  return transactionInput;
+};
+
+// Utility function to process configuration values
+const processConfigValues = (
+  transactionInput: Record<string, unknown> | undefined,
+  circleCreationEventData: CircleCreatedEvent | undefined
+) => {
+  const configValues = {
+    contributionAmount: 0,
+    contributionAmountUsd: 0,
+    securityDeposit: 0,
+    securityDepositUsd: 0,
+    cycleLength: 0,
+    cycleDay: 1,
+    maxMembers: 3,
+    autoSwapEnabled: false,
+  };
+
+  // Use values from transaction/event first (most reliable for creation)
+  if (transactionInput) {
+    if (transactionInput.contribution_amount) configValues.contributionAmount = Number(transactionInput.contribution_amount) / 1e9;
+    if (transactionInput.security_deposit) configValues.securityDeposit = Number(transactionInput.security_deposit) / 1e9;
+    if (transactionInput.cycle_day) configValues.cycleDay = Number(transactionInput.cycle_day);
+    
+    // Handle local currency amounts (new format)
+    if (transactionInput.contribution_amount_local) {
+      configValues.contributionAmountUsd = Number(transactionInput.contribution_amount_local) / 100;
+    } else if (transactionInput.contribution_amount_usd) {
+      configValues.contributionAmountUsd = Number(transactionInput.contribution_amount_usd) / 100;
+    }
+    
+    if (transactionInput.security_deposit_local) {
+      configValues.securityDepositUsd = Number(transactionInput.security_deposit_local) / 100;
+    } else if (transactionInput.security_deposit_usd) {
+      configValues.securityDepositUsd = Number(transactionInput.security_deposit_usd) / 100;
+    }
+  }
+  
+  if (circleCreationEventData) {
+    if (circleCreationEventData.cycle_length) configValues.cycleLength = Number(circleCreationEventData.cycle_length);
+    if (circleCreationEventData.max_members) configValues.maxMembers = Number(circleCreationEventData.max_members);
+    
+    // Use local currency amounts if available (new format)
+    if (circleCreationEventData.contribution_amount_local) {
+      configValues.contributionAmountUsd = Number(circleCreationEventData.contribution_amount_local) / 100;
+    }
+    if (circleCreationEventData.security_deposit_local) {
+      configValues.securityDepositUsd = Number(circleCreationEventData.security_deposit_local) / 100;
+    }
+  }
+  
+  return configValues;
+};
+
+// Utility function to check member deposit status using multiple methods
+const checkMemberDepositStatus = async (
+  client: SuiClient,
+  circleId: string,
+  membersTableId: string | undefined,
+  address: string,
+  memberActivatedEvents: SuiEvent[],
+  custodyEvents: SuiEvent[],
+  securityReturnedEvents: SuiEvent[]
+): Promise<{ hasPaid: boolean; position?: number }> => {
+  let hasPaid = false;
+  let position: number | undefined = undefined;
+  
+  try {
+    // Method 1: Try fetching the Member struct directly for the deposit_paid flag
+    if (membersTableId) {
+      const memberField = await client.getDynamicFieldObject({
+        parentId: membersTableId,
+        name: { type: 'address', value: address }
+      });
+      
+      if (memberField.data?.content && 'fields' in memberField.data.content) {
+        const memberFields = memberField.data.content.fields as {
+          value?: { fields?: { deposit_paid?: boolean, payout_position?: { fields?: { vec?: string[] } } } } 
+        };
+        
+        if (memberFields.value?.fields?.deposit_paid !== undefined) {
+          hasPaid = Boolean(memberFields.value.fields.deposit_paid);
+          debugLog(`Deposit status from Member struct`, { address: shortenAddress(address), hasPaid });
+          
+          // Also try to get position if available
+          if (memberFields.value.fields.payout_position?.fields?.vec?.length) {
+            try {
+               position = parseInt(memberFields.value.fields.payout_position.fields.vec[0], 10);
+            } catch (parseErr) { 
+              debugLog('Failed to parse position from struct', parseErr);
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    debugLog(`Could not fetch Member struct directly for ${shortenAddress(address)}, using events`, null);
+  }
+  
+  // Method 2: Fallback to MemberActivated Event (using pre-fetched data)
+  if (!hasPaid) {
+     hasPaid = memberActivatedEvents.some(event => {
+       const parsed = event.parsedJson as { circle_id?: string; member?: string };
+       return parsed?.circle_id === circleId && parsed?.member === address;
+     });
+     if(hasPaid) debugLog(`Deposit status from MemberActivated event`, { address: shortenAddress(address), hasPaid });
+  }
+
+  // Method 3: Fallback to CustodyDeposited Event (Type 3, using pre-fetched data)
+  if (!hasPaid) {
+    hasPaid = custodyEvents.some(e => {
+       const p = e.parsedJson as { circle_id?: string; member?: string; operation_type?: number | string };
+       return p?.circle_id === circleId && p?.member === address && (p?.operation_type === 3 || p?.operation_type === "3");
+    });
+    if(hasPaid) debugLog(`Deposit status from CustodyDeposited event`, { address: shortenAddress(address), hasPaid });
+  }
+
+  // Check SecurityDepositReturned Event to override hasPaid (using pre-fetched data)
+  try {
+    const hasReturnedEvent = securityReturnedEvents.some(event => {
+      const parsed = event.parsedJson as { circle_id?: string; member?: string; };
+      return parsed?.circle_id === circleId && parsed?.member?.toLowerCase() === address.toLowerCase();
+    });
+
+    if (hasReturnedEvent) {
+      hasPaid = false; // Override: if a deposit was returned, it's no longer considered paid
+      debugLog(`Deposit marked as UNPAID due to SecurityDepositReturned event`, { address: shortenAddress(address) });
+    }
+  } catch (eventError) {
+    debugLog(`Error checking SecurityDepositReturned events`, { address: shortenAddress(address), error: eventError });
+  }
+  
+  return { hasPaid, position };
+};
 
 // Constants for time calculations
 const MS_PER_DAY = 86400000; // 24 * 60 * 60 * 1000
@@ -210,6 +371,7 @@ export default function ManageCircle() {
   const { isAuthenticated, userAddress, account } = useAuth();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
+  const [circlePackageId, setCirclePackageId] = useState<string>(PACKAGE_ID); // Track the package ID for this circle
   const [members, setMembers] = useState<Member[]>([]);
   const [pendingRequests, setPendingRequests] = useState<JoinRequest[]>([]);
   const [suiPrice, setSuiPrice] = useState(1.25);
@@ -337,8 +499,16 @@ export default function ManageCircle() {
 
     setIsLoadingYieldData(true);
     try {
+      // Set the correct package ID for this circle before fetching yield data
+      debugLog('Setting yield tracking service package ID', circlePackageId);
+      yieldTrackingService.setPackageId(circlePackageId);
+      
       // Use the new dynamic method with custody wallet and circle filtering
-      console.log('Fetching yield data for circle:', { userAddress, circleId: id, custodyWalletId: circle?.custody?.walletId });
+      debugLog('Fetching yield data for circle', { 
+        userAddress: shortenAddress(userAddress), 
+        circleId: id, 
+        custodyWalletId: circle?.custody?.walletId 
+      });
       
       const allYieldData = await yieldTrackingService.getAllUserYieldData(
         userAddress, 
@@ -346,7 +516,7 @@ export default function ManageCircle() {
         id as string // circle ID
       );
       
-      console.log('Dynamic yield data found for this circle:', allYieldData);
+      debugLog('Yield data loaded', { count: allYieldData.length });
       setTrackedYields(allYieldData);
     } catch (err) {
       console.error('Error fetching yield data:', err);
@@ -354,28 +524,41 @@ export default function ManageCircle() {
     } finally {
       setIsLoadingYieldData(false);
     }
-  }, [userAddress, id, circle?.custody?.walletId]);
+  }, [userAddress, id, circle?.custody?.walletId, circlePackageId]);
 
   // Fetch yield data when user address is available
   useEffect(() => {
     fetchYieldData();
   }, [fetchYieldData]); // Use fetchYieldData as dependency since it's memoized
 
+  // Add request deduplication
+  const [isFetching, setIsFetching] = useState(false);
+  
   const fetchCircleDetails = async () => {
-    if (!id || !userAddress) return;
-    console.log('Manage - Fetching circle details for:', id);
+    if (!id || !userAddress || isFetching) return;
     
-    setLoading(true); // Set loading state at start
+    debugLog('Fetching circle details', { circleId: id });
+    setIsFetching(true);
+    setLoading(true);
+    
     try {
-      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      const client = new SuiClient({ url: getJsonRpcUrl() });
       
-      // Get circle object with basic fields
-      const objectData = await client.getObject({
-        id: id as string,
-        options: { showContent: true, showType: true }
-      });
+      // Determine package ID for this circle
+      const determinedPackageId = await getCirclePackageId(id as string, userAddress);
+      debugLog('Using package ID', determinedPackageId);
+      setCirclePackageId(determinedPackageId);
       
-      console.log('Manage - Circle object data:', objectData);
+      // Parallel fetch: Get circle object and dynamic fields simultaneously
+      const [objectData, dynamicFieldsResult] = await Promise.all([
+        client.getObject({
+          id: id as string,
+          options: { showContent: true, showType: true }
+        }),
+        client.getDynamicFields({ parentId: id as string })
+      ]);
+      
+      debugLog('Circle object loaded', { hasContent: !!objectData.data?.content });
         
       if (!objectData.data?.content || !('fields' in objectData.data.content)) {
         console.error('Invalid circle object data received');
@@ -391,26 +574,26 @@ export default function ManageCircle() {
           return;
         }
         
-      const dynamicFieldsResult = await client.getDynamicFields({
-        parentId: id as string
-      });
-      console.log('Manage - Dynamic fields:', dynamicFieldsResult.data);
+      debugLog('Dynamic fields loaded', { count: dynamicFieldsResult.data.length });
       
       let transactionInput: Record<string, unknown> | undefined;
       let creationTimestamp: number | null = fields.created_at ? Number(fields.created_at) : null;
       let circleCreationEventData: CircleCreatedEvent | undefined;
       
       try {
-        const circleEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleCreated` },
-          limit: 50
-        });
+        // Parallel fetch: Get circle events and activation status
+        const [circleEvents] = await Promise.all([
+          client.queryEvents({
+            query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleCreated` },
+            limit: 50
+          })
+        ]);
         
         const createEvent = circleEvents.data.find(event => 
           (event.parsedJson as { circle_id?: string })?.circle_id === id
         );
         
-        console.log('Manage - Found creation event:', !!createEvent);
+        debugLog('Creation event found', !!createEvent);
         
         if (createEvent?.parsedJson) {
           circleCreationEventData = createEvent.parsedJson as CircleCreatedEvent;
@@ -431,13 +614,10 @@ export default function ManageCircle() {
             transactionInput.security_deposit_local = circleCreationEventData.security_deposit_local;
           }
           
-          console.log('[MANAGE DEBUG] Extracted from creation event:', {
-            contribution_amount: circleCreationEventData.contribution_amount,
-            contribution_amount_usd: circleCreationEventData.contribution_amount_usd,
-            contribution_amount_local: circleCreationEventData.contribution_amount_local,
-            security_deposit_usd: circleCreationEventData.security_deposit_usd,
-            security_deposit_local: circleCreationEventData.security_deposit_local,
-            currency_type: circleCreationEventData.currency_type
+          debugLog('Creation event data extracted', {
+            hasContribution: !!circleCreationEventData.contribution_amount,
+            hasLocalCurrency: !!circleCreationEventData.contribution_amount_local,
+            currencyType: circleCreationEventData.currency_type
           });
         }
 
@@ -447,79 +627,29 @@ export default function ManageCircle() {
             options: { showInput: true }
           });
           
-          console.log('Manage - Transaction data fetched:', !!txData);
+          debugLog('Transaction data fetched', !!txData);
           
           if (txData?.transaction?.data?.transaction?.kind === 'ProgrammableTransaction') {
             const tx = txData.transaction.data.transaction;
             const inputs = tx.inputs || [];
-            console.log('Manage - Transaction inputs:', inputs);
 
             // Ensure transactionInput is initialized
             if (!transactionInput) transactionInput = {};
 
-            // Extract specific inputs (indexes might vary, check carefully)
-            if (inputs.length > 1 && inputs[1]?.type === 'pure') transactionInput.contribution_amount = inputs[1].value;
-            if (inputs.length > 2 && inputs[2]?.type === 'pure') transactionInput.currency_type = inputs[2].value;
-            if (inputs.length > 3 && inputs[3]?.type === 'pure') transactionInput.contribution_amount_local = inputs[3].value;
-            if (inputs.length > 4 && inputs[4]?.type === 'pure') transactionInput.security_deposit = inputs[4].value;
-            if (inputs.length > 5 && inputs[5]?.type === 'pure') transactionInput.security_deposit_local = inputs[5].value;
-            if (inputs.length > 6 && inputs[6]?.type === 'pure') transactionInput.cycle_day = inputs[6].value;
+            // Extract transaction inputs using utility function
+            const extractedInputs = extractConfigFromTransactionInputs(inputs);
+            Object.assign(transactionInput, extractedInputs);
             
-            console.log('Manage - Extracted from Tx Inputs:', transactionInput);
+            debugLog('Transaction inputs extracted', { inputCount: inputs.length });
         }
             }
           } catch (error) {
-        console.error('Manage - Error fetching transaction data:', error);
+        debugLog('Error fetching transaction data', error);
       }
       
-      // --- Process Extracted Data --- 
-      // Initialize config values with defaults
-      const configValues = {
-        contributionAmount: 0,
-        contributionAmountUsd: 0,
-        securityDeposit: 0,
-        securityDepositUsd: 0,
-        cycleLength: 0,
-        cycleDay: 1,
-        maxMembers: 3,
-        autoSwapEnabled: false, // Initial default
-      };
-      console.log('[fetchCircleDetails] Initial configValues:', JSON.stringify(configValues));
-
-      // 1. Use values from transaction/event first (most reliable for creation)
-      if (transactionInput) {
-        if (transactionInput.contribution_amount) configValues.contributionAmount = Number(transactionInput.contribution_amount) / 1e9;
-        if (transactionInput.security_deposit) configValues.securityDeposit = Number(transactionInput.security_deposit) / 1e9;
-        if (transactionInput.cycle_day) configValues.cycleDay = Number(transactionInput.cycle_day);
-        
-        // Handle local currency amounts (new format)
-        if (transactionInput.contribution_amount_local) {
-          configValues.contributionAmountUsd = Number(transactionInput.contribution_amount_local) / 100;
-        } else if (transactionInput.contribution_amount_usd) {
-          configValues.contributionAmountUsd = Number(transactionInput.contribution_amount_usd) / 100;
-        }
-        
-        if (transactionInput.security_deposit_local) {
-          configValues.securityDepositUsd = Number(transactionInput.security_deposit_local) / 100;
-        } else if (transactionInput.security_deposit_usd) {
-          configValues.securityDepositUsd = Number(transactionInput.security_deposit_usd) / 100;
-        }
-      }
-      if (circleCreationEventData) {
-          if (circleCreationEventData.cycle_length) configValues.cycleLength = Number(circleCreationEventData.cycle_length);
-          if (circleCreationEventData.max_members) configValues.maxMembers = Number(circleCreationEventData.max_members);
-          
-          // Use local currency amounts if available (new format)
-          if (circleCreationEventData.contribution_amount_local) {
-            configValues.contributionAmountUsd = Number(circleCreationEventData.contribution_amount_local) / 100;
-          }
-          if (circleCreationEventData.security_deposit_local) {
-            configValues.securityDepositUsd = Number(circleCreationEventData.security_deposit_local) / 100;
-          }
-          
-          // Security deposit SUI amount might not be in event/tx, look in fields/dynamic
-      }
-      console.log('[fetchCircleDetails] Config after Tx/Event:', JSON.stringify(configValues));
+      // Process configuration values using utility function
+      const configValues = processConfigValues(transactionInput, circleCreationEventData);
+      debugLog('Config after transaction/event processing', configValues);
         
       // 2. Look for config in dynamic fields
       let foundInDynamicField = false; // Flag to track if found
@@ -583,7 +713,7 @@ export default function ManageCircle() {
           }
         }
       }
-      console.log('[fetchCircleDetails] Config after Dynamic Fields (foundInDynamicField: ' + foundInDynamicField + '):', JSON.stringify(configValues));
+      debugLog('Config after dynamic fields', { foundInDynamicField, configValues });
 
       // 3. Use direct fields from the circle object as a final fallback (less reliable for config)
       // Keep fallbacks for other fields if needed
@@ -593,38 +723,27 @@ export default function ManageCircle() {
       if (configValues.securityDepositUsd === 0 && fields.security_deposit_usd) configValues.securityDepositUsd = Number(fields.security_deposit_usd) / 100;
       // Cycle info is usually more reliable from event/tx/dynamic fields
 
-      console.log('[fetchCircleDetails] Final Config Values before setCircle:', JSON.stringify(configValues));
+      debugLog('Final config values', configValues);
       
-      // Debug logging for currency and amounts
-      console.log('[CURRENCY DEBUG] Creation event data:', {
+      debugLog('Currency configuration', {
         currencyType: circleCreationEventData?.currency_type,
-        contributionAmountLocal: circleCreationEventData?.contribution_amount_local,
-        securityDepositLocal: circleCreationEventData?.security_deposit_local,
-        contributionAmountUsd: circleCreationEventData?.contribution_amount_usd,
-        securityDepositUsd: circleCreationEventData?.security_deposit_usd
-      });
-      
-      console.log('[CURRENCY DEBUG] Final config values:', {
-        contributionAmount: configValues.contributionAmount,
-        contributionAmountUsd: configValues.contributionAmountUsd,
-        securityDeposit: configValues.securityDeposit,
-        securityDepositUsd: configValues.securityDepositUsd,
-        currencyType: (typeof transactionInput?.currency_type === 'string' ? transactionInput.currency_type : undefined) || circleCreationEventData?.currency_type || 'USD' // Get currency type from transaction input or creation event
+        hasLocalAmounts: !!(circleCreationEventData?.contribution_amount_local || circleCreationEventData?.security_deposit_local),
+        finalCurrencyType: (typeof transactionInput?.currency_type === 'string' ? transactionInput.currency_type : undefined) || circleCreationEventData?.currency_type || 'USD'
       });
       
       // Check for circle activation status
       let isActive = false;
       try {
         const activationEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleActivated` },
+          query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleActivated` },
           limit: 50
         });
         isActive = activationEvents.data.some(event => 
           (event.parsedJson as { circle_id?: string })?.circle_id === id
         );
-        console.log('Manage - Circle activation status:', isActive);
+        debugLog('Circle activation status', isActive);
       } catch (error) {
-        console.error('Manage - Error checking circle activation:', error);
+        console.error('Error checking circle activation:', error);
       }
 
       // Check for paused status - safely get the boolean value
@@ -635,19 +754,39 @@ export default function ManageCircle() {
         // Handle the case where it might be any other truthy value
         isPaused = true;
       }
-      console.log('[fetchCircleDetails] Circle paused status:', isPaused);
+      debugLog('Circle paused status', isPaused);
 
       // Fetch members and their addresses
       let actualMemberCount = 1; // Start with admin
       const memberAddresses = new Set<string>();
       if (typeof fields.admin === 'string') memberAddresses.add(fields.admin);
       
+      // Parallel fetch: Get member events and custody events
       let memberEvents: { data: SuiEvent[] } = { data: [] };
+      let custodyEvents: { data: SuiEvent[] } = { data: [] };
+      let memberActivatedEvents: { data: SuiEvent[] } = { data: [] };
+      let securityReturnedEvents: { data: SuiEvent[] } = { data: [] };
+      
       try {
-        memberEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::MemberJoined` },
+        [memberEvents, custodyEvents, memberActivatedEvents, securityReturnedEvents] = await Promise.all([
+          client.queryEvents({
+            query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
             limit: 1000
-          });
+          }),
+          client.queryEvents({
+            query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyDeposited` },
+            limit: 100
+          }),
+          client.queryEvents({
+            query: { MoveEventType: `${determinedPackageId}::njangi_members::MemberActivated` },
+            limit: 100
+          }),
+          client.queryEvents({
+            query: { MoveEventType: `${determinedPackageId}::njangi_payments::SecurityDepositReturned` },
+            limit: 100
+          })
+        ]);
+        
         const circleMemberEvents = memberEvents.data.filter((event: SuiEvent) => 
           (event.parsedJson as { circle_id?: string })?.circle_id === id
         );
@@ -655,105 +794,38 @@ export default function ManageCircle() {
           const memberAddr = (event.parsedJson as { member?: string })?.member;
           if (memberAddr) memberAddresses.add(memberAddr);
         });
+        
         actualMemberCount = memberAddresses.size;
-        console.log(`Manage - Calculated member count: ${actualMemberCount}`);
+        debugLog('Calculated member count', actualMemberCount);
       } catch (error) {
-        console.error('Manage - Error calculating member count:', error);
+        console.error('Error calculating member count:', error);
         actualMemberCount = Number(fields.current_members || 1); // Fallback
       }
       
       // --- Fetch Members and Deposit Status (Updated Logic) ---
       const membersList: Member[] = [];
+      // Get members table ID for deposit status checking
+      const membersTableId = fields.members && typeof fields.members === 'object' && fields.members !== null && 
+        'fields' in fields.members && fields.members.fields && typeof fields.members.fields === 'object' &&
+        fields.members.fields !== null && 'id' in fields.members.fields &&
+        fields.members.fields.id && typeof fields.members.fields.id === 'object' &&
+        fields.members.fields.id !== null && 'id' in fields.members.fields.id
+        ? (fields.members.fields.id as { id: string }).id : undefined;
+      
       const depositStatusPromises = Array.from(memberAddresses).map(async (address) => {
-        let hasPaid = false;
         let joinTimestamp = creationTimestamp ?? Date.now(); // Default join time
-        let position: number | undefined = undefined;
         
         try {
-          // Method 1: Try fetching the Member struct directly for the deposit_paid flag
-          try {
-             const circleObject = await client.getObject({
-               id: id as string,
-               options: { showContent: true }
-             });
-             
-             if (circleObject.data?.content && 'fields' in circleObject.data.content) {
-               const circleFields = circleObject.data.content.fields as {
-                 members?: { fields?: { id?: { id: string } } } 
-               };
-               
-               if (circleFields.members?.fields?.id?.id) {
-                 const membersTableId = circleFields.members.fields.id.id;
-                 const memberField = await client.getDynamicFieldObject({
-                   parentId: membersTableId,
-                   name: { type: 'address', value: address }
-                 });
-                 
-                 if (memberField.data?.content && 'fields' in memberField.data.content) {
-                   const memberFields = memberField.data.content.fields as {
-                     value?: { fields?: { deposit_paid?: boolean, payout_position?: { fields?: { vec?: string[] } } } } 
-                   };
-                   
-                   if (memberFields.value?.fields?.deposit_paid !== undefined) {
-                     hasPaid = Boolean(memberFields.value.fields.deposit_paid);
-                     console.log(`Deposit status for ${shortenAddress(address)} from Member struct: ${hasPaid}`);
-                     // Also try to get position if available
-                     if (memberFields.value.fields.payout_position?.fields?.vec?.length) {
-                       try {
-                          position = parseInt(memberFields.value.fields.payout_position.fields.vec[0], 10);
-                       } catch (parseErr) { console.warn('Failed to parse position from struct', parseErr); }
-                     }
-                   }
-                 }
-               }
-             }
-          } catch (structError) {
-             console.warn(`Could not fetch Member struct directly for ${shortenAddress(address)}, falling back to events:`, structError);
-          }
-          
-          // Method 2: Fallback to MemberActivated Event
-          if (!hasPaid) {
-             const memberActivatedEvents = await client.queryEvents({
-               query: { MoveEventType: `${PACKAGE_ID}::njangi_members::MemberActivated` }, limit: 100
-             });
-             hasPaid = memberActivatedEvents.data.some(event => {
-               const parsed = event.parsedJson as { circle_id?: string; member?: string };
-               return parsed?.circle_id === id && parsed?.member === address;
-             });
-             if(hasPaid) console.log(`Deposit status for ${shortenAddress(address)} from MemberActivated event: ${hasPaid}`);
-          }
-
-          // Method 3: Fallback to CustodyDeposited Event (Type 3)
-          if (!hasPaid) {
-            const custodyEvents = await client.queryEvents({
-              query: { MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited` }, limit: 100
-            });
-            hasPaid = custodyEvents.data.some(e => {
-               const p = e.parsedJson as { circle_id?: string; member?: string; operation_type?: number | string };
-               return p?.circle_id === id && p?.member === address && (p?.operation_type === 3 || p?.operation_type === "3");
-            });
-            if(hasPaid) console.log(`Deposit status for ${shortenAddress(address)} from CustodyDeposited event: ${hasPaid}`);
-          }
-
-          // New Step: Check SecurityDepositReturned Event to override hasPaid to false if applicable
-          try {
-            const securityReturnedEvents = await client.queryEvents({
-              query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::SecurityDepositReturned` }, 
-              limit: 100 // Adjust limit as needed
-            });
-            const hasReturnedEvent = securityReturnedEvents.data.some(event => {
-              const parsed = event.parsedJson as { circle_id?: string; member?: string; };
-              // Ensure addresses are compared consistently (e.g., lowercase)
-              return parsed?.circle_id === id && parsed?.member?.toLowerCase() === address.toLowerCase();
-            });
-
-            if (hasReturnedEvent) {
-              hasPaid = false; // Override: if a deposit was returned, it's no longer considered paid
-              console.log(`[fetchCircleDetails] Deposit for ${shortenAddress(address)} definitively marked as UNPAID due to SecurityDepositReturned event.`);
-            }
-          } catch (eventError) {
-            console.warn(`Error fetching SecurityDepositReturned events for ${shortenAddress(address)}:`, eventError);
-          }
+          // Use utility function to check deposit status
+          const { hasPaid, position } = await checkMemberDepositStatus(
+            client,
+            id as string,
+            membersTableId,
+            address,
+            memberActivatedEvents.data,
+            custodyEvents.data,
+            securityReturnedEvents.data
+          );
 
           // Find join date from MemberJoined event if possible
           const joinEvent = memberEvents.data.find((e: SuiEvent) => 
@@ -765,17 +837,19 @@ export default function ManageCircle() {
           }
           
           // If position wasn't found in struct, try from event (less reliable)
-          if (position === undefined) {
-             const positionEvent = memberEvents.data.find((e: SuiEvent) => (e.parsedJson as { member?: string })?.member === address && (e.parsedJson as { circle_id?: string })?.circle_id === id);
-             position = positionEvent ? (positionEvent.parsedJson as { position?: number })?.position : undefined;
-          }
+          const finalPosition = position ?? (
+            memberEvents.data.find((e: SuiEvent) => 
+              (e.parsedJson as { member?: string })?.member === address && 
+              (e.parsedJson as { circle_id?: string })?.circle_id === id
+            )?.parsedJson as { position?: number }
+          )?.position;
 
           membersList.push({
             address, 
-            depositPaid: hasPaid, // Use the determined status
+            depositPaid: hasPaid,
             status: 'active', 
             joinDate: joinTimestamp,
-            position // Store position
+            position: finalPosition
           });
         } catch (error) {
           console.error(`Manage - Error fetching deposit status for ${address}:`, error);
@@ -840,19 +914,23 @@ export default function ManageCircle() {
         custody: undefined // Reset custody, will be set later if found
       });
 
-      // Fetch custody wallet info (separated for clarity)
+      // Fetch custody wallet info in parallel with other operations
         try {
-          const custodyEvents = await client.queryEvents({
-              query: { MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyWalletCreated` },
+          const custodyWalletEvents = await client.queryEvents({
+              query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyWalletCreated` },
             limit: 50
           });
-          const custodyEvent = custodyEvents.data.find(event => 
+          const custodyEvent = custodyWalletEvents.data.find(event => 
               (event.parsedJson as { circle_id?: string })?.circle_id === id
           );
           const walletId = (custodyEvent?.parsedJson as { wallet_id?: string })?.wallet_id;
           
           if (walletId) {
-              const walletData = await client.getObject({ id: walletId, options: { showContent: true } });
+              // Parallel fetch: wallet data and dynamic fields
+              const [walletData, walletDynamicFields] = await Promise.all([
+                client.getObject({ id: walletId, options: { showContent: true } }),
+                client.getDynamicFields({ parentId: walletId })
+              ]);
             if (walletData.data?.content && 'fields' in walletData.data.content) {
                   const wf = walletData.data.content.fields as Record<string, SuiFieldValue>; 
                   // Access nested fields safely
@@ -865,17 +943,12 @@ export default function ManageCircle() {
                   // Look for security deposits in dynamic fields (coin_objects)
                   let securityDeposits = 0;
                   
-                  // Try to query dynamic fields that might contain security deposits
+                  // Process security deposits from dynamic fields (using pre-fetched data)
                   try {
-                    // Attempt to get dynamic fields
-                    const dynamicFieldsResult = await client.getDynamicFields({
-                      parentId: walletId
-                    });
-                    
-                    console.log('[Dynamic Fields]', dynamicFieldsResult.data);
+                    debugLog('Custody wallet dynamic fields', { count: walletDynamicFields.data.length });
                     
                     // Look for coin objects in the dynamic fields
-                    for (const field of dynamicFieldsResult.data) {
+                    for (const field of walletDynamicFields.data) {
                       if (field.objectType && typeof field.objectType === 'string' && 
                           field.objectType.includes('::coin::Coin<0x2::sui::SUI>')) {
                         
@@ -895,17 +968,16 @@ export default function ManageCircle() {
                       }
                     }
                   } catch (error) {
-                    console.error('[Dynamic Fields Error]', error);
+                    debugLog('Dynamic fields error, using fallback', error);
                     // Fallback to the hardcoded security deposit value
                     securityDeposits = 0.163488;
                   }
                   
-                  console.log('[Wallet Debug]', {
-                    walletId,
+                  debugLog('Custody wallet info', {
+                    walletId: shortenAddress(walletId),
                     contributionsBalance,
                     securityDeposits,
-                    hasMainBalance: !!balanceFields?.value,
-                    fields: Object.keys(wf),
+                    hasMainBalance: !!balanceFields?.value
                   });
                   
                   setCircle(prev => prev ? {
@@ -922,18 +994,15 @@ export default function ManageCircle() {
             }
           }
         } catch (error) {
-          console.error('Manage - Error fetching custody wallet info:', error);
+          console.error('Error fetching custody wallet info:', error);
         }
 
     } catch (error) {
-      console.error('Manage - Error fetching circle details:', error);
+      console.error('Error fetching circle details:', error);
       toast.error('Could not load circle information');
-      // Don't set loading to false here, let it be handled in the finally block
     } finally {
-      // Small delay to avoid flickering if loading is very fast
-      setTimeout(() => {
-        setLoading(false);
-      }, 300);
+      setLoading(false);
+      setIsFetching(false);
     }
   };
 
@@ -942,17 +1011,17 @@ export default function ManageCircle() {
     
     try {
       // setLoading(true); // Removed
-      console.log('[ManagePage] Fetching pending join requests for circle:', id);
+      debugLog('Fetching pending join requests', { circleId: id });
       
       const response = await fetch(`/api/join-requests/pending/${id}`);
       
       if (!response.ok) {
-        console.error('[ManagePage] Error response from API:', response.status, response.statusText);
+        debugLog('API error response', { status: response.status, statusText: response.statusText });
         return;
       }
       
       const data = await response.json();
-      console.log('[ManagePage] API response for pending requests:', data);
+      debugLog('Pending requests loaded', { count: data?.data?.length || 0 });
       
       if (data.success && Array.isArray(data.data)) {
         console.log(`[ManagePage] Received ${data.data.length} pending requests`);
@@ -2040,6 +2109,7 @@ export default function ManageCircle() {
             }
           }
         }
+
       }
 
       // Calculate final balances
@@ -2087,7 +2157,7 @@ export default function ManageCircle() {
       // First try to get the balance from CoinDeposited events with coin_type "stablecoin"
       const coinDepositedEvents = await client.queryEvents({
         query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_custody::CoinDeposited`
+          MoveEventType: `${circlePackageId}::njangi_custody::CoinDeposited`
         },
         limit: 20
       });
@@ -2122,7 +2192,7 @@ export default function ManageCircle() {
       // Process CustodyDeposited events to identify security deposits in USDC
       const custodyEvents = await client.queryEvents({
         query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited`
+          MoveEventType: `${circlePackageId}::njangi_custody::CustodyDeposited`
         },
         limit: 50
       });
@@ -3884,7 +3954,7 @@ export default function ManageCircle() {
       
       // Query for YieldConfigCreated events for this circle
       const yieldEvents = await client.queryEvents({
-        query: { MoveEventType: `${PACKAGE_ID}::njangi_yield_integration::YieldConfigCreated` },
+        query: { MoveEventType: `${circlePackageId}::njangi_yield_integration::YieldConfigCreated` },
         limit: 50
       });
       
@@ -5154,6 +5224,7 @@ export default function ManageCircle() {
                       circleId={id as string}
                       userAddress={userAddress || undefined}
                       onYieldConfigCreated={handleYieldConfigCreated}
+                      packageId={circlePackageId}
                     />
                   )}
                 </div>
@@ -5197,4 +5268,4 @@ export default function ManageCircle() {
       <SecurityDepositPayoutModal />
     </div>
   );
-} 
+}

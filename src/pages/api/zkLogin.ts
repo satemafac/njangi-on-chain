@@ -4925,11 +4925,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         try {
           validateSession(sessionId, 'collectYield');
-          const { circleId: collectCircleId, walletId: collectWalletId, yieldConfigId } = req.body;
+          const { circleId: collectCircleId, walletId: collectWalletId, yieldConfigId, packageId } = req.body;
 
           if (!collectCircleId || !collectWalletId || !yieldConfigId) {
             return res.status(400).json({ error: 'Circle ID, wallet ID, and yield config ID are required' });
           }
+
+          // Use the package ID for this specific circle (fallback to default if not provided)
+          const targetPackageId = packageId || PACKAGE_ID;
+          console.log('Using package ID for yield collection:', targetPackageId);
 
           console.log(`Collecting yield for circle ${collectCircleId}`);
 
@@ -4939,7 +4943,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               txb.setSender(account.userAddr);
               
               txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_yield_integration::collect_yield`,
+                target: `${targetPackageId}::njangi_yield_integration::collect_yield`,
                 arguments: [
                   txb.object(collectCircleId),
                   txb.object(collectWalletId),
@@ -5002,11 +5006,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         try {
           validateSession(sessionId, 'emergencyWithdrawYield');
-          const { circleId: emergencyCircleId, walletId: emergencyWalletId, yieldConfigId, reason = 'Emergency withdrawal' } = req.body;
+          const { circleId: emergencyCircleId, walletId: emergencyWalletId, yieldConfigId, packageId, reason = 'Emergency withdrawal' } = req.body;
 
           if (!emergencyCircleId || !emergencyWalletId || !yieldConfigId) {
             return res.status(400).json({ error: 'Circle ID, wallet ID, and yield config ID are required' });
           }
+
+          // Use the package ID for this specific circle (fallback to default if not provided)
+          const targetPackageId = packageId || PACKAGE_ID;
+          console.log('Using package ID for emergency yield withdrawal:', targetPackageId);
 
           console.log(`Emergency withdrawing yield for circle ${emergencyCircleId}, reason: ${reason}`);
 
@@ -5016,7 +5024,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               txb.setSender(account.userAddr);
               
               txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_yield_integration::emergency_withdraw_all`,
+                target: `${targetPackageId}::njangi_yield_integration::emergency_withdraw_all`,
                 arguments: [
                   txb.object(emergencyCircleId),
                   txb.object(emergencyWalletId),
@@ -5080,11 +5088,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         try {
           validateSession(sessionId, 'sendTransaction');
-          const { yieldData } = req.body;
+          const { yieldData, packageId } = req.body;
 
           if (!yieldData || !yieldData.sui_amount || !yieldData.circle_id || !yieldData.custody_wallet_id) {
             return res.status(400).json({ error: 'Yield data with SUI amount, circle ID, and custody wallet ID are required' });
           }
+
+          // Use the package ID for this specific circle (fallback to default if not provided)
+          const targetPackageId = packageId || PACKAGE_ID;
+          console.log('Using package ID for yield configuration:', targetPackageId);
 
           console.log(`Setting up real yield integration for circle ${yieldData.circle_id}:`, {
             suiAmount: yieldData.sui_amount,
@@ -5109,7 +5121,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               
               // Create yield configuration - this will be a shared object
               txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_yield_integration::create_yield_config`,
+                target: `${targetPackageId}::njangi_yield_integration::create_yield_config`,
                 arguments: [
                   txb.object(yieldData.circle_id), // circle: &Circle
                   txb.pure.u8(0), // strategy: u8 (0 = Conservative, now using 100% Cetus)
@@ -5170,13 +5182,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         try {
           validateSession(sessionId, 'sendTransaction');
-          const { yieldData } = req.body;
+          const { yieldData, packageId } = req.body;
 
           if (!yieldData || !yieldData.config_id || !yieldData.circle_id || !yieldData.custody_wallet_id || !yieldData.deposit_amount) {
             return res.status(400).json({ 
               error: 'Yield data with config ID, circle ID, custody wallet ID, and deposit amount are required' 
             });
           }
+
+          // Use the package ID for this specific circle (fallback to default if not provided)
+          const targetPackageId = packageId || PACKAGE_ID;
+          console.log('Using package ID for security deposit processing:', targetPackageId);
 
           console.log(`Processing security deposits for yield generation:`, {
             configId: yieldData.config_id,
@@ -5197,7 +5213,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               // Call generate_yield_on_security_deposit with the created YieldConfig
               // This function now returns only YieldReceipt and withdraws directly from custody wallet
               const yieldReceipt = txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_yield_integration::generate_yield_on_security_deposit`,
+                target: `${targetPackageId}::njangi_yield_integration::generate_yield_on_security_deposit`,
                 arguments: [
                   txb.object(yieldData.circle_id), // circle: &Circle
                   txb.object(yieldData.custody_wallet_id), // wallet: &mut CustodyWallet

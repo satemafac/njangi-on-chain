@@ -183,5 +183,136 @@ export class CircleService {
       throw error;
     }
   }
+}
+
+// Standalone helper functions for multi-package support
+// These can be imported and used directly without needing a CircleService instance
+
+/**
+ * Get the package ID that was used to create a specific circle
+ * @param circleId The ID of the circle to look up
+ * @param userAddress Optional user address to optimize the search
+ * @returns Promise<string> The package ID used to create the circle
+ */
+export async function getCirclePackageId(circleId: string, userAddress?: string): Promise<string> {
+  try {
+    const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+    
+    // If we have a user address, get their package IDs first (more efficient)
+    if (userAddress) {
+      const userPackageIds = await getUserPackageIds(userAddress);
+      
+      // Search through each package ID for the circle
+      for (const packageId of userPackageIds) {
+        try {
+          const events = await client.queryEvents({
+            query: { MoveEventType: `${packageId}::njangi_circles::CircleCreated` },
+            limit: 100
+          });
+          
+          const foundEvent = events.data.find(event => 
+            (event.parsedJson as { circle_id?: string })?.circle_id === circleId
+          );
+          
+          if (foundEvent) {
+            console.log(`Found circle ${circleId} created with package ${packageId}`);
+            return packageId;
+          }
+        } catch (error) {
+          console.warn(`Error querying events for package ${packageId}:`, error);
+          continue;
+        }
+      }
+    }
+    
+    // Fallback: try with the current default package ID
+    try {
+      const events = await client.queryEvents({
+        query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleCreated` },
+        limit: 100
+      });
+      
+      const foundEvent = events.data.find(event => 
+        (event.parsedJson as { circle_id?: string })?.circle_id === circleId
+      );
+      
+      if (foundEvent) {
+        console.log(`Found circle ${circleId} created with default package ${PACKAGE_ID}`);
+        return PACKAGE_ID;
+      }
+    } catch (error) {
+      console.warn('Error querying events for default package:', error);
+    }
+    
+    // If not found anywhere, return the current package ID as fallback
+    console.warn(`Could not find package ID for circle ${circleId}, using default ${PACKAGE_ID}`);
+    return PACKAGE_ID;
+    
+  } catch (error) {
+    console.error('Error in getCirclePackageId:', error);
+    return PACKAGE_ID; // Return default as fallback
+  }
+}
+
+/**
+ * Get all package IDs that a user has used to create circles
+ * @param userAddress The user's address
+ * @returns Promise<string[]> Array of package IDs used by the user
+ */
+export async function getUserPackageIds(userAddress: string): Promise<string[]> {
+  try {
+    const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+    const packageIds = new Set<string>();
+    
+    // Always include the current default package ID
+    packageIds.add(PACKAGE_ID);
+    
+    // Get user's transactions to find package IDs they've interacted with
+    try {
+      const response = await client.queryTransactionBlocks({
+        filter: { FromAddress: userAddress },
+        limit: 50,
+        options: { showEvents: true, showObjectChanges: true }
+      });
+      
+      for (const tx of response.data) {
+        // Look through events for CircleCreated events
+        if (tx.events) {
+          for (const event of tx.events) {
+            if (event.type.includes('::njangi_circles::CircleCreated')) {
+              // Extract package ID from the event type
+              const match = event.type.match(/^(0x[a-f0-9]+)::/);
+              if (match && match[1]) {
+                packageIds.add(match[1]);
+              }
+            }
+          }
+        }
+        
+        // Look through object changes for objects from different packages
+        if (tx.objectChanges) {
+          for (const change of tx.objectChanges) {
+            if (change.type === 'created' && change.objectType?.includes('::njangi_circles::Circle')) {
+              // Extract package ID from the object type
+              const match = change.objectType.match(/^(0x[a-f0-9]+)::/);
+              if (match && match[1]) {
+                packageIds.add(match[1]);
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('Error querying user transactions:', error);
+    }
+    
+    const result = Array.from(packageIds);
+    console.log(`Found ${result.length} package IDs for user ${userAddress}:`, result);
+    return result;
+    
+  } catch (error) {
+    console.error('Error in getUserPackageIds:', error);
+    return [PACKAGE_ID]; // Return default package ID as fallback
+  }
 } 
 
