@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import '@/styles/globals.css';
 import type { AppProps } from 'next/app';
 import { AuthProvider } from '../contexts/AuthContext';
@@ -42,6 +42,28 @@ function AppContent({ Component, pageProps }: AppProps) {
 }
 
 export default function App(props: AppProps) {
+  // Initialize automation service on app startup (client-side only)
+  useEffect(() => {
+    // Only run on client side
+    if (typeof window !== 'undefined') {
+      console.log('🤖 Initializing Njangi Automation System...');
+      
+      // Start automation service in background
+      fetch('/api/automation/start', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            console.log('✅ Automation service started successfully');
+          } else {
+            console.warn('⚠️ Automation service startup failed:', data.error);
+          }
+        })
+        .catch(error => {
+          console.warn('⚠️ Could not connect to automation service:', error.message);
+        });
+    }
+  }, []);
+
   return (
     <AuthProvider>
       <AppContent {...props} />

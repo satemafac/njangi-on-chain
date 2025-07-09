@@ -28,7 +28,12 @@ export type NotificationType =
   | 'cycle_completion'
   | 'deposit_required'
   | 'member_joined'
-  | 'admin_alert';
+  | 'admin_alert'
+  | 'payout_warning_24h'
+  | 'payout_warning_6h'
+  | 'payout_warning_1h'
+  | 'automated_payout_success'
+  | 'automation_failed';
 
 // Notification data structure
 export interface ScheduledNotification {
@@ -307,6 +312,148 @@ export class WhatsAppNotificationService {
   }
 
   /**
+   * 🤖 AUTOMATION: Schedule progressive payout warnings
+   */
+  public scheduleProgressivePayoutWarnings(
+    phoneNumber: string,
+    circleId: string,
+    payoutTime: Date,
+    contributionAmount: number,
+    currency: string = 'USDC',
+    allMembersContributed: boolean = false
+  ): string[] {
+    const notificationIds: string[] = [];
+    const now = new Date();
+
+    // Calculate time remaining
+    const timeUntilPayout = payoutTime.getTime() - now.getTime();
+    const hoursUntilPayout = timeUntilPayout / (1000 * 60 * 60);
+
+    // 24 hour warning
+    const warning24h = new Date(payoutTime.getTime() - 24 * 60 * 60 * 1000);
+    if (warning24h > now && hoursUntilPayout > 24) {
+      notificationIds.push(
+        this.scheduleNotification(phoneNumber, 'payout_warning_24h', warning24h, {
+          circleId,
+          contributionAmount,
+          currency,
+          timeRemaining: '24 hours',
+          allMembersContributed,
+          warningLevel: 1
+        })
+      );
+    }
+
+    // 6 hour warning
+    const warning6h = new Date(payoutTime.getTime() - 6 * 60 * 60 * 1000);
+    if (warning6h > now && hoursUntilPayout > 6) {
+      notificationIds.push(
+        this.scheduleNotification(phoneNumber, 'payout_warning_6h', warning6h, {
+          circleId,
+          contributionAmount,
+          currency,
+          timeRemaining: '6 hours',
+          allMembersContributed,
+          warningLevel: 2
+        })
+      );
+    }
+
+    // 1 hour warning
+    const warning1h = new Date(payoutTime.getTime() - 60 * 60 * 1000);
+    if (warning1h > now && hoursUntilPayout > 1) {
+      notificationIds.push(
+        this.scheduleNotification(phoneNumber, 'payout_warning_1h', warning1h, {
+          circleId,
+          contributionAmount,
+          currency,
+          timeRemaining: '1 hour',
+          allMembersContributed,
+          warningLevel: 3
+        })
+      );
+    }
+
+    logger.info(`Scheduled ${notificationIds.length} progressive payout warnings for circle ${circleId} to ${phoneNumber}`);
+    return notificationIds;
+  }
+
+  /**
+   * 🤖 AUTOMATION: Send immediate payout warning based on warning level
+   */
+  public async sendPayoutWarning(
+    phoneNumber: string,
+    circleId: string,
+    warningLevel: number,
+    data: Record<string, unknown>
+  ): Promise<boolean> {
+    let notificationType: NotificationType;
+
+    switch (warningLevel) {
+      case 1:
+        notificationType = 'payout_warning_24h';
+        break;
+      case 2:
+        notificationType = 'payout_warning_6h';
+        break;
+      case 3:
+        notificationType = 'payout_warning_1h';
+        break;
+      default:
+        logger.warn(`Invalid warning level ${warningLevel} for circle ${circleId}`);
+        return false;
+    }
+
+    return await this.sendImmediateNotification(phoneNumber, notificationType, {
+      ...data,
+      circleId,
+      warningLevel
+    });
+  }
+
+  /**
+   * 🤖 AUTOMATION: Send automated payout success notification
+   */
+  public async sendAutomatedPayoutSuccess(
+    phoneNumber: string,
+    circleId: string,
+    payoutAmount: number,
+    currency: string,
+    recipientAddress: string,
+    transactionHash?: string
+  ): Promise<boolean> {
+    return await this.sendImmediateNotification(phoneNumber, 'automated_payout_success', {
+      circleId,
+      payoutAmount,
+      currency,
+      recipientAddress,
+      transactionHash,
+      isAutomated: true
+    });
+  }
+
+  /**
+   * 🤖 AUTOMATION: Send automation failure notification
+   */
+  public async sendAutomationFailure(
+    phoneNumber: string,
+    circleId: string,
+    errorType: string,
+    errorDetails: string,
+    retryCount: number,
+    maxRetries: number
+  ): Promise<boolean> {
+    return await this.sendImmediateNotification(phoneNumber, 'automation_failed', {
+      circleId,
+      errorType,
+      errorDetails,
+      retryCount,
+      maxRetries,
+      isAutomated: true
+    });
+  }
+
+  /**
    * 🗑️ CANCEL: Cancel scheduled notification
    */
   public cancelNotification(notificationId: string): boolean {
@@ -580,6 +727,123 @@ export class WhatsAppNotificationService {
         requiresAuth: true,
         priority: 'high',
         maxRetries: 3
+      },
+
+      // Automation-specific notification templates
+      payout_warning_24h: {
+        type: 'payout_warning_24h',
+        message: (data) => {
+          const { circleId, contributionAmount, currency, timeRemaining, allMembersContributed } = data;
+          const contributionStatus = allMembersContributed ? 
+            '✅ All members have contributed!' : 
+            '⏰ Still waiting for some contributions';
+          
+          return `📅 **24 Hour Payout Notice**\n\n` +
+            `Your Njangi circle payout is scheduled in 24 hours!\n\n` +
+            `🏦 Circle: ${circleId}\n` +
+            `💰 Expected Amount: ${contributionAmount} ${currency}\n` +
+            `⏱️ Time Remaining: ${timeRemaining}\n\n` +
+            `${contributionStatus}\n\n` +
+            `The payout will be processed automatically when the deadline arrives. ` +
+            `Make sure all contributions are complete!\n\n` +
+            `Send /status for current details.`;
+        },
+        requiresAuth: true,
+        priority: 'medium',
+        maxRetries: 2
+      },
+
+      payout_warning_6h: {
+        type: 'payout_warning_6h',
+        message: (data) => {
+          const { circleId, contributionAmount, currency, timeRemaining, allMembersContributed } = data;
+          const urgencyMessage = allMembersContributed ? 
+            '🎉 All set! Payout will process automatically.' : 
+            '⚠️ URGENT: Missing contributions may delay payout!';
+          
+          return `⏰ **6 Hour Payout Warning**\n\n` +
+            `Your Njangi circle payout is coming up soon!\n\n` +
+            `🏦 Circle: ${circleId}\n` +
+            `💰 Amount: ${contributionAmount} ${currency}\n` +
+            `⏱️ Time Left: ${timeRemaining}\n\n` +
+            `${urgencyMessage}\n\n` +
+            `Automated payout will trigger when the deadline arrives. ` +
+            `Contact your circle admin if you have concerns.\n\n` +
+            `Send /status to check contribution status.`;
+        },
+        requiresAuth: true,
+        priority: 'high',
+        maxRetries: 3
+      },
+
+      payout_warning_1h: {
+        type: 'payout_warning_1h',
+        message: (data) => {
+          const { circleId, contributionAmount, currency, timeRemaining, allMembersContributed } = data;
+          const finalWarning = allMembersContributed ? 
+            '✅ All contributions complete - payout ready!' : 
+            '🚨 FINAL WARNING: Incomplete contributions detected!';
+          
+          return `🚨 **FINAL HOUR - Payout Imminent**\n\n` +
+            `Your Njangi circle payout is in the final hour!\n\n` +
+            `🏦 Circle: ${circleId}\n` +
+            `💰 Amount: ${contributionAmount} ${currency}\n` +
+            `⏱️ Time Left: ${timeRemaining}\n\n` +
+            `${finalWarning}\n\n` +
+            `🤖 Automated payout will execute at the deadline regardless of contribution status. ` +
+            `This is your last chance to make any needed contributions.\n\n` +
+            `Send /status for immediate status check.`;
+        },
+        requiresAuth: true,
+        priority: 'high',
+        maxRetries: 3
+      },
+
+      automated_payout_success: {
+        type: 'automated_payout_success',
+        message: (data) => {
+          const { circleId, payoutAmount, currency, recipientAddress, transactionHash } = data;
+          const hashString = String(transactionHash || '');
+          const displayHash = hashString ? `${hashString.substring(0, 8)}...` : 'Processing';
+          
+          return `🎉 **Automated Payout Complete!**\n\n` +
+            `Your Njangi circle payout has been successfully processed!\n\n` +
+            `🏦 Circle: ${circleId}\n` +
+            `💰 Amount: ${payoutAmount} ${currency}\n` +
+            `📍 Recipient: ${recipientAddress}\n` +
+            `🔗 Transaction: ${displayHash}\n\n` +
+            `🤖 This payout was automatically triggered by our smart contract system. ` +
+            `Funds have been distributed according to your circle's rotation schedule.\n\n` +
+            `Send /circles to view your updated circle status.`;
+        },
+        requiresAuth: true,
+        priority: 'high',
+        maxRetries: 2
+      },
+
+      automation_failed: {
+        type: 'automation_failed',
+        message: (data) => {
+          const { circleId, errorType, errorDetails, retryCount, maxRetries } = data;
+          const retryCountNum = Number(retryCount) || 0;
+          const maxRetriesNum = Number(maxRetries) || 3;
+          const retryMessage = retryCountNum < maxRetriesNum ? 
+            `⏳ Retry ${retryCountNum}/${maxRetriesNum} will be attempted automatically.` :
+            `❌ Max retries reached. Manual intervention required.`;
+          
+          return `🚨 **Automation Failure Alert**\n\n` +
+            `An automated process failed for your circle:\n\n` +
+            `🏦 Circle: ${circleId}\n` +
+            `❌ Error: ${errorType}\n` +
+            `📋 Details: ${errorDetails}\n\n` +
+            `${retryMessage}\n\n` +
+            `If this issue persists, please contact your circle admin or support team. ` +
+            `Your funds remain secure on the blockchain.\n\n` +
+            `Send /status to check current circle status.`;
+        },
+        requiresAuth: true,
+        priority: 'high',
+        maxRetries: 2
       }
     };
 

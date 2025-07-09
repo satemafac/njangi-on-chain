@@ -183,6 +183,53 @@ module njangi::njangi_circles {
     }
 
     // ----------------------------------------------------------
+    // Automation Status Struct
+    // ----------------------------------------------------------
+    public struct AutomationStatus has copy, drop {
+        is_overdue: bool,
+        time_until_payout: u64,
+        is_ready_for_payout: bool,
+        all_members_contributed: bool,
+        warning_level: u8, // 0=none, 1=24h, 2=6h, 3=1h, 4=overdue
+    }
+
+    // ----------------------------------------------------------
+    // Time-Based Automation Events  
+    // ----------------------------------------------------------
+    public struct AutomationTriggered has copy, drop {
+        circle_id: ID,
+        automation_type: String, // "payout", "notification", "health_check"
+        triggered_at: u64,
+        success: bool,
+        details: String,
+    }
+
+    public struct PayoutOverdue has copy, drop {
+        circle_id: ID,
+        overdue_duration_ms: u64,
+        next_payout_time: u64,
+        current_time: u64,
+        all_contributed: bool,
+    }
+
+    public struct AutomationFailed has copy, drop {
+        circle_id: ID,
+        automation_type: String,
+        error_code: u64,
+        error_message: String,
+        failed_at: u64,
+        retry_count: u64,
+    }
+
+    public struct PayoutWarning has copy, drop {
+        circle_id: ID,
+        warning_level: u8, // 1=24h, 2=6h, 3=1h
+        time_remaining_ms: u64,
+        next_payout_time: u64,
+        current_time: u64,
+    }
+
+    // ----------------------------------------------------------
     // Create Circle
     // ----------------------------------------------------------
     public fun create_circle(
@@ -1896,5 +1943,215 @@ module njangi::njangi_circles {
 
     public fun get_security_deposit_usd(circle: &Circle): u64 {
         config::get_security_deposit_usd(&circle.id)
+    }
+
+    // ----------------------------------------------------------
+    // Time-Based Automation Helper Functions
+    // ----------------------------------------------------------
+
+    // Check if a circle's payout is overdue
+    public fun is_payout_overdue(circle: &Circle, clock: &Clock): bool {
+        // Only check active circles
+        if (!circle.is_active) {
+            return false
+        };
+
+        // Don't consider paused circles as overdue
+        if (circle.paused_after_cycle) {
+            return false
+        };
+
+        let current_time = clock::timestamp_ms(clock);
+        current_time > circle.next_payout_time
+    }
+
+    // Note: Batch processing will be handled in the automation service
+    // Individual circle checking is done via is_circle_ready_for_automated_payout
+
+    // Check if a circle is ready for automated payout
+    public fun is_circle_ready_for_automated_payout(circle: &Circle, clock: &Clock): bool {
+        // Must be active
+        if (!circle.is_active) {
+            return false
+        };
+
+        // Must not be paused
+        if (circle.paused_after_cycle) {
+            return false
+        };
+
+        // Must be overdue
+        if (!is_payout_overdue(circle, clock)) {
+            return false
+        };
+
+        // All members must have contributed
+        if (!has_all_members_contributed(circle)) {
+            return false
+        };
+
+        true
+    }
+
+    // Get comprehensive automation status for a circle
+    public fun get_automation_status(circle: &Circle, clock: &Clock): AutomationStatus {
+        let current_time = clock::timestamp_ms(clock);
+        let next_payout = circle.next_payout_time;
+        
+        let is_overdue = current_time > next_payout;
+        let time_until_payout = if (is_overdue) {
+            0
+        } else {
+            next_payout - current_time
+        };
+
+        let all_contributed = has_all_members_contributed(circle);
+        let is_ready = is_circle_ready_for_automated_payout(circle, clock);
+
+        // Calculate warning level based on time remaining
+        let warning_level = if (is_overdue) {
+            4 // Overdue
+        } else if (time_until_payout <= 3_600_000) { // 1 hour
+            3
+        } else if (time_until_payout <= 21_600_000) { // 6 hours
+            2
+        } else if (time_until_payout <= 86_400_000) { // 24 hours
+            1
+        } else {
+            0 // No warning
+        };
+
+        AutomationStatus {
+            is_overdue,
+            time_until_payout,
+            is_ready_for_payout: is_ready,
+            all_members_contributed: all_contributed,
+            warning_level,
+        }
+    }
+
+    // Calculate time remaining until next payout (0 if overdue)
+    public fun get_time_until_payout(circle: &Circle, clock: &Clock): u64 {
+        let current_time = clock::timestamp_ms(clock);
+        let next_payout = circle.next_payout_time;
+        
+        if (current_time >= next_payout) {
+            0
+        } else {
+            next_payout - current_time
+        }
+    }
+
+    // Calculate how long a payout has been overdue (0 if not overdue)
+    public fun get_overdue_duration(circle: &Circle, clock: &Clock): u64 {
+        let current_time = clock::timestamp_ms(clock);
+        let next_payout = circle.next_payout_time;
+        
+        if (current_time <= next_payout) {
+            0
+        } else {
+            current_time - next_payout
+        }
+    }
+
+    // Check if circle should send warning notifications
+    public fun should_send_warning(circle: &Circle, clock: &Clock, warning_hours: u64): bool {
+        // Only for active, non-paused circles
+        if (!circle.is_active || circle.paused_after_cycle) {
+            return false
+        };
+
+        let time_until = get_time_until_payout(circle, clock);
+        let warning_threshold_ms = warning_hours * 3_600_000; // Convert hours to milliseconds
+        
+        // Send warning if time remaining is less than threshold but still positive
+        time_until > 0 && time_until <= warning_threshold_ms
+    }
+
+    // Get warning level for time-based notifications
+    public fun get_warning_level(circle: &Circle, clock: &Clock): u8 {
+        let time_until = get_time_until_payout(circle, clock);
+        
+        if (time_until == 0) {
+            4 // Overdue
+        } else if (time_until <= 3_600_000) { // 1 hour
+            3
+        } else if (time_until <= 21_600_000) { // 6 hours  
+            2
+        } else if (time_until <= 86_400_000) { // 24 hours
+            1
+        } else {
+            0 // No warning needed
+        }
+    }
+
+    // Emit automation events for logging and monitoring
+    public fun emit_automation_triggered(
+        circle: &Circle,
+        automation_type: vector<u8>,
+        success: bool,
+        details: vector<u8>,
+        clock: &Clock
+    ) {
+        event::emit(AutomationTriggered {
+            circle_id: object::uid_to_inner(&circle.id),
+            automation_type: string::utf8(automation_type),
+            triggered_at: clock::timestamp_ms(clock),
+            success,
+            details: string::utf8(details),
+        });
+    }
+
+    public fun emit_payout_overdue(circle: &Circle, clock: &Clock) {
+        let current_time = clock::timestamp_ms(clock);
+        let overdue_duration = get_overdue_duration(circle, clock);
+        
+        event::emit(PayoutOverdue {
+            circle_id: object::uid_to_inner(&circle.id),
+            overdue_duration_ms: overdue_duration,
+            next_payout_time: circle.next_payout_time,
+            current_time,
+            all_contributed: has_all_members_contributed(circle),
+        });
+    }
+
+    public fun emit_automation_failed(
+        circle: &Circle,
+        automation_type: vector<u8>,
+        error_code: u64,
+        error_message: vector<u8>,
+        retry_count: u64,
+        clock: &Clock
+    ) {
+        event::emit(AutomationFailed {
+            circle_id: object::uid_to_inner(&circle.id),
+            automation_type: string::utf8(automation_type),
+            error_code,
+            error_message: string::utf8(error_message),
+            failed_at: clock::timestamp_ms(clock),
+            retry_count,
+        });
+    }
+
+    public fun emit_payout_warning(circle: &Circle, warning_level: u8, clock: &Clock) {
+        let current_time = clock::timestamp_ms(clock);
+        let time_remaining = get_time_until_payout(circle, clock);
+        
+        event::emit(PayoutWarning {
+            circle_id: object::uid_to_inner(&circle.id),
+            warning_level,
+            time_remaining_ms: time_remaining,
+            next_payout_time: circle.next_payout_time,
+            current_time,
+        });
+    }
+
+    // Note: Batch automation status queries will be handled in the automation service
+    // Individual circle status is available via get_automation_status
+
+    // Check if circle has valid rotation setup
+    public fun has_valid_rotation(circle: &Circle): bool {
+        let rotation_len = vector::length(&circle.rotation_order);
+        rotation_len > 0 && circle.current_position < rotation_len
     }
 } 

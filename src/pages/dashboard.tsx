@@ -58,6 +58,14 @@ interface MemberJoinedEvent {
   security_deposit_local?: string;
 }
 
+interface CustodyDepositedEvent {
+  circle_id: string;
+  member: string;
+  amount: string;
+  operation_type: number;
+  wallet_id: string;
+}
+
 // Add these type definitions at the top of the file with other interfaces
 interface TransactionBlock {
   transactions?: Array<{
@@ -1039,7 +1047,137 @@ export default function Dashboard() {
     }
   };
 
-  // Enhanced fetchUserCircles with comprehensive caching
+  // Comprehensive wallet transaction fetching to capture ALL circle interactions
+  const fetchAllWalletTransactions = useCallback(async (client: SuiClient, walletAddress: string): Promise<any[]> => {
+    const allTransactions: any[] = [];
+    let cursor: any = null;
+    const batchSize = 25; // Even smaller batch size to avoid rate limiting
+    const maxTransactions = 2000; // Reduced safety limit
+    
+    console.log(`Fetching ALL historical transactions for wallet ${walletAddress}...`);
+    
+    while (true) {
+      try {
+        const response = await client.queryTransactionBlocks({
+          filter: { FromAddress: walletAddress },
+          options: {
+            showInput: true,
+            showEvents: true,
+            showEffects: false,
+            showObjectChanges: false,
+            showBalanceChanges: false
+          },
+          limit: batchSize,
+          ...(cursor && { cursor })
+        });
+        
+        if (!response.data || response.data.length === 0) {
+          break;
+        }
+        
+        allTransactions.push(...response.data);
+        
+        if (allTransactions.length >= maxTransactions) {
+          console.log(`Reached maximum transaction limit (${maxTransactions}), stopping...`);
+          break;
+        }
+        
+        if (response.hasNextPage && response.nextCursor) {
+          cursor = response.nextCursor;
+          console.log(`Fetched ${allTransactions.length} transactions so far...`);
+          // Add a small delay between batches to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, 200));
+        } else {
+          break;
+        }
+      } catch (error) {
+        console.error('Error fetching wallet transactions:', error);
+        break;
+      }
+    }
+    
+    console.log(`Total wallet transactions fetched: ${allTransactions.length}`);
+    return allTransactions;
+  }, []);
+
+  // Extract circle events from wallet transactions
+  const extractCircleEventsFromTransactions = useCallback(async (transactions: any[], userAddress: string) => {
+    const circleEvents: any[] = [];
+    const memberEvents: any[] = [];
+    const custodyDepositedEvents: any[] = [];
+    const activationEvents: any[] = [];
+    const walletEvents: any[] = [];
+    
+    console.log('Extracting circle-related events from transactions...');
+    
+    for (const tx of transactions) {
+      // Check if this transaction involves circle-related functions
+      const hasCircleFunction = tx.transaction?.data?.transaction?.transactions?.some((t: any) => {
+        if ('MoveCall' in t) {
+          const moveCall = t.MoveCall;
+          return moveCall.module === 'njangi_circles' || moveCall.module === 'njangi_custody';
+        }
+        return false;
+      });
+      
+      if (hasCircleFunction && tx.events) {
+        for (const event of tx.events) {
+          // Parse event types and filter for relevant ones
+          if (event.type && event.parsedJson) {
+            if (event.type.includes('CircleCreated')) {
+              const eventData = event.parsedJson as CircleCreatedEvent;
+              if (eventData.admin === userAddress) {
+                circleEvents.push(event);
+              }
+            } else if (event.type.includes('MemberJoined')) {
+              const eventData = event.parsedJson as MemberJoinedEvent;
+              if (eventData.member === userAddress) {
+                memberEvents.push(event);
+              }
+            } else if (event.type.includes('CustodyDeposited')) {
+              const eventData = event.parsedJson as CustodyDepositedEvent;
+              if (eventData.member === userAddress) {
+                custodyDepositedEvents.push(event);
+              }
+            } else if (event.type.includes('CircleActivated')) {
+              activationEvents.push(event);
+            } else if (event.type.includes('CustodyWalletCreated')) {
+              walletEvents.push(event);
+            }
+          }
+        }
+      }
+    }
+    
+    console.log(`Extracted events - CircleCreated: ${circleEvents.length}, MemberJoined: ${memberEvents.length}, CustodyDeposited: ${custodyDepositedEvents.length}`);
+    
+    return {
+      circleEvents,
+      memberEvents,
+      custodyDepositedEvents,
+      activationEvents,
+      walletEvents
+    };
+  }, []);
+
+  // Helper function to get all user addresses (current implementation returns single address)
+  // TODO: Extend this to support multiple addresses per user across different OAuth providers
+  const getAllUserAddresses = useCallback(async (): Promise<string[]> => {
+    // Current implementation only returns the single authenticated address
+    // In the future, this could be extended to:
+    // 1. Query a user profile service to get linked addresses
+    // 2. Check for addresses generated from different OAuth providers
+    // 3. Query transaction history to identify related addresses
+    
+    if (!userAddress) {
+      return [];
+    }
+    
+    // For now, return only the current user address
+    // This can be extended to return multiple addresses when user profile linking is implemented
+    return [userAddress];
+  }, [userAddress]);
+
   const fetchUserCircles = useCallback(async (forceRefresh: boolean = false) => {
     console.log('fetchUserCircles starting...', { forceRefresh });
     
@@ -1076,69 +1214,27 @@ export default function Dashboard() {
         url: 'https://fullnode.testnet.sui.io:443'
       });
       
-      // Cache user package IDs
-      const packageIdsCacheKey = getCacheKey(userAddress, 'packageIds');
-      const userPackageIds = await cachedApiCall(
-        packageIdsCacheKey,
-        () => getUserPackageIds(client, userAddress),
+      // Get all user addresses for comprehensive circle fetching
+      const allUserAddresses = await getAllUserAddresses();
+      console.log('Fetching circles for user addresses:', allUserAddresses);
+      
+      // NEW APPROACH: Use wallet-based transaction querying to capture ALL circle interactions
+      const walletTransactionsCacheKey = getCacheKey(userAddress, 'walletTransactions');
+      const allWalletTransactions = await cachedApiCall(
+        walletTransactionsCacheKey,
+        () => fetchAllWalletTransactions(client, userAddress),
         CACHE_CONFIG.EVENTS_TTL
       );
       
-      console.log('Querying events for package IDs:', userPackageIds);
+      // Extract all circle-related events from wallet transactions
+      const extractedEvents = await extractCircleEventsFromTransactions(allWalletTransactions, userAddress);
       
-      // Arrays to collect events from all packages
-      let allCircleEvents: any[] = [];
-      let allMemberEvents: any[] = [];
-      let allActivationEvents: any[] = [];
-      let allWalletEvents: any[] = [];
-      
-      // Query events for each package ID with caching
-      for (const packageId of userPackageIds) {
-        console.log(`Querying events for package ${packageId}`);
-        
-        try {
-          // Cache events per package
-          const eventsCacheKey = getCacheKey(userAddress, 'events', packageId);
-          const packageEvents = await cachedApiCall(
-            eventsCacheKey,
-            async () => {
-              const [circleEvents, memberEvents, activationEvents, walletEvents] = await Promise.all([
-                client.queryEvents({
-                  query: { MoveEventType: `${packageId}::njangi_circles::CircleCreated` },
-                  limit: 100
-                }),
-                client.queryEvents({
-                  query: { MoveEventType: `${packageId}::njangi_circles::MemberJoined` },
-                  limit: 100
-                }),
-                client.queryEvents({
-                  query: { MoveEventType: `${packageId}::njangi_circles::CircleActivated` },
-                  limit: 50
-                }),
-                client.queryEvents({
-                  query: { MoveEventType: `${packageId}::njangi_custody::CustodyWalletCreated` },
-                  limit: 100
-                })
-              ]);
-              
-              return {
-                circleEvents: circleEvents.data,
-                memberEvents: memberEvents.data,
-                activationEvents: activationEvents.data,
-                walletEvents: walletEvents.data
-              };
-            },
-            CACHE_CONFIG.EVENTS_TTL
-          );
-          
-          allCircleEvents.push(...packageEvents.circleEvents);
-          allMemberEvents.push(...packageEvents.memberEvents);
-          allActivationEvents.push(...packageEvents.activationEvents);
-          allWalletEvents.push(...packageEvents.walletEvents);
-        } catch (error) {
-          console.error(`Error querying events for package ${packageId}:`, error);
-        }
-      }
+      // Use extracted events
+      const allCircleEvents = extractedEvents.circleEvents;
+      const allMemberEvents = extractedEvents.memberEvents;
+      const allActivationEvents = extractedEvents.activationEvents;
+      const allWalletEvents = extractedEvents.walletEvents;
+      const allCustodyDepositedEvents = extractedEvents.custodyDepositedEvents;
       
       console.log(`Found ${allCircleEvents.length} circle events across all packages`);
       console.log(`Found ${allMemberEvents.length} member events across all packages`);
@@ -1167,6 +1263,9 @@ export default function Dashboard() {
           async () => {
             try {
               console.log(`Fetching dynamic fields for circle ${circleId}`);
+              // Add a small delay to avoid rate limiting
+              await new Promise(resolve => setTimeout(resolve, 100));
+              
               const dynamicFields = await client.getDynamicFields({
                 parentId: circleId
               });
@@ -1296,26 +1395,72 @@ export default function Dashboard() {
         }
       }
       
-      // Process both result sets
-      const circleMap = new Map<string, Circle>();
+      // First, collect all unique circle IDs where user is involved (admin or member)
+      const allUserCircleIds = new Set<string>();
+      const circleMetadata = new Map<string, { isAdmin: boolean; eventData: any }>();
       
-      // Process created circles (admin) with parallel processing for better performance
-      const adminCirclePromises = allCircleEvents
+      // Collect admin circles
+      allCircleEvents
         .filter(event => {
           const parsedEvent = event.parsedJson as CircleCreatedEvent;
-          return parsedEvent?.admin === userAddress;
+          return parsedEvent?.admin && allUserAddresses.includes(parsedEvent.admin);
         })
-        .map(async (event) => {
+        .forEach(event => {
           const parsedEvent = event.parsedJson as CircleCreatedEvent;
-          try {
-            // Cache individual circle object data
-            const objectCacheKey = getCacheKey(userAddress, 'circleObject', parsedEvent.circle_id);
-            const circleData = await cachedApiCall(
-              objectCacheKey,
-              async () => {
-                // First verify if the circle still exists (hasn't been deleted)
-                const objectData = await client.getObject({
-                  id: parsedEvent.circle_id,
+          allUserCircleIds.add(parsedEvent.circle_id);
+          circleMetadata.set(parsedEvent.circle_id, { isAdmin: true, eventData: parsedEvent });
+        });
+      
+      // Collect member circles from MemberJoined events
+      allMemberEvents
+        .filter(event => {
+          const parsedEvent = event.parsedJson as MemberJoinedEvent;
+          return parsedEvent?.member && allUserAddresses.includes(parsedEvent.member);
+        })
+        .forEach(event => {
+          const parsedEvent = event.parsedJson as MemberJoinedEvent;
+          allUserCircleIds.add(parsedEvent.circle_id);
+          // Only set as member if not already marked as admin
+          if (!circleMetadata.has(parsedEvent.circle_id)) {
+            circleMetadata.set(parsedEvent.circle_id, { isAdmin: false, eventData: parsedEvent });
+          }
+        });
+      
+      // Collect member circles from CustodyDeposited events
+      allCustodyDepositedEvents
+        .filter(event => {
+          const parsedEvent = event.parsedJson as CustodyDepositedEvent;
+          return parsedEvent?.member && allUserAddresses.includes(parsedEvent.member);
+        })
+        .forEach(event => {
+          const parsedEvent = event.parsedJson as CustodyDepositedEvent;
+          allUserCircleIds.add(parsedEvent.circle_id);
+          // Only set as member if not already marked as admin
+          if (!circleMetadata.has(parsedEvent.circle_id)) {
+            circleMetadata.set(parsedEvent.circle_id, { isAdmin: false, eventData: parsedEvent });
+          }
+        });
+      
+      console.log(`Found ${allUserCircleIds.size} unique circles for user:`, Array.from(allUserCircleIds));
+      
+      // Now process all unique circles with controlled concurrency
+      const allCirclePromises = Array.from(allUserCircleIds).map(async (circleId, index) => {
+        const metadata = circleMetadata.get(circleId);
+        if (!metadata) return null;
+        
+        try {
+          // Add staggered delay to avoid overwhelming the RPC
+          await new Promise(resolve => setTimeout(resolve, index * 100));
+          
+          console.log(`Processing circle ${index + 1}/${allUserCircleIds.size}: ${circleId}`);
+          // Cache individual circle object data
+          const objectCacheKey = getCacheKey(userAddress, 'circleObject', circleId);
+          const circleData = await cachedApiCall(
+            objectCacheKey,
+            async () => {
+              // First verify if the circle still exists (hasn't been deleted)
+              const objectData = await client.getObject({
+                id: circleId,
                   options: { 
                     showType: true, 
                     showOwner: true,
@@ -1329,24 +1474,28 @@ export default function Dashboard() {
                 
                 // Skip this circle if it doesn't exist or is not accessible
                 if (!objectData.data || objectData.error) {
-                  console.log(`Circle ${parsedEvent.circle_id} no longer exists, skipping...`);
+                  console.log(`Circle ${circleId} no longer exists, skipping...`);
                   return null;
                 }
                 
-                // Get the dynamic fields for this circle
+                // Get the dynamic fields for this circle with better error handling
                 let dynamicFieldsResult;
                 try {
+                  // Add a small delay to avoid rate limiting
+                  await new Promise(resolve => setTimeout(resolve, 50));
+                  
                   dynamicFieldsResult = await client.getDynamicFields({
-                    parentId: parsedEvent.circle_id
+                    parentId: circleId
                   });
-                  console.log(`Dynamic fields for circle ${parsedEvent.circle_id}:`, dynamicFieldsResult.data);
+                  console.log(`Dynamic fields for circle ${circleId}:`, dynamicFieldsResult.data);
                 } catch (error) {
-                  console.error(`Error fetching dynamic fields for circle ${parsedEvent.circle_id}:`, error);
+                  console.error(`Error fetching dynamic fields for circle ${circleId}:`, error);
+                  // Continue without dynamic fields rather than failing completely
                   dynamicFieldsResult = { data: [] };
                 }
                 
                 // Add transaction input data if we have it
-                const transactionInput = transactionInputMap.get(parsedEvent.circle_id);
+                const transactionInput = transactionInputMap.get(circleId);
                 
                 // Add type assertions for the EnhancedObjectData
                 const enhancedObjectData = {
@@ -1363,37 +1512,39 @@ export default function Dashboard() {
               CACHE_CONFIG.API_RESPONSE_TTL
             );
             
-            if (!circleData) return null;
+          if (!circleData) return null;
+          
+          // Process circle using the helper function with all data sources
+          const processedCircle = await processCircleObject(circleData, userAddress, metadata.eventData, client);
+          
+          if (processedCircle) {
+            // Update with the actual member count from events
+            const memberCount = memberCountMap.has(circleId) 
+              ? memberCountMap.get(circleId)!.size 
+              : 1; // Default to 1 (admin only)
             
-                         // Process circle using the helper function with all data sources
-             const processedCircle = await processCircleObject(circleData, userAddress, parsedEvent, client);
-            
-            if (processedCircle) {
-              // Update with the actual member count from events
-              const memberCount = memberCountMap.has(parsedEvent.circle_id) 
-                ? memberCountMap.get(parsedEvent.circle_id)!.size 
-                : 1; // Default to 1 (admin only)
-              
-              // Check if the circle has been activated
-              const isActive = activatedCircleIds.has(parsedEvent.circle_id);
+            // Check if the circle has been activated
+            const isActive = activatedCircleIds.has(circleId);
               
               const safeCircleData = {
                 ...processedCircle,
                 id: processedCircle?.id ?? '',
                 name: typeof processedCircle?.name === 'string' ? processedCircle.name : '',
                 admin: typeof processedCircle?.admin === 'string' ? processedCircle.admin : '',
+                isAdmin: metadata.isAdmin, // Use the metadata to determine if user is admin
+                memberStatus: 'active' as const
               } as Circle;
               
               // Try to get wallet ID from map first
-              let walletId = circleWalletMap.get(parsedEvent.circle_id);
+              let walletId = circleWalletMap.get(circleId);
               
               // If not found in the map, try to get it from dynamic fields
               if (!walletId) {
-                walletId = await fetchWalletIdFromDynamicFields(parsedEvent.circle_id);
+                walletId = await fetchWalletIdFromDynamicFields(circleId);
                 
                 // If found from dynamic fields, store it in our map for future reference
                 if (walletId) {
-                  circleWalletMap.set(parsedEvent.circle_id, walletId);
+                  circleWalletMap.set(circleId, walletId);
                 }
               }
               
@@ -1405,36 +1556,45 @@ export default function Dashboard() {
               };
             }
             return null;
-          } catch (error) {
-            console.error(`Error fetching circle details for ${parsedEvent.circle_id}:`, error);
-            return null;
-          }
-        });
-      
-      // Process member circles similarly with parallel processing
-      const memberCirclePromises = allMemberEvents
-        .filter(event => {
-          const parsedEvent = event.parsedJson as MemberJoinedEvent;
-          return parsedEvent?.member === userAddress && !circleMap.has(parsedEvent.circle_id);
-        })
-        .map(async (event) => {
-          const parsedEvent = event.parsedJson as MemberJoinedEvent;
-          // Similar caching and processing logic as admin circles
-          // ... (implement similar caching for member circles)
-          return null; // Placeholder - implement full member circle processing with caching
-        });
+        } catch (error) {
+          console.error(`Error fetching circle details for ${circleId}:`, error);
+          return null;
+        }
+      });
       
       // Wait for all circle processing to complete
-      const [adminCircles, memberCircles] = await Promise.all([
-        Promise.all(adminCirclePromises),
-        Promise.all(memberCirclePromises)
-      ]);
+      const allCircles = await Promise.all(allCirclePromises);
       
-      // Combine results and filter out nulls
-      const allProcessedCircles = [...adminCircles, ...memberCircles].filter(Boolean) as Circle[];
+      // Filter out nulls
+      const allProcessedCircles = allCircles.filter(Boolean) as Circle[];
       
-      // Convert to final array
-      const freshCirclesArray = allProcessedCircles;
+      console.log(`Processed ${allProcessedCircles.length} circles before deduplication`);
+      console.log('Circle IDs before deduplication:', allProcessedCircles.map(c => c.id));
+      
+      // Implement robust deduplication using Map to ensure no duplicates
+      const uniqueCirclesMap = new Map<string, Circle>();
+      
+      allProcessedCircles.forEach(circle => {
+        const existingCircle = uniqueCirclesMap.get(circle.id);
+        
+        if (!existingCircle) {
+          // First time seeing this circle, add it
+          uniqueCirclesMap.set(circle.id, circle);
+        } else {
+          // Circle already exists, prioritize admin status
+          if (circle.isAdmin && !existingCircle.isAdmin) {
+            // Replace member status with admin status
+            uniqueCirclesMap.set(circle.id, { ...circle, isAdmin: true });
+          }
+          // If both are admin or both are member, keep the existing one
+        }
+      });
+      
+      // Convert to final array with no duplicates
+      const freshCirclesArray = Array.from(uniqueCirclesMap.values());
+      
+      console.log(`Final circles array after deduplication: ${freshCirclesArray.length} circles`);
+      console.log('Final circle IDs:', freshCirclesArray.map(c => c.id));
 
       // Always update the circles state with fresh data and cache it
       setCircles(freshCirclesArray);
@@ -1461,7 +1621,7 @@ export default function Dashboard() {
       setLoading(false);
       setIsBackgroundRefreshing(false);
     }
-  }, [userAddress, isBackgroundRefreshing]); // Removed circles dependency to prevent circular dependency
+  }, [userAddress, isBackgroundRefreshing, fetchAllWalletTransactions, extractCircleEventsFromTransactions, getAllUserAddresses]); // Updated dependencies
 
   // Enhanced useEffect to handle initial load and background refresh
   useEffect(() => {

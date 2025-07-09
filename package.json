@@ -87,7 +87,6 @@
     "@types/react-dom": "^19",
     "@types/react-router-dom": "^5.3.3",
     "@types/uuid": "^10.0.0",
-    "@types/winston": "^2.4.4",
     "autoprefixer": "^10.4.20",
     "cors": "^2.8.5",
     "eslint": "^9",

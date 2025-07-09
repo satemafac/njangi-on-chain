@@ -6,7 +6,7 @@ import { toast } from 'react-hot-toast';
 import { ArrowLeft } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
-import { PACKAGE_ID } from '../../../../services/circle-service';
+import { PACKAGE_ID, getCirclePackageId } from '../../../../services/circle-service';
 import SimplifiedSwapUI from '../../../../components/SimplifiedSwapUI';
 import { getCoinType } from '../../../../config/constants';
 
@@ -668,6 +668,9 @@ export default function ContributeToCircle() {
 
   // Add a new state variable to track if a user has had their security deposit returned during the current paused cycle
   const [securityDepositReturnedDuringPause, setSecurityDepositReturnedDuringPause] = useState<boolean>(false);
+  
+  // Add dynamic package ID state
+  const [circlePackageId, setCirclePackageId] = useState<string>(PACKAGE_ID);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -926,7 +929,7 @@ export default function ContributeToCircle() {
 
       // 3. Fetch CustodyDeposited events (Optional: For logging/verification ONLY, not balance calculation)
       const custodyEvents = await client.queryEvents({
-        query: { MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited` },
+        query: { MoveEventType: `${circlePackageId}::njangi_custody::CustodyDeposited` },
         limit: 100 
       });
       
@@ -1001,13 +1004,18 @@ export default function ContributeToCircle() {
   };
 
   const fetchCircleDetails = async () => {
-    if (!id) return;
+    if (!id || !userAddress) return;
     console.log('Contribute - Fetching circle details for:', id);
     
     setLoading(true);
     setCurrentPositionInCycle(null); // Reset before fetching
     setTotalMembersInRotation(null); // Reset before fetching
     try {
+      // Determine package ID for this circle
+      const determinedPackageId = await getCirclePackageId(id as string, userAddress);
+      console.log('Contribute - Using package ID:', determinedPackageId);
+      setCirclePackageId(determinedPackageId);
+      
       const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
       
       // Get circle object with content
@@ -1063,7 +1071,7 @@ export default function ContributeToCircle() {
       if (!isActive) {
         try {
           const activationEvents = await client.queryEvents({
-            query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleActivated` },
+            query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleActivated` },
             limit: 50
           });
           
@@ -1102,7 +1110,7 @@ export default function ContributeToCircle() {
       try {
         // 1. Fetch CircleCreated event
         const circleEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleCreated` },
+          query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleCreated` },
           limit: 50
         });
         const createEvent = circleEvents.data.find(event => 
@@ -1695,7 +1703,7 @@ export default function ContributeToCircle() {
       
       // First check for recent payout events to detect cycle/position changes
       const payoutEvents = await client.queryEvents({
-        query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::PayoutProcessed` },
+        query: { MoveEventType: `${circlePackageId}::njangi_payments::PayoutProcessed` },
         limit: 20
       });
       
@@ -1719,7 +1727,7 @@ export default function ContributeToCircle() {
       
       // 1. Check ContributionMade events
       const contributionEvents = await client.queryEvents({
-        query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::ContributionMade` },
+        query: { MoveEventType: `${circlePackageId}::njangi_payments::ContributionMade` },
         limit: 100
       });
       
@@ -1752,7 +1760,7 @@ export default function ContributeToCircle() {
       // 2. Check StablecoinContributionMade events
       if (!hasContributed) {
         const stablecoinEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::StablecoinContributionMade` },
+          query: { MoveEventType: `${circlePackageId}::njangi_circles::StablecoinContributionMade` },
           limit: 100
         });
         
@@ -1795,7 +1803,7 @@ export default function ContributeToCircle() {
       // 3. If not found in other events, try CustodyDeposited events
       if (!hasContributed) {
         const custodyEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited` },
+          query: { MoveEventType: `${circlePackageId}::njangi_custody::CustodyDeposited` },
           limit: 100
         });
         
@@ -1834,7 +1842,7 @@ export default function ContributeToCircle() {
       // 4. Check CustodyTransaction events (for maximum coverage)
       if (!hasContributed) {
         const txEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyTransaction` },
+          query: { MoveEventType: `${circlePackageId}::njangi_custody::CustodyTransaction` },
           limit: 100
         });
         
@@ -1958,7 +1966,7 @@ export default function ContributeToCircle() {
       
       // Look for SecurityDepositReturned events for this user and circle
       const securityReturnedEvents = await client.queryEvents({
-        query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::SecurityDepositReturned` }, 
+        query: { MoveEventType: `${circlePackageId}::njangi_payments::SecurityDepositReturned` }, 
         limit: 50
       });
       
@@ -1987,7 +1995,7 @@ export default function ContributeToCircle() {
       
       // Check for the most recent CycleResumed event
       const cycleResumedEvents = await client.queryEvents({
-        query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::CycleResumed` },
+        query: { MoveEventType: `${circlePackageId}::njangi_circles::CycleResumed` },
         limit: 20
       });
       
@@ -2464,7 +2472,7 @@ export default function ContributeToCircle() {
       // First try to get the balance from CoinDeposited events with coin_type "stablecoin"
       const coinDepositedEvents = await client.queryEvents({
         query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_custody::CoinDeposited`
+          MoveEventType: `${circlePackageId}::njangi_custody::CoinDeposited`
         },
         limit: 20
       });
@@ -2504,7 +2512,7 @@ export default function ContributeToCircle() {
       if (newBalance === null) {
         const stablecoinEvents = await client.queryEvents({
         query: {
-            MoveEventType: `${PACKAGE_ID}::njangi_circles::StablecoinDeposited`
+            MoveEventType: `${circlePackageId}::njangi_circles::StablecoinDeposited`
           },
           limit: 10
         });
@@ -2540,7 +2548,7 @@ export default function ContributeToCircle() {
       // Process CustodyDeposited events to identify security deposits in USDC
       const custodyEvents = await client.queryEvents({
         query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited`
+          MoveEventType: `${circlePackageId}::njangi_custody::CustodyDeposited`
         },
         limit: 50
       });
