@@ -1353,6 +1353,24 @@ export default function Dashboard() {
       console.log(`  - From additional event querying: ${additionalMemberJoinedEvents.length}`);
       console.log(`- CircleActivated events: ${allActivationEvents.length}`);
       console.log(`- CustodyDeposited events: ${allCustodyDepositedEvents.length}`);
+      
+      // Debug: Log some sample events to understand their structure
+      if (allMemberEvents.length > 0) {
+        console.log('Sample MemberJoined event:', allMemberEvents[0]);
+        console.log('Sample MemberJoined event structure:', {
+          parsedJson: allMemberEvents[0].parsedJson,
+          type: allMemberEvents[0].type,
+          eventSeq: allMemberEvents[0].eventSeq
+        });
+      }
+      if (allCircleEvents.length > 0) {
+        console.log('Sample CircleCreated event:', allCircleEvents[0]);
+        console.log('Sample CircleCreated event structure:', {
+          parsedJson: allCircleEvents[0].parsedJson,
+          type: allCircleEvents[0].type,
+          eventSeq: allCircleEvents[0].eventSeq
+        });
+      }
       console.log(`Found ${allWalletEvents.length} wallet events across all packages`);
       
       // Create a map of circle IDs to wallet IDs
@@ -1380,9 +1398,14 @@ export default function Dashboard() {
               // Add a small delay to avoid rate limiting
               await new Promise(resolve => setTimeout(resolve, 100));
               
-              const dynamicFields = await client.getDynamicFields({
-                parentId: circleId
-              });
+              const dynamicFields = await retryApiCall(
+                () => client.getDynamicFields({
+                  parentId: circleId
+                }),
+                2,
+                1000,
+                `getDynamicFields for wallet in circle ${circleId}`
+              );
               
               for (const field of dynamicFields.data) {
                 if (field?.name && 
@@ -1393,10 +1416,15 @@ export default function Dashboard() {
                     field.type && field.type.includes('wallet_id')) { 
                   
                   if (field.objectId) { 
-                    const walletField = await client.getObject({
-                      id: field.objectId,
-                      options: { showContent: true }
-                    });
+                    const walletField = await retryApiCall(
+                      () => client.getObject({
+                        id: field.objectId,
+                        options: { showContent: true }
+                      }),
+                      2,
+                      1000,
+                      `getObject for wallet field ${field.objectId}`
+                    );
                     
                     const contentFields = walletField.data?.content && 
                                             typeof walletField.data.content === 'object' && 
@@ -1432,23 +1460,38 @@ export default function Dashboard() {
       }
       console.log('Activated circle IDs:', Array.from(activatedCircleIds));
       
-      // Create a member count map based on member events
+      // Create a member count map based on member events (used as fallback only)
       const memberCountMap = new Map<string, Set<string>>();
       
-      // Process all member events to build the member count map
+      // Add admins (circle creators) to member count for fallback
+      console.log(`Processing ${allCircleEvents.length} circle creation events for fallback member count`);
+      for (const event of allCircleEvents) {
+        if (event.parsedJson && typeof event.parsedJson === 'object') {
+          const eventJson = event.parsedJson as CircleCreatedEvent;
+          if (eventJson.circle_id && eventJson.admin) {
+            if (!memberCountMap.has(eventJson.circle_id)) {
+              memberCountMap.set(eventJson.circle_id, new Set<string>());
+            }
+            memberCountMap.get(eventJson.circle_id)!.add(eventJson.admin);
+          }
+        }
+      }
+      
+      // Add members from MemberJoined events for fallback
+      console.log(`Processing ${allMemberEvents.length} member join events for fallback member count`);
       for (const event of allMemberEvents) {
         if (event.parsedJson && typeof event.parsedJson === 'object') {
           const eventJson = event.parsedJson as { circle_id?: string, member?: string };
           if (eventJson.circle_id && eventJson.member) {
-            // Initialize set if not exists
             if (!memberCountMap.has(eventJson.circle_id)) {
               memberCountMap.set(eventJson.circle_id, new Set<string>());
             }
-            // Add member to the set
             memberCountMap.get(eventJson.circle_id)!.add(eventJson.member);
           }
         }
       }
+      
+      console.log(`Created fallback member count map for ${memberCountMap.size} circles`);
       
       // Create mapping from circle ID to creation event data
       const circleCreationDataMap = new Map<string, CircleCreatedEvent>();
@@ -1656,6 +1699,14 @@ export default function Dashboard() {
                 ? memberCountMap.get(circleId)!.size 
                 : 1; // Default to 1 (admin only)
               
+              console.log(`Circle ${circleId}: Member count calculation:`, {
+                hasCircleInMap: memberCountMap.has(circleId),
+                memberSetSize: memberCountMap.has(circleId) ? memberCountMap.get(circleId)!.size : 0,
+                finalMemberCount: memberCount,
+                isAdmin: metadata.isAdmin,
+                members: memberCountMap.has(circleId) ? Array.from(memberCountMap.get(circleId)!) : []
+              });
+              
               // Check if the circle has been activated
               const isActive = activatedCircleIds.has(circleId);
                 
@@ -1681,9 +1732,21 @@ export default function Dashboard() {
                   }
                 }
                 
+                // Use blockchain's current_members field as primary source, with event-based count as fallback
+                const finalMemberCount = safeCircleData.currentMembers > 0 
+                  ? safeCircleData.currentMembers 
+                  : memberCount;
+                
+                console.log(`Circle ${circleId}: Member count decision:`, {
+                  blockchainCurrentMembers: safeCircleData.currentMembers,
+                  eventBasedMemberCount: memberCount,
+                  finalMemberCount: finalMemberCount,
+                  source: safeCircleData.currentMembers > 0 ? 'blockchain' : 'events'
+                });
+                
                 return {
                   ...safeCircleData,
-                  currentMembers: memberCount,
+                  currentMembers: finalMemberCount,
                   isActive: isActive,
                   walletId: walletId || undefined
                 };
