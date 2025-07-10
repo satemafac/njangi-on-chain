@@ -175,7 +175,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     // Clear sessionStorage to reset UI state between sessions
     sessionStorage.removeItem('testnetBannerDismissed');
     
-    // Redirect to home page after logout - use custom domain
+    // Redirect to home page after logout
+    // The prompt=select_account parameter in the OAuth URL will ensure
+    // users are prompted to select an account on next login
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com';
     window.location.href = baseUrl;
   };

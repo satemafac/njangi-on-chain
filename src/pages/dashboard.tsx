@@ -13,7 +13,94 @@ import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, L
 import { PACKAGE_ID } from '../services/circle-service';
 // Use alias path for the modal import
 import ConfirmationModal from '@/components/ConfirmationModal';
-import { Button } from '@chakra-ui/react';
+
+// Helper function to get RPC URL from environment with fallback
+const getJsonRpcUrl = (fallbackIndex: number = 0): string => {
+  // List of fallback RPC URLs for better reliability
+  const rpcUrls = [
+    process.env.NEXT_PUBLIC_SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443',
+    'https://fullnode.testnet.sui.io:443',
+    'https://sui-testnet-endpoint.blockvision.org',
+    'https://sui-testnet.nodeinfra.com'
+  ];
+  
+  const rpcUrl = rpcUrls[fallbackIndex % rpcUrls.length];
+  
+  // Validate URL format
+  try {
+    new URL(rpcUrl);
+    return rpcUrl;
+  } catch (error) {
+    console.error('Invalid RPC URL:', rpcUrl);
+    // Try next fallback
+    if (fallbackIndex < rpcUrls.length - 1) {
+      return getJsonRpcUrl(fallbackIndex + 1);
+    }
+    return 'https://fullnode.testnet.sui.io:443';
+  }
+};
+
+// Helper function to create SuiClient with retries
+const createSuiClientWithRetry = (retryCount = 0): SuiClient => {
+  const maxRetries = 3;
+  const rpcUrl = getJsonRpcUrl();
+  
+  try {
+    console.log(`Creating SuiClient with URL: ${rpcUrl} (attempt ${retryCount + 1})`);
+    return new SuiClient({ url: rpcUrl });
+  } catch (error) {
+    console.error(`Failed to create SuiClient (attempt ${retryCount + 1}):`, error);
+    
+    if (retryCount < maxRetries) {
+      console.log(`Retrying SuiClient creation...`);
+      return createSuiClientWithRetry(retryCount + 1);
+    }
+    
+    throw new Error(`Failed to create SuiClient after ${maxRetries} attempts: ${error}`);
+  }
+};
+
+// Helper function to retry API calls with exponential backoff
+const retryApiCall = async (
+  apiCall: () => Promise<any>,
+  maxRetries: number = 3,
+  baseDelay: number = 1000,
+  operationName: string = 'API call'
+): Promise<any> => {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      console.log(`${operationName} attempt ${attempt + 1}/${maxRetries}`);
+      const result = await apiCall();
+      if (attempt > 0) {
+        console.log(`${operationName} succeeded after ${attempt + 1} attempts`);
+      }
+      return result;
+    } catch (error) {
+      lastError = error as Error;
+      console.error(`${operationName} failed (attempt ${attempt + 1}):`, error);
+      
+      // Check if this is a network error that we should retry
+      const isNetworkError = error instanceof TypeError && 
+        (error.message.includes('Failed to fetch') || error.message.includes('Network request failed'));
+      
+      if (attempt < maxRetries - 1 && isNetworkError) {
+        const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000; // Exponential backoff with jitter
+        console.log(`Retrying ${operationName} in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else if (attempt === maxRetries - 1) {
+        console.error(`${operationName} failed after ${maxRetries} attempts`);
+        break;
+      } else {
+        // Non-network error, don't retry
+        break;
+      }
+    }
+  }
+  
+  throw lastError || new Error(`${operationName} failed after ${maxRetries} attempts`);
+};
 
 // Circle type definition
 interface Circle {
@@ -274,10 +361,6 @@ interface CachedData<T> {
   version: string;
 }
 
-interface CacheEntry {
-  events: any[];
-  timestamp: number;
-}
 
 // Cache configuration
 const CACHE_CONFIG = {
@@ -294,7 +377,7 @@ const getCacheKey = (userAddress: string, type: string, identifier?: string) => 
 };
 
 // Cache utilities
-const setCacheItem = (key: string, data: any, ttl: number = CACHE_CONFIG.CIRCLES_TTL) => {
+const setCacheItem = (key: string, data: any) => {
   try {
     const cacheItem: CachedData<any> = {
       data,
@@ -372,7 +455,7 @@ const cachedApiCall = async (
   
   // Make API call and cache result
   const result = await apiCall();
-  setCacheItem(cacheKey, result, ttl);
+  setCacheItem(cacheKey, result);
   return result;
 };
 
@@ -451,7 +534,6 @@ export default function Dashboard() {
     }
     return 'USD';
   });
-  const [currencyRates, setCurrencyRates] = useState<Record<string, number>>({});
   const [convertedBalances, setConvertedBalances] = useState<Record<string, number>>({});
   const [totalWalletLocalValue, setTotalWalletLocalValue] = useState<number>(0); // New state for total wallet value
 
@@ -618,26 +700,36 @@ export default function Dashboard() {
     if (!userAddress) return;
     
     try {
-      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      const client = createSuiClientWithRetry();
       
       // Fetch SUI balance for the primary balance display
-      const suiBalance = await client.getBalance({
-        owner: userAddress,
-        coinType: '0x2::sui::SUI'
-      });
+      const suiBalance = await retryApiCall(
+        () => client.getBalance({
+          owner: userAddress,
+          coinType: '0x2::sui::SUI'
+        }),
+        3,
+        1000,
+        'getBalance for SUI'
+      );
       setBalance(suiBalance.totalBalance);
       
-      // Fetch all coins
+      // Fetch all coins with retry logic
       try {
-        const allCoinsData = await client.getAllCoins({
-          owner: userAddress
-        });
+        const allCoinsData = await retryApiCall(
+          () => client.getAllCoins({
+            owner: userAddress
+          }),
+          3,
+          1000,
+          'getAllCoins'
+        );
         
         // Create a map to aggregate coins by symbol
         const coinMap = new Map<string, {coinType: string, symbol: string, balance: string}>();
         
         // Process the coins
-        allCoinsData.data.forEach(coin => {
+        allCoinsData.data.forEach((coin: any) => {
           // Extract coin symbol from the type string (e.g., "0x2::sui::SUI" -> "SUI")
           const typeStr = coin.coinType;
           const typeMatch = typeStr.match(/::([^:]+)$/);
@@ -729,30 +821,8 @@ export default function Dashboard() {
     fetchPrice();
   }, []);
 
-  // Fetch exchange rates when selected currency changes
+  // Save selectedCurrency to localStorage when it changes
   useEffect(() => {
-    const fetchExchangeRates = async () => {
-      try {
-        const rate = await priceService.getExchangeRate(selectedCurrency);
-        setCurrencyRates(prev => ({
-          ...prev,
-          [selectedCurrency]: rate
-        }));
-      } catch (error) {
-        console.error('Error fetching exchange rate:', error);
-      }
-    };
-
-    if (selectedCurrency !== 'USD') {
-      fetchExchangeRates();
-    } else {
-      setCurrencyRates(prev => ({
-        ...prev,
-        USD: 1
-      }));
-    }
-
-    // Save selectedCurrency to localStorage
     if (typeof window !== 'undefined') {
       localStorage.setItem('selectedCurrency', selectedCurrency);
     }
@@ -794,33 +864,7 @@ export default function Dashboard() {
   }, [selectedCurrency, suiPrice, balance, allCoins]);
 
   // Convert SUI amount to selected currency using price service
-  const convertSuiToCurrency = async (suiAmount: number): Promise<number> => {
-    try {
-      const suiPriceInCurrency = await priceService.getSUIPriceInCurrency(selectedCurrency);
-      return suiPriceInCurrency ? suiAmount * suiPriceInCurrency : 0;
-    } catch (error) {
-      console.error('Error converting SUI to currency:', error);
-      return 0;
-    }
-  };
 
-  // Get currency symbol for selected currency
-  const getCurrencySymbol = (currencyCode: string): string => {
-    const symbols: Record<string, string> = {
-      'USD': '$',
-      'XAF': '', // Will be handled by formatCurrency with proper spacing
-      'NGN': '₦',
-      'EUR': '€',
-      'GBP': '£',
-      'CAD': 'C$',
-      'ZAR': 'R',
-      'KES': 'KSh',
-      'EGP': 'E£',
-      'MAD': 'MAD',
-      'GHS': 'GH₵' // Added GHS
-    };
-    return symbols[currencyCode] || currencyCode;
-  };
 
   // Process circle data correctly after the contract restructuring
   const processCircleObject = async (objectData: EnhancedObjectData, userAddress: string, circleCreationData?: CircleCreatedEvent, client?: SuiClient) => {
@@ -997,55 +1041,6 @@ export default function Dashboard() {
   };
 
   // Helper function to get all package IDs used by this user for circle creation
-  const getUserPackageIds = async (client: SuiClient, userAddress: string): Promise<string[]> => {
-    try {
-      console.log('Fetching user transactions to discover package IDs...');
-      
-      // Query all transactions from this user
-      const transactions = await client.queryTransactionBlocks({
-        filter: {
-          FromAddress: userAddress
-        },
-        options: {
-          showInput: true,
-          showEffects: false,
-          showEvents: false,
-          showObjectChanges: false
-        },
-        limit: 100 // Adjust if needed
-      });
-      
-      const packageIds = new Set<string>();
-      packageIds.add(PACKAGE_ID); // Always include the current package ID
-      
-      // Look through transactions for create_circle function calls
-      for (const tx of transactions.data) {
-        if (tx.transaction?.data?.transaction?.kind === 'ProgrammableTransaction') {
-          const programmableTx = tx.transaction.data.transaction;
-          
-          for (const transaction of programmableTx.transactions || []) {
-            if ('MoveCall' in transaction) {
-              const moveCall = transaction.MoveCall;
-              
-              // Check if this is a create_circle function call
-              if (moveCall.function === 'create_circle' && moveCall.module === 'njangi_circles') {
-                console.log('Found create_circle transaction with package:', moveCall.package);
-                packageIds.add(moveCall.package);
-              }
-            }
-          }
-        }
-      }
-      
-      const packageIdArray = Array.from(packageIds);
-      console.log('Discovered package IDs for user:', packageIdArray);
-      return packageIdArray;
-    } catch (error) {
-      console.error('Error fetching user package IDs:', error);
-      // Fallback to current package ID only
-      return [PACKAGE_ID];
-    }
-  };
 
   // Comprehensive wallet transaction fetching to capture ALL circle interactions
   const fetchAllWalletTransactions = useCallback(async (client: SuiClient, walletAddress: string): Promise<any[]> => {
@@ -1058,18 +1053,23 @@ export default function Dashboard() {
     
     while (true) {
       try {
-        const response = await client.queryTransactionBlocks({
-          filter: { FromAddress: walletAddress },
-          options: {
-            showInput: true,
-            showEvents: true,
-            showEffects: false,
-            showObjectChanges: false,
-            showBalanceChanges: false
-          },
-          limit: batchSize,
-          ...(cursor && { cursor })
-        });
+        const response = await retryApiCall(
+          () => client.queryTransactionBlocks({
+            filter: { FromAddress: walletAddress },
+            options: {
+              showInput: true,
+              showEvents: true,
+              showEffects: false,
+              showObjectChanges: false,
+              showBalanceChanges: false
+            },
+            limit: batchSize,
+            ...(cursor && { cursor })
+          }),
+          3,
+          1500,
+          `queryTransactionBlocks batch (${allTransactions.length} fetched so far)`
+        );
         
         if (!response.data || response.data.length === 0) {
           break;
@@ -1210,9 +1210,7 @@ export default function Dashboard() {
     
     try {
       // Create the Sui client
-      const client = new SuiClient({
-        url: 'https://fullnode.testnet.sui.io:443'
-      });
+      const client = createSuiClientWithRetry();
       
       // Get all user addresses for comprehensive circle fetching
       const allUserAddresses = await getAllUserAddresses();
@@ -1222,23 +1220,139 @@ export default function Dashboard() {
       const walletTransactionsCacheKey = getCacheKey(userAddress, 'walletTransactions');
       const allWalletTransactions = await cachedApiCall(
         walletTransactionsCacheKey,
-        () => fetchAllWalletTransactions(client, userAddress),
+        () => retryApiCall(
+          () => fetchAllWalletTransactions(client, userAddress),
+          3,
+          2000,
+          'fetchAllWalletTransactions'
+        ),
         CACHE_CONFIG.EVENTS_TTL
       );
       
-      // Extract all circle-related events from wallet transactions
-      const extractedEvents = await extractCircleEventsFromTransactions(allWalletTransactions, userAddress);
+      // Extract circle-related events from wallet transactions (primarily admin circles)
+      const walletExtractedEvents = await extractCircleEventsFromTransactions(allWalletTransactions, userAddress);
       
-      // Use extracted events
-      const allCircleEvents = extractedEvents.circleEvents;
-      const allMemberEvents = extractedEvents.memberEvents;
-      const allActivationEvents = extractedEvents.activationEvents;
-      const allWalletEvents = extractedEvents.walletEvents;
-      const allCustodyDepositedEvents = extractedEvents.custodyDepositedEvents;
+      // ADDITIONAL: Query MemberJoined events to catch circles where user is member but circle was created by others
+      // This ensures we capture circles where user joined but hasn't deposited yet
       
-      console.log(`Found ${allCircleEvents.length} circle events across all packages`);
-      console.log(`Found ${allMemberEvents.length} member events across all packages`);
-      console.log(`Found ${allActivationEvents.length} activation events across all packages`);
+      const getUserPackageIdsForEvents = async (): Promise<string[]> => {
+        try {
+          // Get a sample of recent transactions to discover package IDs
+          const transactions = await client.queryTransactionBlocks({
+            filter: { FromAddress: userAddress },
+            options: { showInput: true, showEffects: false, showEvents: false, showObjectChanges: false },
+            limit: 50
+          });
+          
+          const packageIds = new Set<string>();
+          packageIds.add(PACKAGE_ID); // Always include the current package ID
+          
+          // Look through transactions for njangi-related function calls
+          for (const tx of transactions.data) {
+            if (tx.transaction?.data?.transaction?.kind === 'ProgrammableTransaction') {
+              const programmableTx = tx.transaction.data.transaction;
+              
+              for (const transaction of programmableTx.transactions || []) {
+                if ('MoveCall' in transaction) {
+                  const moveCall = transaction.MoveCall;
+                  if (moveCall.module === 'njangi_circles' || moveCall.module === 'njangi_custody') {
+                    packageIds.add(moveCall.package);
+                  }
+                }
+              }
+            }
+          }
+          
+          return Array.from(packageIds);
+        } catch (error) {
+          console.error('Error fetching user package IDs:', error);
+          return [PACKAGE_ID];
+        }
+      };
+      
+      // Get package IDs to query for MemberJoined events
+      const packageIdsCacheKey = getCacheKey(userAddress, 'packageIds');
+      const userPackageIds = await cachedApiCall(
+        packageIdsCacheKey,
+        getUserPackageIdsForEvents,
+        CACHE_CONFIG.EVENTS_TTL
+      );
+      
+      // Fetch MemberJoined events where this user is the member
+      let additionalMemberJoinedEvents: any[] = [];
+      
+      for (const packageId of userPackageIds) {
+        try {
+          const memberEventsCacheKey = getCacheKey(userAddress, 'memberJoinedEvents', packageId);
+          const memberEvents = await cachedApiCall(
+            memberEventsCacheKey,
+            async () => {
+              console.log(`Querying MemberJoined events for package ${packageId}...`);
+              const allEvents: any[] = [];
+              let cursor: any = null;
+              
+              while (true) {
+                try {
+                  const response = await retryApiCall(
+                    () => client.queryEvents({
+                      query: { MoveEventType: `${packageId}::njangi_circles::MemberJoined` },
+                      limit: 100,
+                      ...(cursor && { cursor })
+                    }),
+                    3,
+                    1000,
+                    `queryEvents MemberJoined for ${packageId}`
+                  );
+                  
+                  if (!response.data || response.data.length === 0) break;
+                  
+                  // Filter for events where this user is the member
+                  const userMemberEvents = response.data.filter((event: any) => {
+                    const parsedEvent = event.parsedJson as MemberJoinedEvent;
+                    return parsedEvent?.member === userAddress;
+                  });
+                  
+                  allEvents.push(...userMemberEvents);
+                  
+                  if (response.hasNextPage && response.nextCursor) {
+                    cursor = response.nextCursor;
+                    await new Promise(resolve => setTimeout(resolve, 100)); // Rate limiting
+                  } else {
+                    break;
+                  }
+                } catch (error) {
+                  console.error(`Error fetching MemberJoined events for ${packageId}:`, error);
+                  break;
+                }
+              }
+              
+              return allEvents;
+            },
+            CACHE_CONFIG.EVENTS_TTL
+          );
+          
+          additionalMemberJoinedEvents.push(...memberEvents);
+        } catch (error) {
+          console.error(`Error querying member events for package ${packageId}:`, error);
+        }
+      }
+      
+      console.log(`Found ${additionalMemberJoinedEvents.length} additional MemberJoined events where user is member`);
+      
+      // Combine all events from both approaches
+      const allCircleEvents = walletExtractedEvents.circleEvents;
+      const allMemberEvents = [...walletExtractedEvents.memberEvents, ...additionalMemberJoinedEvents];
+      const allActivationEvents = walletExtractedEvents.activationEvents;
+      const allWalletEvents = walletExtractedEvents.walletEvents;
+      const allCustodyDepositedEvents = walletExtractedEvents.custodyDepositedEvents;
+      
+      console.log(`HYBRID APPROACH RESULTS:`);
+      console.log(`- CircleCreated events (user as admin): ${allCircleEvents.length}`);
+      console.log(`- Total MemberJoined events (user as member): ${allMemberEvents.length}`);
+      console.log(`  - From wallet transactions: ${walletExtractedEvents.memberEvents.length}`);
+      console.log(`  - From additional event querying: ${additionalMemberJoinedEvents.length}`);
+      console.log(`- CircleActivated events: ${allActivationEvents.length}`);
+      console.log(`- CustodyDeposited events: ${allCustodyDepositedEvents.length}`);
       console.log(`Found ${allWalletEvents.length} wallet events across all packages`);
       
       // Create a map of circle IDs to wallet IDs
@@ -1443,130 +1557,163 @@ export default function Dashboard() {
       
       console.log(`Found ${allUserCircleIds.size} unique circles for user:`, Array.from(allUserCircleIds));
       
-      // Now process all unique circles with controlled concurrency
-      const allCirclePromises = Array.from(allUserCircleIds).map(async (circleId, index) => {
-        const metadata = circleMetadata.get(circleId);
-        if (!metadata) return null;
+      // Process circles in smaller batches to avoid overwhelming the RPC
+      const circleIds = Array.from(allUserCircleIds);
+      const batchSize = 5; // Process 5 circles at a time
+      const allProcessedCircles: Circle[] = [];
+      
+      for (let i = 0; i < circleIds.length; i += batchSize) {
+        const batch = circleIds.slice(i, i + batchSize);
+        console.log(`Processing circle batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(circleIds.length / batchSize)} (${batch.length} circles)`);
         
-        try {
-          // Add staggered delay to avoid overwhelming the RPC
-          await new Promise(resolve => setTimeout(resolve, index * 100));
+        const batchPromises = batch.map(async (circleId, batchIndex) => {
+          const metadata = circleMetadata.get(circleId);
+          if (!metadata) return null;
           
-          console.log(`Processing circle ${index + 1}/${allUserCircleIds.size}: ${circleId}`);
-          // Cache individual circle object data
-          const objectCacheKey = getCacheKey(userAddress, 'circleObject', circleId);
-          const circleData = await cachedApiCall(
-            objectCacheKey,
-            async () => {
-              // First verify if the circle still exists (hasn't been deleted)
-              const objectData = await client.getObject({
-                id: circleId,
-                  options: { 
-                    showType: true, 
-                    showOwner: true,
-                    showContent: true,
-                    showDisplay: false,
-                    showStorageRebate: false,
-                    showPreviousTransaction: false,
-                    showBcs: false
-                  }
-                });
-                
-                // Skip this circle if it doesn't exist or is not accessible
-                if (!objectData.data || objectData.error) {
-                  console.log(`Circle ${circleId} no longer exists, skipping...`);
-                  return null;
-                }
-                
-                // Get the dynamic fields for this circle with better error handling
-                let dynamicFieldsResult;
-                try {
-                  // Add a small delay to avoid rate limiting
-                  await new Promise(resolve => setTimeout(resolve, 50));
+          try {
+            // Add small delay within batch
+            await new Promise(resolve => setTimeout(resolve, batchIndex * 200));
+            
+            console.log(`Processing circle ${i + batchIndex + 1}/${circleIds.length}: ${circleId}`);
+            
+            // Cache individual circle object data
+            const objectCacheKey = getCacheKey(userAddress, 'circleObject', circleId);
+            const circleData = await cachedApiCall(
+              objectCacheKey,
+              async () => {
+                // First verify if the circle still exists (hasn't been deleted)
+                const objectData = await retryApiCall(
+                  () => client.getObject({
+                    id: circleId,
+                    options: { 
+                      showType: true, 
+                      showOwner: true,
+                      showContent: true,
+                      showDisplay: false,
+                      showStorageRebate: false,
+                      showPreviousTransaction: false,
+                      showBcs: false
+                    }
+                  }),
+                  3,
+                  1000,
+                  `getObject for circle ${circleId}`
+                );
                   
-                  dynamicFieldsResult = await client.getDynamicFields({
-                    parentId: circleId
-                  });
-                  console.log(`Dynamic fields for circle ${circleId}:`, dynamicFieldsResult.data);
-                } catch (error) {
-                  console.error(`Error fetching dynamic fields for circle ${circleId}:`, error);
-                  // Continue without dynamic fields rather than failing completely
-                  dynamicFieldsResult = { data: [] };
+                  // Skip this circle if it doesn't exist or is not accessible
+                  if (!objectData.data || objectData.error) {
+                    console.log(`Circle ${circleId} no longer exists, skipping...`);
+                    return null;
+                  }
+                  
+                  // Get the dynamic fields for this circle with better error handling
+                  let dynamicFieldsResult;
+                  try {
+                    // Add a small delay to avoid rate limiting
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                    
+                    dynamicFieldsResult = await retryApiCall(
+                      () => client.getDynamicFields({
+                        parentId: circleId
+                      }),
+                      2,
+                      1000,
+                      `getDynamicFields for circle ${circleId}`
+                    );
+                    console.log(`Dynamic fields for circle ${circleId}:`, dynamicFieldsResult.data);
+                  } catch (error) {
+                    console.error(`Error fetching dynamic fields for circle ${circleId}:`, error);
+                    // Continue without dynamic fields rather than failing completely
+                    dynamicFieldsResult = { data: [] };
+                  }
+                  
+                  // Add transaction input data if we have it
+                  const transactionInput = transactionInputMap.get(circleId);
+                  
+                  // Add type assertions for the EnhancedObjectData
+                  const enhancedObjectData = {
+                    ...objectData,
+                    data: {
+                      ...objectData.data,
+                      dynamicFields: dynamicFieldsResult.data,
+                    },
+                    transactionInput
+                  };
+                  
+                  return enhancedObjectData;
+                },
+                CACHE_CONFIG.API_RESPONSE_TTL
+              );
+              
+            if (!circleData) return null;
+            
+            // Process circle using the helper function with all data sources
+            const processedCircle = await processCircleObject(circleData, userAddress, metadata.eventData, client);
+            
+            if (processedCircle) {
+              // Update with the actual member count from events
+              const memberCount = memberCountMap.has(circleId) 
+                ? memberCountMap.get(circleId)!.size 
+                : 1; // Default to 1 (admin only)
+              
+              // Check if the circle has been activated
+              const isActive = activatedCircleIds.has(circleId);
+                
+                const safeCircleData = {
+                  ...processedCircle,
+                  id: processedCircle?.id ?? '',
+                  name: typeof processedCircle?.name === 'string' ? processedCircle.name : '',
+                  admin: typeof processedCircle?.admin === 'string' ? processedCircle.admin : '',
+                  isAdmin: metadata.isAdmin, // Use the metadata to determine if user is admin
+                  memberStatus: 'active' as const
+                } as Circle;
+                
+                // Try to get wallet ID from map first
+                let walletId = circleWalletMap.get(circleId);
+                
+                // If not found in the map, try to get it from dynamic fields
+                if (!walletId) {
+                  walletId = await fetchWalletIdFromDynamicFields(circleId);
+                  
+                  // If found from dynamic fields, store it in our map for future reference
+                  if (walletId) {
+                    circleWalletMap.set(circleId, walletId);
+                  }
                 }
                 
-                // Add transaction input data if we have it
-                const transactionInput = transactionInputMap.get(circleId);
-                
-                // Add type assertions for the EnhancedObjectData
-                const enhancedObjectData = {
-                  ...objectData,
-                  data: {
-                    ...objectData.data,
-                    dynamicFields: dynamicFieldsResult.data,
-                  },
-                  transactionInput
+                return {
+                  ...safeCircleData,
+                  currentMembers: memberCount,
+                  isActive: isActive,
+                  walletId: walletId || undefined
                 };
-                
-                return enhancedObjectData;
-              },
-              CACHE_CONFIG.API_RESPONSE_TTL
-            );
-            
-          if (!circleData) return null;
-          
-          // Process circle using the helper function with all data sources
-          const processedCircle = await processCircleObject(circleData, userAddress, metadata.eventData, client);
-          
-          if (processedCircle) {
-            // Update with the actual member count from events
-            const memberCount = memberCountMap.has(circleId) 
-              ? memberCountMap.get(circleId)!.size 
-              : 1; // Default to 1 (admin only)
-            
-            // Check if the circle has been activated
-            const isActive = activatedCircleIds.has(circleId);
-              
-              const safeCircleData = {
-                ...processedCircle,
-                id: processedCircle?.id ?? '',
-                name: typeof processedCircle?.name === 'string' ? processedCircle.name : '',
-                admin: typeof processedCircle?.admin === 'string' ? processedCircle.admin : '',
-                isAdmin: metadata.isAdmin, // Use the metadata to determine if user is admin
-                memberStatus: 'active' as const
-              } as Circle;
-              
-              // Try to get wallet ID from map first
-              let walletId = circleWalletMap.get(circleId);
-              
-              // If not found in the map, try to get it from dynamic fields
-              if (!walletId) {
-                walletId = await fetchWalletIdFromDynamicFields(circleId);
-                
-                // If found from dynamic fields, store it in our map for future reference
-                if (walletId) {
-                  circleWalletMap.set(circleId, walletId);
-                }
               }
-              
-              return {
-                ...safeCircleData,
-                currentMembers: memberCount,
-                isActive: isActive,
-                walletId: walletId || undefined
-              };
-            }
+              return null;
+          } catch (error) {
+            console.error(`Error fetching circle details for ${circleId}:`, error);
             return null;
-        } catch (error) {
-          console.error(`Error fetching circle details for ${circleId}:`, error);
-          return null;
+          }
+        });
+        
+        // Wait for batch to complete
+        const batchResults = await Promise.allSettled(batchPromises);
+        
+        // Process batch results
+        batchResults.forEach(result => {
+          if (result.status === 'fulfilled' && result.value) {
+            allProcessedCircles.push(result.value);
+          }
+        });
+        
+        // Add delay between batches to avoid overwhelming RPC
+        if (i + batchSize < circleIds.length) {
+          console.log('Waiting between batches...');
+          await new Promise(resolve => setTimeout(resolve, 1000));
         }
-      });
+      }
       
-      // Wait for all circle processing to complete
-      const allCircles = await Promise.all(allCirclePromises);
-      
-      // Filter out nulls
-      const allProcessedCircles = allCircles.filter(Boolean) as Circle[];
+      // allProcessedCircles is already populated from batch processing above
+      console.log(`Successfully processed ${allProcessedCircles.length} circles`);
       
       console.log(`Processed ${allProcessedCircles.length} circles before deduplication`);
       console.log('Circle IDs before deduplication:', allProcessedCircles.map(c => c.id));
@@ -1598,7 +1745,7 @@ export default function Dashboard() {
 
       // Always update the circles state with fresh data and cache it
       setCircles(freshCirclesArray);
-      setCacheItem(cacheKey, freshCirclesArray, CACHE_CONFIG.CIRCLES_TTL);
+      setCacheItem(cacheKey, freshCirclesArray);
       
       // Store admin circle IDs in localStorage for use by the Navbar component
       const adminCircleIds = freshCirclesArray
@@ -1615,8 +1762,25 @@ export default function Dashboard() {
       
     } catch (error) {
       console.error('Error fetching circles:', error);
-      setError('An error occurred while fetching circles. Please try again later.');
-      // If fetch fails, retain cached circles if they exist
+      
+      // More detailed error handling
+      if (error instanceof Error) {
+        if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+          setError('Network connection issue. Please check your internet connection and try again.');
+        } else if (error.message.includes('timeout')) {
+          setError('Request timeout. The network might be slow, please try again.');
+        } else {
+          setError(`Error fetching circles: ${error.message}`);
+        }
+      } else {
+        setError('An unexpected error occurred while fetching circles. Please try again later.');
+      }
+      
+      // If fetch fails but we have cached circles, keep them and just show a warning
+      if (circles.length > 0) {
+        console.log('Keeping cached circles due to network error');
+        toast.error('Failed to refresh circles, showing cached data', { duration: 3000 });
+      }
     } finally {
       setLoading(false);
       setIsBackgroundRefreshing(false);
@@ -2410,22 +2574,6 @@ export default function Dashboard() {
   };
 
   // Fix toast with the wallet balance warning to use proper entity escaping
-  const handleWalletWithBalance = (walletId: string | undefined) => {
-    toast((t) => (
-      <div className="flex flex-col">
-        <p>This circle&apos;s wallet still has funds. Would you like to withdraw them first?</p>
-        <button 
-          onClick={() => {
-            if (walletId) withdrawFunds(walletId);
-            toast.dismiss(t.id);
-          }}
-          className="mt-2 bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm"
-        >
-          Withdraw Funds
-        </button>
-      </div>
-    ), { duration: 9000 });
-  };
 
   // Check if the testnet banner should be shown
   useEffect(() => {

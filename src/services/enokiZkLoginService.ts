@@ -145,7 +145,8 @@ export class EnokiZkLoginService {
         redirect_uri: REDIRECT_URI,
         response_type: 'id_token',
         response_mode: 'fragment',
-        scope: 'openid profile email'
+        scope: 'openid profile email',
+        prompt: 'select_account'  // Force account selection screen
       });
       loginUrl = `${GOOGLE_OAUTH_URL}?${params.toString()}`;
     } else if (provider === 'Facebook') {
