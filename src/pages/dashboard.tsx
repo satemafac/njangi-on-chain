@@ -491,6 +491,11 @@ export default function Dashboard() {
   const [copiedCircleId, setCopiedCircleId] = useState<string | null>(null);
   const [showTestnetBanner, setShowTestnetBanner] = useState(true);
 
+  // Pagination state
+  const [displayedCirclesCount, setDisplayedCirclesCount] = useState(9); // Start with 9 circles
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const CIRCLES_PER_PAGE = 9; // Load 9 more each time
+
   // Add MoonPay state for the current implementation
   const [moonpayWidget, setMoonpayWidget] = useState<{ show: () => void; close: () => void } | null>(null);
 
@@ -1849,6 +1854,37 @@ export default function Dashboard() {
       setIsBackgroundRefreshing(false);
     }
   }, [userAddress, isBackgroundRefreshing, fetchAllWalletTransactions, extractCircleEventsFromTransactions, getAllUserAddresses]); // Updated dependencies
+
+  // Utility function to sort circles chronologically (newest to oldest)
+  const getSortedCircles = useCallback((circleList: Circle[]) => {
+    return [...circleList].sort((a, b) => {
+      // Use creation timestamp if available, otherwise use nextPayoutTime as proxy
+      const timeA = a.nextPayoutTime || 0;
+      const timeB = b.nextPayoutTime || 0;
+      return timeB - timeA; // Newest first (descending order)
+    });
+  }, []);
+
+  // Utility function to get paginated circles
+  const getPaginatedCircles = useCallback((circleList: Circle[], count: number) => {
+    const sortedCircles = getSortedCircles(circleList);
+    return sortedCircles.slice(0, count);
+  }, [getSortedCircles]);
+
+  // Function to load more circles
+  const loadMoreCircles = useCallback(() => {
+    setIsLoadingMore(true);
+    // Simulate a small delay for better UX
+    setTimeout(() => {
+      setDisplayedCirclesCount(prev => prev + CIRCLES_PER_PAGE);
+      setIsLoadingMore(false);
+    }, 300);
+  }, [CIRCLES_PER_PAGE]);
+
+  // Reset displayed count when circles change (after refresh)
+  useEffect(() => {
+    setDisplayedCirclesCount(9); // Reset to initial value
+  }, [circles.length]);
 
   // Enhanced useEffect to handle initial load and background refresh
   useEffect(() => {
@@ -3321,7 +3357,7 @@ export default function Dashboard() {
                     <Tab.Panels>
                       <Tab.Panel>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                          {circles.map((circle) => (
+                          {getPaginatedCircles(circles, displayedCirclesCount).map((circle) => (
                             <div key={circle.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow duration-200">
                               <div className="p-5 border-b border-gray-100">
                                 <div className="flex justify-between items-start">
@@ -3543,11 +3579,36 @@ export default function Dashboard() {
                             </div>
                           ))}
                         </div>
+                        
+                        {/* Load More Button */}
+                        {displayedCirclesCount < getSortedCircles(circles).length && (
+                          <div className="mt-8 text-center">
+                            <button
+                              onClick={loadMoreCircles}
+                              disabled={isLoadingMore}
+                              className="inline-flex items-center px-6 py-3 border border-gray-300 shadow-sm text-base font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
+                            >
+                              {isLoadingMore ? (
+                                <>
+                                  <RefreshCw className="animate-spin -ml-1 mr-3 h-5 w-5" />
+                                  Loading...
+                                </>
+                              ) : (
+                                <>
+                                  Load More Circles
+                                  <span className="ml-2 text-sm text-gray-500">
+                                    ({getSortedCircles(circles).length - displayedCirclesCount} remaining)
+                                  </span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        )}
                       </Tab.Panel>
                       
                       <Tab.Panel>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                          {circles.filter(c => c.isAdmin).map((circle) => (
+                          {getPaginatedCircles(circles.filter(c => c.isAdmin), displayedCirclesCount).map((circle) => (
                             <div key={circle.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow duration-200">
                               <div className="p-5 border-b border-gray-100">
                                 <div className="flex justify-between items-start">
@@ -3767,11 +3828,36 @@ export default function Dashboard() {
                             </div>
                           ))}
                         </div>
+                        
+                        {/* Load More Button for Admin Tab */}
+                        {displayedCirclesCount < getSortedCircles(circles.filter(c => c.isAdmin)).length && (
+                          <div className="mt-8 text-center">
+                            <button
+                              onClick={loadMoreCircles}
+                              disabled={isLoadingMore}
+                              className="inline-flex items-center px-6 py-3 border border-gray-300 shadow-sm text-base font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
+                            >
+                              {isLoadingMore ? (
+                                <>
+                                  <RefreshCw className="animate-spin -ml-1 mr-3 h-5 w-5" />
+                                  Loading...
+                                </>
+                              ) : (
+                                <>
+                                  Load More Circles
+                                  <span className="ml-2 text-sm text-gray-500">
+                                    ({getSortedCircles(circles.filter(c => c.isAdmin)).length - displayedCirclesCount} remaining)
+                                  </span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        )}
                       </Tab.Panel>
                       
                       <Tab.Panel>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                          {circles.filter(c => !c.isAdmin).map((circle) => (
+                          {getPaginatedCircles(circles.filter(c => !c.isAdmin), displayedCirclesCount).map((circle) => (
                             <div key={circle.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow duration-200">
                               <div className="p-5 border-b border-gray-100">
                                 <div className="flex justify-between items-start">
@@ -3968,6 +4054,31 @@ export default function Dashboard() {
                             </div>
                           ))}
                         </div>
+                        
+                        {/* Load More Button for Member Only Tab */}
+                        {displayedCirclesCount < getSortedCircles(circles.filter(c => !c.isAdmin)).length && (
+                          <div className="mt-8 text-center">
+                            <button
+                              onClick={loadMoreCircles}
+                              disabled={isLoadingMore}
+                              className="inline-flex items-center px-6 py-3 border border-gray-300 shadow-sm text-base font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
+                            >
+                              {isLoadingMore ? (
+                                <>
+                                  <RefreshCw className="animate-spin -ml-1 mr-3 h-5 w-5" />
+                                  Loading...
+                                </>
+                              ) : (
+                                <>
+                                  Load More Circles
+                                  <span className="ml-2 text-sm text-gray-500">
+                                    ({getSortedCircles(circles.filter(c => !c.isAdmin)).length - displayedCirclesCount} remaining)
+                                  </span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        )}
                       </Tab.Panel>
                     </Tab.Panels>
                   </Tab.Group>

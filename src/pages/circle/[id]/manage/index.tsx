@@ -757,60 +757,140 @@ export default function ManageCircle() {
       debugLog('Circle paused status', isPaused);
 
       // Fetch members and their addresses
-      let actualMemberCount = 1; // Start with admin
-      const memberAddresses = new Set<string>();
-      if (typeof fields.admin === 'string') memberAddresses.add(fields.admin);
+      // Get member count from blockchain first (primary source)
+      const blockchainMemberCount = Number(fields.current_members || 0);
       
-      // Parallel fetch: Get member events and custody events
-      let memberEvents: { data: SuiEvent[] } = { data: [] };
-      let custodyEvents: { data: SuiEvent[] } = { data: [] };
-      let memberActivatedEvents: { data: SuiEvent[] } = { data: [] };
-      let securityReturnedEvents: { data: SuiEvent[] } = { data: [] };
-      
-      try {
-        [memberEvents, custodyEvents, memberActivatedEvents, securityReturnedEvents] = await Promise.all([
-          client.queryEvents({
-            query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
-            limit: 1000
-          }),
-          client.queryEvents({
-            query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyDeposited` },
-            limit: 100
-          }),
-          client.queryEvents({
-            query: { MoveEventType: `${determinedPackageId}::njangi_members::MemberActivated` },
-            limit: 100
-          }),
-          client.queryEvents({
-            query: { MoveEventType: `${determinedPackageId}::njangi_payments::SecurityDepositReturned` },
-            limit: 100
-          })
-        ]);
-        
-        const circleMemberEvents = memberEvents.data.filter((event: SuiEvent) => 
-          (event.parsedJson as { circle_id?: string })?.circle_id === id
-        );
-        circleMemberEvents.forEach((event: SuiEvent) => {
-          const memberAddr = (event.parsedJson as { member?: string })?.member;
-          if (memberAddr) memberAddresses.add(memberAddr);
-        });
-        
-        actualMemberCount = memberAddresses.size;
-        debugLog('Calculated member count', actualMemberCount);
-      } catch (error) {
-        console.error('Error calculating member count:', error);
-        actualMemberCount = Number(fields.current_members || 1); // Fallback
-      }
-      
-      // --- Fetch Members and Deposit Status (Updated Logic) ---
-      const membersList: Member[] = [];
-      // Get members table ID for deposit status checking
+      // Get members table ID for member discovery
       const membersTableId = fields.members && typeof fields.members === 'object' && fields.members !== null && 
         'fields' in fields.members && fields.members.fields && typeof fields.members.fields === 'object' &&
         fields.members.fields !== null && 'id' in fields.members.fields &&
         fields.members.fields.id && typeof fields.members.fields.id === 'object' &&
         fields.members.fields.id !== null && 'id' in fields.members.fields.id
         ? (fields.members.fields.id as { id: string }).id : undefined;
+      
+      // Get member addresses directly from blockchain members table (primary method)
+      let memberAddresses = new Set<string>();
+      let blockchainMemberList: string[] = [];
+      
+      if (membersTableId) {
+        try {
+          debugLog('Fetching all members from blockchain members table', membersTableId);
+          const allMemberFields = await client.getDynamicFields({ 
+            parentId: membersTableId 
+          });
+          
+          blockchainMemberList = allMemberFields.data
+            .filter(field => field.name?.type === 'address')
+            .map(field => field.name.value as string)
+            .filter(addr => addr && addr !== '0x0');
+          
+          memberAddresses = new Set(blockchainMemberList);
+          debugLog('Members from blockchain table', { 
+            count: blockchainMemberList.length, 
+            addresses: blockchainMemberList.map(addr => `${addr.slice(0, 6)}...${addr.slice(-4)}`)
+          });
+        } catch (error) {
+          console.error('Error fetching members from blockchain table:', error);
+        }
+      }
+      
+      // Fallback: Build event-based member list if blockchain method failed
+      let eventBasedMemberCount = 1; // Start with admin
+      let memberEvents: { data: SuiEvent[] } = { data: [] };
+      let custodyEvents: { data: SuiEvent[] } = { data: [] };
+      let memberActivatedEvents: { data: SuiEvent[] } = { data: [] };
+      let securityReturnedEvents: { data: SuiEvent[] } = { data: [] };
+      
+      if (memberAddresses.size === 0) {
+        // Only fetch events if blockchain method failed
+        debugLog('Falling back to event-based member discovery');
+        if (typeof fields.admin === 'string') memberAddresses.add(fields.admin);
+        
+        try {
+          [memberEvents, custodyEvents, memberActivatedEvents, securityReturnedEvents] = await Promise.all([
+            client.queryEvents({
+              query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
+              limit: 1000
+            }),
+            client.queryEvents({
+              query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyDeposited` },
+              limit: 100
+            }),
+            client.queryEvents({
+              query: { MoveEventType: `${determinedPackageId}::njangi_members::MemberActivated` },
+              limit: 100
+            }),
+            client.queryEvents({
+              query: { MoveEventType: `${determinedPackageId}::njangi_payments::SecurityDepositReturned` },
+              limit: 100
+            })
+          ]);
+          
+          const circleMemberEvents = memberEvents.data.filter((event: SuiEvent) => 
+            (event.parsedJson as { circle_id?: string })?.circle_id === id
+          );
+          circleMemberEvents.forEach((event: SuiEvent) => {
+            const memberAddr = (event.parsedJson as { member?: string })?.member;
+            if (memberAddr) memberAddresses.add(memberAddr);
+          });
+          
+          eventBasedMemberCount = memberAddresses.size;
+          debugLog('Event-based member discovery', { 
+            count: eventBasedMemberCount, 
+            addresses: Array.from(memberAddresses).map(addr => `${addr.slice(0, 6)}...${addr.slice(-4)}`)
+          });
+        } catch (error) {
+          console.error('Error with event-based member discovery:', error);
+          eventBasedMemberCount = 1; // Default fallback
+        }
+      } else {
+        // Still fetch events for deposit status checking, but with smaller limits since we don't need them for member discovery
+        try {
+          [memberEvents, custodyEvents, memberActivatedEvents, securityReturnedEvents] = await Promise.all([
+            client.queryEvents({
+              query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
+              limit: 100 // Reduced limit since only used for join dates
+            }),
+            client.queryEvents({
+              query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyDeposited` },
+              limit: 100
+            }),
+            client.queryEvents({
+              query: { MoveEventType: `${determinedPackageId}::njangi_members::MemberActivated` },
+              limit: 100
+            }),
+            client.queryEvents({
+              query: { MoveEventType: `${determinedPackageId}::njangi_payments::SecurityDepositReturned` },
+              limit: 100
+            })
+          ]);
+        } catch (error) {
+          console.error('Error fetching events for member details:', error);
+          // Initialize empty arrays if event fetching fails
+          memberEvents = { data: [] };
+          custodyEvents = { data: [] };
+          memberActivatedEvents = { data: [] };
+          securityReturnedEvents = { data: [] };
+        }
+      }
+      
+      // Use blockchain count as primary, event-based as fallback
+      const actualMemberCount = blockchainMemberCount > 0 ? blockchainMemberCount : eventBasedMemberCount;
+      
+      debugLog('Member count decision for circle management', {
+        blockchainMemberCount,
+        eventBasedMemberCount, 
+        actualMemberCount,
+        source: blockchainMemberCount > 0 ? 'blockchain' : 'events'
+      });
+      
+      // --- Fetch Members and Deposit Status (Updated Logic) ---
+      const membersList: Member[] = [];
+      
+      debugLog('Building member list from addresses', {
+        addressCount: memberAddresses.size,
+        source: blockchainMemberList.length > 0 ? 'blockchain' : 'events'
+      });
       
       const depositStatusPromises = Array.from(memberAddresses).map(async (address) => {
         let joinTimestamp = creationTimestamp ?? Date.now(); // Default join time
