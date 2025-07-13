@@ -1620,7 +1620,7 @@ export default function ContributeToCircle() {
         try {
           const memberActivatedEvents = await client.queryEvents({
             // Correct module name is njangi_members
-            query: { MoveEventType: `${determinedPackageId}::njangi_members::MemberActivated` }, 
+            query: { MoveEventType: `${circlePackageId}::njangi_members::MemberActivated` }, 
             limit: 50
           });
           
@@ -1643,7 +1643,7 @@ export default function ContributeToCircle() {
         console.log('Checking deposit-related events as final fallback...');
         // Check CustodyDeposited events (operation_type 3)
         const custodyEvents = await client.queryEvents({
-          query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyDeposited` }, limit: 50
+          query: { MoveEventType: `${circlePackageId}::njangi_custody::CustodyDeposited` }, limit: 50
         });
         const foundCustodyEvent = custodyEvents.data.some(e => {
            const p = e.parsedJson as { circle_id?: string; member?: string; operation_type?: number | string };
@@ -1663,7 +1663,7 @@ export default function ContributeToCircle() {
         try {
           console.log(`[ContributePage] Checking SecurityDepositReturned events for ${userAddress} in circle ${circle.id}...`);
           const securityReturnedEvents = await client.queryEvents({
-            query: { MoveEventType: `${determinedPackageId}::njangi_payments::SecurityDepositReturned` }, 
+            query: { MoveEventType: `${circlePackageId}::njangi_payments::SecurityDepositReturned` }, 
             limit: 50 // Adjust limit as needed
           });
           const hasReturnedEvent = securityReturnedEvents.data.some(event => {
