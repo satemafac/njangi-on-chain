@@ -362,12 +362,12 @@ interface CachedData<T> {
 }
 
 
-// Cache configuration
+// Cache configuration - optimized for better user experience
 const CACHE_CONFIG = {
-  CIRCLES_TTL: 5 * 60 * 1000, // 5 minutes for circles data
-  EVENTS_TTL: 10 * 60 * 1000, // 10 minutes for events data
-  API_RESPONSE_TTL: 2 * 60 * 1000, // 2 minutes for individual API responses
-  VERSION: '1.0.0' // Increment when data structure changes
+  CIRCLES_TTL: 15 * 60 * 1000, // 15 minutes for circles data (increased from 5 minutes)
+  EVENTS_TTL: 30 * 60 * 1000, // 30 minutes for events data (increased from 10 minutes)
+  API_RESPONSE_TTL: 10 * 60 * 1000, // 10 minutes for individual API responses (increased from 2 minutes)
+  VERSION: '1.0.1' // Increment when data structure changes
 };
 
 // Cache keys
@@ -470,9 +470,10 @@ export default function Dashboard() {
   // Enhanced circles state with caching
   const [circles, setCircles] = useState<Circle[]>(() => {
     if (typeof window !== 'undefined' && userAddress) {
-      const cached = getCacheItem(`userCircles-${userAddress}`, CACHE_CONFIG.CIRCLES_TTL) as Circle[] | null;
+      const cacheKey = getCacheKey(userAddress, 'circles');
+      const cached = getCacheItem(cacheKey, CACHE_CONFIG.CIRCLES_TTL) as Circle[] | null;
       if (cached) {
-        console.log('Loaded circles from cache:', cached.length);
+        console.log('Loaded circles from cache on init:', cached.length);
         return cached;
       }
     }
@@ -1184,7 +1185,7 @@ export default function Dashboard() {
   }, [userAddress]);
 
   const fetchUserCircles = useCallback(async (forceRefresh: boolean = false) => {
-    console.log('fetchUserCircles starting...', { forceRefresh });
+    console.log('fetchUserCircles starting...', { forceRefresh, userAddress: userAddress?.slice(0, 6) + '...' });
     
     if (!userAddress) {
       console.log('No user address, skipping fetch');
@@ -1195,8 +1196,15 @@ export default function Dashboard() {
     const isInitialLoadWithCache = circles.length > 0;
     const cacheStale = isCacheStale(cacheKey, CACHE_CONFIG.CIRCLES_TTL);
     
-    // If we have cached data and it's not stale, and not forcing refresh
-    if (!forceRefresh && !cacheStale && isInitialLoadWithCache) {
+    console.log('Cache status:', { 
+      isInitialLoadWithCache, 
+      cacheStale, 
+      forceRefresh,
+      circlesLength: circles.length 
+    });
+    
+    // Early return if we have fresh cached data and not forcing refresh
+    if (!forceRefresh && isInitialLoadWithCache && !cacheStale) {
       console.log('Using fresh cached data, skipping fetch');
       setLoading(false);
       return;
@@ -1886,7 +1894,7 @@ export default function Dashboard() {
     setDisplayedCirclesCount(9); // Reset to initial value
   }, [circles.length]);
 
-  // Enhanced useEffect to handle initial load and background refresh
+  // Enhanced useEffect to handle initial load and cache validation
   useEffect(() => {
     if (!userAddress) return;
     
@@ -1894,15 +1902,24 @@ export default function Dashboard() {
     const hasCachedData = circles.length > 0;
     const cacheStale = isCacheStale(cacheKey, CACHE_CONFIG.CIRCLES_TTL);
     
+    console.log('Cache check:', { 
+      userAddress: userAddress.slice(0, 6) + '...', 
+      hasCachedData, 
+      cacheStale,
+      circlesLength: circles.length 
+    });
+    
     // If we have cached data and it's fresh, don't fetch
     if (hasCachedData && !cacheStale) {
+      console.log('Using fresh cached data, skipping fetch');
       setLoading(false);
       return;
     }
     
-    // Otherwise, fetch (either no cache or stale cache)
+    // Only fetch if we don't have cached data or cache is stale
+    console.log('Cache miss or stale, fetching circles...');
     fetchUserCircles(false);
-  }, [userAddress, fetchUserCircles]);
+  }, [userAddress]); // Removed fetchUserCircles from dependencies
 
   // Add manual refresh function
   const handleManualRefresh = useCallback(() => {

@@ -2,7 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { SetupData, AccountData, OAuthProvider } from '@/services/zkLoginService';
 import { ZkLoginError } from '@/services/zkLoginClient';
 import { SuiClient } from '@mysten/sui/client';
-import { PACKAGE_ID } from '../../services/circle-service';
+import { PACKAGE_ID, getCirclePackageId } from '../../services/circle-service';
 import { 
   USDC_COIN_TYPE,
   SUI_COIN_TYPE
@@ -2628,6 +2628,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           console.log(`Creating custody contribution transaction for circle ${circleId}, wallet ${walletId}`);
           
+          // Get the correct package ID for this circle
+          let packageIdToUse = PACKAGE_ID;
+          try {
+            const dynamicPackageId = await getCirclePackageId(circleId, session.account.userAddr);
+            if (dynamicPackageId) {
+              packageIdToUse = dynamicPackageId;
+              console.log(`Using dynamic package ID ${packageIdToUse} for circle ${circleId}`);
+            } else {
+              console.log(`No dynamic package ID found, using default ${PACKAGE_ID}`);
+            }
+          } catch (error) {
+            console.warn(`Failed to get dynamic package ID for circle ${circleId}, using default:`, error);
+            packageIdToUse = PACKAGE_ID;
+          }
+          
           // Get contribution amount from circle object - improved version
           let contributionAmount = 0;
           try {
@@ -2751,7 +2766,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               
               // Call the contribute function
               txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_payments::contribute`,
+                target: `${packageIdToUse}::njangi_payments::contribute`,
                 arguments: [
                   txb.object(circleId as string),
                   txb.object(walletId as string),
@@ -3248,12 +3263,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
+          // Get the correct package ID for this circle
+          let packageIdToUse = PACKAGE_ID;
+          try {
+            const dynamicPackageId = await getCirclePackageId(circleId, session.account.userAddr);
+            if (dynamicPackageId) {
+              packageIdToUse = dynamicPackageId;
+              console.log(`Using dynamic package ID ${packageIdToUse} for circle ${circleId}`);
+            } else {
+              console.log(`No dynamic package ID found, using default ${PACKAGE_ID}`);
+            }
+          } catch (error) {
+            console.warn(`Failed to get dynamic package ID for circle ${circleId}, using default:`, error);
+            packageIdToUse = PACKAGE_ID;
+          }
+
           // Execute the activate circle transaction using ZkLoginService's sendTransaction method
           const txResult = await instance.sendTransaction(
             session.account,
             (txb: Transaction) => {
               txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_circles::activate_circle`,
+                target: `${packageIdToUse}::njangi_circles::activate_circle`,
                 arguments: [
                   txb.object(circleId)
                 ],

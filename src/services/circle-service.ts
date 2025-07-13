@@ -198,6 +198,25 @@ export async function getCirclePackageId(circleId: string, userAddress?: string)
   try {
     const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
     
+    // First, try to get the circle object directly to extract package ID from its type
+    try {
+      const circleObject = await client.getObject({
+        id: circleId,
+        options: { showType: true }
+      });
+      
+      if (circleObject.data?.type) {
+        // Extract package ID from object type like "0xpackage::module::Type"
+        const match = circleObject.data.type.match(/^(0x[a-f0-9]+)::/);
+        if (match && match[1]) {
+          console.log(`Found circle ${circleId} with package ${match[1]} from object type`);
+          return match[1];
+        }
+      }
+    } catch (error) {
+      console.warn(`Error getting circle object ${circleId}:`, error);
+    }
+    
     // If we have a user address, get their package IDs first (more efficient)
     if (userAddress) {
       const userPackageIds = await getUserPackageIds(userAddress);

@@ -389,7 +389,7 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     // Admin activates the circle, requiring all members to have deposits
     // ----------------------------------------------------------
-    public fun activate_circle(
+    public entry fun activate_circle(
         circle: &mut Circle,
         ctx: &mut TxContext
     ) {

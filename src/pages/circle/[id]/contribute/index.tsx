@@ -178,13 +178,15 @@ const ContributionProgress: React.FC<{
   // currentPositionInCycle?: number | null; // REMOVED - No longer used here
   // totalMembersInRotation?: number | null; // REMOVED - No longer used here
   isPaused?: boolean; // Add isPaused prop
+  circlePackageId: string; // Add circlePackageId prop
 }> = ({ 
   circleId, 
   maxMembers, 
   currentCycle, 
   className = '', 
   currentRecipientAddress,
-  isPaused = false // Default to false
+  isPaused = false, // Default to false
+  circlePackageId // Add to destructured props
   // currentPositionInCycle, // REMOVED
   // totalMembersInRotation // REMOVED
 }) => {
@@ -204,14 +206,14 @@ const ContributionProgress: React.FC<{
   
   // Check for payout events to detect cycle changes
   const checkForPayoutEvents = async () => {
-    if (!circleId) return;
+    if (!circleId || !circlePackageId) return;
 
     try {
       const client = new SuiClient({ url: getJsonRpcUrl() });
       
       // Query PayoutProcessed events
       const payoutEvents = await client.queryEvents({
-        query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::PayoutProcessed` },
+        query: { MoveEventType: `${circlePackageId}::njangi_payments::PayoutProcessed` },
         limit: 20
       });
       
@@ -383,7 +385,7 @@ const ContributionProgress: React.FC<{
     // Removed interval code here to stop auto-refresh
 
     // No need for cleanup function since we don't create an interval
-  }, [circleId]);
+  }, [circleId, circlePackageId]);
 
   useEffect(() => {
     if (circleId && maxMembers > 0 && currentCycle > 0) {
@@ -1173,7 +1175,7 @@ export default function ContributeToCircle() {
         
         // 3. Fetch CustodyWalletCreated event for walletId
         const custodyEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyWalletCreated` },
+          query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyWalletCreated` },
           limit: 100
         });
         const custodyEvent = custodyEvents.data.find(event =>
@@ -1186,6 +1188,8 @@ export default function ContributeToCircle() {
         if (custodyEvent?.parsedJson) {
           walletId = (custodyEvent.parsedJson as { wallet_id: string }).wallet_id;
           console.log('Contribute - Found wallet ID from events:', walletId);
+        } else {
+          console.warn('Contribute - No CustodyWalletCreated event found for circle:', id);
         }
 
       } catch (error) {
@@ -1446,6 +1450,8 @@ export default function ContributeToCircle() {
         maxMembers: maxMembers, 
         pausedAfterCycle: isPausedAfterCycle,
       });
+      
+      console.log('Contribute - Final walletId set in circle:', walletId);
 
       console.log('[CONTRIBUTE DEBUG] Final circle state set:', {
         id,
@@ -1614,7 +1620,7 @@ export default function ContributeToCircle() {
         try {
           const memberActivatedEvents = await client.queryEvents({
             // Correct module name is njangi_members
-            query: { MoveEventType: `${PACKAGE_ID}::njangi_members::MemberActivated` }, 
+            query: { MoveEventType: `${determinedPackageId}::njangi_members::MemberActivated` }, 
             limit: 50
           });
           
@@ -1637,7 +1643,7 @@ export default function ContributeToCircle() {
         console.log('Checking deposit-related events as final fallback...');
         // Check CustodyDeposited events (operation_type 3)
         const custodyEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited` }, limit: 50
+          query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyDeposited` }, limit: 50
         });
         const foundCustodyEvent = custodyEvents.data.some(e => {
            const p = e.parsedJson as { circle_id?: string; member?: string; operation_type?: number | string };
@@ -1657,7 +1663,7 @@ export default function ContributeToCircle() {
         try {
           console.log(`[ContributePage] Checking SecurityDepositReturned events for ${userAddress} in circle ${circle.id}...`);
           const securityReturnedEvents = await client.queryEvents({
-            query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::SecurityDepositReturned` }, 
+            query: { MoveEventType: `${determinedPackageId}::njangi_payments::SecurityDepositReturned` }, 
             limit: 50 // Adjust limit as needed
           });
           const hasReturnedEvent = securityReturnedEvents.data.some(event => {
@@ -2079,6 +2085,13 @@ export default function ContributeToCircle() {
       
       if (!account) {
         toast.error('User account not available. Please log in again.');
+        setIsProcessing(false);
+        return;
+      }
+      
+      // Check if walletId is available
+      if (!circle.walletId) {
+        toast.error('Circle wallet information not available. Please refresh the page and try again.');
         setIsProcessing(false);
         return;
       }
@@ -3380,6 +3393,7 @@ export default function ContributeToCircle() {
                               currentCycle={currentCycle} 
                               currentRecipientAddress={cycleRecipientAddress} // Pass the recipient address
                               isPaused={circle.pausedAfterCycle} // Add isPaused prop
+                              circlePackageId={circlePackageId} // Pass the circlePackageId prop
                             />
                           </div>
                         </div>
