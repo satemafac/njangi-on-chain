@@ -5,7 +5,7 @@ import { SuiClient } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
 import { ArrowLeft } from 'lucide-react';
 import { cetusService } from '../../../../lib/cetus-service';
-import { PACKAGE_ID } from '../../../../services/circle-service';
+import { PACKAGE_ID, getCirclePackageId } from '../../../../services/circle-service';
 
 interface StablecoinConfig {
   enabled: boolean;
@@ -26,6 +26,7 @@ export default function SwapSettings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [walletId, setWalletId] = useState<string | null>(null);
+  const [circlePackageId, setCirclePackageId] = useState<string>(PACKAGE_ID);
   
   const [config, setConfig] = useState<StablecoinConfig>({
     enabled: false,
@@ -46,11 +47,32 @@ export default function SwapSettings() {
     }
     
     if (id && userAddress) {
+      fetchCirclePackageId();
+    }
+  }, [id, userAddress, isAuthenticated]);
+
+  const fetchCirclePackageId = async () => {
+    try {
+      if (!id || !userAddress) return;
+      
+      const dynamicPackageId = await getCirclePackageId(id as string, userAddress);
+      const packageIdToUse = dynamicPackageId || PACKAGE_ID;
+      setCirclePackageId(packageIdToUse);
+      console.log(`[SwapSettings] Using package ID ${packageIdToUse} for circle ${id}`);
+      
+      // After setting package ID, fetch other data
+      fetchCircleData();
+      fetchWalletId();
+      loadAvailableTokens();
+    } catch (error) {
+      console.error('Error fetching circle package ID:', error);
+      // Fallback to default package ID
+      setCirclePackageId(PACKAGE_ID);
       fetchCircleData();
       fetchWalletId();
       loadAvailableTokens();
     }
-  }, [id, userAddress, isAuthenticated]);
+  };
   
   const fetchCircleData = async () => {
     try {
@@ -91,7 +113,7 @@ export default function SwapSettings() {
       
       const hasCustodyWallet = await client.queryEvents({
         query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyWalletCreated`
+          MoveEventType: `${circlePackageId}::njangi_custody::CustodyWalletCreated`
         },
         limit: 1000
       });
