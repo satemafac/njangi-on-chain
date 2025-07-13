@@ -3251,7 +3251,7 @@ export default function ManageCircle() {
     try {
       // Check for payout events first, to detect if a cycle has just advanced
       const payoutEvents = await client.queryEvents({
-        query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::PayoutProcessed` },
+        query: { MoveEventType: `${circlePackageId}::njangi_payments::PayoutProcessed` },
         limit: 20
       });
       
@@ -3316,8 +3316,8 @@ export default function ManageCircle() {
       const uniqueContributors = new Set<string>();
       if (currentCycleFromServer > 0) {
         const eventFetchPromises = [
-          client.queryEvents({ query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::ContributionMade` }, limit: 250 }),
-          client.queryEvents({ query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::StablecoinContributionMade` }, limit: 250 })
+          client.queryEvents({ query: { MoveEventType: `${circlePackageId}::njangi_payments::ContributionMade` }, limit: 250 }),
+          client.queryEvents({ query: { MoveEventType: `${circlePackageId}::njangi_circles::StablecoinContributionMade` }, limit: 250 })
         ];
         const eventResults = await Promise.all(eventFetchPromises);
 
@@ -3361,7 +3361,7 @@ export default function ManageCircle() {
     } finally {
       setLoadingContributions(false);
     }
-  }, [circle, members, PACKAGE_ID]); // Added PACKAGE_ID
+  }, [circle, members, circlePackageId]); // Use dynamic package ID
 
   useEffect(() => {
     if (circle && circle.isActive && members.length > 0) {

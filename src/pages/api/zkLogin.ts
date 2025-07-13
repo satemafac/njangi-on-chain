@@ -4169,13 +4169,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           console.log(`Admin triggering automatic payout for circle ${circleId} with wallet ${req.body.walletId}`);
 
+          // Get the dynamic package ID for this circle
+          const dynamicPackageId = await getCirclePackageId(circleId, session.account.userAddr);
+          const packageIdToUse = dynamicPackageId || PACKAGE_ID;
+          console.log(`Using package ID ${packageIdToUse} for circle ${circleId}`);
+
           // Send the transaction
           const txResult = await instance.sendTransaction(
             session.account,
             (txb: Transaction) => {
               txb.setSender(session.account!.userAddr);
               txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_payments::admin_trigger_payout`,
+                target: `${packageIdToUse}::njangi_payments::admin_trigger_payout`,
                 arguments: [
                   txb.object(circleId),
                   txb.object(req.body.walletId),
@@ -4266,6 +4271,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           console.log(`Admin triggering USDC payout for circle ${circleId} with wallet ${req.body.walletId}`);
 
+          // Get the dynamic package ID for this circle
+          const dynamicPackageId = await getCirclePackageId(circleId, session.account.userAddr);
+          const packageIdToUse = dynamicPackageId || PACKAGE_ID;
+          console.log(`Using package ID ${packageIdToUse} for circle ${circleId}`);
+
           // Define the USDC coin type for testnet
           const USDC_TYPE = "0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC";
 
@@ -4275,7 +4285,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             (txb: Transaction) => {
               txb.setSender(session.account!.userAddr);
               txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_payments::admin_trigger_usdc_payout`,
+                target: `${packageIdToUse}::njangi_payments::admin_trigger_usdc_payout`,
                 arguments: [
                   txb.object(circleId),
                   txb.object(req.body.walletId),
