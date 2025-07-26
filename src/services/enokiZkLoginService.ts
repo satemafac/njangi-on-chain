@@ -105,7 +105,7 @@ interface TransactionResult {
  */
 export class EnokiZkLoginService {
   private static instance: EnokiZkLoginService;
-  private suiClient: SuiClient;
+  private suiClient!: SuiClient; // Add ! to mark as definitely assigned
 
   private constructor() {
     // Initialize with current network configuration
