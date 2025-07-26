@@ -534,7 +534,7 @@ export default function Dashboard() {
   const [isJoinDialogOpen, setIsJoinDialogOpen] = useState(false);
   const [circleIdInput, setCircleIdInput] = useState('');
   const [copiedCircleId, setCopiedCircleId] = useState<string | null>(null);
-  const [showTestnetBanner, setShowTestnetBanner] = useState(true);
+  const [showTestnetBanner, setShowTestnetBanner] = useState(() => getCurrentNetwork() === 'testnet');
   
   // Network configuration state - use centralized config
   const [network, setNetwork] = useState<'testnet' | 'mainnet'>(() => getCurrentNetwork());
@@ -772,6 +772,8 @@ export default function Dashboard() {
       } else {
         // Ensure centralized config is initialized with current network
         setCurrentNetwork(network);
+        // Also ensure banner visibility matches current network
+        setShowTestnetBanner(getCurrentNetwork() === 'testnet');
       }
     }
   }, []); // Run only once on mount

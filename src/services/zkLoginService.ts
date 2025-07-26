@@ -61,7 +61,7 @@ export interface TransactionResult {
 
 export class ZkLoginService {
   private static instance: ZkLoginService;
-  private suiClient: SuiClient;
+  private suiClient!: SuiClient; // Add ! to mark as definitely assigned
 
   private constructor() {
     this.initializeClient();
