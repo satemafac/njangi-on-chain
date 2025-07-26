@@ -1080,6 +1080,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             console.log(`Building moveCall for adding member: ${req.body.circleId}, member: ${req.body.memberAddress}`);
             
             try {
+              // Get the correct package ID for this circle
+              const circlePackageId = await getCirclePackageId(req.body.circleId, account.userAddr);
+              console.log(`Using package ID for circle ${req.body.circleId}: ${circlePackageId}`);
+              
               // Send transaction using zkLogin service
               const txResult = await instance.sendTransaction(
                 account,
@@ -1088,7 +1092,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   
                   // Call our implemented admin_approve_member function
                   txb.moveCall({
-                    target: `${PACKAGE_ID}::njangi_circles::admin_approve_member`,
+                    target: `${circlePackageId}::njangi_circles::admin_approve_member`,
                     arguments: [
                       txb.object(req.body.circleId),
                       txb.pure.address(req.body.memberAddress),
@@ -1200,6 +1204,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             console.log(`Building moveCall for adding multiple members to circle: ${req.body.circleId}, member count: ${req.body.memberAddresses.length}`);
             
             try {
+              // Get the correct package ID for this circle
+              const circlePackageId = await getCirclePackageId(req.body.circleId, account.userAddr);
+              console.log(`Using package ID for bulk approve in circle ${req.body.circleId}: ${circlePackageId}`);
+              
               // Normalize all addresses
               const normalizedAddresses = req.body.memberAddresses.map((addr: string) => {
                 // Ensure all addresses have 0x prefix and are lowercase
@@ -1217,7 +1225,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   
                   // Call our implemented admin_approve_members function
                   txb.moveCall({
-                    target: `${PACKAGE_ID}::njangi_circles::admin_approve_members`,
+                    target: `${circlePackageId}::njangi_circles::admin_approve_members`,
                     arguments: [
                       txb.object(req.body.circleId),
                       txb.makeMoveVec({ elements: addressArgs, type: 'address' }),
