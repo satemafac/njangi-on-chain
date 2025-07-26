@@ -4,14 +4,11 @@ import { bcs } from '@mysten/sui/bcs';
 import type { CircleFormData, CycleLength, WeekDay } from '../types/circle';
 import { getCurrentPackageId, getCurrentRpcUrl } from './network-config';
 
-// Check if we're on the client side
-const isClient = typeof window !== 'undefined';
-
 // Get package ID using network-aware configuration with fallbacks
 export function getPackageId(): string {
   try {
     return getCurrentPackageId() || process.env.NEXT_PUBLIC_PACKAGE_ID || "0xd530bfd7511ac2d343646a8ca4e2e14ffb89e1ec69a38ff8fb99c415706d6154";
-  } catch (error) {
+  } catch {
     // Fallback if network config is not available (e.g., during SSR)
     return process.env.NEXT_PUBLIC_PACKAGE_ID || "0xd530bfd7511ac2d343646a8ca4e2e14ffb89e1ec69a38ff8fb99c415706d6154";
   }
