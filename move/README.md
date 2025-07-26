@@ -54,25 +54,116 @@ Error: `Unexpected lambda type. Lambdas can only be used with 'macro' functions,
 
 Fix: Refactor functions that use lambda callbacks to use concrete function references or implement a trait-like pattern.
 
-## Building the Project
+## 🚀 **Dynamic Network Configuration System**
+
+The Njangi project features a flexible network switching system that allows seamless deployment to both testnet and mainnet.
+
+### **Quick Start**
 
 ```bash
 cd move
+
+# Check current network configuration
+./scripts/switch-network.sh status
+
+# Switch to mainnet for deployment
+./scripts/switch-network.sh mainnet
+
+# Deploy to mainnet
+./deploy.sh mainnet
+```
+
+### **Available Scripts**
+
+```bash
+# Network Management
+./scripts/switch-network.sh [testnet|mainnet|status]
+
+# Complete Deployment (Recommended)
+./deploy.sh [testnet|mainnet] [--gas-budget 300000000] [--debug] [--build-only]
+
+# Enhanced Build Script
+./build_and_test.sh [--network=testnet|mainnet] [--build-only] [--debug-publish]
+```
+
+### **Network Configurations**
+
+- **Testnet**: Uses testnet SUI framework, Pyth testnet, Cetus testnet addresses
+- **Mainnet**: Uses mainnet SUI framework, Pyth mainnet, Cetus mainnet addresses
+
+Configuration files are located in:
+- `config/testnet.toml` - Testnet configuration
+- `config/mainnet.toml` - Mainnet configuration
+- `Move.toml` - Active configuration (auto-updated by scripts)
+
+## Building the Project
+
+### **Manual Build (Traditional)**
+```bash
+cd move
 sui move build
+```
+
+### **Enhanced Build with Network Switching**
+```bash
+# Build for current network
+./build_and_test.sh --build-only
+
+# Build for specific network
+./build_and_test.sh --network=mainnet --build-only
+./build_and_test.sh --network=testnet --build-only
 ```
 
 ## Testing
 
 ```bash
 cd move
+
+# Traditional testing
 sui move test
+
+# Enhanced testing with network context
+./build_and_test.sh --network=testnet
 ```
 
 ## Publishing
 
+### **Automated Deployment (Recommended)**
 ```bash
-cd move
+# Deploy to testnet
+./deploy.sh testnet
+
+# Deploy to mainnet with custom gas
+./deploy.sh mainnet --gas-budget 300000000
+```
+
+### **Manual Publishing**
+```bash
+# Switch network first
+./scripts/switch-network.sh mainnet
+
+# Then publish
 sui client publish --gas-budget 200000000
+```
+
+## 💰 **Wallet Setup for Deployment**
+
+### **Current Wallet Address**
+```
+0xdde1086c98c6023db8e3d8267992e4c9aeba3d0271f6bac85dc2f6daa8301c77
+```
+
+### **Funding Requirements**
+- **Testnet**: Free SUI from Discord faucet
+- **Mainnet**: 5-10 SUI recommended for deployment
+
+### **Check Balance**
+```bash
+# Check wallet balance
+sui client gas
+
+# Get wallet address
+sui client active-address
 ```
 
 ## Njangi Circle with Cetus DEX Integration

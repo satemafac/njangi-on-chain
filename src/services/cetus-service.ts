@@ -13,36 +13,39 @@ import {
 const DEFAULT_SLIPPAGE = 50; // 0.5%
 const SUI_TYPE = '0x2::sui::SUI';
 
-// Testnet constants for stablecoins
-const USDC_TYPE = '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC';
+// Network-aware constants for stablecoins
+import { getCurrentCoinTypes, getCurrentCetusConfig, getCurrentRpcUrl, getCurrentNetwork } from './network-config';
+const coinTypes = getCurrentCoinTypes();
+const USDC_TYPE = coinTypes.USDC;
 const USDT_TYPE = '0x6674cb08a6ef2a155b3c240df0c559fcb5fef5738a17851c124dfbe96bc9a744::usdt::COIN';
 
-// Cetus testnet addresses 
-const CETUS_PACKAGE = '0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12';
+// Network-aware Cetus configuration
+const cetusConfig = getCurrentCetusConfig();
+const CETUS_PACKAGE = cetusConfig.packageId;
 
-// Testnet Cetus configuration
+// Network-aware Cetus configuration
 const CETUS_CONFIG = {
   clmmConfig: {
-    pools_id: '0xdf23f5920fbe7d529ddda0c814efd1c5ab3a4ce67fa34dadf9e135c3d617df25',
-    global_config_id: '0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca',
-    package_id: '0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12',
-    published_at: '0xb2a1d27337788bda89d350703b8326952413bd94b35b9b573ac8401b9803d018',
-    config_id: '0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca'
+    pools_id: cetusConfig.pools_id || '0xdf23f5920fbe7d529ddda0c814efd1c5ab3a4ce67fa34dadf9e135c3d617df25',
+    global_config_id: cetusConfig.globalConfig,
+    package_id: cetusConfig.packageId,
+    published_at: cetusConfig.published_at || '0xb2a1d27337788bda89d350703b8326952413bd94b35b9b573ac8401b9803d018',
+    config_id: cetusConfig.globalConfig
   },
   cetusConfig: {
-    coin_list_id: '0x1eabed72c53feb3805120a081dc15963c204dc8d091542592abaf7a35689b2fb',
-    launchpad_pools_id: '0x38465dad7da5e2c57cd68be9cfb7a7b370ac0fae42057a6085e9c7b924af9b09',
-    package_id: '0x25253305c8c0b393698cf26ff475f7e0b86f212a15711534adc627785a938494',
-    global_config_id: '0x1049dd299e1364f2be3dd467498be16fb32f23d4a938bef0a4ea6fd0a160d659',
-    cert_id: '0x6f1a1ccc1c8bfc4a5612fbea2d62c531832e99cbf46582410ec92d938cd1c66a'
+    coin_list_id: cetusConfig.coin_list_id || '0x1eabed72c53feb3805120a081dc15963c204dc8d091542592abaf7a35689b2fb',
+    launchpad_pools_id: cetusConfig.launchpad_pools_id || '0x38465dad7da5e2c57cd68be9cfb7a7b370ac0fae42057a6085e9c7b924af9b09',
+    package_id: cetusConfig.packageId,
+    global_config_id: cetusConfig.globalConfig,
+    cert_id: cetusConfig.cert_id || '0x6f1a1ccc1c8bfc4a5612fbea2d62c531832e99cbf46582410ec92d938cd1c66a'
   },
   networkOptions: {
-    url: 'https://fullnode.testnet.sui.io:443'
+    url: getCurrentRpcUrl()
   }
 };
 
-// SUI-USDC Pool on Cetus (Testnet)
-const USDC_SUI_POOL_ID = '0xb01b068bd0360bb3308b81eb42386707e460b7818816709b7f51e1635d542d40';
+// Network-aware SUI-USDC Pool on Cetus
+const USDC_SUI_POOL_ID = cetusConfig.pools.SUI_USDC;
 
 // SUI-USDC Pool will be fetched dynamically from the SDK
 // Don't hardcode pool IDs as they can change with protocol upgrades
@@ -141,7 +144,7 @@ class CetusService {
       // Initialize the SDK and cast to our interface
       // Using unknown as an intermediate step to avoid type errors with the SDK
       this.sdk = initCetusSDK({
-        network: 'testnet',
+        network: getCurrentNetwork(),
         fullNodeUrl: CETUS_CONFIG.networkOptions.url
       }) as unknown as CetusSDKInterface;
       

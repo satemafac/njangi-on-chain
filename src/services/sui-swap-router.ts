@@ -1,39 +1,32 @@
 import { Transaction } from '@mysten/sui/transactions';
 import { SuiClient } from '@mysten/sui/client';
+import { getCurrentNetworkConfig } from './network-config';
 
-// Constants for different DEXes on SUI
-const CETUS_PACKAGE_ID = '0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12';
-const CETUS_GLOBAL_CONFIG_ID = '0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca';
+// Get network-aware constants
+function getCetusPackageId(): string {
+  return getCurrentNetworkConfig().cetus.packageId;
+}
+
+function getCetusGlobalConfigId(): string {
+  return getCurrentNetworkConfig().cetus.globalConfig;
+}
 
 // Common token addresses
 const SUI_TYPE = '0x2::sui::SUI';
-const TOKENS = {
-  // Mainnet tokens
-  mainnet: {
-    SUI: '0x2::sui::SUI',
-    USDC: '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN',
-    USDT: '0x6674cb08a6ef2a155b3c240df0c559fcb5fef5738a17851c124dfbe96bc9a744::coin::COIN',
-    DAI: '0x9e89965f542887a8f0383451ba553fedf62c04e4dc68f60dec5b8d7ad1436bd6::usdc::USDC'
-  },
-  // Testnet tokens
-  testnet: {
-    SUI: '0x2::sui::SUI',
-    USDC: '0x9e89965f542887a8f0383451ba553fedf62c04e4dc68f60dec5b8d7ad1436bd6::usdc::USDC',
-    USDT: '0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08::usdt::USDT',
-  }
-};
 
-// Pool IDs for common token pairs
-const POOL_IDS = {
-  testnet: {
-    'SUI_USDC': '0x2e041f3fd93646dcc877f783c1f2b7fa62d30271bdef1f21ef002cebf857bded',
-    'SUI_USDT': '0x2cc7129e25401b5eccfdc678d402e2cc22f688f1c8e5db58c06c3c4e71242eb2',
-  },
-  mainnet: {
-    'SUI_USDC': '0x5eb2dfcdd1b15c8d13a4b0b53ae77b3916fae780160ef9f19ca3e49686541c7a',
-    'SUI_USDT': '0x06d8af9e6afd27262db436f0d37b304a041f710c3ea1fa4c3a9bab36b3569cc3',
-  }
-};
+// Get network-aware tokens
+function getTokens(): Record<string, string> {
+  return getCurrentNetworkConfig().tokens;
+}
+
+// Get network-aware pool IDs
+function getPoolIds(): Record<string, string> {
+  const cetusConfig = getCurrentNetworkConfig().cetus;
+  return {
+    'SUI_USDC': cetusConfig.pools.SUI_USDC,
+    'SUI_USDT': cetusConfig.pools.SUI_USDT || cetusConfig.pools.SUI_USDC,
+  };
+}
 
 interface SwapOptions {
   slippageTolerance: number; // in percentage (e.g., 0.5 for 0.5%)
@@ -65,9 +58,8 @@ export class SuiSwapRouter {
     network: Network = 'testnet',
     userAddress: string = ''
   ) {
-    const rpcUrl = network === 'testnet' 
-      ? 'https://fullnode.testnet.sui.io:443' 
-      : 'https://sui-mainnet-rpc.allthatnode.com';
+    // Use network-aware RPC URL
+    const rpcUrl = getCurrentNetworkConfig().rpcUrl;
     
     this.suiClient = new SuiClient({ url: rpcUrl });
     this.network = network;
@@ -129,17 +121,18 @@ export class SuiSwapRouter {
         : BigInt(Math.floor(Number(amount) * (fromToken === SUI_TYPE ? 1e9 : 1e6)));
       
       // Determine pool ID
-      const fromSymbol = Object.entries(TOKENS[this.network])
+      const networkTokens = getTokens();
+      const fromSymbol = Object.entries(networkTokens)
         .find(([, addr]) => addr === fromToken)?.[0] || 'UNKNOWN';
-      const toSymbol = Object.entries(TOKENS[this.network])
+      const toSymbol = Object.entries(networkTokens)
         .find(([, addr]) => addr === toToken)?.[0] || 'UNKNOWN';
       
       // Get the pool ID safely
       let poolId: string | undefined;
       const poolKey = `${fromSymbol}_${toSymbol}`;
       
-      // Type assertion to ensure poolIds is correctly accessed
-      const networkPools = POOL_IDS[this.network];
+      // Get network-aware pool IDs
+      const networkPools = getPoolIds();
       
       if (poolKey in networkPools) {
         poolId = networkPools[poolKey as keyof typeof networkPools];
@@ -285,12 +278,13 @@ export class SuiSwapRouter {
     
     // Get the stablecoin symbol
     let stablecoinSymbol = 'USDC';
-    if (toToken === TOKENS[this.network].USDT) {
+    const networkTokens = getTokens();
+    if (toToken === networkTokens.USDT) {
       stablecoinSymbol = 'USDT';
     }
     
     // Get pool ID safely
-    const networkPools = POOL_IDS[this.network];
+    const networkPools = getPoolIds();
     const poolKey = `SUI_${stablecoinSymbol}` as keyof typeof networkPools;
     const poolId = networkPools[poolKey];
     
@@ -305,9 +299,9 @@ export class SuiSwapRouter {
       
       // Call Cetus router swap function (simplified)
       tx.moveCall({
-        target: `${CETUS_PACKAGE_ID}::router::swap_exact_sui_for_coin_with_affiliate`,
+        target: `${getCetusPackageId()}::router::swap_exact_sui_for_coin_with_affiliate`,
         arguments: [
-          tx.object(CETUS_GLOBAL_CONFIG_ID), // global config
+          tx.object(getCetusGlobalConfigId()), // global config
           coin, // sui coin
           tx.pure.u64(minOutputAmount), // min amount out
           tx.object(poolId), // pool
@@ -351,9 +345,9 @@ export class SuiSwapRouter {
       
       // Call Cetus router swap function (for non-SUI to SUI)
       tx.moveCall({
-        target: `${CETUS_PACKAGE_ID}::router::swap_exact_coin_for_sui_with_affiliate`,
+        target: `${getCetusPackageId()}::router::swap_exact_coin_for_sui_with_affiliate`,
         arguments: [
-          tx.object(CETUS_GLOBAL_CONFIG_ID), // global config
+          tx.object(getCetusGlobalConfigId()), // global config
           coinToUse, // from coin
           tx.pure.u64(minOutputAmount), // min amount out
           tx.object(poolId), // pool
@@ -381,12 +375,13 @@ export class SuiSwapRouter {
     
     // Get the stablecoin symbol
     let stablecoinSymbol = 'USDC';
-    if (toToken === TOKENS[this.network].USDT) {
+    const networkTokens = getTokens();
+    if (toToken === networkTokens.USDT) {
       stablecoinSymbol = 'USDT';
     }
     
     // Get pool ID safely
-    const networkPools = POOL_IDS[this.network];
+    const networkPools = getPoolIds();
     const poolKey = `SUI_${stablecoinSymbol}` as keyof typeof networkPools;
     const poolId = networkPools[poolKey];
     
@@ -400,9 +395,9 @@ export class SuiSwapRouter {
       
       // Using router module with swap_exact_sui_for_coin instead of pool::swap_sui
       tx.moveCall({
-        target: `${CETUS_PACKAGE_ID}::router::swap_exact_sui_for_coin`,
+        target: `${getCetusPackageId()}::router::swap_exact_sui_for_coin`,
         arguments: [
-          tx.object(CETUS_GLOBAL_CONFIG_ID),
+          tx.object(getCetusGlobalConfigId()),
           coin,
           tx.pure.u64(minOutputAmount),
           tx.object(poolId),
@@ -419,9 +414,9 @@ export class SuiSwapRouter {
       
       // Using pool::flash_swap for SUI to stablecoin swap
       const [, , receipt] = tx.moveCall({
-        target: `${CETUS_PACKAGE_ID}::pool::flash_swap`,
+        target: `${getCetusPackageId()}::pool::flash_swap`,
         arguments: [
-          tx.object(CETUS_GLOBAL_CONFIG_ID), // Global config ID
+          tx.object(getCetusGlobalConfigId()), // Global config ID
           tx.object(poolId), // Pool ID
           tx.pure.bool(false), // is_a_to_b (SUI → stablecoin is false in this pool)
           tx.pure.bool(true), // by_amount_in
@@ -434,7 +429,7 @@ export class SuiSwapRouter {
       
       // Pay for the swap with the SUI we split earlier
       tx.moveCall({
-        target: `${CETUS_PACKAGE_ID}::pool::repay_flash_swap`,
+        target: `${getCetusPackageId()}::pool::repay_flash_swap`,
         arguments: [
           receipt,
           coin
@@ -476,9 +471,9 @@ export class SuiSwapRouter {
       
       // Use pool::flash_swap for token to SUI swap
       const [, , receipt] = tx.moveCall({
-        target: `${CETUS_PACKAGE_ID}::pool::flash_swap`,
+        target: `${getCetusPackageId()}::pool::flash_swap`,
         arguments: [
-          tx.object(CETUS_GLOBAL_CONFIG_ID), // Global config ID
+          tx.object(getCetusGlobalConfigId()), // Global config ID
           tx.object(poolId), // Pool ID
           tx.pure.bool(true), // is_a_to_b (token → SUI is true in this pool)
           tx.pure.bool(true), // by_amount_in
@@ -491,7 +486,7 @@ export class SuiSwapRouter {
       
       // Repay with the token we have
       tx.moveCall({
-        target: `${CETUS_PACKAGE_ID}::pool::repay_flash_swap`,
+        target: `${getCetusPackageId()}::pool::repay_flash_swap`,
         arguments: [
           receipt,
           coinObject
@@ -532,7 +527,8 @@ export class SuiSwapRouter {
    * Get list of supported tokens
    */
   getSupportedTokens(): Array<{ symbol: string; address: string; decimals: number }> {
-    return Object.entries(TOKENS[this.network]).map(([symbol, address]) => ({
+    const networkTokens = getTokens();
+    return Object.entries(networkTokens).map(([symbol, address]) => ({
       symbol,
       address,
       decimals: symbol === 'SUI' ? 9 : 6

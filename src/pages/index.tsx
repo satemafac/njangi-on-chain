@@ -1,10 +1,30 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../contexts/AuthContext';
 import { LoginButton } from '../components/LoginButton';
 import Image from 'next/image';
 import Link from 'next/link';
 import Head from 'next/head';
+import * as Dialog from '@radix-ui/react-dialog';
+import { X } from 'lucide-react';
+import { setCurrentNetwork } from '../services/network-config';
+
+// Global type declaration for network config
+declare global {
+  interface Window {
+    CURRENT_NETWORK_CONFIG?: {
+      rpcUrl: string;
+      packageId: string;
+      usdcAddress: string;
+      networkName: string;
+      enoki: {
+        apiKey: string | undefined;
+        baseUrl: string;
+        graphqlUrl: string;
+      };
+    };
+  }
+}
 
 export default function Home() {
   const router = useRouter();
@@ -20,6 +40,40 @@ export default function Home() {
   // Live stats state
   const [circleCount, setCircleCount] = useState<number | null>(null);
 
+  // Network configuration - memoized to prevent unnecessary re-renders
+  const NETWORK_CONFIG = useMemo(() => ({
+    testnet: {
+      rpcUrl: 'https://fullnode.testnet.sui.io:443',
+      packageId: process.env.NEXT_PUBLIC_TESTNET_PACKAGE_ID || process.env.NEXT_PUBLIC_PACKAGE_ID || '',
+      usdcAddress: process.env.NEXT_PUBLIC_TESTNET_USDC || '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC',
+      networkName: 'Testnet',
+      enoki: {
+        apiKey: process.env.NEXT_PUBLIC_ENOKI_TESTNET || process.env.NEXT_PUBLIC_ENOKI,
+        baseUrl: 'https://api.enoki.mystenlabs.com/v1',
+        graphqlUrl: 'https://sui-testnet.mystenlabs.com/graphql'
+      }
+    },
+    mainnet: {
+      rpcUrl: 'https://fullnode.mainnet.sui.io:443', 
+      packageId: process.env.NEXT_PUBLIC_MAINNET_PACKAGE_ID || process.env.NEXT_PUBLIC_PACKAGE_ID || '',
+      usdcAddress: '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN',
+      networkName: 'Mainnet',
+      enoki: {
+        apiKey: process.env.NEXT_PUBLIC_ENOKI_MAINNET || process.env.NEXT_PUBLIC_ENOKI,
+        baseUrl: 'https://api.enoki.mystenlabs.com/v1',
+        graphqlUrl: 'https://sui-mainnet.mystenlabs.com/graphql'
+      }
+    }
+  }), []);
+
+  // Network state
+  const [network, setNetwork] = useState<'testnet' | 'mainnet'>('testnet');
+  const [showTestnetBanner, setShowTestnetBanner] = useState(true);
+
+  // Network switching modal state
+  const [isNetworkSwitchModalOpen, setIsNetworkSwitchModalOpen] = useState(false);
+  const [pendingNetwork, setPendingNetwork] = useState<'testnet' | 'mainnet' | null>(null);
+
   const culturalNames = [
     "Adaji", "Ajoh", "Asue", "Arisan", "Cadena", "Chama", "ChitFunds", "Cundina",
     "Equb", "Esusu", "Family-Lottery", "Hagbad", "Hui", "Idir", "Iqub", "Keyes",
@@ -34,6 +88,67 @@ export default function Home() {
       [id]: !prev[id]
     }));
   };
+
+  // Dismiss testnet banner
+  const dismissTestnetBanner = () => {
+    setShowTestnetBanner(false);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('testnetBannerDismissed', 'true');
+    }
+  };
+
+  // Network switching function
+  const switchNetwork = useCallback((newNetwork: 'testnet' | 'mainnet') => {
+    setPendingNetwork(newNetwork);
+    setIsNetworkSwitchModalOpen(true);
+  }, []);
+
+  // Confirm network switch
+  const confirmNetworkSwitch = useCallback(() => {
+    if (!pendingNetwork) return;
+
+    const config = NETWORK_CONFIG[pendingNetwork];
+    
+    // Update network configuration
+    setNetwork(pendingNetwork);
+    setShowTestnetBanner(pendingNetwork === 'testnet');
+    
+    // Persist network choice
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('preferredNetwork', pendingNetwork);
+    }
+    
+    // Update the network configuration service
+    setCurrentNetwork(pendingNetwork);
+    
+    // Store network config globally for Enoki service
+    if (typeof window !== 'undefined') {
+      window.CURRENT_NETWORK_CONFIG = config;
+    }
+    
+    // Clear zkLogin session data as it's network-specific
+    if (typeof window !== 'undefined') {
+      const zkLoginKeys = Object.keys(localStorage).filter(key => 
+        key.includes('zklogin') || key.includes('enoki')
+      );
+      zkLoginKeys.forEach(key => localStorage.removeItem(key));
+    }
+    
+    // Close modal and reset pending network
+    setIsNetworkSwitchModalOpen(false);
+    setPendingNetwork(null);
+    
+    // Force page reload to ensure clean state with new network
+    setTimeout(() => {
+      window.location.reload();
+    }, 500);
+  }, [pendingNetwork, NETWORK_CONFIG]);
+
+  // Cancel network switch
+  const cancelNetworkSwitch = useCallback(() => {
+    setIsNetworkSwitchModalOpen(false);
+    setPendingNetwork(null);
+  }, []);
 
   // Fetch live circle count from blockchain
   useEffect(() => {
@@ -105,6 +220,41 @@ export default function Home() {
       setIsSignupLoading(false);
     }
   };
+
+  // Initialize network preference from localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const savedNetwork = localStorage.getItem('preferredNetwork') as 'testnet' | 'mainnet' | null;
+      const bannerDismissed = localStorage.getItem('testnetBannerDismissed') === 'true';
+      
+      if (savedNetwork && savedNetwork !== network && NETWORK_CONFIG[savedNetwork]) {
+        const config = NETWORK_CONFIG[savedNetwork];
+        setNetwork(savedNetwork);
+        setShowTestnetBanner(savedNetwork === 'testnet' && !bannerDismissed);
+        
+        // Update the network configuration service
+        setCurrentNetwork(savedNetwork);
+        
+        // Store network config globally for Enoki service
+        window.CURRENT_NETWORK_CONFIG = config;
+        
+        console.log(`Loaded network preference: ${savedNetwork}`);
+      } else {
+        // Set default network config
+        setCurrentNetwork(network);
+        window.CURRENT_NETWORK_CONFIG = NETWORK_CONFIG[network];
+        setShowTestnetBanner(network === 'testnet' && !bannerDismissed);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run only once on mount - intentionally excluding dependencies
+
+  // Update global network config when network changes
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.CURRENT_NETWORK_CONFIG = NETWORK_CONFIG[network];
+    }
+  }, [network, NETWORK_CONFIG]);
 
   useEffect(() => {
     if (account) {
@@ -241,6 +391,188 @@ export default function Home() {
       </Head>
       
     <div className="min-h-screen bg-gray-50">
+      {/* Network Switch Confirmation Modal */}
+      <Dialog.Root open={isNetworkSwitchModalOpen} onOpenChange={setIsNetworkSwitchModalOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="bg-black bg-opacity-50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50" />
+          <Dialog.Content className="data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border border-gray-200 bg-white p-6 shadow-lg duration-200 rounded-lg">
+            <div className="flex flex-col space-y-2 text-center sm:text-left">
+              <Dialog.Title className="text-lg font-semibold text-gray-900">
+                Switch to {pendingNetwork ? NETWORK_CONFIG[pendingNetwork].networkName : ''}?
+              </Dialog.Title>
+              <div className="text-sm text-gray-500 space-y-3">
+                <div>Switching networks will:</div>
+                <ul className="list-disc list-inside space-y-1 text-sm text-gray-600">
+                  <li>Generate a different wallet address for the same account</li>
+                  <li>Clear your current session and require re-authentication</li>
+                  <li>Show circles and balances from the selected network only</li>
+                </ul>
+                <div className="text-sm text-amber-600 font-medium">
+                  ⚠️ Your wallet address will be different on {pendingNetwork ? NETWORK_CONFIG[pendingNetwork].networkName.toLowerCase() : ''}
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2">
+              <button
+                onClick={cancelNetworkSwitch}
+                className="inline-flex h-10 items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 mt-3 sm:mt-0 sm:w-auto"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmNetworkSwitch}
+                className="inline-flex h-10 items-center justify-center rounded-md border border-transparent bg-amber-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 sm:w-auto"
+              >
+                Switch to {pendingNetwork ? NETWORK_CONFIG[pendingNetwork].networkName : ''}
+              </button>
+            </div>
+            <Dialog.Close asChild>
+              <button 
+                onClick={cancelNetworkSwitch}
+                className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-white transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2"
+              >
+                <X className="h-4 w-4" />
+                <span className="sr-only">Close</span>
+              </button>
+            </Dialog.Close>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* Testnet Banner */}
+      {showTestnetBanner && network === 'testnet' && (
+        <div className="bg-amber-50 border-b border-amber-200">
+          <div className="max-w-7xl mx-auto py-3 px-3 sm:px-6 lg:px-8">
+            <div className="flex items-center justify-between flex-wrap">
+              <div className="w-0 flex-1 flex items-center">
+                <span className="flex p-2 rounded-lg bg-amber-100">
+                  <svg className="h-5 w-5 text-amber-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                </span>
+                <div className="ml-3 flex-1">
+                  <p className="text-sm text-amber-700">
+                    You are currently on the Sui Testnet. Funds and transactions are not on the main network.
+                  </p>
+                </div>
+                <div className="ml-4">
+                  <a
+                    href="https://faucet.sui.io"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center px-3 py-1.5 border border-amber-300 text-xs font-medium rounded-md text-amber-700 bg-amber-100 hover:bg-amber-200 focus:outline-none focus:ring-2 focus:ring-amber-500 transition-colors duration-200"
+                  >
+                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    </svg>
+                    Get Test Tokens
+                  </a>
+                </div>
+              </div>
+              <button 
+                onClick={dismissTestnetBanner}
+                className="rounded-md p-1.5 text-amber-500 hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-600"
+              >
+                <span className="sr-only">Dismiss</span>
+                <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Glass Network Toggle Switch */}
+      <div className="fixed top-4 right-4 sm:top-6 sm:right-6 z-40">
+        <div className="relative">
+          {/* Glass Container */}
+          <div className="relative bg-white/10 backdrop-blur-2xl border border-white/20 rounded-3xl p-1.5 shadow-2xl hover:shadow-3xl transition-all duration-500 hover:bg-white/15 group">
+            {/* Inner glow effect */}
+            <div className="absolute inset-0 rounded-3xl bg-gradient-to-r from-white/5 to-white/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+            
+            <div className="relative flex items-center">
+              {/* Glass Background Track */}
+              <div className="relative flex bg-black/5 backdrop-blur-sm rounded-2xl overflow-hidden border border-white/10">
+                {/* Floating Glass Indicator */}
+                <div className={`absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] bg-white/20 backdrop-blur-xl border border-white/30 rounded-xl shadow-lg transition-all duration-500 ease-out ${
+                  network === 'testnet' 
+                    ? 'left-0.5' 
+                    : 'left-[calc(50%+1px)]'
+                }`}>
+                  {/* Active indicator glow */}
+                  <div className={`absolute inset-0 rounded-xl transition-all duration-500 ${
+                    network === 'testnet' 
+                      ? 'bg-gradient-to-r from-blue-400/30 to-blue-500/30 shadow-blue-500/20' 
+                      : 'bg-gradient-to-r from-emerald-400/30 to-green-500/30 shadow-emerald-500/20'
+                  } shadow-lg`} />
+                </div>
+                
+                {/* Testnet Button */}
+                <button
+                  onClick={() => switchNetwork('testnet')}
+                  className={`relative z-20 px-4 py-3 sm:px-5 sm:py-3.5 text-xs sm:text-sm font-bold transition-all duration-500 ease-out hover:scale-105 active:scale-95 ${
+                    network === 'testnet' 
+                      ? 'text-white drop-shadow-sm' 
+                      : 'text-white/70 hover:text-white/90'
+                  }`}
+                >
+                  <div className="flex items-center space-x-2">
+                    <div className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full transition-all duration-500 ${
+                      network === 'testnet' 
+                        ? 'bg-blue-300 shadow-lg shadow-blue-400/50 animate-pulse' 
+                        : 'bg-white/40 hover:bg-white/60'
+                    }`} />
+                    <span className="hidden sm:inline font-semibold tracking-wide">Testnet</span>
+                    <span className="sm:hidden font-semibold">Test</span>
+                  </div>
+                </button>
+                
+                {/* Mainnet Button */}
+                <button
+                  onClick={() => switchNetwork('mainnet')}
+                  className={`relative z-20 px-4 py-3 sm:px-5 sm:py-3.5 text-xs sm:text-sm font-bold transition-all duration-500 ease-out hover:scale-105 active:scale-95 ${
+                    network === 'mainnet' 
+                      ? 'text-white drop-shadow-sm' 
+                      : 'text-white/70 hover:text-white/90'
+                  }`}
+                >
+                  <div className="flex items-center space-x-2">
+                    <div className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full transition-all duration-500 ${
+                      network === 'mainnet' 
+                        ? 'bg-emerald-300 shadow-lg shadow-emerald-400/50 animate-pulse' 
+                        : 'bg-white/40 hover:bg-white/60'
+                    }`} />
+                    <span className="hidden sm:inline font-semibold tracking-wide">Mainnet</span>
+                    <span className="sm:hidden font-semibold">Main</span>
+                  </div>
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          {/* Glass Status Tooltip */}
+          <div className={`hidden sm:block absolute -bottom-1 left-1/2 transform -translate-x-1/2 translate-y-full 
+                          px-4 py-2 rounded-xl text-xs font-semibold transition-all duration-500 backdrop-blur-2xl border shadow-xl
+                          ${network === 'mainnet' 
+                            ? 'bg-emerald-500/20 text-white border-emerald-300/30 shadow-emerald-500/20' 
+                            : 'bg-blue-500/20 text-white border-blue-300/30 shadow-blue-500/20'
+                          }`}>
+            <div className="flex items-center space-x-2">
+              <div className={`w-2 h-2 rounded-full animate-pulse shadow-md ${
+                network === 'mainnet' ? 'bg-emerald-400' : 'bg-blue-400'
+              }`} />
+              <span className="tracking-wider">Live on {NETWORK_CONFIG[network].networkName}</span>
+            </div>
+            {/* Glass Tooltip Arrow */}
+            <div className={`absolute -top-1.5 left-1/2 transform -translate-x-1/2 w-3 h-3 rotate-45 backdrop-blur-2xl border-l border-t
+                            ${network === 'mainnet' 
+                              ? 'bg-emerald-500/20 border-emerald-300/30' 
+                              : 'bg-blue-500/20 border-blue-300/30'
+                            }`} />
+          </div>
+        </div>
+      </div>
       {/* Cultural Names Sliding Banner */}
       <div className="bg-gradient-to-r from-blue-600 via-blue-700 to-blue-600 text-white py-3 overflow-hidden relative">
         <div className="absolute inset-0 bg-black bg-opacity-10"></div>

@@ -3,7 +3,7 @@ import { Transaction as TransactionBlock } from '@mysten/sui/transactions';
 import { ExecuteTransactionRequestType } from '@mysten/sui/client';
 import { enokiZkLoginService } from './enokiZkLoginService';
 
-const FULLNODE_URL = 'https://fullnode.testnet.sui.io:443';
+import { getCurrentRpcUrl } from './network-config';
 
 export type OAuthProvider = 'Google' | 'Facebook' | 'Apple';
 
@@ -64,14 +64,21 @@ export class ZkLoginService {
   private suiClient: SuiClient;
 
   private constructor() {
+    this.initializeClient();
+  }
+
+  private initializeClient() {
     this.suiClient = new SuiClient({
-      url: FULLNODE_URL
+      url: getCurrentRpcUrl()
     });
   }
 
   public static getInstance(): ZkLoginService {
     if (!ZkLoginService.instance) {
       ZkLoginService.instance = new ZkLoginService();
+    } else {
+      // Reinitialize client with current network configuration
+      ZkLoginService.instance.initializeClient();
     }
     return ZkLoginService.instance;
   }

@@ -17,16 +17,23 @@ command_exists() {
 
 # Function to display usage
 display_usage() {
-    echo -e "${CYAN}Usage: $0 [--build-only] [--debug-publish]${NC}"
+    echo -e "${CYAN}Usage: $0 [--build-only] [--debug-publish] [--network=<network>]${NC}"
     echo -e "Options:"
     echo -e "  --build-only     Only build the modules, skip publishing and testing"
     echo -e "  --debug-publish  Use additional debug flags during publishing"
+    echo -e "  --network=<net>  Switch to testnet or mainnet before building (testnet|mainnet)"
     echo -e "  --help           Display this help message"
+    echo -e ""
+    echo -e "Examples:"
+    echo -e "  $0 --network=mainnet        # Switch to mainnet and build"
+    echo -e "  $0 --network=testnet        # Switch to testnet and build"
+    echo -e "  $0 --build-only --network=mainnet  # Switch to mainnet and build only"
 }
 
 # Parse command line arguments
 BUILD_ONLY=false
 DEBUG_PUBLISH=false
+NETWORK=""
 for arg in "$@"; do
     case $arg in
         --build-only)
@@ -34,6 +41,13 @@ for arg in "$@"; do
             ;;
         --debug-publish)
             DEBUG_PUBLISH=true
+            ;;
+        --network=*)
+            NETWORK="${arg#*=}"
+            if [[ "$NETWORK" != "testnet" && "$NETWORK" != "mainnet" ]]; then
+                echo -e "${RED}Invalid network: $NETWORK. Must be 'testnet' or 'mainnet'${NC}"
+                exit 1
+            fi
             ;;
         --help)
             display_usage
@@ -52,6 +66,22 @@ if ! command_exists sui; then
     echo -e "${RED}Error: Sui CLI is not installed or not in PATH.${NC}"
     echo -e "Please install Sui CLI by following instructions at: https://docs.sui.io/build/install"
     exit 1
+fi
+
+# Handle network switching if specified
+if [[ -n "$NETWORK" ]]; then
+    echo -e "${BLUE}🔄 Switching to $NETWORK configuration...${NC}"
+    if [[ -f "./scripts/switch-network.sh" ]]; then
+        ./scripts/switch-network.sh "$NETWORK"
+        if [[ $? -ne 0 ]]; then
+            echo -e "${RED}❌ Failed to switch to $NETWORK. Exiting.${NC}"
+            exit 1
+        fi
+    else
+        echo -e "${RED}❌ Network switching script not found: ./scripts/switch-network.sh${NC}"
+        exit 1
+    fi
+    echo -e "${BLUE}============================================${NC}"
 fi
 
 # Display header

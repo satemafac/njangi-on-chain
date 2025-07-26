@@ -1,5 +1,7 @@
 // real-time-apr-service.ts - Fetches real-time APR data from Cetus and NAVI protocols
 
+import { getCurrentCetusConfig } from './network-config';
+
 export interface PoolAPRData {
   poolId: string;
   token0: string;
@@ -68,8 +70,8 @@ class RealTimeAPRService {
   
   // Known pool IDs for SUI pairs
   private readonly KNOWN_POOLS = {
-    SUI_USDC: '0xb01b068bd0360bb3308b81eb42386707e460b7818816709b7f51e1635d542d40',
-    SUI_USDT: '0x0254747f5ca059a1972cd7f6016485d51392a3fde608107b93bbaebea550f703'
+    SUI_USDC: getCurrentCetusConfig().pools.SUI_USDC,
+    SUI_USDT: getCurrentCetusConfig().pools.SUI_USDT || '0x0254747f5ca059a1972cd7f6016485d51392a3fde608107b93bbaebea550f703'
   };
 
   /**

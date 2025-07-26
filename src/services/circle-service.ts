@@ -2,14 +2,23 @@ import { Transaction as TransactionBlock } from '@mysten/sui/transactions';
 import { SuiClient } from '@mysten/sui/client';
 import { bcs } from '@mysten/sui/bcs';
 import type { CircleFormData, CycleLength, WeekDay } from '../types/circle';
+import { getCurrentPackageId, getCurrentRpcUrl } from './network-config';
 
 // Check if we're on the client side
 const isClient = typeof window !== 'undefined';
 
-// Get package ID from environment variable, or fall back to a default value
-export const PACKAGE_ID = isClient 
-  ? process.env.NEXT_PUBLIC_PACKAGE_ID || "0xd530bfd7511ac2d343646a8ca4e2e14ffb89e1ec69a38ff8fb99c415706d6154"
-  : process.env.NEXT_PUBLIC_PACKAGE_ID || "0xd530bfd7511ac2d343646a8ca4e2e14ffb89e1ec69a38ff8fb99c415706d6154";
+// Get package ID using network-aware configuration with fallbacks
+export function getPackageId(): string {
+  try {
+    return getCurrentPackageId() || process.env.NEXT_PUBLIC_PACKAGE_ID || "0xd530bfd7511ac2d343646a8ca4e2e14ffb89e1ec69a38ff8fb99c415706d6154";
+  } catch (error) {
+    // Fallback if network config is not available (e.g., during SSR)
+    return process.env.NEXT_PUBLIC_PACKAGE_ID || "0xd530bfd7511ac2d343646a8ca4e2e14ffb89e1ec69a38ff8fb99c415706d6154";
+  }
+}
+
+// Legacy constant for backward compatibility (will be dynamically resolved)
+export const PACKAGE_ID = getPackageId();
 
 // Constants from Move contract
 const CIRCLE_TYPE_ROTATIONAL = 0;
@@ -93,7 +102,7 @@ export class CircleService {
       
       // 8. Build transaction with new currency-aware parameters
       tx.moveCall({
-        target: `${PACKAGE_ID}::njangi_circles::create_circle`,
+        target: `${getPackageId()}::njangi_circles::create_circle`,
         arguments: [
           tx.pure(nameBytes),                    // name: vector<u8>
           tx.pure.u64(contributionAmount),       // contribution_amount: u64
@@ -145,7 +154,7 @@ export class CircleService {
 
       // Join the circle
       tx.moveCall({
-        target: `${PACKAGE_ID}::njangi_circles::join_circle`,
+        target: `${getPackageId()}::njangi_circles::join_circle`,
         arguments: [
           tx.object(circleId),    // circle: &mut Circle
           depositCoin,            // deposit: Coin<SUI>
@@ -168,7 +177,7 @@ export class CircleService {
       
       for (const address of memberAddresses) {
         tx.moveCall({
-          target: `${PACKAGE_ID}::njangi_circles::invite_member`,
+          target: `${getPackageId()}::njangi_circles::invite_member`,
           typeArguments: [],
           arguments: [
             tx.object(circleId), // circle: &mut NjangiCircle
@@ -196,7 +205,7 @@ export class CircleService {
  */
 export async function getCirclePackageId(circleId: string, userAddress?: string): Promise<string> {
   try {
-    const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+    const client = new SuiClient({ url: getCurrentRpcUrl() });
     
     // First, try to get the circle object directly to extract package ID from its type
     try {
@@ -247,7 +256,7 @@ export async function getCirclePackageId(circleId: string, userAddress?: string)
     // Fallback: try with the current default package ID
     try {
       const events = await client.queryEvents({
-        query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleCreated` },
+        query: { MoveEventType: `${getPackageId()}::njangi_circles::CircleCreated` },
         limit: 100
       });
       
@@ -256,20 +265,20 @@ export async function getCirclePackageId(circleId: string, userAddress?: string)
       );
       
       if (foundEvent) {
-        console.log(`Found circle ${circleId} created with default package ${PACKAGE_ID}`);
-        return PACKAGE_ID;
+        console.log(`Found circle ${circleId} created with default package ${getPackageId()}`);
+        return getPackageId();
       }
     } catch (error) {
       console.warn('Error querying events for default package:', error);
     }
     
     // If not found anywhere, return the current package ID as fallback
-    console.warn(`Could not find package ID for circle ${circleId}, using default ${PACKAGE_ID}`);
-    return PACKAGE_ID;
+    console.warn(`Could not find package ID for circle ${circleId}, using default ${getPackageId()}`);
+    return getPackageId();
     
   } catch (error) {
     console.error('Error in getCirclePackageId:', error);
-    return PACKAGE_ID; // Return default as fallback
+    return getPackageId(); // Return default as fallback
   }
 }
 
@@ -280,11 +289,11 @@ export async function getCirclePackageId(circleId: string, userAddress?: string)
  */
 export async function getUserPackageIds(userAddress: string): Promise<string[]> {
   try {
-    const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+    const client = new SuiClient({ url: getCurrentRpcUrl() });
     const packageIds = new Set<string>();
     
     // Always include the current default package ID
-    packageIds.add(PACKAGE_ID);
+    packageIds.add(getPackageId());
     
     // Get user's transactions to find package IDs they've interacted with
     try {
@@ -331,7 +340,7 @@ export async function getUserPackageIds(userAddress: string): Promise<string[]> 
     
   } catch (error) {
     console.error('Error in getUserPackageIds:', error);
-    return [PACKAGE_ID]; // Return default package ID as fallback
+    return [getPackageId()]; // Return default package ID as fallback
   }
 } 
 

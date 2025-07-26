@@ -6,6 +6,7 @@ import { toast } from 'react-hot-toast';
 import { ArrowLeft } from 'lucide-react';
 import { cetusService } from '../../../../lib/cetus-service';
 import { PACKAGE_ID, getCirclePackageId } from '../../../../services/circle-service';
+import { getCurrentRpcUrl, getCurrentNetwork, getCurrentCoinTypes, getCurrentCetusConfig } from '../../../../services/network-config';
 
 interface StablecoinConfig {
   enabled: boolean;
@@ -30,12 +31,12 @@ export default function SwapSettings() {
   
   const [config, setConfig] = useState<StablecoinConfig>({
     enabled: false,
-    targetCoinType: '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN', // Default to USDC
+    targetCoinType: getCurrentCoinTypes().USDC, // Default to network-aware USDC
     slippageTolerance: 50, // 0.5%
     minimumSwapAmount: 1, // 1 SUI
-    dexAddress: '0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12', // Cetus package ID v1.26.0
-    globalConfigId: '',
-    poolId: '',
+    dexAddress: getCurrentCetusConfig().packageId, // Network-aware Cetus package ID
+    globalConfigId: getCurrentCetusConfig().globalConfig,
+    poolId: getCurrentCetusConfig().pools.SUI_USDC,
   });
   
   const [availableTokens, setAvailableTokens] = useState<Array<{ symbol: string; address: string }>>([]);
@@ -77,7 +78,7 @@ export default function SwapSettings() {
   const fetchCircleData = async () => {
     try {
       setLoading(true);
-      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      const client = new SuiClient({ url: getCurrentRpcUrl() });
       
       const objectData = await client.getObject({
         id: id as string,
@@ -109,7 +110,7 @@ export default function SwapSettings() {
   
   const fetchWalletId = async () => {
     try {
-      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      const client = new SuiClient({ url: getCurrentRpcUrl() });
       
       const hasCustodyWallet = await client.queryEvents({
         query: {
@@ -139,7 +140,7 @@ export default function SwapSettings() {
       if (!userAddress) return;
       
       // Initialize the service and get available tokens
-      cetusService.init(userAddress, 'testnet');
+      cetusService.init(userAddress, getCurrentNetwork());
       const tokens = await cetusService.getSupportedTokens();
       setAvailableTokens(tokens.map(t => ({ symbol: t.symbol, address: t.address })));
     } catch (error) {

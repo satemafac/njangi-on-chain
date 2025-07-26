@@ -12,9 +12,12 @@ import {
 } from '@mysten/sui/zklogin';
 import { decodeJwt } from 'jose';
 import { SuiTransactionBlockResponse, ExecuteTransactionRequestType } from '@mysten/sui/client';
+import { getCurrentRpcUrl, getCurrentEnokiConfig, getCurrentNetwork } from './network-config';
 
-// Use testnet for development
-const FULLNODE_URL = process.env.NEXT_PUBLIC_SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443';
+// Dynamic RPC URL based on network configuration
+function getNetworkRpcUrl(): string {
+  return getCurrentRpcUrl();
+}
 
 // OAuth URLs and client IDs (same as before)
 const GOOGLE_OAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -25,12 +28,22 @@ const FACEBOOK_CLIENT_ID = process.env.NEXT_PUBLIC_FACEBOOK_CLIENT_ID;
 const APPLE_CLIENT_ID = process.env.NEXT_PUBLIC_APPLE_CLIENT_ID;
 const REDIRECT_URI = process.env.NEXT_PUBLIC_REDIRECT_URI;
 
-// Enoki API configuration
-const ENOKI_API_KEY = process.env.NEXT_PUBLIC_ENOKI;
+// Dynamic Enoki API configuration based on network
+function getEnokiConfig() {
+  return getCurrentEnokiConfig();
+}
+
 const ENOKI_BASE_URL = 'https://api.enoki.mystenlabs.com/v1';
 
 const MAX_EPOCH = 2; // keep ephemeral keys active for this many Sui epochs from now (1 epoch ~= 24h)
-const GRAPHQL_URL = 'https://sui-testnet.mystenlabs.com/graphql';
+
+// Dynamic GraphQL URL based on network
+function getGraphQLUrl(): string {
+  const network = getCurrentNetwork();
+  return network === 'mainnet' 
+    ? 'https://sui-mainnet.mystenlabs.com/graphql'
+    : 'https://sui-testnet.mystenlabs.com/graphql';
+}
 
 export type OAuthProvider = 'Google' | 'Facebook' | 'Apple';
 
@@ -95,18 +108,36 @@ export class EnokiZkLoginService {
   private suiClient: SuiClient;
 
   private constructor() {
-    if (!ENOKI_API_KEY) {
-      throw new Error('NEXT_PUBLIC_ENOKI API key is required. Please set it in your environment variables.');
+    // Initialize with current network configuration
+    this.initializeWithNetwork();
+  }
+
+  private initializeWithNetwork() {
+    const currentNetwork = getCurrentNetwork();
+    const enokiConfig = getEnokiConfig();
+    
+    console.log('🔧 EnokiZkLoginService initializing with network:', currentNetwork);
+    console.log('🔑 Enoki config:', {
+      network: enokiConfig.network,
+      apiKey: enokiConfig.apiKey ? enokiConfig.apiKey.slice(0, 20) + '...' : 'MISSING',
+      hasApiKey: !!enokiConfig.apiKey
+    });
+    
+    if (!enokiConfig.apiKey) {
+      throw new Error(`Enoki API key is required for ${currentNetwork} network. Please check your environment variables.`);
     }
     
     this.suiClient = new SuiClient({
-      url: FULLNODE_URL
+      url: getNetworkRpcUrl()
     });
   }
 
   public static getInstance(): EnokiZkLoginService {
     if (!EnokiZkLoginService.instance) {
       EnokiZkLoginService.instance = new EnokiZkLoginService();
+    } else {
+      // Reinitialize with current network configuration
+      EnokiZkLoginService.instance.initializeWithNetwork();
     }
     return EnokiZkLoginService.instance;
   }
@@ -181,10 +212,16 @@ export class EnokiZkLoginService {
    */
   private async getUserSalt(jwt: string): Promise<string> {
     try {
+      const enokiConfig = getEnokiConfig();
+      const currentNetwork = getCurrentNetwork();
+      
+      console.log('🧂 Getting user salt for network:', currentNetwork);
+      console.log('🔑 Using Enoki API key:', enokiConfig.apiKey ? enokiConfig.apiKey.slice(0, 20) + '...' : 'MISSING');
+      
       const response = await fetch(`${ENOKI_BASE_URL}/zklogin`, {
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${ENOKI_API_KEY}`,
+          'Authorization': `Bearer ${enokiConfig.apiKey}`,
           'zklogin-jwt': jwt,
           'Content-Type': 'application/json',
         }
@@ -219,15 +256,21 @@ export class EnokiZkLoginService {
     keyClaimName: string;
   }): Promise<ZkLoginProofs> {
     try {
+      const enokiConfig = getEnokiConfig();
+      
+      console.log('🕰️ Getting zkProof for network:', enokiConfig.network);
+      console.log('🔑 Using Enoki API key:', enokiConfig.apiKey ? enokiConfig.apiKey.slice(0, 20) + '...' : 'MISSING');
+      console.log('🌍 Network in proof request:', enokiConfig.network);
+      
       const response = await fetch(`${ENOKI_BASE_URL}/zklogin/zkp`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${ENOKI_API_KEY}`,
+          'Authorization': `Bearer ${enokiConfig.apiKey}`,
           'zklogin-jwt': proofRequest.jwt,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          network: 'testnet',
+          network: enokiConfig.network,
           ephemeralPublicKey: proofRequest.extendedEphemeralPublicKey,
           maxEpoch: proofRequest.maxEpoch,
           randomness: proofRequest.jwtRandomness
@@ -517,7 +560,7 @@ export class EnokiZkLoginService {
             }
         `;
 
-        const response = await fetch(GRAPHQL_URL, {
+        const response = await fetch(getGraphQLUrl(), {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json',

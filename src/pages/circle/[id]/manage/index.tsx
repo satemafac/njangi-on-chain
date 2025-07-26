@@ -8,6 +8,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
 import { PACKAGE_ID, getCirclePackageId } from '../../../../services/circle-service';
+import { getCurrentRpcUrl } from '../../../../services/network-config';
 import StablecoinSwapForm from '../../../../components/StablecoinSwapForm';
 import RotationOrderList from '../../../../components/RotationOrderList';
 import ConfirmationModal from '../../../../components/ConfirmationModal';
@@ -362,7 +363,7 @@ const ManageCircleSkeleton = () => (
 
 // Add getJsonRpcUrl helper if not already present globally
 const getJsonRpcUrl = (): string => {
-  return process.env.NEXT_PUBLIC_SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443';
+  return getCurrentRpcUrl();
 };
 
 export default function ManageCircle() {
@@ -2145,7 +2146,7 @@ export default function ManageCircle() {
     
     setFetchingSuiBalance(true);
     try {
-      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      const client = new SuiClient({ url: getCurrentRpcUrl() });
       
       let mainSuiBalance = 0;
       let dynamicFieldSuiBalance = 0;
@@ -2229,7 +2230,7 @@ export default function ManageCircle() {
     
     setFetchingUsdcBalance(true);
     try {
-      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      const client = new SuiClient({ url: getCurrentRpcUrl() });
       let newBalance = null;
       let newSecurityDepositBalance = 0;
       let newContributionBalance = 0;
@@ -4030,7 +4031,7 @@ export default function ManageCircle() {
     if (!id) return;
     
     try {
-      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      const client = new SuiClient({ url: getCurrentRpcUrl() });
       
       // Query for YieldConfigCreated events for this circle
       const yieldEvents = await client.queryEvents({

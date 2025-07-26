@@ -8,6 +8,7 @@ import { STRATEGY_CONFIGS } from './config/strategies';
 import ConfirmationModal from '../ConfirmationModal';
 import { priceService } from '../../services/price-service';
 import { yieldTrackingService, TrackedYieldData } from '../../services/yield-tracking-service';
+import { getCurrentCetusConfig } from '../../services/network-config';
 
 
 
@@ -194,7 +195,7 @@ export const YieldStrategySection: React.FC<YieldStrategySectionProps> = ({
       });
 
       // Use Cetus service to prepare the transaction
-      const poolId = '0xb01b068bd0360bb3308b81eb42386707e460b7818816709b7f51e1635d542d40'; // SUI-USDC pool
+      const poolId = getCurrentCetusConfig().pools.SUI_USDC; // SUI-USDC pool
       
       // Store transaction details for modal confirmation
       const handleConfirmTransaction = async () => {

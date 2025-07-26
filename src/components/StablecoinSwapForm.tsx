@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import { swapService, SwapQuote } from '../services/swap-service';
+import { getCurrentCoinTypes } from '../services/network-config';
 
 interface StablecoinSwapFormProps {
   circleId: string;
@@ -24,7 +25,7 @@ const StablecoinSwapForm: React.FC<StablecoinSwapFormProps> = ({
   
   // Constants for this form
   const SUI_COIN_TYPE = '0x2::sui::SUI';
-  const USDC_COIN_TYPE = '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN';
+  const USDC_COIN_TYPE = getCurrentCoinTypes().USDC;
 
   // Fetch swap quote when component mounts
   React.useEffect(() => {

@@ -9,10 +9,11 @@ import { priceService } from '../../../../services/price-service';
 import { PACKAGE_ID, getCirclePackageId } from '../../../../services/circle-service';
 import SimplifiedSwapUI from '../../../../components/SimplifiedSwapUI';
 import { getCoinType } from '../../../../config/constants';
+import { getCurrentRpcUrl } from '../../../../services/network-config';
 
 // Add this helper function at the top level
 function getJsonRpcUrl(): string {
-  return process.env.NEXT_PUBLIC_SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443';
+  return getCurrentRpcUrl();
 }
 
 // Constants for transaction calculations
@@ -1018,7 +1019,7 @@ export default function ContributeToCircle() {
       console.log('Contribute - Using package ID:', determinedPackageId);
       setCirclePackageId(determinedPackageId);
       
-      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      const client = new SuiClient({ url: getCurrentRpcUrl() });
       
       // Get circle object with content
       const objectData = await client.getObject({
@@ -2476,7 +2477,7 @@ export default function ContributeToCircle() {
     setIsInitialBalanceLoad(false);
     
     try {
-      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      const client = new SuiClient({ url: getCurrentRpcUrl() });
       const previousBalance = custodyStablecoinBalance;
       let newBalance = null;
       let newSecurityDepositBalance = 0;

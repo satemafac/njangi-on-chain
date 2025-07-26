@@ -8,9 +8,12 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
 import { SuiClient } from '@mysten/sui.js/client';
+import { getCurrentRpcUrl, getCurrentPackageId, getCurrentNetwork } from '../services/network-config';
 
-// Add package ID constant
-const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID || '0x123';
+// Get package ID dynamically based on current network
+const getPackageId = () => {
+  return getCurrentPackageId() || process.env.NEXT_PUBLIC_PACKAGE_ID || '0x123';
+};
 
 // Add supported currencies directly here since they're not in price-service
 export interface SupportedCurrency {
@@ -170,6 +173,19 @@ const validateFormData = (formData: CircleFormData): string[] => {
     errors.push(`Number of members must be between ${MIN_MEMBERS} and ${MAX_MEMBERS}`);
   }
   
+  // Validate cycle day selection
+  if (formData.cycleLength === 'weekly' || formData.cycleLength === 'bi-weekly') {
+    // For weekly cycles, cycleDay should be a weekday string
+    if (typeof formData.cycleDay !== 'string' || !['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].includes(formData.cycleDay)) {
+      errors.push('Please select a day of the week');
+    }
+  } else {
+    // For monthly/quarterly cycles, cycleDay should be a valid day number (1-28)
+    if (typeof formData.cycleDay !== 'number' || formData.cycleDay < 1 || formData.cycleDay > 28) {
+      errors.push('Please select a valid day of the month (1-28)');
+    }
+  }
+  
   if (formData.cycleType === 'smart-goal' && formData.smartGoal) {
     if (formData.smartGoal.goalType === 'amount' && (!formData.smartGoal.targetAmount || formData.smartGoal.targetAmount <= 0)) {
       errors.push('Target amount must be greater than 0');
@@ -273,7 +289,7 @@ interface InviteMember {
 
 export default function CreateCircle() {
   const router = useRouter();
-  const { isAuthenticated, account } = useAuth();
+  const { isAuthenticated, account, userAddress } = useAuth();
   const [currentStep, setCurrentStep] = useState(0); // Start at step 0 for circle type selection
   const [useCustomContribution, setUseCustomContribution] = useState(false);
   const [useCustomDeposit, setUseCustomDeposit] = useState(false);
@@ -572,6 +588,12 @@ export default function CreateCircle() {
       if (!response.ok) {
         if (response.status === 401) {
           // Session expired or authentication failed, redirect to dashboard
+          // Clear dashboard cache to ensure fresh data is loaded
+          if (typeof window !== 'undefined' && userAddress) {
+            const currentNetwork = getCurrentNetwork();
+            const cacheKey = `cache_${userAddress}_${currentNetwork}_circles`;
+            localStorage.removeItem(cacheKey);
+          }
           router.push('/dashboard');
           return;
         }
@@ -611,15 +633,15 @@ export default function CreateCircle() {
     }
 
     try {
-      // Create the Sui client
+      // Create the Sui client with network-aware RPC URL
       const client = new SuiClient({
-        url: 'https://fullnode.testnet.sui.io:443'
+        url: getCurrentRpcUrl()
       });
 
       // Query for CircleCreated events where the user is the admin
       const circleEvents = await client.queryEvents({
         query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleCreated`
+          MoveEventType: `${getPackageId()}::njangi_circles::CircleCreated`
         },
         limit: 50, // Get recent events
         order: 'descending' // Most recent first
@@ -831,7 +853,15 @@ The Njangi On-Chain Team`;
               {/* Cancel Button */}
               <div className="flex justify-center mt-8">
                 <button
-                  onClick={() => router.push('/dashboard')}
+                  onClick={() => {
+                    // Clear dashboard cache to ensure fresh data is loaded
+                    if (typeof window !== 'undefined' && userAddress) {
+                      const currentNetwork = getCurrentNetwork();
+                      const cacheKey = `cache_${userAddress}_${currentNetwork}_circles`;
+                      localStorage.removeItem(cacheKey);
+                    }
+                    router.push('/dashboard');
+                  }}
                   className="group inline-flex items-center px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base font-medium text-gray-700 bg-white border-2 border-gray-200 rounded-lg sm:rounded-xl shadow-sm hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200"
                 >
                   <svg 
@@ -2092,10 +2122,27 @@ The Njangi On-Chain Team`;
                       toast.success(`Opened ${emailInvites.length} email invites in your email client`);
                     }
                     
-                    // Then redirect to dashboard
+                    // Clear dashboard cache to ensure fresh data is loaded
+                    if (typeof window !== 'undefined' && userAddress) {
+                      // Clear circles cache for the current network
+                      const currentNetwork = getCurrentNetwork();
+                      const cacheKey = `cache_${userAddress}_${currentNetwork}_circles`;
+                      localStorage.removeItem(cacheKey);
+                      
+                      // Also clear events cache to get fresh data
+                      const eventsCachePattern = `cache_${userAddress}_${currentNetwork}_events`;
+                      for (let i = 0; i < localStorage.length; i++) {
+                        const key = localStorage.key(i);
+                        if (key && key.startsWith(eventsCachePattern)) {
+                          localStorage.removeItem(key);
+                        }
+                      }
+                    }
+                    
+                    // Then redirect to dashboard with delay to allow blockchain processing
                     setTimeout(() => {
-                      router.push('/dashboard');
-                    }, 1000);
+                      router.push('/dashboard?refreshCircles=true');
+                    }, 3000); // Increased delay to allow blockchain to process transaction
                   }}
                   className="w-full sm:w-auto px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                 >

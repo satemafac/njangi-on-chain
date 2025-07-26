@@ -10,20 +10,54 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
 import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink } from 'lucide-react';
-import { PACKAGE_ID } from '../services/circle-service';
+import { getPackageId } from '../services/circle-service';
 // Use alias path for the modal import
 import ConfirmationModal from '@/components/ConfirmationModal';
+import { 
+  getCurrentNetwork, 
+  getCurrentNetworkConfig, 
+  getCurrentRpcUrl, 
+  getCurrentPackageId,
+  setCurrentNetwork
+} from '../services/network-config';
 
-// Helper function to get RPC URL from environment with fallback
+// Global type declaration for network config
+declare global {
+  interface Window {
+    CURRENT_NETWORK_CONFIG?: {
+      rpcUrl: string;
+      packageId: string;
+      usdcAddress: string;
+      networkName: string;
+      enoki: {
+        apiKey: string | undefined;
+        baseUrl: string;
+        graphqlUrl: string;
+      };
+    };
+  }
+}
+
+// Helper function to get RPC URL from environment with network-aware fallback
 const getJsonRpcUrl = (fallbackIndex: number = 0): string => {
-  // List of fallback RPC URLs for better reliability
-  const rpcUrls = [
-    process.env.NEXT_PUBLIC_SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443',
+  const currentNetwork = getCurrentNetwork();
+  
+  // Network-specific fallback RPC URLs for better reliability
+  const testnetUrls = [
+    process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://fullnode.testnet.sui.io:443',
     'https://fullnode.testnet.sui.io:443',
     'https://sui-testnet-endpoint.blockvision.org',
     'https://sui-testnet.nodeinfra.com'
   ];
   
+  const mainnetUrls = [
+    process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://fullnode.mainnet.sui.io:443',
+    'https://fullnode.mainnet.sui.io:443',
+    'https://sui-mainnet-endpoint.blockvision.org',
+    'https://sui-mainnet.nodeinfra.com'
+  ];
+  
+  const rpcUrls = currentNetwork === 'mainnet' ? mainnetUrls : testnetUrls;
   const rpcUrl = rpcUrls[fallbackIndex % rpcUrls.length];
   
   // Validate URL format
@@ -36,14 +70,17 @@ const getJsonRpcUrl = (fallbackIndex: number = 0): string => {
     if (fallbackIndex < rpcUrls.length - 1) {
       return getJsonRpcUrl(fallbackIndex + 1);
     }
-    return 'https://fullnode.testnet.sui.io:443';
+    // Final fallback based on network
+    return currentNetwork === 'mainnet' 
+      ? 'https://fullnode.mainnet.sui.io:443'
+      : 'https://fullnode.testnet.sui.io:443';
   }
 };
 
 // Helper function to create SuiClient with retries
-const createSuiClientWithRetry = (retryCount = 0): SuiClient => {
+const createSuiClientWithRetry = (customRpcUrl?: string, retryCount = 0): SuiClient => {
   const maxRetries = 3;
-  const rpcUrl = getJsonRpcUrl();
+  const rpcUrl = customRpcUrl || getJsonRpcUrl();
   
   try {
     console.log(`Creating SuiClient with URL: ${rpcUrl} (attempt ${retryCount + 1})`);
@@ -53,7 +90,7 @@ const createSuiClientWithRetry = (retryCount = 0): SuiClient => {
     
     if (retryCount < maxRetries) {
       console.log(`Retrying SuiClient creation...`);
-      return createSuiClientWithRetry(retryCount + 1);
+      return createSuiClientWithRetry(customRpcUrl, retryCount + 1);
     }
     
     throw new Error(`Failed to create SuiClient after ${maxRetries} attempts: ${error}`);
@@ -370,9 +407,10 @@ const CACHE_CONFIG = {
   VERSION: '1.0.1' // Increment when data structure changes
 };
 
-// Cache keys
+// Cache keys - now network-aware to prevent cross-network contamination
 const getCacheKey = (userAddress: string, type: string, identifier?: string) => {
-  const base = `njangi_cache_${userAddress}_${type}`;
+  const currentNetwork = getCurrentNetwork();
+  const base = `njangi_cache_${currentNetwork}_${userAddress}_${type}`;
   return identifier ? `${base}_${identifier}` : base;
 };
 
@@ -430,15 +468,18 @@ const isCacheStale = (key: string, ttl: number = CACHE_CONFIG.CIRCLES_TTL): bool
 };
 
 // Clear all cache for a user
-const clearUserCache = (userAddress: string) => {
+const clearUserCache = (userAddress: string, network?: string) => {
   const keysToRemove: string[] = [];
+  const currentNetwork = network || getCurrentNetwork();
+  
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
-    if (key && key.startsWith(`njangi_cache_${userAddress}`)) {
+    if (key && key.startsWith(`njangi_cache_${currentNetwork}_${userAddress}`)) {
       keysToRemove.push(key);
     }
   }
   keysToRemove.forEach(key => localStorage.removeItem(key));
+  console.log(`🗑️ Cleared ${keysToRemove.length} cached items for ${currentNetwork} network`);
 };
 
 // API response caching
@@ -462,6 +503,9 @@ const cachedApiCall = async (
 export default function Dashboard() {
   const router = useRouter();
   const { isAuthenticated, userAddress, account, deleteCircle: authDeleteCircle, sendTokens } = useAuth();
+  
+  // Use centralized network configuration
+  const currentNetworkConfig = getCurrentNetworkConfig();
   const [balance, setBalance] = useState<string>('0');
   const [allCoins, setAllCoins] = useState<{coinType: string, symbol: string, balance: string}[]>([]);
   const [showFullAddress, setShowFullAddress] = useState(false);
@@ -491,6 +535,11 @@ export default function Dashboard() {
   const [circleIdInput, setCircleIdInput] = useState('');
   const [copiedCircleId, setCopiedCircleId] = useState<string | null>(null);
   const [showTestnetBanner, setShowTestnetBanner] = useState(true);
+  
+  // Network configuration state - use centralized config
+  const [network, setNetwork] = useState<'testnet' | 'mainnet'>(() => getCurrentNetwork());
+  const [rpcUrl, setRpcUrl] = useState<string>(() => getCurrentRpcUrl());
+  const [packageId, setPackageId] = useState<string>(() => getCurrentPackageId());
 
   // Pagination state
   const [displayedCirclesCount, setDisplayedCirclesCount] = useState(9); // Start with 9 circles
@@ -528,6 +577,13 @@ export default function Dashboard() {
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [transferStep, setTransferStep] = useState<'form' | 'review' | 'confirm' | 'success'>('form');
   const [transferResult, setTransferResult] = useState<{ digest?: string; error?: string } | null>(null);
+  const [gasError, setGasError] = useState<string | null>(null);
+
+  // Add transaction history state
+  const [isTransactionHistoryOpen, setIsTransactionHistoryOpen] = useState(false);
+  const [transactionHistory, setTransactionHistory] = useState<any[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   // Add currency selection state
   // Initialize selectedCurrency from localStorage or default to 'USD'
@@ -698,6 +754,30 @@ export default function Dashboard() {
     }
   }, [isAuthenticated, router]);
 
+  // Initialize network preference from localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const savedNetwork = localStorage.getItem('preferredNetwork') as 'testnet' | 'mainnet' | null;
+      if (savedNetwork && savedNetwork !== network) {
+        // Update centralized network configuration
+        setCurrentNetwork(savedNetwork);
+        const config = getCurrentNetworkConfig();
+        
+        setNetwork(savedNetwork);
+        setRpcUrl(getCurrentRpcUrl());
+        setPackageId(getCurrentPackageId());
+        setShowTestnetBanner(savedNetwork === 'testnet');
+        
+        console.log(`Loaded network preference: ${savedNetwork}`);
+      } else {
+        // Ensure centralized config is initialized with current network
+        setCurrentNetwork(network);
+      }
+    }
+  }, []); // Run only once on mount
+
+  // Network config is handled by centralized service - no need for manual updates
+
   // Add refresh balance state
   const [isRefreshingBalance, setIsRefreshingBalance] = useState(false);
 
@@ -706,7 +786,7 @@ export default function Dashboard() {
     if (!userAddress) return;
     
     try {
-      const client = createSuiClientWithRetry();
+      const client = createSuiClientWithRetry(rpcUrl);
       
       // Fetch SUI balance for the primary balance display
       const suiBalance = await retryApiCall(
@@ -736,10 +816,20 @@ export default function Dashboard() {
         
         // Process the coins
         allCoinsData.data.forEach((coin: any) => {
-          // Extract coin symbol from the type string (e.g., "0x2::sui::SUI" -> "SUI")
+          // Extract coin symbol from the type string with network-aware mapping
           const typeStr = coin.coinType;
-          const typeMatch = typeStr.match(/::([^:]+)$/);
-          const symbol = typeMatch ? typeMatch[1] : typeStr;
+          let symbol: string;
+          
+          // Map known coin types to proper symbols
+          if (typeStr === currentNetworkConfig.coinTypes.SUI) {
+            symbol = 'SUI';
+          } else if (typeStr === currentNetworkConfig.coinTypes.USDC) {
+            symbol = 'USDC';
+          } else {
+            // For unknown types, extract from the end of the type string
+            const typeMatch = typeStr.match(/::([^:]+)$/);
+            symbol = typeMatch ? typeMatch[1] : typeStr;
+          }
           
           // If this symbol already exists in our map, add to its balance
           if (coinMap.has(symbol)) {
@@ -850,13 +940,11 @@ export default function Dashboard() {
 
       // Convert other token balances
       for (const coin of allCoins) {
-        const tokenBalance = coin.symbol.toLowerCase() === 'usdc' 
-          ? (Number(coin.balance) / 1000000) 
-          : Number(coin.balance) / 1000000000;
+        const tokenBalance = Number(coin.balance) / getCoinDecimals(coin.coinType);
 
         if (coin.symbol === 'SUI') {
           newConvertedBalances[coin.symbol] = newConvertedBalances.SUI || 0;
-        } else if (coin.symbol.toLowerCase() === 'usdc') {
+        } else if (coin.symbol === 'USDC') {
           // USDC is pegged to USD, so we convert from USD to target currency
           const convertedValue = await priceService.convertFromUSD(tokenBalance, selectedCurrency);
           newConvertedBalances[coin.symbol] = convertedValue;
@@ -1106,6 +1194,109 @@ export default function Dashboard() {
     return allTransactions;
   }, []);
 
+  // Fetch recent transaction history for display
+  const fetchTransactionHistory = useCallback(async () => {
+    if (!userAddress) return [];
+    
+    const rpcUrl = getCurrentRpcUrl();
+    const client = createSuiClientWithRetry(rpcUrl);
+    
+    setIsLoadingHistory(true);
+    setHistoryError(null);
+    
+    try {
+      const response = await retryApiCall(
+        () => client.queryTransactionBlocks({
+          filter: { FromAddress: userAddress },
+          options: {
+            showInput: true,
+            showEvents: true,
+            showEffects: true,
+            showObjectChanges: false,
+            showBalanceChanges: true
+          },
+          limit: 20, // Recent 20 transactions
+          order: 'descending'
+        }),
+        3,
+        1000,
+        'fetchTransactionHistory'
+      );
+      
+      const processedTransactions = response.data.map((tx: any) => {
+        // Process transaction data for display
+        const txData = tx.transaction?.data?.transaction;
+        const balanceChanges = tx.balanceChanges || [];
+        const timestamp = tx.timestampMs ? new Date(parseInt(tx.timestampMs)) : new Date();
+        
+        // Determine transaction type and amount
+        let type = 'Unknown';
+        let amount = '0';
+        let tokenType = 'SUI';
+        let direction = 'neutral';
+        
+        // Check balance changes to determine direction and amount
+        const userBalanceChange = balanceChanges.find((change: any) => 
+          change.owner?.AddressOwner === userAddress
+        );
+        
+        if (userBalanceChange) {
+          amount = Math.abs(parseFloat(userBalanceChange.amount) / 1_000_000_000).toFixed(4);
+          tokenType = userBalanceChange.coinType?.split('::').pop() || 'SUI';
+          direction = parseFloat(userBalanceChange.amount) > 0 ? 'received' : 'sent';
+        }
+        
+        // Determine transaction type from function calls
+        if (txData?.transactions) {
+          for (const t of txData.transactions) {
+            if ('MoveCall' in t) {
+              const moveCall = t.MoveCall;
+              if (moveCall.module === 'njangi_circles') {
+                if (moveCall.function === 'create_circle') type = 'Create Circle';
+                else if (moveCall.function === 'join_circle') type = 'Join Circle';
+                else if (moveCall.function === 'contribute_to_circle') type = 'Contribute';
+                else if (moveCall.function === 'claim_payout') type = 'Claim Payout';
+                else if (moveCall.function === 'delete_circle') {
+                  type = 'Delete Circle';
+                  // For delete_circle, override direction since storage rebate shows as "received"
+                  // but it's actually a refund from deleting, not receiving tokens
+                  direction = 'neutral';
+                }
+                else type = 'Circle Action';
+              } else if (moveCall.module === 'pay' || moveCall.module === 'transfer') {
+                type = direction === 'sent' ? 'Send Tokens' : 'Receive Tokens';
+              }
+            } else if ('TransferObjects' in t) {
+              type = 'Transfer';
+            }
+          }
+        }
+        
+        return {
+          digest: tx.digest,
+          timestamp,
+          type,
+          amount,
+          tokenType,
+          direction,
+          status: tx.effects?.status?.status === 'success' ? 'Success' : 'Failed',
+          gasFee: tx.effects?.gasUsed ? 
+            (parseFloat(tx.effects.gasUsed.computationCost) + parseFloat(tx.effects.gasUsed.storageCost)) / 1_000_000_000 
+            : 0
+        };
+      });
+      
+      setTransactionHistory(processedTransactions);
+      return processedTransactions;
+    } catch (error) {
+      console.error('Error fetching transaction history:', error);
+      setHistoryError('Failed to load transaction history');
+      return [];
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  }, [userAddress]);
+
   // Extract circle events from wallet transactions
   const extractCircleEventsFromTransactions = useCallback(async (transactions: any[], userAddress: string) => {
     const circleEvents: any[] = [];
@@ -1223,7 +1414,7 @@ export default function Dashboard() {
     
     try {
       // Create the Sui client
-      const client = createSuiClientWithRetry();
+      const client = createSuiClientWithRetry(rpcUrl);
       
       // Get all user addresses for comprehensive circle fetching
       const allUserAddresses = await getAllUserAddresses();
@@ -1258,7 +1449,7 @@ export default function Dashboard() {
           });
           
           const packageIds = new Set<string>();
-          packageIds.add(PACKAGE_ID); // Always include the current package ID
+          packageIds.add(getPackageId()); // Always include the current package ID
           
           // Look through transactions for njangi-related function calls
           for (const tx of transactions.data) {
@@ -1279,7 +1470,7 @@ export default function Dashboard() {
           return Array.from(packageIds);
         } catch (error) {
           console.error('Error fetching user package IDs:', error);
-          return [PACKAGE_ID];
+          return [getPackageId()];
         }
       };
       
@@ -1863,6 +2054,79 @@ export default function Dashboard() {
     }
   }, [userAddress, isBackgroundRefreshing, fetchAllWalletTransactions, extractCircleEventsFromTransactions, getAllUserAddresses]); // Updated dependencies
 
+  // Network switching function
+  const switchNetwork = useCallback((newNetwork: 'testnet' | 'mainnet') => {
+    const networkName = newNetwork === 'testnet' ? 'Testnet' : 'Mainnet';
+    
+    // Show confirmation modal for network switch
+    setConfirmModalProps({
+      title: `Switch to ${networkName}?`,
+      message: (
+        <div className="space-y-3">
+          <p>Switching networks will:</p>
+          <ul className="list-disc list-inside space-y-1 text-sm text-gray-600">
+            <li>Generate a different wallet address for the same account</li>
+            <li>Clear your current session and require re-authentication</li>
+            <li>Show circles and balances from the selected network only</li>
+          </ul>
+          <p className="text-sm text-amber-600 font-medium">
+            ⚠️ Your wallet address will be different on {networkName.toLowerCase()}
+          </p>
+        </div>
+      ),
+      onConfirm: () => {
+        // Update centralized network configuration
+        setCurrentNetwork(newNetwork);
+        
+        // Update local state
+        setNetwork(newNetwork);
+        setRpcUrl(getCurrentRpcUrl());
+        setPackageId(getCurrentPackageId());
+        
+        // Persist network choice
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('preferredNetwork', newNetwork);
+        }
+        
+        // Show appropriate banner based on network
+        setShowTestnetBanner(newNetwork === 'testnet');
+        
+        // Clear all cached data
+        if (typeof window !== 'undefined') {
+          // Clear ALL user-specific cache for the OLD network (circles, transactions, events, etc.)
+          if (userAddress) {
+            // Clear cache from the old network
+            clearUserCache(userAddress, network);
+            // Also clear cache from the new network to ensure fresh start
+            clearUserCache(userAddress, newNetwork);
+          }
+          
+          // Clear zkLogin session data as it's network-specific
+          const zkLoginKeys = Object.keys(localStorage).filter(key => 
+            key.includes('zklogin') || key.includes('enoki')
+          );
+          zkLoginKeys.forEach(key => localStorage.removeItem(key));
+        }
+        
+        // Reset all user state
+        setCircles([]);
+        setBalance('0');
+        setAllCoins([]);
+        setLoading(true);
+        
+        // Force page reload to re-initialize with new network
+        // This ensures clean state and proper Enoki re-initialization
+        toast.success(`Switching to ${networkName}...`, { duration: 2000 });
+        setTimeout(() => {
+          window.location.reload();
+        }, 1000);
+      },
+      confirmText: `Switch to ${networkName}`,
+      confirmButtonVariant: 'warning'
+    });
+    setIsConfirmModalOpen(true);
+  }, [userAddress, setConfirmModalProps, setIsConfirmModalOpen]);
+
   // Utility function to sort circles chronologically (newest to oldest)
   const getSortedCircles = useCallback((circleList: Circle[]) => {
     return [...circleList].sort((a, b) => {
@@ -1898,6 +2162,20 @@ export default function Dashboard() {
   useEffect(() => {
     if (!userAddress) return;
     
+    // Check if we're coming from create-circle page
+    const shouldForceRefresh = router.query.refreshCircles === 'true';
+    if (shouldForceRefresh) {
+      // Clear URL parameter to avoid repeated refreshes
+      router.replace('/dashboard', undefined, { shallow: true });
+      
+      // Force refresh with a small delay to ensure blockchain processing
+      console.log('Detected redirect from create-circle, forcing refresh with delay...');
+      setTimeout(() => {
+        fetchUserCircles(true);
+      }, 2000);
+      return;
+    }
+    
     const cacheKey = getCacheKey(userAddress, 'circles');
     const hasCachedData = circles.length > 0;
     const cacheStale = isCacheStale(cacheKey, CACHE_CONFIG.CIRCLES_TTL);
@@ -1919,7 +2197,7 @@ export default function Dashboard() {
     // Only fetch if we don't have cached data or cache is stale
     console.log('Cache miss or stale, fetching circles...');
     fetchUserCircles(false);
-  }, [userAddress]); // Removed fetchUserCircles from dependencies
+  }, [userAddress, router]); // Added router to dependencies
 
   // Add manual refresh function
   const handleManualRefresh = useCallback(() => {
@@ -2050,6 +2328,17 @@ export default function Dashboard() {
               onConfirm: () => setIsConfirmModalOpen(false)
             });
             setIsConfirmModalOpen(true);
+          } else if (result.errorType === 'OBJECT_ALREADY_DELETED') {
+            console.log("Circle already deleted:", result.error);
+            
+            // Remove the circle from UI since it's already deleted
+            setCircles(prevCircles => prevCircles.filter(c => c.id !== circleId));
+            
+            // Invalidate cache to ensure fresh data on next load
+            invalidateCirclesCache();
+            
+            // Show informational message
+            toast.success("Circle has already been deleted. Updated the view.");
           } else {
             // Handle other types of failures
             toast.error(result.error || "Failed to delete circle");
@@ -2194,7 +2483,6 @@ export default function Dashboard() {
       }
       
       console.log("Available wallet methods:", Object.keys(wallet));
-      const packageId = PACKAGE_ID;
       console.log("Using packageId:", packageId);
       
       setIsDeleting(circleId);
@@ -2724,6 +3012,18 @@ export default function Dashboard() {
     }
   }, []);
 
+  // Helper function to get decimals based on coin type
+  const getCoinDecimals = (coinType: string): number => {
+    if (coinType === currentNetworkConfig.coinTypes.SUI) {
+      return 1000000000; // 9 decimals
+    } else if (coinType === currentNetworkConfig.coinTypes.USDC) {
+      return 1000000; // 6 decimals
+    } else {
+      // Default to 9 decimals for unknown coins
+      return 1000000000;
+    }
+  };
+
   // Validate SUI address format
   const isValidSuiAddress = (address: string): boolean => {
     if (!address) return false;
@@ -2761,7 +3061,7 @@ export default function Dashboard() {
         // Check balance
         const selectedCoin = allCoins.find(coin => coin.symbol === formData.selectedToken);
         if (selectedCoin) {
-          const decimals = selectedCoin.symbol.toLowerCase() === 'usdc' ? 1000000 : 1000000000;
+          const decimals = getCoinDecimals(selectedCoin.coinType);
           const availableBalance = Number(selectedCoin.balance) / decimals;
           
           if (amount > availableBalance) {
@@ -2787,8 +3087,10 @@ export default function Dashboard() {
       warnings.newAddress = 'This is a new address. Please double-check before sending.';
     }
 
-    // Testnet warning
-    warnings.testnet = 'You are on Sui Testnet. These are test tokens with no real value.';
+    // Network warning (only show for testnet)
+    if (getCurrentNetwork() === 'testnet') {
+      warnings.testnet = 'You are on Sui Testnet. These are test tokens with no real value.';
+    }
 
     return {
       isValid: Object.keys(errors).length === 0,
@@ -2819,7 +3121,7 @@ export default function Dashboard() {
         throw new Error('Selected token not found');
       }
 
-      const decimals = selectedCoin.symbol.toLowerCase() === 'usdc' ? 1000000 : 1000000000;
+      const decimals = getCoinDecimals(selectedCoin.coinType);
       const amountInSmallestUnit = Math.floor(amount * decimals);
 
       // Normalize recipient address
@@ -2895,34 +3197,81 @@ export default function Dashboard() {
     setIsTransferDialogOpen(false);
   };
 
-  // Quick amount buttons
-  const getQuickAmounts = (tokenSymbol: string) => {
-    if (tokenSymbol === 'SUI') {
-      return ['0.1', '1', '5', '10'];
-    } else if (tokenSymbol === 'USDC') {
-      return ['10', '50', '100', '500'];
-    }
-    return ['0.1', '1', '10', '100'];
+  // Percentage-based quick amount options
+  const getQuickPercentages = () => {
+    return [25, 50, 75];
   };
 
-  // Set quick amount
-  const setQuickAmount = (amount: string) => {
-    setTransferForm(prev => ({ ...prev, amount }));
-  };
-
-  // Set max amount
-  const setMaxAmount = () => {
+  // Set percentage amount
+  const setPercentageAmount = (percentage: number) => {
     const selectedCoin = allCoins.find(coin => coin.symbol === transferForm.selectedToken);
     if (selectedCoin) {
-      const decimals = selectedCoin.symbol.toLowerCase() === 'usdc' ? 1000000 : 1000000000;
-      let maxAmount = Number(selectedCoin.balance) / decimals;
+      const decimals = getCoinDecimals(selectedCoin.coinType);
+      let totalBalance = Number(selectedCoin.balance) / decimals;
+      
+      // Clear any previous gas errors
+      setGasError(null);
       
       // Reserve gas for SUI transfers
       if (transferForm.selectedToken === 'SUI') {
-        maxAmount = Math.max(0, maxAmount - 0.01);
+        const gasReserve = getCurrentNetwork() === 'mainnet' ? 0.015 : 0.01;
+        totalBalance = Math.max(0, totalBalance - gasReserve);
+        
+        // Check if we have enough balance after gas reserve
+        if (totalBalance <= 0) {
+          setGasError(`Insufficient SUI balance for gas fees. Need at least ${gasReserve} SUI for transaction fees.`);
+          return;
+        }
       }
       
-      setTransferForm(prev => ({ ...prev, amount: maxAmount.toString() }));
+      // Calculate percentage amount
+      const percentageAmount = (totalBalance * percentage) / 100;
+      const roundedAmount = Math.floor(percentageAmount * 1000000) / 1000000;
+      
+      setTransferForm(prev => ({ ...prev, amount: roundedAmount.toString() }));
+    }
+  };
+
+
+  // Set max amount with intelligent gas estimation
+  const setMaxAmount = () => {
+    const selectedCoin = allCoins.find(coin => coin.symbol === transferForm.selectedToken);
+    if (selectedCoin) {
+      const decimals = getCoinDecimals(selectedCoin.coinType);
+      let maxAmount = Number(selectedCoin.balance) / decimals;
+      
+      // Clear any previous gas errors
+      setGasError(null);
+      
+      // Reserve gas for SUI transfers with network-aware estimation
+      if (transferForm.selectedToken === 'SUI') {
+        // Current network gas estimation:
+        // - Mainnet: Reserve 0.015 SUI (more conservative for higher fees)
+        // - Testnet: Reserve 0.01 SUI (as before)
+        const gasReserve = getCurrentNetwork() === 'mainnet' ? 0.015 : 0.01;
+        maxAmount = Math.max(0, maxAmount - gasReserve);
+        
+        // Show custom error for insufficient balance
+        if (maxAmount <= 0) {
+          setGasError(`Insufficient SUI balance for gas fees. Need at least ${gasReserve} SUI for transaction fees.`);
+          return;
+        } else if (maxAmount < 0.001) {
+          // Set a warning instead of error for very low balance
+          setGasError(`Very low balance after gas reserve. ${gasReserve} SUI reserved for transaction fees.`);
+        }
+      }
+      
+      // Round to reasonable precision to avoid display issues
+      const roundedAmount = Math.floor(maxAmount * 1000000) / 1000000;
+      setTransferForm(prev => ({ ...prev, amount: roundedAmount.toString() }));
+      
+      // Show success message for successful max calculation
+      if (transferForm.selectedToken === 'SUI' && maxAmount > 0.001) {
+        const gasReserve = getCurrentNetwork() === 'mainnet' ? 0.015 : 0.01;
+        toast.success(`Max amount set (${gasReserve} SUI reserved for gas)`, {
+          duration: 2000
+        });
+      }
     }
   };
 
@@ -2985,6 +3334,51 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {/* Network Toggle */}
+      <div className="bg-white border-b border-gray-200">
+        <div className="max-w-7xl mx-auto py-3 px-3 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <span className="text-sm font-medium text-gray-700">Network:</span>
+              <div className="flex bg-gray-100 rounded-lg p-1">
+                <button
+                  onClick={() => switchNetwork('testnet')}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-200 ${
+                    network === 'testnet' 
+                      ? 'bg-blue-500 text-white shadow-sm' 
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                  }`}
+                >
+                  Testnet
+                </button>
+                <button
+                  onClick={() => switchNetwork('mainnet')}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-200 ${
+                    network === 'mainnet' 
+                      ? 'bg-green-500 text-white shadow-sm' 
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                  }`}
+                >
+                  Mainnet
+                </button>
+              </div>
+            </div>
+            
+            {/* Network Status Indicator */}
+            <div className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium ${
+              network === 'mainnet' 
+                ? 'bg-green-100 text-green-800' 
+                : 'bg-blue-100 text-blue-800'
+            }`}>
+              <div className={`w-2 h-2 rounded-full mr-2 ${
+                network === 'mainnet' ? 'bg-green-400' : 'bg-blue-400'
+              }`} />
+              {network === 'testnet' ? 'Testnet' : 'Mainnet'}
+            </div>
+          </div>
+        </div>
+      </div>
 
       <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         <div className="px-4 py-6 sm:px-0">
@@ -3118,6 +3512,35 @@ export default function Dashboard() {
                           </Tooltip.Portal>
                         </Tooltip.Root>
                       </Tooltip.Provider>
+                      
+                      {/* Transaction History Button */}
+                      <Tooltip.Provider>
+                        <Tooltip.Root>
+                          <Tooltip.Trigger asChild>
+                            <button
+                              onClick={() => {
+                                setIsTransactionHistoryOpen(true);
+                                fetchTransactionHistory();
+                              }}
+                              className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors duration-200"
+                              aria-label="View transaction history"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                              </svg>
+                            </button>
+                          </Tooltip.Trigger>
+                          <Tooltip.Portal>
+                            <Tooltip.Content
+                              className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                              sideOffset={5}
+                            >
+                              Transaction History
+                              <Tooltip.Arrow className="fill-gray-800" />
+                            </Tooltip.Content>
+                          </Tooltip.Portal>
+                        </Tooltip.Root>
+                      </Tooltip.Provider>
                     </div>
                     
                     {/* Currency Selector - Better Mobile Styling */}
@@ -3187,9 +3610,7 @@ export default function Dashboard() {
                       <p className="text-xs font-medium text-gray-500 mb-2">All Tokens</p>
                       <div className="space-y-3 max-h-60 overflow-y-auto pr-2"> {/* Increased max-h slightly */}
                         {allCoins.map((coin, index) => {
-                          const tokenBalance = coin.symbol.toLowerCase() === 'usdc' 
-                            ? (Number(coin.balance) / 1000000) 
-                            : Number(coin.balance) / 1000000000; 
+                          const tokenBalance = Number(coin.balance) / getCoinDecimals(coin.coinType); 
                           
                           const convertedValue = convertedBalances[coin.symbol] || 0;
                           
@@ -3203,11 +3624,11 @@ export default function Dashboard() {
                                 <div className="text-right">
                                   <div className="text-sm font-medium text-gray-800">
                                     {balanceVisible 
-                                      ? tokenBalance.toFixed(coin.symbol.toLowerCase() === 'usdc' ? 2 : 4)
+                                      ? tokenBalance.toFixed(coin.symbol === 'USDC' ? 2 : 4)
                                       : formatBalanceDisplay(tokenBalance)
                                     }
                                   </div>
-                                  {(coin.symbol === 'SUI' || coin.symbol.toLowerCase() === 'usdc') && suiPrice && convertedValue > 0 && (
+                                  {(coin.symbol === 'SUI' || coin.symbol === 'USDC') && suiPrice && convertedValue > 0 && (
                                     <div className="text-xs text-gray-500">
                                       {balanceVisible 
                                         ? formatCurrency(convertedValue, selectedCurrency)
@@ -3216,7 +3637,7 @@ export default function Dashboard() {
                                     </div>
                                   )}
                                 </div>
-                                {coin.symbol.toLowerCase() === 'usdc' && (
+                                {coin.symbol === 'USDC' && (
                                   <button
                                     onClick={() => {
                                       console.log('Buy USDC button clicked');
@@ -4291,12 +4712,15 @@ export default function Dashboard() {
                   </label>
                   <div className="grid grid-cols-2 gap-2">
                     {allCoins.map((coin) => {
-                      const decimals = coin.symbol.toLowerCase() === 'usdc' ? 1000000 : 1000000000;
+                      const decimals = getCoinDecimals(coin.coinType);
                       const balance = Number(coin.balance) / decimals;
                       return (
                         <button
                           key={coin.symbol}
-                          onClick={() => setTransferForm(prev => ({ ...prev, selectedToken: coin.symbol }))}
+                          onClick={() => {
+                            setGasError(null); // Clear gas error when switching tokens
+                            setTransferForm(prev => ({ ...prev, selectedToken: coin.symbol }));
+                          }}
                           className={`p-3 rounded-lg border-2 transition-all ${
                             transferForm.selectedToken === coin.symbol
                               ? 'border-blue-500 bg-blue-50'
@@ -4373,7 +4797,10 @@ export default function Dashboard() {
                         type="number"
                         step="any"
                         value={transferForm.amount}
-                        onChange={(e) => setTransferForm(prev => ({ ...prev, amount: e.target.value }))}
+                        onChange={(e) => {
+                          setGasError(null); // Clear gas error when user types
+                          setTransferForm(prev => ({ ...prev, amount: e.target.value }));
+                        }}
                         placeholder="0.00"
                         className={`w-full px-3 py-2 pr-16 border rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
                           transferValidation.errors.amount || transferValidation.errors.balance
@@ -4387,22 +4814,59 @@ export default function Dashboard() {
                     </div>
                     
                     {/* Quick Amount Buttons */}
-                    <div className="flex space-x-2">
-                      {getQuickAmounts(transferForm.selectedToken).map((amount) => (
+                    <div className="space-y-2">
+                      <div className="flex space-x-2">
+                        {getQuickPercentages().map((percentage) => (
+                          <button
+                            key={percentage}
+                            onClick={() => setPercentageAmount(percentage)}
+                            className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded transition-colors"
+                          >
+                            {percentage}%
+                          </button>
+                        ))}
                         <button
-                          key={amount}
-                          onClick={() => setQuickAmount(amount)}
-                          className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded transition-colors"
+                          onClick={setMaxAmount}
+                          className="px-2 py-1 text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 rounded transition-colors"
                         >
-                          {amount}
+                          Max
                         </button>
-                      ))}
-                      <button
-                        onClick={setMaxAmount}
-                        className="px-2 py-1 text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 rounded transition-colors"
-                      >
-                        Max
-                      </button>
+                      </div>
+                      
+                      {/* Gas Information for SUI transfers */}
+                      {transferForm.selectedToken === 'SUI' && !gasError && (
+                        <div className="text-xs text-gray-500 flex items-center space-x-1">
+                          <span>ⓘ</span>
+                          <span>
+                            Percentages calculated after reserving {getCurrentNetwork() === 'mainnet' ? '0.015' : '0.01'} SUI for gas
+                          </span>
+                        </div>
+                      )}
+                      
+                      {/* Modern Gas Error Component */}
+                      {gasError && (
+                        <div className="flex items-start space-x-3 p-4 bg-red-50 border border-red-200 rounded-xl">
+                          <div className="flex-shrink-0">
+                            <div className="w-6 h-6 bg-red-100 rounded-full flex items-center justify-center">
+                              <AlertCircle className="w-4 h-4 text-red-600" />
+                            </div>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-red-800">
+                              Insufficient Balance
+                            </p>
+                            <p className="text-sm text-red-700 mt-1">
+                              {gasError}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => setGasError(null)}
+                            className="flex-shrink-0 text-red-400 hover:text-red-600 transition-colors"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     {/* USD Value Display */}
@@ -4521,7 +4985,7 @@ export default function Dashboard() {
                     )}
                     <div className="flex justify-between">
                       <span className="text-gray-500">Network:</span>
-                      <span>Sui Testnet</span>
+                      <span>Sui {getCurrentNetwork() === 'mainnet' ? 'Mainnet' : 'Testnet'}</span>
                     </div>
                     {transferForm.memo && (
                       <div className="flex justify-between">
@@ -4635,6 +5099,134 @@ export default function Dashboard() {
               </div>
             )}
 
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* Transaction History Modal */}
+      <Dialog.Root open={isTransactionHistoryOpen} onOpenChange={setIsTransactionHistoryOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black bg-opacity-50 z-40" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl z-50 w-full max-w-2xl mx-4 max-h-[90vh] overflow-hidden">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <div>
+                <Dialog.Title className="text-lg font-semibold text-gray-900">Transaction History</Dialog.Title>
+                <Dialog.Description className="text-sm text-gray-500 mt-1">
+                  Recent transactions from your wallet
+                </Dialog.Description>
+              </div>
+              <Dialog.Close className="text-gray-400 hover:text-gray-600 focus:outline-none">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </Dialog.Close>
+            </div>
+            
+            <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
+              {isLoadingHistory ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="flex items-center space-x-3">
+                    <svg className="animate-spin h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span className="text-gray-600">Loading transaction history...</span>
+                  </div>
+                </div>
+              ) : historyError ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="text-center">
+                    <svg className="w-12 h-12 text-red-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                    </svg>
+                    <p className="text-gray-600 mb-2">{historyError}</p>
+                    <button
+                      onClick={fetchTransactionHistory}
+                      className="text-blue-600 hover:text-blue-700 text-sm font-medium"
+                    >
+                      Try again
+                    </button>
+                  </div>
+                </div>
+              ) : transactionHistory.length === 0 ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="text-center">
+                    <svg className="w-12 h-12 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <p className="text-gray-500">No transactions found</p>
+                    <p className="text-sm text-gray-400 mt-1">Your transaction history will appear here</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {transactionHistory.map((tx) => (
+                    <div key={tx.digest} className="bg-gray-50 rounded-lg p-4 hover:bg-gray-100 transition-colors">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center space-x-3">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                            tx.direction === 'received' ? 'bg-green-100 text-green-600' :
+                            tx.direction === 'sent' ? 'bg-red-100 text-red-600' :
+                            'bg-blue-100 text-blue-600'
+                          }`}>
+                            {tx.direction === 'received' ? (
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8l-8 8-8-8" />
+                              </svg>
+                            ) : tx.direction === 'sent' ? (
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 20V4m8 8l-8-8-8 8" />
+                              </svg>
+                            ) : (
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4" />
+                              </svg>
+                            )}
+                          </div>
+                          <div>
+                            <p className="font-medium text-gray-900">{tx.type}</p>
+                            <p className="text-sm text-gray-500">{tx.timestamp.toLocaleString()}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className={`font-semibold ${
+                            tx.direction === 'received' ? 'text-green-600' :
+                            tx.direction === 'sent' ? 'text-red-600' :
+                            'text-gray-900'
+                          }`}>
+                            {tx.direction === 'received' ? '+' : tx.direction === 'sent' ? '-' : ''}{tx.amount} {tx.tokenType}
+                          </p>
+                          <div className="flex items-center justify-end space-x-2 mt-1">
+                            <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
+                              tx.status === 'Success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                            }`}>
+                              {tx.status}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between text-xs text-gray-500">
+                        <div className="flex items-center space-x-4">
+                          <span>Gas: {tx.gasFee.toFixed(6)} SUI</span>
+                          <a
+                            href={`https://${getCurrentNetwork() === 'mainnet' ? 'suiscan.xyz' : 'testnet.suivision.xyz'}/tx/${tx.digest}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:text-blue-700 inline-flex items-center"
+                          >
+                            View on explorer
+                            <svg className="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                          </a>
+                        </div>
+                        <span className="font-mono">{tx.digest.slice(0, 8)}...{tx.digest.slice(-8)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

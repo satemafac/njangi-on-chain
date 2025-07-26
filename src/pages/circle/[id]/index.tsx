@@ -7,6 +7,7 @@ import { ArrowLeft, Copy, Link } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../services/price-service';
 import { getCirclePackageId } from '../../../services/circle-service';
+import { getCurrentRpcUrl } from '../../../services/network-config';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -83,7 +84,7 @@ export default function CircleDetails() {
   const fetchCircleDetails = async () => {
     if (!id || !userAddress) return;
     console.log('Details - Fetching circle details:', id);
-    const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+    const client = new SuiClient({ url: getCurrentRpcUrl() });
     
     try {
       setLoading(true);

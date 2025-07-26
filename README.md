@@ -48,6 +48,47 @@ public fun claim_payout(
 ```
 *The actual contract contains additional helper functions and event emitters; see `/move/sources/` for full code.*
 
+## 🚀 **Deployment**
+
+The Njangi contracts use a dynamic network configuration system for seamless deployment to both testnet and mainnet.
+
+### **Quick Deployment**
+
+```bash
+cd move
+
+# Deploy to testnet
+./deploy.sh testnet
+
+# Deploy to mainnet (requires funded wallet)
+./deploy.sh mainnet
+```
+
+### **Mainnet Wallet Funding**
+
+**Send SUI tokens to this address for mainnet deployment:**
+```
+0xdde1086c98c6023db8e3d8267992e4c9aeba3d0271f6bac85dc2f6daa8301c77
+```
+**Recommended amount:** 5-10 SUI for gas fees
+
+### **Network Management**
+
+```bash
+# Check current configuration
+./scripts/switch-network.sh status
+
+# Switch networks
+./scripts/switch-network.sh mainnet
+./scripts/switch-network.sh testnet
+```
+
+## 📚 **Documentation**
+
+- **📦 [Deployment Guide](docs/deployment-guide.md)** - Complete deployment documentation
+- **⚡ [Quick Reference](move/DEPLOYMENT.md)** - Essential commands for deployment
+- **🏗️ [Move Contracts](move/README.md)** - Smart contract documentation
+
 ## Security Deposits & Upcoming Yield
 Security deposits protect the circle against missed contributions.  
 We are integrating a staking module that will deploy these deposits to a DeFi yield source while they remain locked, allowing members to earn extra rewards.  

@@ -6,6 +6,7 @@ import { ArrowDown, Settings, AlertCircle, Info, CheckCircle2, TrendingUp, Refre
 import { priceService } from '../services/price-service';
 import ConfirmationModal from './ConfirmationModal';
 import { SuiClient } from '@mysten/sui/client';
+import { getCurrentCoinTypes, getCurrentRpcUrl, getCurrentNetwork } from '../services/network-config';
 
 // Maximum number of retries for deposit attempts
 const MAX_RETRIES = 3;
@@ -138,9 +139,10 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
     console.log(`[SimplifiedSwapUI] Updated deposit status: ${securityDepositPaid ? 'PAID' : 'NOT PAID'}`);
   }, [securityDepositPaid]);
 
-  // Constants for this form
-  const SUI_COIN_TYPE = '0x2::sui::SUI';
-  const USDC_COIN_TYPE = '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC';
+  // Network-aware constants for this form
+  const coinTypes = getCurrentCoinTypes();
+  const SUI_COIN_TYPE = coinTypes.SUI;
+  const USDC_COIN_TYPE = coinTypes.USDC;
   const ESTIMATED_GAS_FEE = 0.00021; // Estimated gas fee in SUI (adjust based on network conditions)
 
   // New constants for better swap calculations
@@ -1057,7 +1059,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
     
     try {
       // First, fetch the USDC coin details to confirm it exists and get the value
-      const suiClient = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      const suiClient = new SuiClient({ url: getCurrentRpcUrl() });
       let coinObject;
       
       try {
@@ -1949,7 +1951,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
           <div className="flex justify-between items-center text-sm text-gray-400 mb-2">
             <span>Swap Transaction:</span>
             <a 
-              href={`https://explorer.sui.io/txblock/${swapTxDigest}?network=testnet`} 
+              href={`https://explorer.sui.io/txblock/${swapTxDigest}?network=${getCurrentNetwork()}`} 
               target="_blank" 
               rel="noopener noreferrer"
               className="text-blue-400 hover:underline truncate max-w-[180px]"

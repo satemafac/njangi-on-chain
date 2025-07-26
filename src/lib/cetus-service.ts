@@ -1,6 +1,7 @@
 import { SuiClient } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
 import { suiSwapRouter } from '../services/sui-swap-router';
+import { getCurrentRpcUrl } from '../services/network-config';
 
 const SUI_TYPE = '0x2::sui::SUI';
 // These token types are used in the SUI router but not directly here
@@ -33,8 +34,8 @@ class CetusService {
   private network: 'testnet' | 'mainnet' = 'testnet';
 
   constructor() {
-    // Initialize with default values
-    this.suiClient = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+    // Initialize with network-aware RPC URL
+    this.suiClient = new SuiClient({ url: getCurrentRpcUrl() });
   }
 
   /**
@@ -43,7 +44,13 @@ class CetusService {
   init(userAddress: string, network: 'testnet' | 'mainnet' = 'testnet') {
     this.userAddress = userAddress;
     this.network = network;
+    
+    // Update SuiClient with network-aware RPC URL
+    this.suiClient = new SuiClient({ url: getCurrentRpcUrl() });
+    
+    // Initialize swap router with network awareness
     suiSwapRouter.setUserAddress(userAddress);
+    
     this.isInitialized = true;
   }
 

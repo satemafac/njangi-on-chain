@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { cetusService } from '../../services/cetus-service';
 import { CetusErrorCode, parseError, CetusErrorLogger } from '../../services/cetus-errors';
+import { getCurrentCetusConfig } from '../../services/network-config';
 
 // Interfaces for yield data
 interface YieldEarnings {
@@ -269,7 +270,7 @@ export const DepositManagement: React.FC<DepositManagementProps> = ({
         // Use the correct LiquidityParams interface
         const liquidityParams = {
           walletAddress: walletId,
-          poolId: '0xb01b068bd0360bb3308b81eb42386707e460b7818816709b7f51e1635d542d40',
+          poolId: getCurrentCetusConfig().pools.SUI_USDC,
           amountA: optimalAmounts.suiAmount,
           amountB: optimalAmounts.usdcAmount,
           slippage: 0.01 // 1% slippage

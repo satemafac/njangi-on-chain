@@ -6,6 +6,7 @@ import { toast } from 'react-hot-toast';
 import { SuiClient } from '@mysten/sui/client';
 import { priceService } from '@/services/price-service';
 import { PACKAGE_ID } from '../../../../services/circle-service';
+import { getCurrentRpcUrl } from '../../../../services/network-config';
 import Head from 'next/head';
 import { LoginButton } from '@/components/LoginButton';
 
@@ -146,7 +147,7 @@ export default function JoinCircle() {
     
     setLoading(true);
     try {
-      const client = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+      const client = new SuiClient({ url: getCurrentRpcUrl() });
       
       // Get circle object
       const objectData = await client.getObject({

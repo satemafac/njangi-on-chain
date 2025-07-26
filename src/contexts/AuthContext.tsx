@@ -285,6 +285,19 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             };
           }
           
+          // Special handling for already deleted objects
+          if (responseData.code === 'OBJECT_ALREADY_DELETED' || 
+              responseData.error.includes('already been deleted')) {
+            
+            // Instead of throwing, return a structured error that indicates the object is already deleted
+            return {
+              success: false,
+              error: 'This circle has already been deleted or is no longer available. Please refresh the page to update the view.',
+              errorType: 'OBJECT_ALREADY_DELETED',
+              walletId
+            };
+          }
+          
           // Regular business logic errors (like cannot delete due to active members)
           throw new Error(responseData.error);
         } else if (response.status === 401) {

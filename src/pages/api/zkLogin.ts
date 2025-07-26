@@ -12,6 +12,13 @@ import BN from 'bn.js';
 import { Transaction } from '@mysten/sui/transactions';
 import * as fs from 'fs';
 import { enokiZkLoginService } from '@/services/enokiZkLoginService';
+import { 
+  getCurrentNetwork, 
+  getCurrentRpcUrl, 
+  getCurrentCoinTypes, 
+  getCurrentCetusConfig,
+  getCurrentTokens
+} from '@/services/network-config';
 
 // Add at the top with other imports
 interface RPCError extends Error {
@@ -22,13 +29,19 @@ interface RPCError extends Error {
 const MAX_EPOCH = 2; // Number of epochs to keep session alive (1 epoch ~= 24h)
 const PROCESSING_COOLDOWN = 30000; // 30 seconds between processing attempts for the same session
 
-// Add constants for the Cetus Aggregator
-const AGGREGATOR_ROUTER = '0xeffc8ae61f439bb34c9b905ff8f29ec56873dcedf81c7123ff2f1f67c45ec302';
+// Minimum slippage for aggregator transactions
 const MIN_AGGREGATOR_SLIPPAGE = 30; // 0.3% minimum slippage to ensure transaction success
 
-// Add at line 1076-1077
-// Not using CETUS_GLOBAL_CONFIG for the direct swap method
-// const CETUS_GLOBAL_CONFIG = '0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca';
+// Network-aware helper functions
+function getNetworkAggregatorRouter(): string {
+  return getCurrentCetusConfig().aggregatorRouter;
+}
+
+// Remove unused function - using getCurrentCetusConfig().globalConfig directly
+
+function getNetworkRpcUrl(): string {
+  return getCurrentRpcUrl();
+}
 
 // Persistent session store using localStorage (client) or an external store (server)
 // We'll use a more persistent approach than just the in-memory Map
@@ -181,41 +194,56 @@ const PROCESSING_SESSIONS = new Map<string, { startTime: number, promise: Promis
 // Add aggregator SDK helper
 let aggregatorSDK: AggregatorClient | null = null;
 
-// Add alternative USDC coin types for testnet that might be more liquid
-const ALTERNATE_USDC_COIN_TYPES = [
-  // The original USDC from the constants file
-  USDC_COIN_TYPE,
-  // Alternative USDC formats from other protocols on testnet
-  "0x9e89965f542887a8f0383451ba553fedf62c04e4dc68f60dec5b8d7ad1436bd6::usdc::USDC",
-  "0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08::coin::COIN"
-];
+// Get network-aware USDC coin types
+function getAlternateUsdcCoinTypes(): string[] {
+  const networkTokens = getCurrentTokens();
+  const networkCoinTypes = getCurrentCoinTypes();
+  
+  return [
+    networkCoinTypes.USDC,
+    networkTokens.USDC,
+    ...(networkTokens.USDT ? [networkTokens.USDT] : [])
+  ];
+}
 
-// Direct pool addresses to use as fallback when aggregator fails
-const DIRECT_POOL_ADDRESSES = {
-  // SUI-USDC pools on testnet
-  'USDC': [
-    '0xb01b068bd0360bb3308b81eb42386707e460b7818816709b7f51e1635d542d40', // Main pool we've seen has liquidity
-    '0x2e041f3fd93646dcc877f783c1f2b7fa62d30271bdef1f21ef002cebf857bded',
-    // Add more pools from Cetus testnet
-    '0x6fb54be7106bb59863f196bc5e2e34426c15f3d5b9662150ed81d5417411dbd7',
-    '0xaf5a9c7e4b265955acb0b371ab5ccb76a240b9735c8e9c8978ce866bed19a9a9'
-  ],
-  // Add more direct pools if needed
-};
+// Get network-aware pool addresses
+function getDirectPoolAddresses(): Record<string, string[]> {
+  const cetusConfig = getCurrentCetusConfig();
+  const network = getCurrentNetwork();
+  
+  if (network === 'testnet') {
+    return {
+      'USDC': [
+        cetusConfig.pools.SUI_USDC,
+        '0x2e041f3fd93646dcc877f783c1f2b7fa62d30271bdef1f21ef002cebf857bded',
+        '0x6fb54be7106bb59863f196bc5e2e34426c15f3d5b9662150ed81d5417411dbd7',
+        '0xaf5a9c7e4b265955acb0b371ab5ccb76a240b9735c8e9c8978ce866bed19a9a9'
+      ],
+    };
+  } else {
+    return {
+      'USDC': [
+        cetusConfig.pools.SUI_USDC,
+        ...(cetusConfig.pools.SUI_USDT ? [cetusConfig.pools.SUI_USDT] : [])
+      ],
+    };
+  }
+}
 
-// Initialize Aggregator SDK
+// Initialize Aggregator SDK with network awareness
 async function getAggregatorSDK(): Promise<AggregatorClient> {
   if (aggregatorSDK) return aggregatorSDK;
   
   try {
+    const network = getCurrentNetwork();
     const sdkOptions = {
-      rpcUrl: 'https://fullnode.testnet.sui.io:443',
-      aggregatorPackageId: AGGREGATOR_ROUTER,
-      env: Env.Testnet
+      rpcUrl: getNetworkRpcUrl(),
+      aggregatorPackageId: getNetworkAggregatorRouter(),
+      env: network === 'testnet' ? Env.Testnet : Env.Mainnet
     };
     
     aggregatorSDK = new AggregatorClient(sdkOptions);
-    console.log('Aggregator SDK initialized successfully');
+    console.log(`Aggregator SDK initialized successfully for ${network}`);
     return aggregatorSDK;
   } catch (error) {
     console.error('Failed to initialize Aggregator SDK:', error);
@@ -225,7 +253,8 @@ async function getAggregatorSDK(): Promise<AggregatorClient> {
 
 // Function to get the JSON RPC URL
 function getJsonRpcUrl(): string {
-  const rpcUrl = process.env.SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443';
+  const networkRpcUrl = getNetworkRpcUrl();
+  const rpcUrl = process.env.SUI_RPC_URL || networkRpcUrl;
   
   // Validate the URL format
   try {
@@ -233,10 +262,9 @@ function getJsonRpcUrl(): string {
     return rpcUrl;
   } catch (error) {
     console.error('Invalid SUI_RPC_URL:', rpcUrl, 'Error:', error);
-    // Fallback to default if environment variable is malformed
-    const fallbackUrl = 'https://fullnode.testnet.sui.io:443';
-    console.log('Using fallback RPC URL:', fallbackUrl);
-    return fallbackUrl;
+    // Fallback to network default if environment variable is malformed
+    console.log('Using network fallback RPC URL:', networkRpcUrl);
+    return networkRpcUrl;
   }
 }
 
@@ -274,7 +302,7 @@ const checkPoolLiquidity = async () => {
     
     // First check which pools actually exist
     const validPools = [];
-    for (const poolId of DIRECT_POOL_ADDRESSES['USDC']) {
+    for (const poolId of getDirectPoolAddresses()['USDC']) {
       try {
         const objectData = await suiClient.getObject({
           id: poolId,
@@ -971,6 +999,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   requireRelogin: false,
                   details: 'This is likely due to the wallet ID not matching any dynamic field in the circle object.'
                 });
+              } else if (txError.message.includes('deleted') || txError.message.includes('invalid input objects')) {
+                return res.status(400).json({ 
+                  error: 'Cannot delete: The circle has already been deleted or is no longer available.',
+                  code: 'OBJECT_ALREADY_DELETED',
+                  requireRelogin: false,
+                  details: 'The circle object has already been deleted from the blockchain. Please refresh the page to update the UI.'
+                });
               }
             }
             
@@ -1454,7 +1489,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (!successfulCoinType) {
               console.log('Trying alternate USDC coin types...');
               
-              for (const altCoinType of ALTERNATE_USDC_COIN_TYPES) {
+              for (const altCoinType of getAlternateUsdcCoinTypes()) {
                 // Skip the one we already tried
                 if (altCoinType === USDC_COIN_TYPE) continue;
                 
@@ -1507,10 +1542,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   
                   // Try each valid pool in the direct pool list
                   let tried = 0;
-                  for (const poolId of validPools.length > 0 ? validPools : DIRECT_POOL_ADDRESSES['USDC']) {
+                  for (const poolId of validPools.length > 0 ? validPools : getDirectPoolAddresses()['USDC']) {
                     tried++;
                     try {
-                      console.log(`Attempting direct swap with pool ${poolId} (attempt ${tried}/${validPools.length || DIRECT_POOL_ADDRESSES['USDC'].length})`);
+                      console.log(`Attempting direct swap with pool ${poolId} (attempt ${tried}/${validPools.length || getDirectPoolAddresses()['USDC'].length})`);
                       
                       // No longer reducing the swap amount - use the full amount
                       console.log(`Using full swap amount for direct pool: ${Number(suiAmountMIST) / 1e9} SUI`);
@@ -1828,20 +1863,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
-          // Map the simple coin names to their full module paths
+          // Map the simple coin names to their full module paths using network config
+          const networkTokens = getCurrentTokens();
           const coinTypeMap: Record<string, string> = {
-            'USDC': '0x9e89965f542887a8f0383451ba553fedf62c04e4dc68f60dec5b8d7ad1436bd6::usdc::USDC',
-            'USDT': '0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08::usdt::USDT'
+            'USDC': networkTokens.USDC,
+            'USDT': networkTokens.USDT || networkTokens.USDC
           };
           
           // Testnet Cetus configuration 
           // const CETUS_PACKAGE = '0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12';
           // const CETUS_GLOBAL_CONFIG = '0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca';
           
-          // Default pool IDs for the supported coins on testnet
+          // Get network-aware pool IDs for the supported coins
+          const cetusConfig = getCurrentCetusConfig();
           const poolIds: Record<string, string> = {
-            'USDC': '0x2e041f3fd93646dcc877f783c1f2b7fa62d30271bdef1f21ef002cebf857bded',
-            'USDT': '0x2cc7129e25401b5eccfdc678d402e2cc22f688f1c8e5db58c06c3c4e71242eb2'
+            'USDC': cetusConfig.pools.SUI_USDC,
+            'USDT': cetusConfig.pools.SUI_USDT || cetusConfig.pools.SUI_USDC
           };
           
           // Get the appropriate pool ID for the selected coin type
@@ -1861,10 +1898,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     txb.object(walletId),
                   txb.pure.bool(config.enabled),
                   txb.pure.string(coinTypeMap[config.targetCoinType] || coinTypeMap['USDC']),
-                  txb.pure.address("0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12"),
+                  txb.pure.address(getCurrentCetusConfig().packageId),
                   txb.pure.u64(BigInt(config.slippageTolerance)),
                     txb.pure.u64(BigInt(minimumSwapAmount)),
-                  txb.pure.address("0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca"),
+                  txb.pure.address(getCurrentCetusConfig().globalConfig),
                   txb.pure.address(poolId),
                 ],
               });
@@ -4276,8 +4313,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const packageIdToUse = dynamicPackageId || PACKAGE_ID;
           console.log(`Using package ID ${packageIdToUse} for circle ${circleId}`);
 
-          // Define the USDC coin type for testnet
-          const USDC_TYPE = "0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC";
+          // Define the USDC coin type using network config
+          const USDC_TYPE = getCurrentCoinTypes().USDC;
 
           // Send the transaction
           const txResult = await instance.sendTransaction(
@@ -5496,7 +5533,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               }
             },
             {
-              gasBudget: 10000000, // 0.01 SUI
+              gasBudget: 10000000, // 0.01 SUI - reasonable for simple token transfer
             }
           );
 

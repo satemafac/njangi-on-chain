@@ -2,6 +2,7 @@
 
 import { SuiClient } from '@mysten/sui.js/client';
 import { TransactionBlock } from '@mysten/sui.js/transactions';
+import { getCurrentCoinTypes, getCurrentCetusConfig, getCurrentRpcUrl } from './network-config';
 
 interface CetusPoolData {
   address: string;
@@ -81,19 +82,19 @@ interface TrackedYieldData {
 class YieldTrackingService {
   private PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID || '0x918e07818381a856b74f76e212baebaae0b8ae4073a3ab4534e25de48928d3d6';
   private currentPackageId = this.PACKAGE_ID; // Track current package ID for dynamic queries
-  private SUI_RPC_URL = process.env.NEXT_PUBLIC_SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443';
+  private SUI_RPC_URL = getCurrentRpcUrl();
   
   // Use internal proxy API to avoid CORS issues (matches real-time-apr-service.ts approach)
   private CETUS_POOL_API = '/api/cetus-apr';
   private CETUS_PRICE_API = '/api/cetus-apr'; // Will extend this endpoint for price data
   
   // Cetus contract addresses and configuration - matching our working cetus-service.ts
-  private CETUS_PACKAGE_ID = '0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12'; // Cetus CLMM testnet package
+  private CETUS_PACKAGE_ID = getCurrentCetusConfig().packageId; // Network-aware Cetus package
   private CETUS_CLMM_POOL_MODULE = 'clmm_pool';
   private CETUS_POSITION_MODULE = 'position';
   
   // We'll use the first available pool from the API since pool IDs can change
-  private SUI_USDC_POOL_ID = '0xb01b068bd0360bb3308b81eb42386707e460b7818816709b7f51e1635d542d40';
+  private SUI_USDC_POOL_ID = getCurrentCetusConfig().pools.SUI_USDC;
   
   // Initialize Sui client for blockchain queries
   private suiClient: SuiClient;
@@ -1130,7 +1131,7 @@ class YieldTrackingService {
         ],
         typeArguments: [
           '0x2::sui::SUI',
-          '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC'
+          getCurrentCoinTypes().USDC
         ]
       });
 
@@ -1267,7 +1268,7 @@ class YieldTrackingService {
         ],
         typeArguments: [
           '0x2::sui::SUI',
-          '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC'  // Testnet USDC type from cetus-service.ts
+          getCurrentCoinTypes().USDC  // Testnet USDC type from cetus-service.ts
         ]
       });
 
@@ -1310,7 +1311,7 @@ class YieldTrackingService {
         ],
         typeArguments: [
           '0x2::sui::SUI',
-          '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC'  // Testnet USDC type from cetus-service.ts
+          getCurrentCoinTypes().USDC  // Testnet USDC type from cetus-service.ts
         ]
       });
 
