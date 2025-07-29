@@ -17,7 +17,10 @@ import {
   getCurrentRpcUrl, 
   getCurrentCoinTypes, 
   getCurrentCetusConfig,
-  getCurrentTokens
+  getCurrentTokens,
+  setCurrentNetwork,
+  NetworkType,
+  getCurrentPackageId
 } from '@/services/network-config';
 
 // Add at the top with other imports
@@ -776,8 +779,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             return res.status(400).json({ error: 'Circle ID is required' });
           }
           
-          // Initialize SUI client
-          const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+          // Handle network parameter if provided by frontend
+          const requestedNetwork = req.body.network;
+          if (requestedNetwork && (requestedNetwork === 'testnet' || requestedNetwork === 'mainnet')) {
+            console.log(`Frontend requested network: ${requestedNetwork}, current server network: ${getCurrentNetwork()}`);
+          }
+          
+          // Get the correct RPC URL for the requested network
+          const networkToUse = requestedNetwork || getCurrentNetwork();
+          const rpcUrl = networkToUse === 'testnet' 
+            ? (process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://fullnode.testnet.sui.io:443')
+            : (process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://fullnode.mainnet.sui.io:443');
+          
+          // Initialize SUI client with the correct network's RPC URL
+          const suiClient = new SuiClient({ url: rpcUrl });
+          console.log(`Using ${networkToUse} network with RPC: ${rpcUrl}`);
           
           // If no wallet ID was provided, try to find it from events
           if (!walletId) {
@@ -824,19 +840,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
           
           // Verify the wallet exists and belongs to the circle
+          let walletObj;
           try {
-            const walletObj = await suiClient.getObject({
+            walletObj = await suiClient.getObject({
               id: walletId,
               options: { showContent: true }
             });
             
             if (!walletObj.data?.content) {
-              console.error(`Wallet ${walletId} not found or has no content`);
-              return res.status(400).json({ 
-                error: 'Wallet not found'
-              });
+              // Check if this might be a network mismatch issue
+              const currentNetwork = getCurrentNetwork();
+              console.warn(`Wallet ${walletId} not found on ${currentNetwork} network - may be from a different network`);
+              
+              // Instead of returning an error, try to delete the circle without wallet verification
+              // This handles the case where wallet exists on different network
+              console.log(`Proceeding with circle deletion without wallet verification (network: ${currentNetwork})`);
+              walletObj = null; // Signal to skip wallet-specific validations
             }
-            
+          } catch (error) {
+            const currentNetwork = getCurrentNetwork();
+            console.warn(`Error fetching wallet ${walletId} on ${currentNetwork} network:`, error);
+            console.log(`Proceeding with circle deletion without wallet verification (network mismatch)`);
+            walletObj = null; // Signal to skip wallet-specific validations
+          }
+          
+          // Only perform wallet validation if walletObj exists (network match)
+          if (walletObj && walletObj.data?.content) {
             // Check if wallet belongs to the circle
             const walletContent = walletObj.data.content as { fields?: { circle_id?: string, balance?: { fields?: { value?: string } } } };
             if (walletContent?.fields?.circle_id !== circleId) {
@@ -889,40 +918,108 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               console.warn('Error checking wallet dynamic fields:', error);
               // Continue with deletion attempt even if we can't check dynamic fields
             }
-            
-          } catch (error) {
-            console.error(`Error verifying wallet ${walletId}:`, error);
-            return res.status(500).json({
-              error: `Failed to verify wallet details: ${error instanceof Error ? error.message : String(error)}`
-            });
           }
 
-          // Attempt to send the transaction
+          // Verify both circle and wallet exist on current network before transaction
           try {
+            const currentNetwork = requestedNetwork || getCurrentNetwork(); // Use requested network if provided
+            console.log(`Verifying objects exist on ${currentNetwork} network before transaction`);
+            
+            // Check if circle exists on current network
+            let circleExists = false;
+            try {
+              const circleCheck = await suiClient.getObject({
+                id: circleId,
+                options: { showContent: true }
+              });
+              circleExists = circleCheck.data?.content != null;
+            } catch {
+              console.log(`Circle ${circleId} not found on ${currentNetwork}`);
+            }
+            
+            // Check if wallet exists on current network (only if we have a wallet)
+            let walletExists = walletObj != null; // If we validated wallet above, it exists
+            if (!walletExists && walletId) {
+              try {
+                const walletCheck = await suiClient.getObject({
+                  id: walletId,
+                  options: { showContent: true }
+                });
+                walletExists = walletCheck.data?.content != null;
+              } catch {
+                console.log(`Wallet ${walletId} not found on ${currentNetwork}`);
+              }
+            }
+            
+            // If objects don't exist on current network, return appropriate error
+            if (!circleExists) {
+              return res.status(400).json({
+                error: `Circle ${circleId} does not exist on ${currentNetwork} network. Please switch to the correct network.`,
+                code: 'ENetworkMismatch',
+                currentNetwork: currentNetwork,
+                circleId: circleId
+              });
+            }
+            
+            if (walletId && !walletExists) {
+              return res.status(400).json({
+                error: `Wallet ${walletId} does not exist on ${currentNetwork} network. Please switch to the correct network.`,
+                code: 'ENetworkMismatch',
+                currentNetwork: currentNetwork,
+                walletId: walletId
+              });
+            }
+            
             console.log(`Creating transaction block for delete_circle with circle ID: ${circleId} and wallet ID: ${walletId}`);
             
-            const txResult = await instance.sendTransaction(
-              session.account!,
-              (txb: Transaction) => {
-                txb.setSender(session.account!.userAddr);
-                
-                // Log transaction creation details
-                console.log(`Building moveCall with package: ${PACKAGE_ID}, module: njangi_circles, function: delete_circle`);
-                console.log(`Using circleId: ${circleId} and walletId: ${walletId} as arguments`);
-                
-                // Include both circle and wallet in the call with proper object flags
-                txb.moveCall({
-                  target: `${PACKAGE_ID}::njangi_circles::delete_circle`,
-                  arguments: [
-                    txb.object(circleId),
-                    txb.object(walletId)
-                  ]
-                });
-                
-                console.log('Transaction block built successfully');
-              },
-              { gasBudget: 100000000 } // Increase gas budget for delete operation
-            );
+            // Temporarily set the network to match the frontend request
+            const originalNetwork = getCurrentNetwork();
+            let txResult;
+            
+            try {
+              if (requestedNetwork && requestedNetwork !== originalNetwork) {
+                console.log(`Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for transaction`);
+                setCurrentNetwork(requestedNetwork as NetworkType);
+                // Reinitialize the EnokiZkLoginService with the new network configuration
+                instance.initializeWithNetwork();
+              }
+              
+              // Get the package ID that was used to create this specific circle
+              const circlePackageId = await getCirclePackageId(circleId, session.account!.userAddr);
+              const packageIdToUse = circlePackageId || getCurrentPackageId();
+              
+              console.log(`Using package ID ${packageIdToUse} for circle ${circleId} (circle-specific: ${!!circlePackageId})`);
+              
+              txResult = await instance.sendTransaction(
+                session.account!,
+                (txb: Transaction) => {
+                  txb.setSender(session.account!.userAddr);
+                  
+                  // Log transaction creation details
+                  console.log(`Building moveCall with package: ${packageIdToUse}, module: njangi_circles, function: delete_circle`);
+                  console.log(`Using circleId: ${circleId} and walletId: ${walletId} as arguments`);
+                  
+                  // Include both circle and wallet in the call with proper object flags
+                  txb.moveCall({
+                    target: `${packageIdToUse}::njangi_circles::delete_circle`,
+                    arguments: [
+                      txb.object(circleId),
+                      txb.object(walletId)
+                    ]
+                  });
+                  
+                  console.log('Transaction block built successfully');
+                },
+                { gasBudget: 100000000 } // Increase gas budget for delete operation
+              );
+            } finally {
+              // Always restore the original network and reinitialize the service
+              if (requestedNetwork && requestedNetwork !== originalNetwork) {
+                console.log(`Restoring server network back to ${originalNetwork}`);
+                setCurrentNetwork(originalNetwork as NetworkType);
+                instance.initializeWithNetwork();
+              }
+            }
             
             console.log('Circle deletion successful:', JSON.stringify(txResult, null, 2));
             return res.status(200).json({ 
@@ -1302,6 +1399,129 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           console.error('Admin approve multiple members error:', error);
           return res.status(500).json({ 
             error: error instanceof Error ? error.message : 'Failed to process bulk member approval request',
+            requireRelogin: false
+          });
+        }
+
+      case 'adminRemoveMember':
+        try {
+          if (!account) {
+            return res.status(400).json({ error: 'Account data is required' });
+          }
+
+          if (!req.body.circleId || !req.body.memberAddress || !req.body.walletId) {
+            return res.status(400).json({ error: 'Circle ID, member address, and wallet ID are required' });
+          }
+
+          // Validate the session
+          try {
+            if (!sessionId) {
+              throw new Error('No session ID provided');
+            }
+            validateSession(sessionId, 'sendTransaction');
+          } catch (validationError) {
+            console.error('Session validation failed:', validationError);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              error: validationError instanceof Error ? validationError.message : 'Session validation failed',
+              requireRelogin: true
+            });
+          }
+
+          try {
+            console.log(`Building moveCall for removing member: ${req.body.memberAddress} from circle: ${req.body.circleId}`);
+            
+            try {
+              // Get the correct package ID for this circle
+              const circlePackageId = await getCirclePackageId(req.body.circleId, account.userAddr);
+              console.log(`Using package ID for circle ${req.body.circleId}: ${circlePackageId}`);
+              
+              // Send transaction using zkLogin service
+              const txResult = await instance.sendTransaction(
+                account,
+                (txb: Transaction) => {
+                  txb.setSender(account.userAddr);
+                  
+                  // Call the admin_remove_member function
+                  txb.moveCall({
+                    target: `${circlePackageId}::njangi_circles::admin_remove_member`,
+                    arguments: [
+                      txb.object(req.body.circleId),
+                      txb.pure.address(req.body.memberAddress),
+                      txb.object(req.body.walletId),
+                      txb.object("0x6")  // Clock object
+                    ]
+                  });
+                },
+                { gasBudget: 100000000 } // Higher gas budget for member removal
+              );
+              
+              console.log('Admin remove member transaction successful:', txResult);
+              return res.status(200).json({
+                digest: txResult.digest,
+                status: txResult.status,
+                gasUsed: txResult.gasUsed
+              });
+            } catch (txError) {
+              console.error('Admin remove member transaction error:', txError);
+              console.error('Error type:', typeof txError);
+              console.error('Error message:', txError instanceof Error ? txError.message : String(txError));
+              console.error('Error stack:', txError instanceof Error ? txError.stack : 'No stack trace');
+              
+              // Check if the error is related to proof verification
+              if (txError instanceof Error && 
+                  (txError.message.includes('proof verify failed') ||
+                   txError.message.includes('Session expired') ||
+                   txError.message.includes('re-authenticate'))) {
+                
+                // Clear the session for authentication errors
+                sessions.delete(sessionId);
+                clearSessionCookie(res);
+                
+                return res.status(401).json({
+                  error: 'Your session has expired. Please login again.',
+                  requireRelogin: true
+                });
+              }
+              
+              // Check for specific contract errors
+              if (txError instanceof Error) {
+                if (txError.message.includes('ENotAdmin')) {
+                  return res.status(400).json({ 
+                    error: 'Cannot remove member: Only the circle admin can remove members',
+                    requireRelogin: false
+                  });
+                } else if (txError.message.includes('EMemberNotFound')) {
+                  return res.status(400).json({ 
+                    error: 'Member not found in this circle',
+                    requireRelogin: false
+                  });
+                } else if (txError.message.includes('ECircleIsActive')) {
+                  return res.status(400).json({ 
+                    error: 'Cannot remove member: Members can only be removed from inactive circles',
+                    requireRelogin: false
+                  });
+                }
+              }
+              
+              // For other errors, keep the session but return error with more detail
+              return res.status(500).json({ 
+                error: txError instanceof Error ? txError.message : 'Failed to execute transaction',
+                details: txError instanceof Error ? txError.stack : String(txError),
+                requireRelogin: false
+              });
+            }
+          } catch (error) {
+            console.error('Admin remove member error:', error);
+            return res.status(500).json({ 
+              error: error instanceof Error ? error.message : 'Failed to process admin remove member request',
+              requireRelogin: false
+            });
+          }
+        } catch (error) {
+          console.error('Admin remove member error:', error);
+          return res.status(500).json({ 
+            error: error instanceof Error ? error.message : 'Failed to process admin remove member request',
             requireRelogin: false
           });
         }
@@ -4011,8 +4231,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             return res.status(400).json({ error: 'Wallet ID is required' });
           }
           
-          // Initialize SUI client
-          const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+          // Handle network parameter if provided by frontend
+          const requestedNetwork = req.body.network;
+          if (requestedNetwork && (requestedNetwork === 'testnet' || requestedNetwork === 'mainnet')) {
+            console.log(`Frontend requested network: ${requestedNetwork}, current server network: ${getCurrentNetwork()}`);
+          }
+          
+          // Get the correct RPC URL for the requested network
+          const networkToUse = requestedNetwork || getCurrentNetwork();
+          const rpcUrl = networkToUse === 'testnet' 
+            ? (process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://fullnode.testnet.sui.io:443')
+            : (process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://fullnode.mainnet.sui.io:443');
+          
+          // Initialize SUI client with the correct network's RPC URL
+          const suiClient = new SuiClient({ url: rpcUrl });
+          console.log(`Using ${networkToUse} network with RPC: ${rpcUrl}`);
           
           // Get wallet details to check balance
           try {
@@ -4054,22 +4287,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             
             console.log(`Withdrawing ${balance.toString()} from wallet ${walletId}`);
             
-            // Create transaction to withdraw funds to user's address
-            const txResult = await instance.sendTransaction(
-              session.account!,
-              (txb: Transaction) => {
-                txb.setSender(session.account!.userAddr);
-                
-                // Call withdraw_all function from the custody module
-                txb.moveCall({
-                  target: `${PACKAGE_ID}::njangi_custody::withdraw_all`,
-                  arguments: [
-                    txb.object(walletId)
-                  ]
-                });
-              },
-              { gasBudget: 100000000 }
-            );
+            // Temporarily set the network to match the frontend request
+            const originalNetwork = getCurrentNetwork();
+            let txResult;
+            
+            try {
+              if (requestedNetwork && requestedNetwork !== originalNetwork) {
+                console.log(`Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for transaction`);
+                setCurrentNetwork(requestedNetwork as NetworkType);
+                // Reinitialize the EnokiZkLoginService with the new network configuration
+                instance.initializeWithNetwork();
+              }
+              
+              // Get the network-aware package ID dynamically
+              const networkPackageId = getCurrentPackageId();
+              
+              // Create transaction to withdraw funds to user's address
+              txResult = await instance.sendTransaction(
+                session.account!,
+                (txb: Transaction) => {
+                  txb.setSender(session.account!.userAddr);
+                  
+                  // Call withdraw_all function from the custody module
+                  txb.moveCall({
+                    target: `${networkPackageId}::njangi_custody::withdraw_all`,
+                    arguments: [
+                      txb.object(walletId)
+                    ]
+                  });
+                },
+                { gasBudget: 100000000 }
+              );
+            } finally {
+              // Always restore the original network and reinitialize the service
+              if (requestedNetwork && requestedNetwork !== originalNetwork) {
+                console.log(`Restoring server network back to ${originalNetwork}`);
+                setCurrentNetwork(originalNetwork as NetworkType);
+                instance.initializeWithNetwork();
+              }
+            }
             
             console.log('Withdraw successful:', JSON.stringify(txResult, null, 2));
             return res.status(200).json({ 
@@ -4091,6 +4347,236 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             details: err instanceof Error ? err.message : String(err) 
           });
         }
+
+      case 'returnSecurityDeposit': {
+        try {
+          // Validate required parameters
+          if (!account) {
+            return res.status(400).json({ error: 'Account data is required' });
+          }
+          
+          if (!sessionId) {
+            return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+          }
+          
+          const circleId = req.body.circleId;
+          const walletId = req.body.walletId;
+          const memberAddress = req.body.memberAddress;
+          
+          if (!circleId || !walletId || !memberAddress) {
+            return res.status(400).json({ 
+              error: 'Circle ID, wallet ID, and member address are required' 
+            });
+          }
+          
+          // Validate session
+          const session = validateSession(sessionId, 'returnSecurityDeposit');
+          
+          // Handle network parameter if provided by frontend
+          const requestedNetwork = req.body.network;
+          const currentServerNetwork = getCurrentNetwork();
+          
+          console.log(`[returnSecurityDeposit] Network info - Frontend requested: ${requestedNetwork}, Server current: ${currentServerNetwork}`);
+          
+          if (requestedNetwork && (requestedNetwork === 'testnet' || requestedNetwork === 'mainnet')) {
+            if (requestedNetwork !== currentServerNetwork) {
+              console.log(`[returnSecurityDeposit] Network mismatch detected! Frontend: ${requestedNetwork}, Server: ${currentServerNetwork}`);
+            }
+          }
+          
+          // Get the correct RPC URL for the requested network
+          const networkToUse = requestedNetwork || currentServerNetwork;
+          const rpcUrl = networkToUse === 'testnet' 
+            ? (process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://fullnode.testnet.sui.io:443')
+            : (process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://fullnode.mainnet.sui.io:443');
+          
+          // Initialize SUI client with the correct network's RPC URL
+          const suiClient = new SuiClient({ url: rpcUrl });
+          console.log(`[returnSecurityDeposit] Using ${networkToUse} network with RPC: ${rpcUrl}`);
+          
+          // Verify the wallet exists and has sufficient balance
+          try {
+            const walletObj = await suiClient.getObject({
+              id: walletId,
+              options: { showContent: true }
+            });
+            
+            if (!walletObj.data?.content) {
+              console.log(`Wallet ${walletId} not found on ${networkToUse} network`);
+              return res.status(400).json({ 
+                error: `Wallet not found on ${networkToUse} network`
+              });
+            }
+          } catch (error) {
+            console.log(`Error accessing wallet ${walletId}:`, error);
+            return res.status(400).json({ 
+              error: `Cannot access wallet on ${networkToUse} network`
+            });
+          }
+          
+          // Temporarily set the network to match the frontend request
+          const originalNetwork = getCurrentNetwork();
+          let txResult;
+          
+          try {
+            if (requestedNetwork && requestedNetwork !== originalNetwork) {
+              console.log(`Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for transaction`);
+              setCurrentNetwork(requestedNetwork as NetworkType);
+              // Reinitialize the EnokiZkLoginService with the new network configuration
+              instance.initializeWithNetwork();
+            }
+            
+            console.log(`Returning security deposit from wallet ${walletId} to member ${memberAddress}`);
+            
+            // Get the network-aware package ID dynamically
+            const networkPackageId = getCurrentPackageId();
+            console.log(`[returnSecurityDeposit] Network-aware package ID: ${networkPackageId}`);
+            
+            // First, get detailed object information with better error handling
+            console.log(`Attempting to fetch circle object ${circleId} from ${networkToUse} network using RPC: ${rpcUrl}`);
+            
+            let circleObj;
+            try {
+              circleObj = await suiClient.getObject({
+                id: circleId,
+                options: { 
+                  showContent: true,
+                  showType: true,
+                  showOwner: true
+                }
+              });
+            } catch (error) {
+              console.error('Error fetching circle object:', error);
+              return res.status(400).json({ 
+                error: `Failed to fetch circle object: ${error instanceof Error ? error.message : String(error)}`
+              });
+            }
+            
+            console.log('Raw circle object response:', JSON.stringify(circleObj, null, 2));
+            
+            if (!circleObj.data) {
+              return res.status(400).json({ 
+                error: `Circle object ${circleId} not found on ${networkToUse} network. The object might not exist or might be on a different network.`
+              });
+            }
+            
+            console.log('Circle object type:', circleObj.data.type);
+            console.log('Circle object owner:', circleObj.data.owner);
+            
+            // Verify this is actually a Circle object and extract the correct package ID
+            const objectType = circleObj.data.type;
+            if (!objectType || (!objectType.includes('njangi_circles::Circle') && !objectType.includes('Circle'))) {
+              return res.status(400).json({ 
+                error: `Object ${circleId} is not a Circle object. Found type: ${objectType || 'undefined'}. This might indicate a network mismatch - please ensure you're on the correct network.`
+              });
+            }
+            
+            // Extract the actual package ID from the object type
+            // Object type format: "0x<package_id>::njangi_circles::Circle"
+            const actualPackageId = objectType.split('::')[0];
+            console.log(`[returnSecurityDeposit] Circle object package ID: ${actualPackageId}`);
+            console.log(`[returnSecurityDeposit] Current network package ID: ${networkPackageId}`);
+            
+            if (actualPackageId !== networkPackageId) {
+              console.log(`[returnSecurityDeposit] Package ID mismatch detected! Using object's package ID: ${actualPackageId}`);
+            }
+            
+            let isSuiBased = true; // Default to SUI
+            if (circleObj.data?.content && 'fields' in circleObj.data.content) {
+              const fields = circleObj.data.content.fields as Record<string, unknown>;
+              // Check if there's a currency_type field or similar indicator
+              if (fields.currency_type === 'stablecoin' || fields.currency_type === 'usdc') {
+                isSuiBased = false;
+              }
+              
+              // Also check if the circle is active or paused - these functions require specific states
+              console.log('Circle is_active:', fields.is_active);
+              console.log('Circle is_paused_after_cycle:', fields.is_paused_after_cycle);
+              
+              // Check if there are members in the circle to inspect deposit status
+              if (fields.members) {
+                console.log('Circle has members table:', typeof fields.members);
+              }
+            }
+            
+            console.log(`Detected ${isSuiBased ? 'SUI' : 'stablecoin'} based circle for security deposit return`);
+            
+            // Check if the circle is properly inactive for process_security_deposit_return
+            if (circleObj.data?.content && 'fields' in circleObj.data.content) {
+              const fields = circleObj.data.content.fields as Record<string, unknown>;
+              if (fields.is_active === true) {
+                return res.status(400).json({ 
+                  error: `Circle is still active. The process_security_deposit_return function requires the circle to be inactive. Current is_active: ${fields.is_active}`
+                });
+              }
+              console.log(`[returnSecurityDeposit] Circle is inactive (is_active: ${fields.is_active}), proceeding with deposit return`);
+            }
+            
+            // Use the proper Move contract function to return security deposit
+            txResult = await instance.sendTransaction(
+              session.account!,
+              (txb: Transaction) => {
+                txb.setSender(session.account!.userAddr);
+                
+                // Use process_security_deposit_return since the circle is inactive
+                // This function handles deposit returns from the treasury with reputation/warning checks
+                txb.moveCall({
+                  target: `${actualPackageId}::njangi_payments::process_security_deposit_return`,
+                  arguments: [
+                    txb.object(circleId),     // circle: &mut Circle
+                    txb.pure.address(memberAddress) // member_addr: address
+                  ]
+                });
+              },
+              { gasBudget: 100000000 }
+            );
+          } finally {
+            // Always restore the original network and reinitialize the service
+            if (requestedNetwork && requestedNetwork !== originalNetwork) {
+              console.log(`Restoring server network back to ${originalNetwork}`);
+              setCurrentNetwork(originalNetwork as NetworkType);
+              instance.initializeWithNetwork();
+            }
+          }
+          
+          console.log('Security deposit return successful:', JSON.stringify(txResult, null, 2));
+          return res.status(200).json({ 
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+          
+        } catch (error) {
+          console.error('Error returning security deposit:', error);
+          
+          // Check if this is a MoveAbort error and provide specific guidance
+          const errorStr = error instanceof Error ? error.message : String(error);
+          if (errorStr.includes('MoveAbort') && errorStr.includes('22')) {
+            return res.status(400).json({ 
+              error: 'Cannot return security deposit: Invalid payout amount', 
+              details: 'This error occurs when the member has no deposit balance, has already received their deposit, or has a low reputation score (< 80). Check that the member actually paid a security deposit and has a good standing in the circle.',
+              errorCode: 22
+            });
+          } else if (errorStr.includes('MoveAbort') && errorStr.includes('54')) {
+            return res.status(400).json({ 
+              error: 'Cannot return security deposit: Circle is still active', 
+              details: 'The process_security_deposit_return function requires the circle to be inactive. Please ensure the circle has been properly closed.',
+              errorCode: 54
+            });
+          } else if (errorStr.includes('MoveAbort') && errorStr.includes('18')) {
+            return res.status(400).json({ 
+              error: 'Cannot return security deposit: Member has unfulfilled obligations', 
+              details: 'The member has not met their contribution requirements. They must complete all required contributions before their deposit can be returned.',
+              errorCode: 18
+            });
+          }
+          
+          return res.status(500).json({ 
+            error: 'Failed to return security deposit', 
+            details: errorStr
+          });
+        }
+      }
 
       case 'adminSetMaxMembers': {
         try {

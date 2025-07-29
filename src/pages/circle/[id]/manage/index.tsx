@@ -8,7 +8,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
 import { PACKAGE_ID, getCirclePackageId } from '../../../../services/circle-service';
-import { getCurrentRpcUrl } from '../../../../services/network-config';
+import { getCurrentRpcUrl, getCurrentNetwork } from '../../../../services/network-config';
 import StablecoinSwapForm from '../../../../components/StablecoinSwapForm';
 import RotationOrderList from '../../../../components/RotationOrderList';
 import ConfirmationModal from '../../../../components/ConfirmationModal';
@@ -369,7 +369,7 @@ const getJsonRpcUrl = (): string => {
 export default function ManageCircle() {
   const router = useRouter();
   const { id } = router.query;
-  const { isAuthenticated, userAddress, account } = useAuth();
+  const { isAuthenticated, userAddress, account, withdrawWalletFunds } = useAuth();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
   const [circlePackageId, setCirclePackageId] = useState<string>(PACKAGE_ID); // Track the package ID for this circle
@@ -1279,6 +1279,157 @@ export default function ManageCircle() {
     } finally {
       setIsApproving(false);
     }
+  };
+
+  // Function to call admin_remove_member
+  const callAdminRemoveMember = async (circleId: string, memberAddress: string): Promise<boolean> => {
+    try {
+      setIsApproving(true);
+      
+      if (!account) {
+        toast.error('Authentication required');
+        return false;
+      }
+
+      // Call the API directly like the approve functions
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'adminRemoveMember',
+          account,
+          circleId,
+          memberAddress,
+          walletId: circle?.custody?.walletId
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to remove member');
+      }
+
+      console.log('Member removed successfully:', result);
+      toast.success(`Member ${shortenAddress(memberAddress)} removed successfully`);
+      
+      // Refresh the circle data to update the member list
+      await fetchCircleData();
+      
+      return true;
+    } catch (error: unknown) {
+      console.error('Error removing member on blockchain:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to remove member on blockchain');
+      return false;
+    } finally {
+      setIsApproving(false);
+    }
+  };
+
+  // Handler for removing a member with confirmation
+  const handleRemoveMember = async (memberAddress: string) => {
+    if (!circle || !id) return;
+
+    // Show confirmation modal
+    setConfirmationModal({
+      isOpen: true,
+      title: 'Remove Member',
+      message: (
+        <div className="space-y-3">
+          <p>
+            Are you sure you want to remove <strong>{shortenAddress(memberAddress)}</strong> from this circle?
+          </p>
+          <p className="text-sm text-gray-600">
+            This action can only be performed when the circle is inactive and will return any security deposit to the member.
+          </p>
+          <p className="text-sm text-red-600 font-medium">
+            This action cannot be undone.
+          </p>
+        </div>
+      ),
+      onConfirm: async () => {
+        const toastId = 'remove-member';
+        toast.loading(`Removing ${shortenAddress(memberAddress)}...`, { id: toastId });
+        
+        const success = await callAdminRemoveMember(id as string, memberAddress);
+        
+        if (success) {
+          toast.success(`Member ${shortenAddress(memberAddress)} removed successfully`, { id: toastId });
+        } else {
+          toast.error(`Failed to remove member ${shortenAddress(memberAddress)}`, { id: toastId });
+        }
+      },
+      confirmText: 'Remove Member',
+      cancelText: 'Cancel',
+      confirmButtonVariant: 'danger',
+    });
+  };
+
+  // Handler for returning security deposit to a member
+  const handleReturnSecurityDeposit = async (memberAddress: string) => {
+    if (!circle || !id) return;
+
+    // Show confirmation modal
+    setConfirmationModal({
+      isOpen: true,
+      title: 'Return Security Deposit',
+      message: (
+        <div className="space-y-3">
+          <p>
+            Are you sure you want to return the security deposit to <strong>{shortenAddress(memberAddress)}</strong>?
+          </p>
+          <p className="text-sm text-gray-600">
+            This will withdraw their security deposit from the circle's wallet and send it back to their address.
+          </p>
+          <p className="text-sm text-amber-600 font-medium">
+            Make sure the member has completed their obligations in the circle before returning their deposit.
+          </p>
+        </div>
+      ),
+      onConfirm: async () => {
+        if (!circle.custody?.walletId) {
+          toast.error('Circle wallet not found');
+          return;
+        }
+
+        const toastId = 'return-deposit';
+        toast.loading(`Returning security deposit to ${shortenAddress(memberAddress)}...`, { id: toastId });
+        
+        try {
+          // Use a direct API call to return security deposit to the specific member
+          const response = await fetch('/api/zkLogin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'returnSecurityDeposit',
+              account,
+              circleId: id,
+              walletId: circle.custody.walletId,
+              memberAddress: memberAddress,
+              network: getCurrentNetwork()
+            })
+          });
+          
+          const responseData = await response.json();
+          
+          if (!response.ok) {
+            throw new Error(responseData.error || 'Failed to return security deposit');
+          }
+          
+          toast.success(`Security deposit returned to ${shortenAddress(memberAddress)}`, { id: toastId });
+          
+          // Refresh circle data to reflect the updated wallet balance
+          await fetchCircleDetails();
+          
+        } catch (error) {
+          console.error('Error returning security deposit:', error);
+          toast.error(`Failed to return security deposit: ${error instanceof Error ? error.message : String(error)}`, { id: toastId });
+        }
+      },
+      confirmText: 'Return Deposit',
+      cancelText: 'Cancel',
+      confirmButtonVariant: 'warning',
+    });
   };
 
   const handleJoinRequest = async (request: JoinRequest, approve: boolean) => {
@@ -4642,9 +4793,12 @@ export default function ManageCircle() {
                       <RotationOrderList 
                         members={members}
                         adminAddress={circle.admin}
+                        currentUserAddress={userAddress || ''}
                         shortenAddress={shortenAddress}
                         onSaveOrder={saveRotationOrder}
                         onCancelEdit={() => setIsEditingRotation(false)}
+                        onRemoveMember={handleRemoveMember}
+                        onReturnSecurityDeposit={handleReturnSecurityDeposit}
                       />
                     </div>
                   ) : (
@@ -4805,9 +4959,9 @@ export default function ManageCircle() {
                                     {/* No actions for admin */}
                                     {member.address !== circle?.admin && (
                                       <button
-                                        onClick={() => toast.success('Member removal coming soon')}
-                                        disabled={circle?.isActive} // Disable if circle is active
-                                        className={`px-2 py-1 rounded transition-colors ${circle?.isActive ? 'text-gray-400 bg-gray-100 cursor-not-allowed' : 'text-red-600 hover:text-red-900 hover:bg-red-50'}`}
+                                        onClick={() => handleRemoveMember(member.address)}
+                                        disabled={circle?.isActive || userAddress !== circle?.admin} // Disable if circle is active or user is not admin
+                                        className={`px-2 py-1 rounded transition-colors ${circle?.isActive || userAddress !== circle?.admin ? 'text-gray-400 bg-gray-100 cursor-not-allowed' : 'text-red-600 hover:text-red-900 hover:bg-red-50'}`}
                                       >
                                         <span className="hidden sm:inline">Remove</span>
                                         <X className="w-4 h-4 inline sm:hidden" />

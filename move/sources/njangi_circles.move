@@ -182,6 +182,16 @@ module njangi::njangi_circles {
         timestamp: u64,
     }
 
+    // Member Removed Event - Emitted when admin removes a member from inactive circle
+    public struct MemberRemoved has copy, drop {
+        circle_id: ID,
+        member: address,
+        removed_by: address,
+        deposit_returned: bool,
+        deposit_amount: u64,
+        timestamp: u64,
+    }
+
     // ----------------------------------------------------------
     // Automation Status Struct
     // ----------------------------------------------------------
@@ -1172,6 +1182,86 @@ module njangi::njangi_circles {
             
             i = i + 1;
         };
+    }
+
+    // ----------------------------------------------------------
+    // Admin remove member from inactive circle and return security deposit
+    // ----------------------------------------------------------
+    public entry fun admin_remove_member(
+        circle: &mut Circle,
+        member_addr: address,
+        wallet: &mut custody::CustodyWallet,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        // Ensure that only the admin can remove members
+        let sender = tx_context::sender(ctx);
+        assert!(sender == circle.admin, ENotAdmin);
+        
+        // Ensure the circle is not active - only allow removal from inactive circles
+        assert!(!circle.is_active, ECircleIsActive);
+        
+        // Ensure the member exists in the circle
+        assert!(is_member(circle, member_addr), ENotMember);
+        
+        // Verify wallet belongs to this circle
+        assert!(custody::get_circle_id(wallet) == get_id(circle), EWalletCircleMismatch);
+        
+        // Get member data before removal
+        let member = table::borrow(&circle.members, member_addr);
+        let deposit_amount = members::get_deposit_balance(member);
+        let has_deposit = members::has_paid_deposit(member);
+        
+        // Remove member from the circle's members table
+        let removed_member = table::remove(&mut circle.members, member_addr);
+        
+        // Update current members count
+        circle.current_members = circle.current_members - 1;
+        
+        // Remove from rotation order if present
+        let rotation_len = vector::length(&circle.rotation_order);
+        let mut i = 0;
+        let mut found_position = option::none<u64>();
+        
+        while (i < rotation_len) {
+            if (*vector::borrow(&circle.rotation_order, i) == member_addr) {
+                found_position = option::some(i);
+                break
+            };
+            i = i + 1;
+        };
+        
+        // If member was in rotation order, replace with placeholder
+        if (option::is_some(&found_position)) {
+            let pos = *option::borrow(&found_position);
+            *vector::borrow_mut(&mut circle.rotation_order, pos) = @0x0;
+        };
+        
+        // If member had paid a security deposit, return it from custody wallet
+        if (has_deposit && deposit_amount > 0) {
+            // Withdraw the security deposit from custody wallet and transfer to member
+            let deposit_coin = custody::withdraw(
+                wallet,
+                deposit_amount,
+                ctx
+            );
+            transfer::public_transfer(deposit_coin, member_addr);
+            
+            // Note: SecurityDepositReturned event will be emitted by the custody module
+            // when we implement the proper return function there
+        };
+        
+        // Clean up the removed member object (automatic in Move)
+        
+        // Emit MemberRemoved event
+        event::emit(MemberRemoved {
+            circle_id: object::uid_to_inner(&circle.id),
+            member: member_addr,
+            removed_by: sender,
+            deposit_returned: has_deposit && deposit_amount > 0,
+            deposit_amount: if (has_deposit && deposit_amount > 0) { deposit_amount } else { 0 },
+            timestamp: clock::timestamp_ms(clock),
+        });
     }
 
     // ----------------------------------------------------------

@@ -112,7 +112,7 @@ export class EnokiZkLoginService {
     this.initializeWithNetwork();
   }
 
-  private initializeWithNetwork() {
+  public initializeWithNetwork() {
     const currentNetwork = getCurrentNetwork();
     const enokiConfig = getEnokiConfig();
     

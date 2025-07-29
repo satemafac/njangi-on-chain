@@ -68,7 +68,6 @@ export default function Home() {
 
   // Network state
   const [network, setNetwork] = useState<'testnet' | 'mainnet'>('testnet');
-  const [showTestnetBanner, setShowTestnetBanner] = useState(true);
 
   // Network switching modal state
   const [isNetworkSwitchModalOpen, setIsNetworkSwitchModalOpen] = useState(false);
@@ -89,13 +88,6 @@ export default function Home() {
     }));
   };
 
-  // Dismiss testnet banner
-  const dismissTestnetBanner = () => {
-    setShowTestnetBanner(false);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('testnetBannerDismissed', 'true');
-    }
-  };
 
   // Network switching function
   const switchNetwork = useCallback((newNetwork: 'testnet' | 'mainnet') => {
@@ -111,11 +103,10 @@ export default function Home() {
     
     // Update network configuration
     setNetwork(pendingNetwork);
-    setShowTestnetBanner(pendingNetwork === 'testnet');
     
     // Persist network choice
     if (typeof window !== 'undefined') {
-      localStorage.setItem('preferredNetwork', pendingNetwork);
+      localStorage.setItem('sui-network', pendingNetwork);
     }
     
     // Update the network configuration service
@@ -224,13 +215,11 @@ export default function Home() {
   // Initialize network preference from localStorage
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const savedNetwork = localStorage.getItem('preferredNetwork') as 'testnet' | 'mainnet' | null;
-      const bannerDismissed = localStorage.getItem('testnetBannerDismissed') === 'true';
+      const savedNetwork = localStorage.getItem('sui-network') as 'testnet' | 'mainnet' | null;
       
       if (savedNetwork && savedNetwork !== network && NETWORK_CONFIG[savedNetwork]) {
         const config = NETWORK_CONFIG[savedNetwork];
         setNetwork(savedNetwork);
-        setShowTestnetBanner(savedNetwork === 'testnet' && !bannerDismissed);
         
         // Update the network configuration service
         setCurrentNetwork(savedNetwork);
@@ -243,7 +232,6 @@ export default function Home() {
         // Set default network config
         setCurrentNetwork(network);
         window.CURRENT_NETWORK_CONFIG = NETWORK_CONFIG[network];
-        setShowTestnetBanner(network === 'testnet' && !bannerDismissed);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -439,49 +427,6 @@ export default function Home() {
         </Dialog.Portal>
       </Dialog.Root>
 
-      {/* Testnet Banner */}
-      {showTestnetBanner && network === 'testnet' && (
-        <div className="bg-amber-50 border-b border-amber-200">
-          <div className="max-w-7xl mx-auto py-3 px-3 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between flex-wrap">
-              <div className="w-0 flex-1 flex items-center">
-                <span className="flex p-2 rounded-lg bg-amber-100">
-                  <svg className="h-5 w-5 text-amber-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                  </svg>
-                </span>
-                <div className="ml-3 flex-1">
-                  <p className="text-sm text-amber-700">
-                    You are currently on the Sui Testnet. Funds and transactions are not on the main network.
-                  </p>
-                </div>
-                <div className="ml-4">
-                  <a
-                    href="https://faucet.sui.io"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center px-3 py-1.5 border border-amber-300 text-xs font-medium rounded-md text-amber-700 bg-amber-100 hover:bg-amber-200 focus:outline-none focus:ring-2 focus:ring-amber-500 transition-colors duration-200"
-                  >
-                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                    </svg>
-                    Get Test Tokens
-                  </a>
-                </div>
-              </div>
-              <button 
-                onClick={dismissTestnetBanner}
-                className="rounded-md p-1.5 text-amber-500 hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-600"
-              >
-                <span className="sr-only">Dismiss</span>
-                <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                </svg>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Floating Glass Network Toggle Switch */}
       <div className="fixed top-4 right-4 sm:top-6 sm:right-6 z-40">

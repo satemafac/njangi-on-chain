@@ -97,7 +97,7 @@ const createSuiClientWithRetry = (customRpcUrl?: string, retryCount = 0): SuiCli
   }
 };
 
-// Helper function to retry API calls with exponential backoff
+// Enhanced retry function with network mismatch detection and circuit breaker logic
 const retryApiCall = async (
   apiCall: () => Promise<any>,
   maxRetries: number = 3,
@@ -118,11 +118,23 @@ const retryApiCall = async (
       lastError = error as Error;
       console.error(`${operationName} failed (attempt ${attempt + 1}):`, error);
       
-      // Check if this is a network error that we should retry
+      // Enhanced error categorization
       const isNetworkError = error instanceof TypeError && 
         (error.message.includes('Failed to fetch') || error.message.includes('Network request failed'));
+        
+      const isObjectNotFound = error instanceof Error && 
+        (error.message.includes('not found') || error.message.includes('does not exist') || 
+         error.message.includes('Object does not exist') || error.message.includes('404'));
       
-      if (attempt < maxRetries - 1 && isNetworkError) {
+      // Network mismatch detection - if object not found, it might be on different network
+      if (isObjectNotFound) {
+        console.warn(`${operationName} - Object not found, might be network mismatch. Skipping retries.`);
+        // Don't retry for object not found errors - they likely indicate network mismatch
+        throw new Error(`Network mismatch: Object not found on current network (${getCurrentNetwork()})`);
+      }
+      
+      // Only retry network errors, not object-not-found errors
+      if (attempt < maxRetries - 1 && isNetworkError && !isObjectNotFound) {
         const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000; // Exponential backoff with jitter
         console.log(`Retrying ${operationName} in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
@@ -130,7 +142,8 @@ const retryApiCall = async (
         console.error(`${operationName} failed after ${maxRetries} attempts`);
         break;
       } else {
-        // Non-network error, don't retry
+        // Non-retryable error, don't retry
+        console.log(`${operationName} - Non-retryable error, stopping attempts`);
         break;
       }
     }
@@ -399,18 +412,21 @@ interface CachedData<T> {
 }
 
 
-// Cache configuration - optimized for better user experience
+// Cache configuration - optimized for better user experience and network consistency
 const CACHE_CONFIG = {
-  CIRCLES_TTL: 15 * 60 * 1000, // 15 minutes for circles data (increased from 5 minutes)
-  EVENTS_TTL: 30 * 60 * 1000, // 30 minutes for events data (increased from 10 minutes)
-  API_RESPONSE_TTL: 10 * 60 * 1000, // 10 minutes for individual API responses (increased from 2 minutes)
-  VERSION: '1.0.1' // Increment when data structure changes
+  CIRCLES_TTL: 10 * 60 * 1000, // 10 minutes for circles data (synchronized for consistency)
+  EVENTS_TTL: 15 * 60 * 1000, // 15 minutes for events data (reduced for fresher data)
+  API_RESPONSE_TTL: 10 * 60 * 1000, // 10 minutes for individual API responses (synchronized)
+  VERSION: '1.0.2' // Increment when data structure changes - updated for network fingerprinting
 };
 
-// Cache keys - now network-aware to prevent cross-network contamination
+// Enhanced cache keys with network fingerprinting to prevent cross-network contamination
 const getCacheKey = (userAddress: string, type: string, identifier?: string) => {
   const currentNetwork = getCurrentNetwork();
-  const base = `njangi_cache_${currentNetwork}_${userAddress}_${type}`;
+  const networkConfig = getCurrentNetworkConfig();
+  // Create a network fingerprint using package ID and RPC URL hash
+  const networkFingerprint = btoa(`${networkConfig.packageId}-${networkConfig.rpcUrl}`).slice(0, 8);
+  const base = `njangi_cache_${currentNetwork}_${networkFingerprint}_${userAddress}_${type}`;
   return identifier ? `${base}_${identifier}` : base;
 };
 
@@ -437,6 +453,18 @@ const getCacheItem = (key: string, ttl: number = CACHE_CONFIG.CIRCLES_TTL): any 
     
     // Check version compatibility
     if (cacheItem.version !== CACHE_CONFIG.VERSION) {
+      console.log('Cache version mismatch, invalidating:', { expected: CACHE_CONFIG.VERSION, found: cacheItem.version });
+      localStorage.removeItem(key);
+      return null;
+    }
+    
+    // Enhanced network validation - check if key matches current network context
+    const currentNetwork = getCurrentNetwork();
+    const networkConfig = getCurrentNetworkConfig();
+    const expectedFingerprint = btoa(`${networkConfig.packageId}-${networkConfig.rpcUrl}`).slice(0, 8);
+    
+    if (!key.includes(`${currentNetwork}_${expectedFingerprint}`)) {
+      console.log('Network fingerprint mismatch, invalidating cache:', { key: key.slice(0, 50) + '...', currentNetwork, expectedFingerprint });
       localStorage.removeItem(key);
       return null;
     }
@@ -467,22 +495,69 @@ const isCacheStale = (key: string, ttl: number = CACHE_CONFIG.CIRCLES_TTL): bool
   }
 };
 
-// Clear all cache for a user
+// Enhanced cache clearing with network fingerprint awareness
 const clearUserCache = (userAddress: string, network?: string) => {
   const keysToRemove: string[] = [];
-  const currentNetwork = network || getCurrentNetwork();
+  const targetNetwork = network || getCurrentNetwork();
   
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
-    if (key && key.startsWith(`njangi_cache_${currentNetwork}_${userAddress}`)) {
-      keysToRemove.push(key);
+    if (key && key.includes('njangi_cache_')) {
+      // Clear all njangi cache for the user, including old fingerprint formats
+      if (key.includes(`_${userAddress}_`) || key.includes(`${targetNetwork}_`)) {
+        keysToRemove.push(key);
+      }
     }
   }
   keysToRemove.forEach(key => localStorage.removeItem(key));
-  console.log(`🗑️ Cleared ${keysToRemove.length} cached items for ${currentNetwork} network`);
+  console.log(`🗑️ Enhanced cache clear: Removed ${keysToRemove.length} cached items for ${targetNetwork} network`);
 };
 
-// API response caching
+// New function to clear stale cache entries across all users and networks
+const clearStaleCache = () => {
+  const keysToRemove: string[] = [];
+  const currentTime = Date.now();
+  
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('njangi_cache_')) {
+      try {
+        const cached = localStorage.getItem(key);
+        if (cached) {
+          const cacheItem: CachedData<any> = JSON.parse(cached);
+          // Remove if version mismatch or very old (24 hours)
+          if (cacheItem.version !== CACHE_CONFIG.VERSION || 
+              currentTime - cacheItem.timestamp > 24 * 60 * 60 * 1000) {
+            keysToRemove.push(key);
+          }
+        }
+      } catch (error) {
+        // If can't parse, remove it
+        keysToRemove.push(key);
+      }
+    }
+  }
+  
+  keysToRemove.forEach(key => localStorage.removeItem(key));
+  if (keysToRemove.length > 0) {
+    console.log(`🧹 Cleaned up ${keysToRemove.length} stale cache entries`);
+  }
+};
+
+// Circuit breaker state management
+const circuitBreakers = new Map<string, {
+  failures: number;
+  lastFailureTime: number;
+  state: 'closed' | 'open' | 'half-open';
+}>();
+
+const CIRCUIT_BREAKER_CONFIG = {
+  failureThreshold: 5,
+  timeoutWindow: 60000, // 1 minute
+  retryDelay: 30000 // 30 seconds
+};
+
+// Enhanced API response caching with circuit breaker
 const cachedApiCall = async (
   cacheKey: string,
   apiCall: () => Promise<any>,
@@ -494,10 +569,141 @@ const cachedApiCall = async (
     return cached;
   }
   
-  // Make API call and cache result
-  const result = await apiCall();
-  setCacheItem(cacheKey, result);
-  return result;
+  // Check circuit breaker state
+  const circuitKey = `circuit_${cacheKey.split('_')[0]}`; // Group by operation type
+  const circuitState = circuitBreakers.get(circuitKey) || {
+    failures: 0,
+    lastFailureTime: 0,
+    state: 'closed' as const
+  };
+  
+  const now = Date.now();
+  
+  // Circuit breaker logic
+  if (circuitState.state === 'open') {
+    if (now - circuitState.lastFailureTime < CIRCUIT_BREAKER_CONFIG.retryDelay) {
+      console.warn(`Circuit breaker OPEN for ${circuitKey}, using stale cache if available`);
+      // Try to get stale cache data (with extended TTL) as fallback
+      const staleCache = getCacheItem(cacheKey, ttl * 3); // 3x TTL for fallback
+      if (staleCache) {
+        console.log(`Using stale cache data for ${circuitKey}`);
+        return staleCache;
+      }
+      throw new Error(`Circuit breaker open: Service temporarily unavailable for ${circuitKey}`);
+    } else {
+      // Move to half-open state
+      circuitState.state = 'half-open';
+      console.log(`Circuit breaker moving to HALF-OPEN state for ${circuitKey}`);
+    }
+  }
+  
+  try {
+    // Make API call
+    const result = await apiCall();
+    
+    // Success - reset circuit breaker
+    if (circuitState.failures > 0) {
+      console.log(`Circuit breaker SUCCESS - resetting for ${circuitKey}`);
+      circuitState.failures = 0;
+      circuitState.state = 'closed';
+      circuitBreakers.set(circuitKey, circuitState);
+    }
+    
+    // Cache successful result
+    setCacheItem(cacheKey, result);
+    return result;
+  } catch (error) {
+    // Failure - update circuit breaker
+    circuitState.failures++;
+    circuitState.lastFailureTime = now;
+    
+    if (circuitState.failures >= CIRCUIT_BREAKER_CONFIG.failureThreshold) {
+      circuitState.state = 'open';
+      console.warn(`Circuit breaker OPENED for ${circuitKey} after ${circuitState.failures} failures`);
+    }
+    
+    circuitBreakers.set(circuitKey, circuitState);
+    
+    // Try to return stale cache as fallback
+    const staleCache = getCacheItem(cacheKey, ttl * 5); // 5x TTL for emergency fallback
+    if (staleCache) {
+      console.log(`Using emergency stale cache for ${circuitKey} due to error:`, error);
+      return staleCache;
+    }
+    
+    throw error;
+  }
+};
+
+// Circle ID validation helper - checks if circle exists on current network
+const validateCircleOnNetwork = async (circleId: string, client: SuiClient): Promise<boolean> => {
+  try {
+    // Use a more lightweight validation approach
+    const response = await client.getObject({
+      id: circleId,
+      options: { 
+        showType: true,
+        showOwner: false,
+        showContent: false,
+        showDisplay: false
+      }
+    });
+    
+    // Check if object exists and has the right type
+    return !!(response.data && 
+             response.data.type && 
+             response.data.type.includes('njangi_circles::Circle'));
+  } catch (error) {
+    // For any error, assume the circle doesn't exist on this network
+    console.log(`Circle ${circleId} validation failed on ${getCurrentNetwork()}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    return false;
+  }
+};
+
+// Batch validation for multiple circle IDs with rate limiting
+const validateCirclesOnNetwork = async (circleIds: string[], client: SuiClient): Promise<string[]> => {
+  console.log(`Validating ${circleIds.length} circles on ${getCurrentNetwork()} network...`);
+  
+  // Validate in smaller batches to avoid overwhelming the RPC
+  const batchSize = 3;
+  const validCircleIds: string[] = [];
+  
+  for (let i = 0; i < circleIds.length; i += batchSize) {
+    const batch = circleIds.slice(i, i + batchSize);
+    
+    const validationPromises = batch.map(async (circleId, index) => {
+      // Add small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, index * 100));
+      
+      try {
+        const isValid = await validateCircleOnNetwork(circleId, client);
+        return isValid ? circleId : null;
+      } catch (error) {
+        console.log(`Validation failed for circle ${circleId}:`, error);
+        return null;
+      }
+    });
+    
+    const results = await Promise.allSettled(validationPromises);
+    const batchValidIds = results
+      .filter((result): result is PromiseFulfilledResult<string> => 
+        result.status === 'fulfilled' && result.value !== null)
+      .map(result => result.value);
+    
+    validCircleIds.push(...batchValidIds);
+    
+    // Add delay between batches
+    if (i + batchSize < circleIds.length) {
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+  }
+  
+  const filteredCount = circleIds.length - validCircleIds.length;
+  if (filteredCount > 0) {
+    console.log(`Filtered out ${filteredCount} circles not available on ${getCurrentNetwork()} network`);
+  }
+  
+  return validCircleIds;
 };
 
 export default function Dashboard() {
@@ -527,6 +733,31 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [isBackgroundRefreshing, setIsBackgroundRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // Enhanced error and loading states
+  const [networkError, setNetworkError] = useState<{
+    type: 'network_mismatch' | 'connection_failed' | 'service_unavailable' | null;
+    message: string;
+    canRetry: boolean;
+    retryCount: number;
+  }>({
+    type: null,
+    message: '',
+    canRetry: false,
+    retryCount: 0
+  });
+  
+  const [loadingProgress, setLoadingProgress] = useState<{
+    stage: 'network_validation' | 'fetching_events' | 'validating_circles' | 'processing_circles' | 'completed';
+    current: number;
+    total: number;
+    message: string;
+  }>({
+    stage: 'network_validation',
+    current: 0,
+    total: 0,
+    message: 'Initializing...'
+  });
   const [suiPrice, setSuiPrice] = useState<number | null>(null);
   const [isPriceLoading, setIsPriceLoading] = useState(true);
   const [deleteableCircles, setDeleteableCircles] = useState<Set<string>>(new Set());
@@ -757,11 +988,11 @@ export default function Dashboard() {
   // Initialize network preference from localStorage
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const savedNetwork = localStorage.getItem('preferredNetwork') as 'testnet' | 'mainnet' | null;
+      const savedNetwork = localStorage.getItem('sui-network') as 'testnet' | 'mainnet' | null;
       if (savedNetwork && savedNetwork !== network) {
         // Update centralized network configuration
         setCurrentNetwork(savedNetwork);
-        const config = getCurrentNetworkConfig();
+        getCurrentNetworkConfig();
         
         setNetwork(savedNetwork);
         setRpcUrl(getCurrentRpcUrl());
@@ -775,6 +1006,14 @@ export default function Dashboard() {
         // Also ensure banner visibility matches current network
         setShowTestnetBanner(getCurrentNetwork() === 'testnet');
       }
+    }
+  }, []); // Run only once on mount
+
+  // Initialize cache cleanup on component mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      // Clean up stale cache entries on app start
+      clearStaleCache();
     }
   }, []); // Run only once on mount
 
@@ -1028,14 +1267,21 @@ export default function Dashboard() {
           console.log(`Fetching complete CircleConfig object with ID: ${configObjectId}`);
           
           // Fetch the complete CircleConfig object
-          const configObjectResponse = await client.getObject({
-            id: configObjectId,
-            options: { 
-              showContent: true,
-              showDisplay: false,
-              showType: true
-            }
-          });
+          let configObjectResponse;
+          try {
+            configObjectResponse = await client.getObject({
+              id: configObjectId,
+              options: { 
+                showContent: true,
+                showDisplay: false,
+                showType: true
+              }
+            });
+          } catch (error) {
+            console.log(`CircleConfig object ${configObjectId} not accessible on ${getCurrentNetwork()}, using fallback values...`);
+            // Continue without the config object - we'll use fallback values
+            configObjectResponse = { data: null };
+          }
           
           if (configObjectResponse.data && configObjectResponse.data.content) {
             console.log('Fetched CircleConfig object:', configObjectResponse.data);
@@ -1085,6 +1331,11 @@ export default function Dashboard() {
           }
         } catch (error) {
           console.error(`Error fetching CircleConfig object with ID ${configObjectId}:`, error);
+          
+          // If the error is a fetch error, it might be due to network mismatch
+          if (error instanceof Error && error.message.includes('Failed to fetch')) {
+            console.warn(`Circle config object ${configObjectId} not found on current network. This might be from a different network.`);
+          }
         }
       }
     }
@@ -1413,6 +1664,8 @@ export default function Dashboard() {
     }
     
     setError('');
+    setNetworkError({ type: null, message: '', canRetry: false, retryCount: 0 });
+    setLoadingProgress({ stage: 'network_validation', current: 0, total: 0, message: 'Validating network configuration...' });
     
     try {
       // Create the Sui client
@@ -1421,6 +1674,8 @@ export default function Dashboard() {
       // Get all user addresses for comprehensive circle fetching
       const allUserAddresses = await getAllUserAddresses();
       console.log('Fetching circles for user addresses:', allUserAddresses);
+      
+      setLoadingProgress({ stage: 'fetching_events', current: 1, total: 5, message: 'Fetching transaction history...' });
       
       // NEW APPROACH: Use wallet-based transaction querying to capture ALL circle interactions
       const walletTransactionsCacheKey = getCacheKey(userAddress, 'walletTransactions');
@@ -1442,38 +1697,21 @@ export default function Dashboard() {
       // This ensures we capture circles where user joined but hasn't deposited yet
       
       const getUserPackageIdsForEvents = async (): Promise<string[]> => {
-        try {
-          // Get a sample of recent transactions to discover package IDs
-          const transactions = await client.queryTransactionBlocks({
-            filter: { FromAddress: userAddress },
-            options: { showInput: true, showEffects: false, showEvents: false, showObjectChanges: false },
-            limit: 50
-          });
-          
-          const packageIds = new Set<string>();
-          packageIds.add(getPackageId()); // Always include the current package ID
-          
-          // Look through transactions for njangi-related function calls
-          for (const tx of transactions.data) {
-            if (tx.transaction?.data?.transaction?.kind === 'ProgrammableTransaction') {
-              const programmableTx = tx.transaction.data.transaction;
-              
-              for (const transaction of programmableTx.transactions || []) {
-                if ('MoveCall' in transaction) {
-                  const moveCall = transaction.MoveCall;
-                  if (moveCall.module === 'njangi_circles' || moveCall.module === 'njangi_custody') {
-                    packageIds.add(moveCall.package);
-                  }
-                }
-              }
-            }
-          }
-          
-          return Array.from(packageIds);
-        } catch (error) {
-          console.error('Error fetching user package IDs:', error);
-          return [getPackageId()];
+        // For network consistency, only use the current network's package ID
+        // This prevents querying events from different networks that don't exist
+        const currentPackageId = getPackageId();
+        const currentNetwork = getCurrentNetwork();
+        
+        console.log(`Using package ID for ${currentNetwork} network:`, currentPackageId);
+        
+        // Validate that we have a valid package ID for the current network
+        if (!currentPackageId || !currentPackageId.startsWith('0x') || currentPackageId.length < 20) {
+          console.error(`Invalid package ID for ${currentNetwork} network:`, currentPackageId);
+          return [];
         }
+        
+        // Only return the current network's package ID to ensure network consistency
+        return [currentPackageId];
       };
       
       // Get package IDs to query for MemberJoined events
@@ -1484,63 +1722,106 @@ export default function Dashboard() {
         CACHE_CONFIG.EVENTS_TTL
       );
       
+      // Validate package IDs and provide fallback
+      if (!userPackageIds || userPackageIds.length === 0) {
+        console.warn(`No valid package IDs found for ${getCurrentNetwork()} network, skipping MemberJoined events query`);
+      } else {
+        console.log(`Found ${userPackageIds.length} valid package IDs for event queries:`, userPackageIds);
+      }
+      
       // Fetch MemberJoined events where this user is the member
       let additionalMemberJoinedEvents: any[] = [];
       
-      for (const packageId of userPackageIds) {
+      // Add comprehensive error handling to prevent runtime errors
+      if (userPackageIds && userPackageIds.length > 0) {
         try {
-          const memberEventsCacheKey = getCacheKey(userAddress, 'memberJoinedEvents', packageId);
-          const memberEvents = await cachedApiCall(
-            memberEventsCacheKey,
-            async () => {
-              console.log(`Querying MemberJoined events for package ${packageId}...`);
-              const allEvents: any[] = [];
-              let cursor: any = null;
-              
-              while (true) {
-                try {
-                  const response = await retryApiCall(
-                    () => client.queryEvents({
-                      query: { MoveEventType: `${packageId}::njangi_circles::MemberJoined` },
-                      limit: 100,
-                      ...(cursor && { cursor })
-                    }),
-                    3,
-                    1000,
-                    `queryEvents MemberJoined for ${packageId}`
-                  );
-                  
-                  if (!response.data || response.data.length === 0) break;
-                  
-                  // Filter for events where this user is the member
-                  const userMemberEvents = response.data.filter((event: any) => {
-                    const parsedEvent = event.parsedJson as MemberJoinedEvent;
-                    return parsedEvent?.member === userAddress;
-                  });
-                  
-                  allEvents.push(...userMemberEvents);
-                  
-                  if (response.hasNextPage && response.nextCursor) {
-                    cursor = response.nextCursor;
-                    await new Promise(resolve => setTimeout(resolve, 100)); // Rate limiting
-                  } else {
+          console.log(`Querying MemberJoined events for ${userPackageIds.length} package IDs on ${getCurrentNetwork()}`);
+          
+          for (const packageId of userPackageIds) {
+          try {
+            const memberEventsCacheKey = getCacheKey(userAddress, 'memberJoinedEvents', packageId);
+            const memberEvents = await cachedApiCall(
+              memberEventsCacheKey,
+              async () => {
+                console.log(`Querying MemberJoined events for package ${packageId}...`);
+                const allEvents: any[] = [];
+                let cursor: any = null;
+                
+                while (true) {
+                  try {
+                    const response = await retryApiCall(
+                      () => client.queryEvents({
+                        query: { MoveEventType: `${packageId}::njangi_circles::MemberJoined` },
+                        limit: 100,
+                        ...(cursor && { cursor })
+                      }),
+                      3,
+                      1000,
+                      `queryEvents MemberJoined for ${packageId}`
+                    );
+                    
+                    if (!response.data || response.data.length === 0) break;
+                    
+                    // Filter for events where this user is the member
+                    const userMemberEvents = response.data.filter((event: any) => {
+                      const parsedEvent = event.parsedJson as MemberJoinedEvent;
+                      return parsedEvent?.member === userAddress;
+                    });
+                    
+                    allEvents.push(...userMemberEvents);
+                    
+                    if (response.hasNextPage && response.nextCursor) {
+                      cursor = response.nextCursor;
+                      await new Promise(resolve => setTimeout(resolve, 100)); // Rate limiting
+                    } else {
+                      break;
+                    }
+                  } catch (error) {
+                    console.error(`Error fetching MemberJoined events for ${packageId}:`, error);
+                    
+                    // Check if this is a network connectivity issue or invalid package
+                    if (error instanceof Error && error.message.includes('Failed to fetch')) {
+                      console.warn(`Network error querying events for package ${packageId} on ${getCurrentNetwork()}, package may not exist on this network`);
+                    }
                     break;
                   }
-                } catch (error) {
-                  console.error(`Error fetching MemberJoined events for ${packageId}:`, error);
-                  break;
                 }
-              }
-              
-              return allEvents;
-            },
-            CACHE_CONFIG.EVENTS_TTL
-          );
-          
-          additionalMemberJoinedEvents.push(...memberEvents);
-        } catch (error) {
-          console.error(`Error querying member events for package ${packageId}:`, error);
+                
+                return allEvents;
+              },
+              CACHE_CONFIG.EVENTS_TTL
+            );
+            
+            additionalMemberJoinedEvents.push(...memberEvents);
+          } catch (error) {
+            console.error(`Error querying member events for package ${packageId}:`, error);
+            
+            // Log additional context for debugging
+            if (error instanceof Error && error.message.includes('Failed to fetch')) {
+              console.warn(`Skipping package ${packageId} due to network error - may not exist on ${getCurrentNetwork()}`);
+            }
+            
+            // Continue with other packages instead of failing completely
+            continue;
+          }
         }
+      } catch (error) {
+        console.error('Critical error in MemberJoined events query:', error);
+        console.warn('Falling back to wallet-extracted events only due to network query failure');
+        
+        // Set network error state to inform user
+        setNetworkError({
+          type: 'service_unavailable',
+          message: 'Unable to query member events - using cached data only',
+          canRetry: true,
+          retryCount: networkError.retryCount + 1
+        });
+        
+        // Continue with empty additional events instead of crashing
+        additionalMemberJoinedEvents = [];
+      }
+      } else {
+        console.log(`Skipping MemberJoined events query - no valid package IDs for ${getCurrentNetwork()}`);
       }
       
       console.log(`Found ${additionalMemberJoinedEvents.length} additional MemberJoined events where user is member`);
@@ -1604,14 +1885,15 @@ export default function Dashboard() {
               // Add a small delay to avoid rate limiting
               await new Promise(resolve => setTimeout(resolve, 100));
               
-              const dynamicFields = await retryApiCall(
-                () => client.getDynamicFields({
+              let dynamicFields;
+              try {
+                dynamicFields = await client.getDynamicFields({
                   parentId: circleId
-                }),
-                2,
-                1000,
-                `getDynamicFields for wallet in circle ${circleId}`
-              );
+                });
+              } catch (error) {
+                console.log(`Dynamic fields for circle ${circleId} not accessible on ${getCurrentNetwork()}, skipping wallet fetch...`);
+                return undefined;
+              }
               
               for (const field of dynamicFields.data) {
                 if (field?.name && 
@@ -1622,15 +1904,16 @@ export default function Dashboard() {
                     field.type && field.type.includes('wallet_id')) { 
                   
                   if (field.objectId) { 
-                    const walletField = await retryApiCall(
-                      () => client.getObject({
+                    let walletField;
+                    try {
+                      walletField = await client.getObject({
                         id: field.objectId,
                         options: { showContent: true }
-                      }),
-                      2,
-                      1000,
-                      `getObject for wallet field ${field.objectId}`
-                    );
+                      });
+                    } catch (error) {
+                      console.log(`Wallet field ${field.objectId} not accessible on ${getCurrentNetwork()}, skipping...`);
+                      continue;
+                    }
                     
                     const contentFields = walletField.data?.content && 
                                             typeof walletField.data.content === 'object' && 
@@ -1806,10 +2089,15 @@ export default function Dashboard() {
       
       console.log(`Found ${allUserCircleIds.size} unique circles for user:`, Array.from(allUserCircleIds));
       
-      // Process circles in smaller batches to avoid overwhelming the RPC
+      setLoadingProgress({ stage: 'processing_circles', current: 3, total: 5, message: `Processing ${allUserCircleIds.size} circles with network filtering...` });
+      
+      // Skip aggressive pre-validation, let individual circle processing handle network mismatches
       const circleIds = Array.from(allUserCircleIds);
+      console.log(`Processing ${circleIds.length} circles with built-in network error handling`);
       const batchSize = 5; // Process 5 circles at a time
       const allProcessedCircles: Circle[] = [];
+      
+      setLoadingProgress({ stage: 'processing_circles', current: 4, total: 5, message: `Processing ${circleIds.length} validated circles...` });
       
       for (let i = 0; i < circleIds.length; i += batchSize) {
         const batch = circleIds.slice(i, i + batchSize);
@@ -1831,8 +2119,9 @@ export default function Dashboard() {
               objectCacheKey,
               async () => {
                 // First verify if the circle still exists (hasn't been deleted)
-                const objectData = await retryApiCall(
-                  () => client.getObject({
+                let objectData;
+                try {
+                  objectData = await client.getObject({
                     id: circleId,
                     options: { 
                       showType: true, 
@@ -1843,11 +2132,11 @@ export default function Dashboard() {
                       showPreviousTransaction: false,
                       showBcs: false
                     }
-                  }),
-                  3,
-                  1000,
-                  `getObject for circle ${circleId}`
-                );
+                  });
+                } catch (error) {
+                  console.log(`Circle ${circleId} not accessible on ${getCurrentNetwork()} network, skipping...`);
+                  return null;
+                }
                   
                   // Skip this circle if it doesn't exist or is not accessible
                   if (!objectData.data || objectData.error) {
@@ -1861,14 +2150,9 @@ export default function Dashboard() {
                     // Add a small delay to avoid rate limiting
                     await new Promise(resolve => setTimeout(resolve, 50));
                     
-                    dynamicFieldsResult = await retryApiCall(
-                      () => client.getDynamicFields({
-                        parentId: circleId
-                      }),
-                      2,
-                      1000,
-                      `getDynamicFields for circle ${circleId}`
-                    );
+                    dynamicFieldsResult = await client.getDynamicFields({
+                      parentId: circleId
+                    });
                     console.log(`Dynamic fields for circle ${circleId}:`, dynamicFieldsResult.data);
                   } catch (error) {
                     console.error(`Error fetching dynamic fields for circle ${circleId}:`, error);
@@ -1897,7 +2181,22 @@ export default function Dashboard() {
             if (!circleData) return null;
             
             // Process circle using the helper function with all data sources
-            const processedCircle = await processCircleObject(circleData, userAddress, metadata.eventData, client);
+            let processedCircle;
+            try {
+              processedCircle = await processCircleObject(circleData, userAddress, metadata.eventData, client);
+            } catch (error) {
+              console.error(`Error processing circle ${circleId}:`, error);
+              
+              // If it's a fetch error, it might be due to network mismatch
+              if (error instanceof Error && error.message.includes('Failed to fetch')) {
+                console.warn(`Circle ${circleId} might be from a different network. Skipping...`);
+                return null;
+              }
+              
+              // For other errors, still skip but log more details
+              console.error(`Unexpected error processing circle ${circleId}:`, error);
+              return null;
+            }
             
             if (processedCircle) {
               // Update with the actual member count from events
@@ -2024,31 +2323,71 @@ export default function Dashboard() {
       console.log('Storing admin circle IDs in localStorage:', adminCircleIds);
       localStorage.setItem('adminCircles', JSON.stringify(adminCircleIds));
       
+      // Update progress to completed
+      setLoadingProgress({ stage: 'completed', current: 5, total: 5, message: `Successfully loaded ${freshCirclesArray.length} circles` });
+      
       // If this was a background refresh, show a subtle notification
       if (isBackgroundRefreshing) {
-        toast.success('Circles updated', { duration: 2000 });
+        toast.success(`${freshCirclesArray.length} circles updated`, { duration: 2000 });
       }
       
     } catch (error) {
       console.error('Error fetching circles:', error);
       
-      // More detailed error handling
+      // Enhanced error categorization and user feedback
+      let errorType: 'network_mismatch' | 'connection_failed' | 'service_unavailable' = 'connection_failed';
+      let userMessage = 'Failed to fetch circles. Please check your connection and try again.';
+      let canRetry = true;
+      
       if (error instanceof Error) {
-        if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
-          setError('Network connection issue. Please check your internet connection and try again.');
+        if (error.message.includes('Network mismatch') || error.message.includes('not found')) {
+          errorType = 'network_mismatch';
+          userMessage = `Some circles may not be available on ${getCurrentNetwork()} network. Try switching networks or refreshing.`;
+          canRetry = true;
+        } else if (error.message.includes('Circuit breaker open') || error.message.includes('Service temporarily unavailable')) {
+          errorType = 'service_unavailable';
+          userMessage = 'Service is temporarily unavailable due to high load. Please wait a moment and try again.';
+          canRetry = true;
+        } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+          errorType = 'connection_failed';
+          userMessage = 'Connection failed. Please check your internet connection and try again.';
+          canRetry = true;
         } else if (error.message.includes('timeout')) {
-          setError('Request timeout. The network might be slow, please try again.');
+          errorType = 'connection_failed';
+          userMessage = 'Request timeout. The network might be slow, please try again.';
+          canRetry = true;
         } else {
-          setError(`Error fetching circles: ${error.message}`);
+          userMessage = `Error fetching circles: ${error.message}`;
         }
       } else {
-        setError('An unexpected error occurred while fetching circles. Please try again later.');
+        userMessage = 'An unexpected error occurred while fetching circles. Please try again later.';
       }
       
-      // If fetch fails but we have cached circles, keep them and just show a warning
+      const currentRetryCount = networkError.retryCount;
+      setNetworkError({
+        type: errorType,
+        message: userMessage,
+        canRetry,
+        retryCount: currentRetryCount + 1
+      });
+      
+      setError(userMessage);
+      
+      // If fetch fails but we have cached circles, keep them and show appropriate messaging
       if (circles.length > 0) {
         console.log('Keeping cached circles due to network error');
-        toast.error('Failed to refresh circles, showing cached data', { duration: 3000 });
+        if (errorType === 'network_mismatch') {
+          toast(`⚠️ Showing cached circles. ${userMessage}`, { duration: 4000, icon: '⚠️' });
+        } else {
+          toast.error('Failed to refresh circles, showing cached data', { duration: 3000 });
+        }
+      } else {
+        // No cached data, show error toast
+        if (currentRetryCount < 3) {
+          toast.error(userMessage, { duration: 4000 });
+        } else {
+          toast.error('Multiple failures detected. Please refresh the page.', { duration: 6000 });
+        }
       }
     } finally {
       setLoading(false);
@@ -2087,27 +2426,41 @@ export default function Dashboard() {
         
         // Persist network choice
         if (typeof window !== 'undefined') {
-          localStorage.setItem('preferredNetwork', newNetwork);
+          localStorage.setItem('sui-network', newNetwork);
         }
         
         // Show appropriate banner based on network
         setShowTestnetBanner(newNetwork === 'testnet');
         
-        // Clear all cached data
+        // Atomic cache clearing for network switch
         if (typeof window !== 'undefined') {
-          // Clear ALL user-specific cache for the OLD network (circles, transactions, events, etc.)
-          if (userAddress) {
-            // Clear cache from the old network
-            clearUserCache(userAddress, network);
-            // Also clear cache from the new network to ensure fresh start
-            clearUserCache(userAddress, newNetwork);
+          console.log(`🔄 Performing atomic cache clear for network switch: ${network} → ${newNetwork}`);
+          const startTime = Date.now();
+          
+          // Clear ALL njangi-related cache (more comprehensive)
+          const keysToRemove: string[] = [];
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && (
+              key.startsWith('njangi_cache_') ||
+              key.includes('zklogin') || 
+              key.includes('enoki') ||
+              key.includes('circle_') ||
+              key.includes('transaction_') ||
+              key.includes('wallet_')
+            )) {
+              keysToRemove.push(key);
+            }
           }
           
-          // Clear zkLogin session data as it's network-specific
-          const zkLoginKeys = Object.keys(localStorage).filter(key => 
-            key.includes('zklogin') || key.includes('enoki')
-          );
-          zkLoginKeys.forEach(key => localStorage.removeItem(key));
+          // Atomic removal
+          keysToRemove.forEach(key => localStorage.removeItem(key));
+          
+          // Clean up any remaining stale cache
+          clearStaleCache();
+          
+          const clearTime = Date.now() - startTime;
+          console.log(`✅ Atomic cache clear completed: ${keysToRemove.length} items removed in ${clearTime}ms`);
         }
         
         // Reset all user state
@@ -2214,16 +2567,65 @@ export default function Dashboard() {
   // Cache invalidation when user creates/joins circles
   const invalidateCirclesCache = useCallback(() => {
     if (userAddress) {
+      console.log('🗑️ Invalidating all circle-related caches');
+      
+      // Clear main circles cache
       const cacheKey = getCacheKey(userAddress, 'circles');
       localStorage.removeItem(cacheKey);
-      // Also clear events cache to get fresh data
-      const eventsCachePattern = getCacheKey(userAddress, 'events', '');
+      
+      // Clear all circle-related caches comprehensively
+      const keysToRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key && key.startsWith(eventsCachePattern.slice(0, -1))) {
-          localStorage.removeItem(key);
+        if (key && key.includes(userAddress)) {
+          // Clear any cache that contains this user's address and is circle-related
+          if (key.includes('circles') || 
+              key.includes('events') || 
+              key.includes('wallet') || 
+              key.includes('circleObject') || 
+              key.includes('walletTransactions') ||
+              key.includes('packageIds') ||
+              key.includes('memberJoinedEvents') ||
+              key.includes('transaction')) {
+            keysToRemove.push(key);
+          }
         }
       }
+      
+      // Remove all identified cache keys
+      keysToRemove.forEach(key => {
+        localStorage.removeItem(key);
+        console.log(`🗑️ Removed cache key: ${key}`);
+      });
+      
+      console.log(`🗑️ Invalidated ${keysToRemove.length} cache entries`);
+    }
+  }, [userAddress]);
+
+  // Cache invalidation for a specific circle (more efficient than clearing all)
+  const invalidateSpecificCircleCache = useCallback((circleId: string) => {
+    if (userAddress) {
+      console.log(`🗑️ Invalidating cache for specific circle: ${circleId}`);
+      
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.includes(userAddress) && key.includes(circleId)) {
+          keysToRemove.push(key);
+        }
+      }
+      
+      // Also clear main circles cache since it contains this circle
+      const mainCacheKey = getCacheKey(userAddress, 'circles');
+      keysToRemove.push(mainCacheKey);
+      
+      // Remove all identified cache keys
+      keysToRemove.forEach(key => {
+        localStorage.removeItem(key);
+        console.log(`🗑️ Removed cache key for deleted circle: ${key}`);
+      });
+      
+      console.log(`🗑️ Invalidated ${keysToRemove.length} cache entries for circle ${circleId}`);
     }
   }, [userAddress]);
 
@@ -2309,11 +2711,17 @@ export default function Dashboard() {
         if (result.success) {
           console.log("Delete successful with digest:", result.digest);
           
-          // Invalidate cache to ensure fresh data on next load
-          invalidateCirclesCache();
+          // Invalidate cache for this specific circle and refresh general cache
+          invalidateSpecificCircleCache(circleId);
           
-          // Update the UI
+          // Update the UI immediately
           setCircles(prevCircles => prevCircles.filter(c => c.id !== circleId));
+          
+          // Fetch fresh data from blockchain to ensure consistency
+          console.log("🔄 Fetching fresh circles data after deletion");
+          setTimeout(() => {
+            fetchUserCircles(true); // Force refresh from blockchain
+          }, 1000); // Small delay to allow deletion to propagate
           
           toast.success("Circle has been deleted.");
         } else {

@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 import { AccountData, OAuthProvider } from '@/services/zkLoginService';
 import { ZkLoginClient } from '@/services/zkLoginClient';
 import { useIdleTimer } from '@/hooks/useIdleTimer';
+import { getCurrentNetwork } from '@/services/network-config';
 
 // Define CircleData interface based on required parameters
 interface CircleData {
@@ -256,7 +257,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           action: 'deleteCircle', 
           account,
           circleId,
-          walletId
+          walletId,
+          network: getCurrentNetwork() // Add current network to request
         })
       });
       
@@ -360,7 +362,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           action: 'withdrawWalletFunds', 
           account,
           walletId,
-          amount
+          amount,
+          network: getCurrentNetwork() // Add current network to request
         })
       });
       
