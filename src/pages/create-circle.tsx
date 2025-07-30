@@ -580,6 +580,7 @@ export default function CreateCircle() {
           action: 'sendTransaction',
           account,
           circleData: serializedData,
+          network: getCurrentNetwork(), // Include current network selection
         }),
       });
 

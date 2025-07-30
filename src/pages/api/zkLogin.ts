@@ -556,6 +556,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
+          // Handle network parameter if provided by frontend
+          const requestedNetwork = req.body.network;
+          if (requestedNetwork && (requestedNetwork === 'testnet' || requestedNetwork === 'mainnet')) {
+            console.log(`Frontend requested network: ${requestedNetwork}, current server network: ${getCurrentNetwork()}`);
+          }
+
           // Validate monetary values before transaction
           const contribution = BigInt(circleData.contribution_amount);
           const contributionLocal = BigInt(circleData.contribution_amount_local || 0);
@@ -652,44 +658,68 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             currencyType: circleData.currency_type
           });
 
-          // Attempt to send the transaction
+          // Attempt to send the transaction with network override support
           try {
-            const txResult = await instance.sendTransaction(
-              session.account,
-              (txb: Transaction) => {
-                txb.setSender(session.account!.userAddr);
-                
-                // Validate cycle_day before using it
-                const cycleDay = circleData.cycle_day !== undefined ? circleData.cycle_day : 1; // Default to 1 if undefined
-                console.log('Using cycle_day value:', cycleDay);
-                
-                txb.moveCall({
-                  target: `${PACKAGE_ID}::njangi_circles::create_circle`,
-                  arguments: [
-                    txb.pure.string(circleData.name),
-                    txb.pure.u64(contribution),
-                    txb.pure.string(circleData.currency_type || 'USD'),  // currency_type: vector<u8>
-                    txb.pure.u64(contributionLocal),
-                    txb.pure.u64(contributionUsd),     // contribution_amount_usd
-                    txb.pure.u64(deposit),
-                    txb.pure.u64(depositLocal),
-                    txb.pure.u64(depositUsd),          // security_deposit_usd
-                    txb.pure.u64(circleData.cycle_length),
-                    txb.pure.u64(cycleDay), // Use validated cycleDay
-                    txb.pure.u8(circleData.circle_type),
-                    txb.pure.u64(circleData.max_members),
-                    txb.pure.u8(circleData.rotation_style),
-                    txb.pure.vector('bool', circleData.penalty_rules),
-                    txb.pure.option('u8', circleData.goal_type?.some),
-                    txb.pure.option('u64', circleData.target_amount?.some ? BigInt(circleData.target_amount.some) : null),
-                    txb.pure.option('u64', circleData.target_amount_local?.some ? BigInt(circleData.target_amount_local.some) : null),
-                    txb.pure.option('u64', circleData.target_date?.some ? BigInt(circleData.target_date.some) : null),
-                    txb.pure.bool(circleData.verification_required),
-                    txb.object("0x6")  // Clock object
-                  ]
-                });
+            // Temporarily set the network to match the frontend request
+            const originalNetwork = getCurrentNetwork();
+            let txResult;
+            
+            try {
+              if (requestedNetwork && requestedNetwork !== originalNetwork) {
+                console.log(`Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for transaction`);
+                setCurrentNetwork(requestedNetwork as NetworkType);
+                // Reinitialize the EnokiZkLoginService with the new network configuration
+                instance.initializeWithNetwork();
               }
-            );
+              
+              // Get the package ID that matches the current/requested network
+              const packageIdToUse = getCurrentPackageId();
+              console.log(`Using package ID ${packageIdToUse} for circle creation (network: ${getCurrentNetwork()})`);
+              
+              txResult = await instance.sendTransaction(
+                session.account,
+                (txb: Transaction) => {
+                  txb.setSender(session.account!.userAddr);
+                  
+                  // Validate cycle_day before using it
+                  const cycleDay = circleData.cycle_day !== undefined ? circleData.cycle_day : 1; // Default to 1 if undefined
+                  console.log('Using cycle_day value:', cycleDay);
+                  
+                  txb.moveCall({
+                    target: `${packageIdToUse}::njangi_circles::create_circle`,
+                    arguments: [
+                      txb.pure.string(circleData.name),
+                      txb.pure.u64(contribution),
+                      txb.pure.string(circleData.currency_type || 'USD'),  // currency_type: vector<u8>
+                      txb.pure.u64(contributionLocal),
+                      txb.pure.u64(contributionUsd),     // contribution_amount_usd
+                      txb.pure.u64(deposit),
+                      txb.pure.u64(depositLocal),
+                      txb.pure.u64(depositUsd),          // security_deposit_usd
+                      txb.pure.u64(circleData.cycle_length),
+                      txb.pure.u64(cycleDay), // Use validated cycleDay
+                      txb.pure.u8(circleData.circle_type),
+                      txb.pure.u64(circleData.max_members),
+                      txb.pure.u8(circleData.rotation_style),
+                      txb.pure.vector('bool', circleData.penalty_rules),
+                      txb.pure.option('u8', circleData.goal_type?.some),
+                      txb.pure.option('u64', circleData.target_amount?.some ? BigInt(circleData.target_amount.some) : null),
+                      txb.pure.option('u64', circleData.target_amount_local?.some ? BigInt(circleData.target_amount_local.some) : null),
+                      txb.pure.option('u64', circleData.target_date?.some ? BigInt(circleData.target_date.some) : null),
+                      txb.pure.bool(circleData.verification_required),
+                      txb.object("0x6")  // Clock object
+                    ]
+                  });
+                }
+              );
+            } finally {
+              // Always restore the original network and reinitialize the service
+              if (requestedNetwork && requestedNetwork !== originalNetwork) {
+                console.log(`Restoring server network back to ${originalNetwork}`);
+                setCurrentNetwork(originalNetwork as NetworkType);
+                instance.initializeWithNetwork();
+              }
+            }
             
             console.log('Transaction successful:', txResult);
             return res.status(200).json({ 
