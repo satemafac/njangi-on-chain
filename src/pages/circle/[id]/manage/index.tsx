@@ -369,7 +369,7 @@ const getJsonRpcUrl = (): string => {
 export default function ManageCircle() {
   const router = useRouter();
   const { id } = router.query;
-  const { isAuthenticated, userAddress, account, withdrawWalletFunds } = useAuth();
+  const { isAuthenticated, userAddress, account } = useAuth();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
   const [circlePackageId, setCirclePackageId] = useState<string>(PACKAGE_ID); // Track the package ID for this circle
@@ -1150,7 +1150,8 @@ export default function ManageCircle() {
           action: 'adminApproveMember',
           account,
           circleId,
-          memberAddress
+          memberAddress,
+          network: getCurrentNetwork() // Include current network selection
         }),
       });
       
@@ -1226,7 +1227,8 @@ export default function ManageCircle() {
           action: 'adminApproveMembers',
           account,
           circleId,
-          memberAddresses
+          memberAddresses,
+          network: getCurrentNetwork()
         }),
       });
       
@@ -1300,7 +1302,8 @@ export default function ManageCircle() {
           account,
           circleId,
           memberAddress,
-          walletId: circle?.custody?.walletId
+          walletId: circle?.custody?.walletId,
+          network: getCurrentNetwork()
         }),
       });
 
@@ -1314,7 +1317,7 @@ export default function ManageCircle() {
       toast.success(`Member ${shortenAddress(memberAddress)} removed successfully`);
       
       // Refresh the circle data to update the member list
-      await fetchCircleData();
+      await fetchCircleDetails();
       
       return true;
     } catch (error: unknown) {
@@ -1379,7 +1382,7 @@ export default function ManageCircle() {
             Are you sure you want to return the security deposit to <strong>{shortenAddress(memberAddress)}</strong>?
           </p>
           <p className="text-sm text-gray-600">
-            This will withdraw their security deposit from the circle's wallet and send it back to their address.
+            This will withdraw their security deposit from the circle&apos;s wallet and send it back to their address.
           </p>
           <p className="text-sm text-amber-600 font-medium">
             Make sure the member has completed their obligations in the circle before returning their deposit.
@@ -1577,7 +1580,8 @@ export default function ManageCircle() {
           action: 'adminSetMaxMembers',
           account,
           circleId: circle.id,
-          newMaxMembers
+          newMaxMembers,
+          network: getCurrentNetwork()
         }),
       });
       
@@ -2265,7 +2269,8 @@ export default function ManageCircle() {
           action: 'toggleAutoSwap',
           account,
           circleId: circle.id,
-          enabled
+          enabled,
+          network: getCurrentNetwork()
         }),
       });
       
@@ -2928,7 +2933,8 @@ export default function ManageCircle() {
             body: JSON.stringify({
               action: 'activateCircle',
               account,
-              circleId: circle.id
+              circleId: circle.id,
+              network: getCurrentNetwork()
             }),
           });
           
@@ -3354,7 +3360,8 @@ export default function ManageCircle() {
               action: 'adminSetMaxMembers',
               account,
               circleId: circle.id,
-              newMaxMembers: maxMembersNum
+              newMaxMembers: maxMembersNum,
+              network: getCurrentNetwork()
             }),
           });
           
@@ -3655,7 +3662,8 @@ export default function ManageCircle() {
             body: JSON.stringify({
               action: 'resumeCycle',
               account,
-              circleId: circle.id
+              circleId: circle.id,
+              network: getCurrentNetwork()
             }),
           });
           
@@ -4116,7 +4124,8 @@ export default function ManageCircle() {
           account,
           circleId: circle.id,
           strategy,
-          autoCompound: true
+          autoCompound: true,
+          network: getCurrentNetwork()
         }),
       });
 
@@ -5234,7 +5243,8 @@ export default function ManageCircle() {
                                                 action: 'adminTriggerUsdcPayout',
                                                 account,
                                                 circleId: circle.id,
-                                                walletId: circle.custody?.walletId || ''
+                                                walletId: circle.custody?.walletId || '',
+                                                network: getCurrentNetwork()
                                               }),
                                             });
                                             

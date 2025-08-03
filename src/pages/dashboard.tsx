@@ -1389,16 +1389,29 @@ export default function Dashboard() {
 
   // Helper function to get all package IDs used by this user for circle creation
 
-  // Comprehensive wallet transaction fetching to capture ALL circle interactions
-  const fetchAllWalletTransactions = useCallback(async (client: SuiClient, walletAddress: string): Promise<any[]> => {
+  // Optimized contract-specific transaction fetching to capture ALL circle interactions across all package versions
+  const fetchContractSpecificTransactions = useCallback(async (client: SuiClient, walletAddress: string): Promise<any[]> => {
+    console.log(`Fetching contract-specific transactions for wallet ${walletAddress}...`);
+    
+    // Define all our contract modules that we want to track (across any package version)
+    const contractModules = [
+      'njangi_circles',     // Primary circle management
+      'njangi_custody',     // Custody and deposits
+      'njangi_core',        // Core utilities
+      'njangi_members',     // Member management
+      'njangi_milestones',  // Milestone tracking
+      'njangi_circle_config' // Circle configuration
+    ];
+    
+    // Fetch transactions from user and filter for ANY contract interactions (any package ID)
     const allTransactions: any[] = [];
     let cursor: any = null;
-    const batchSize = 25; // Even smaller batch size to avoid rate limiting
-    const maxTransactions = 2000; // Reduced safety limit
+    const batchSize = 50;
+    const maxTransactions = 500; // Increased limit to capture more history
     
-    console.log(`Fetching ALL historical transactions for wallet ${walletAddress}...`);
+    console.log(`Fetching transactions from address ${walletAddress} across all contract versions...`);
     
-    while (true) {
+    while (allTransactions.length < maxTransactions) {
       try {
         const response = await retryApiCall(
           () => client.queryTransactionBlocks({
@@ -1410,11 +1423,12 @@ export default function Dashboard() {
               showObjectChanges: false,
               showBalanceChanges: false
             },
-            limit: batchSize,
+            limit: Math.min(batchSize, maxTransactions - allTransactions.length),
+            order: 'descending', // Get most recent first
             ...(cursor && { cursor })
           }),
-          3,
-          1500,
+          2,
+          1000,
           `queryTransactionBlocks batch (${allTransactions.length} fetched so far)`
         );
         
@@ -1422,28 +1436,55 @@ export default function Dashboard() {
           break;
         }
         
-        allTransactions.push(...response.data);
+        // Filter for contract-specific transactions (ANY package ID with our modules)
+        const contractTransactions = response.data.filter((tx: any) => {
+          return tx.transaction?.data?.transaction?.transactions?.some((t: any) => {
+            if ('MoveCall' in t) {
+              const moveCall = t.MoveCall;
+              // Check if this transaction calls any of our contract modules (regardless of package ID)
+              return contractModules.includes(moveCall.module);
+            }
+            return false;
+          });
+        });
         
-        if (allTransactions.length >= maxTransactions) {
-          console.log(`Reached maximum transaction limit (${maxTransactions}), stopping...`);
-          break;
-        }
+        allTransactions.push(...contractTransactions);
         
         if (response.hasNextPage && response.nextCursor) {
           cursor = response.nextCursor;
-          console.log(`Fetched ${allTransactions.length} transactions so far...`);
-          // Add a small delay between batches to avoid rate limiting
-          await new Promise(resolve => setTimeout(resolve, 200));
+          // Small delay between batches to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, 100));
         } else {
           break;
         }
       } catch (error) {
-        console.error('Error fetching wallet transactions:', error);
+        console.error('Error fetching transactions:', error);
         break;
       }
     }
     
-    console.log(`Total wallet transactions fetched: ${allTransactions.length}`);
+    console.log(`Contract-specific transaction fetching summary:`);
+    console.log(`- Total contract transactions found: ${allTransactions.length}`);
+    
+    // Count by module and package for debugging
+    const moduleBreakdown: Record<string, number> = {};
+    const packageBreakdown: Record<string, number> = {};
+    
+    allTransactions.forEach(tx => {
+      tx.transaction?.data?.transaction?.transactions?.forEach((t: any) => {
+        if ('MoveCall' in t) {
+          const moveCall = t.MoveCall;
+          if (contractModules.includes(moveCall.module)) {
+            moduleBreakdown[moveCall.module] = (moduleBreakdown[moveCall.module] || 0) + 1;
+            packageBreakdown[moveCall.package] = (packageBreakdown[moveCall.package] || 0) + 1;
+          }
+        }
+      });
+    });
+    
+    console.log(`- Module breakdown:`, moduleBreakdown);
+    console.log(`- Package breakdown:`, packageBreakdown);
+    
     return allTransactions;
   }, []);
 
@@ -1550,7 +1591,7 @@ export default function Dashboard() {
     }
   }, [userAddress]);
 
-  // Extract circle events from wallet transactions
+  // Extract circle events from contract-specific transactions
   const extractCircleEventsFromTransactions = useCallback(async (transactions: any[], userAddress: string) => {
     const circleEvents: any[] = [];
     const memberEvents: any[] = [];
@@ -1558,19 +1599,12 @@ export default function Dashboard() {
     const activationEvents: any[] = [];
     const walletEvents: any[] = [];
     
-    console.log('Extracting circle-related events from transactions...');
+    console.log(`Extracting circle-related events from ${transactions.length} contract-specific transactions...`);
     
     for (const tx of transactions) {
-      // Check if this transaction involves circle-related functions
-      const hasCircleFunction = tx.transaction?.data?.transaction?.transactions?.some((t: any) => {
-        if ('MoveCall' in t) {
-          const moveCall = t.MoveCall;
-          return moveCall.module === 'njangi_circles' || moveCall.module === 'njangi_custody';
-        }
-        return false;
-      });
-      
-      if (hasCircleFunction && tx.events) {
+      // Since we already filtered for contract-specific transactions, 
+      // we can directly process the events without additional function checking
+      if (tx.events && tx.events.length > 0) {
         for (const event of tx.events) {
           // Parse event types and filter for relevant ones
           if (event.type && event.parsedJson) {
@@ -1590,8 +1624,10 @@ export default function Dashboard() {
                 custodyDepositedEvents.push(event);
               }
             } else if (event.type.includes('CircleActivated')) {
+              // CircleActivated events are relevant for all users to know activation status
               activationEvents.push(event);
             } else if (event.type.includes('CustodyWalletCreated')) {
+              // Wallet creation events are useful for mapping circle IDs to wallet IDs
               walletEvents.push(event);
             }
           }
@@ -1599,7 +1635,7 @@ export default function Dashboard() {
       }
     }
     
-    console.log(`Extracted events - CircleCreated: ${circleEvents.length}, MemberJoined: ${memberEvents.length}, CustodyDeposited: ${custodyDepositedEvents.length}`);
+    console.log(`Extracted events - CircleCreated: ${circleEvents.length}, MemberJoined: ${memberEvents.length}, CustodyDeposited: ${custodyDepositedEvents.length}, CircleActivated: ${activationEvents.length}, WalletCreated: ${walletEvents.length}`);
     
     return {
       circleEvents,
@@ -1677,18 +1713,46 @@ export default function Dashboard() {
       
       setLoadingProgress({ stage: 'fetching_events', current: 1, total: 5, message: 'Fetching transaction history...' });
       
-      // NEW APPROACH: Use wallet-based transaction querying to capture ALL circle interactions
-      const walletTransactionsCacheKey = getCacheKey(userAddress, 'walletTransactions');
-      const allWalletTransactions = await cachedApiCall(
-        walletTransactionsCacheKey,
-        () => retryApiCall(
-          () => fetchAllWalletTransactions(client, userAddress),
-          3,
-          2000,
-          'fetchAllWalletTransactions'
-        ),
-        CACHE_CONFIG.EVENTS_TTL
-      );
+      // OPTIMIZED APPROACH: Use contract-specific transaction querying to capture ALL circle interactions across all package versions
+      console.log(`Fetching circle transactions for ${getCurrentNetwork()} network from all contract versions...`);
+      
+      const walletTransactionsCacheKey = getCacheKey(userAddress, 'allContractTransactions');
+      let allWalletTransactions: any[] = [];
+      
+      try {
+        allWalletTransactions = await cachedApiCall(
+          walletTransactionsCacheKey,
+          () => retryApiCall(
+            () => fetchContractSpecificTransactions(client, userAddress),
+            3,
+            2000,
+            'fetchContractSpecificTransactions'
+          ),
+          CACHE_CONFIG.EVENTS_TTL
+        );
+        
+        console.log(`Successfully fetched ${allWalletTransactions.length} contract-specific transactions from all package versions`);
+      } catch (error) {
+        console.error('Error fetching contract-specific transactions:', error);
+        
+        // Set appropriate network error
+        setNetworkError({
+          type: 'connection_failed',
+          message: 'Failed to fetch transaction data. Some circles may not be displayed.',
+          canRetry: true,
+          retryCount: networkError.retryCount + 1
+        });
+        
+        // Try to use any cached data as fallback
+        const cachedData = getCacheItem(walletTransactionsCacheKey, CACHE_CONFIG.EVENTS_TTL * 5);
+        if (cachedData && Array.isArray(cachedData)) {
+          console.log(`Using stale cached data with ${cachedData.length} transactions`);
+          allWalletTransactions = cachedData;
+        } else {
+          console.warn('No cached transaction data available, continuing with empty dataset');
+          allWalletTransactions = [];
+        }
+      }
       
       // Extract circle-related events from wallet transactions (primarily admin circles)
       const walletExtractedEvents = await extractCircleEventsFromTransactions(allWalletTransactions, userAddress);
@@ -1985,56 +2049,48 @@ export default function Dashboard() {
       // Create mapping from circle ID to creation event data
       const circleCreationDataMap = new Map<string, CircleCreatedEvent>();
       
-      // Also store transaction data to extract cycle_day which isn't in the event
+      // Extract transaction input data directly from the transaction data we already have
       const transactionInputMap = new Map<string, TransactionInputData>();
       
+      // Helper function to extract cycle_day from transaction inputs
+      const extractCycleDayFromTransaction = (tx: any): number | undefined => {
+        try {
+          // Try to extract from the transaction data that we already have
+          if (tx?.transaction?.data?.transaction?.kind === 'ProgrammableTransaction') {
+            const txData = tx.transaction.data.transaction;
+            const inputs = txData.inputs || [];
+            
+            // Try to find the cycle_day input (typically at index 6 for create_circle calls)
+            if (inputs.length > 6 && inputs[6].type === 'pure' && inputs[6].valueType === 'u64') {
+              const cycleDay = inputs[6].value;
+              console.log(`Found cycle_day ${cycleDay} from transaction inputs`);
+              return Number(cycleDay);
+            }
+          }
+        } catch (error) {
+          console.log('Could not extract cycle_day from transaction inputs:', error);
+        }
+        return undefined;
+      };
+      
+      // Process circle creation events and extract data efficiently
       for (const event of allCircleEvents) {
         if (event.parsedJson) {
           const parsedEvent = event.parsedJson as CircleCreatedEvent;
           if (parsedEvent.circle_id) {
             circleCreationDataMap.set(parsedEvent.circle_id, parsedEvent);
             
-            // Try to get the transaction digest and fetch transaction data (with caching)
-            if (event.id?.txDigest) {
-              const txCacheKey = getCacheKey(userAddress, 'transaction', event.id.txDigest);
-              const txInputData = await cachedApiCall(
-                txCacheKey,
-                async () => {
-                  try {
-                    const txData = await client.getTransactionBlock({
-                      digest: event.id.txDigest,
-                      options: {
-                        showInput: true,
-                        showEffects: false,
-                        showEvents: false,
-                        showObjectChanges: false,
-                      }
-                    });
-                    
-                    // Extract inputs from transaction data if available
-                    if (txData?.transaction?.data?.transaction?.kind === 'ProgrammableTransaction') {
-                      const tx = txData.transaction.data.transaction;
-                      const inputs = tx.inputs || [];
-                      
-                      // Try to find the cycle_day input (typically at index 6)
-                      if (inputs.length > 6 && inputs[6].type === 'pure' && inputs[6].valueType === 'u64') {
-                        const cycleDay = inputs[6].value;
-                        console.log(`Found cycle_day ${cycleDay} for circle ${parsedEvent.circle_id} from tx`);
-                        
-                        return { cycle_day: Number(cycleDay) };
-                      }
-                    }
-                    return {};
-                  } catch (error) {
-                    console.error(`Error fetching transaction data for ${event.id.txDigest}:`, error);
-                    return {};
-                  }
-                },
-                CACHE_CONFIG.API_RESPONSE_TTL
-              );
-              
-              if (txInputData.cycle_day !== undefined) {
-                transactionInputMap.set(parsedEvent.circle_id, txInputData);
+            // Try to extract cycle_day from the transaction that's already in our data
+            // Find the transaction in our fetched data that contains this event
+            const parentTransaction = allWalletTransactions.find(tx => 
+              tx.digest === event.id?.txDigest
+            );
+            
+            if (parentTransaction) {
+              const cycleDay = extractCycleDayFromTransaction(parentTransaction);
+              if (cycleDay !== undefined) {
+                transactionInputMap.set(parsedEvent.circle_id, { cycle_day: cycleDay });
+                console.log(`Extracted cycle_day ${cycleDay} for circle ${parsedEvent.circle_id}`);
               }
             }
           }
@@ -2393,7 +2449,7 @@ export default function Dashboard() {
       setLoading(false);
       setIsBackgroundRefreshing(false);
     }
-  }, [userAddress, isBackgroundRefreshing, fetchAllWalletTransactions, extractCircleEventsFromTransactions, getAllUserAddresses]); // Updated dependencies
+  }, [userAddress, isBackgroundRefreshing, fetchContractSpecificTransactions, extractCircleEventsFromTransactions, getAllUserAddresses]); // Updated dependencies
 
   // Network switching function
   const switchNetwork = useCallback((newNetwork: 'testnet' | 'mainnet') => {

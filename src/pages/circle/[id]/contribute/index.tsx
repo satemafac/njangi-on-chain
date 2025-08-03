@@ -9,7 +9,7 @@ import { priceService } from '../../../../services/price-service';
 import { PACKAGE_ID, getCirclePackageId } from '../../../../services/circle-service';
 import SimplifiedSwapUI from '../../../../components/SimplifiedSwapUI';
 import { getCoinType } from '../../../../config/constants';
-import { getCurrentRpcUrl } from '../../../../services/network-config';
+import { getCurrentRpcUrl, getCurrentNetwork } from '../../../../services/network-config';
 
 // Add this helper function at the top level
 function getJsonRpcUrl(): string {
@@ -2127,7 +2127,8 @@ export default function ContributeToCircle() {
           account,
           circleId: circle.id,
           walletId: circle.walletId,
-          useUSDC: hasEnoughUSDC // Tell backend to prefer USDC if available
+          useUSDC: hasEnoughUSDC, // Tell backend to prefer USDC if available
+          network: getCurrentNetwork() // Include current network selection
         }),
       });
       
@@ -2282,7 +2283,8 @@ export default function ContributeToCircle() {
           account,
           circleId: circle.id,
           walletId: circle.walletId,
-          depositAmount: Math.floor(depositAmount * 1e9)
+          depositAmount: Math.floor(depositAmount * 1e9),
+          network: getCurrentNetwork() // Include current network selection
         }),
       });
       
@@ -2731,7 +2733,8 @@ export default function ContributeToCircle() {
           circleId: circle.id,
           walletId: circle.walletId,
           usdcAmount: requiredAmountInCents, // Send amount in CENTS
-          isSecurityDeposit
+          isSecurityDeposit,
+          network: getCurrentNetwork() // Include current network selection
         }),
       });
       

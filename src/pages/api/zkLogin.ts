@@ -1202,33 +1202,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
+          // Handle network parameter if provided by frontend
+          const requestedNetwork = req.body.network;
+          if (requestedNetwork && (requestedNetwork === 'testnet' || requestedNetwork === 'mainnet')) {
+            console.log(`Frontend requested network: ${requestedNetwork}, current server network: ${getCurrentNetwork()}`);
+          }
+
           try {
             // Create a transaction for admin_approve_member
             console.log(`Building moveCall for adding member: ${req.body.circleId}, member: ${req.body.memberAddress}`);
             
             try {
-              // Get the correct package ID for this circle
-              const circlePackageId = await getCirclePackageId(req.body.circleId, account.userAddr);
-              console.log(`Using package ID for circle ${req.body.circleId}: ${circlePackageId}`);
+              // Temporarily set the network to match the frontend request
+              const originalNetwork = getCurrentNetwork();
+              let txResult;
               
-              // Send transaction using zkLogin service
-              const txResult = await instance.sendTransaction(
-                account,
-                (txb: Transaction) => {
-                  txb.setSender(account.userAddr);
-                  
-                  // Call our implemented admin_approve_member function
-                  txb.moveCall({
-                    target: `${circlePackageId}::njangi_circles::admin_approve_member`,
-                    arguments: [
-                      txb.object(req.body.circleId),
-                      txb.pure.address(req.body.memberAddress),
-                      txb.object("0x6")  // Clock object
-                    ]
-                  });
-                },
-                { gasBudget: 100000000 } // Higher gas budget for member approval
-              );
+              try {
+                if (requestedNetwork && requestedNetwork !== originalNetwork) {
+                  console.log(`Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for transaction`);
+                  setCurrentNetwork(requestedNetwork as NetworkType);
+                  // Reinitialize the EnokiZkLoginService with the new network configuration
+                  instance.initializeWithNetwork();
+                }
+                
+                // Get the correct package ID for this circle using the current network context
+                const circlePackageId = await getCirclePackageId(req.body.circleId, account.userAddr);
+                console.log(`Using package ID for circle ${req.body.circleId}: ${circlePackageId} (network: ${getCurrentNetwork()})`);
+              
+                // Send transaction using zkLogin service
+                txResult = await instance.sendTransaction(
+                  account,
+                  (txb: Transaction) => {
+                    txb.setSender(account.userAddr);
+                    
+                    // Call our implemented admin_approve_member function
+                    txb.moveCall({
+                      target: `${circlePackageId}::njangi_circles::admin_approve_member`,
+                      arguments: [
+                        txb.object(req.body.circleId),
+                        txb.pure.address(req.body.memberAddress),
+                        txb.object("0x6")  // Clock object
+                      ]
+                    });
+                  },
+                  { gasBudget: 100000000 } // Higher gas budget for member approval
+                );
+              } finally {
+                // Always restore the original network and reinitialize the service
+                if (requestedNetwork && requestedNetwork !== originalNetwork) {
+                  console.log(`Restoring server network back to ${originalNetwork}`);
+                  setCurrentNetwork(originalNetwork as NetworkType);
+                  instance.initializeWithNetwork();
+                }
+              }
               
               console.log('Admin approve member transaction successful:', txResult);
               return res.status(200).json({
@@ -1326,42 +1352,68 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
+          // Handle network parameter if provided by frontend
+          const requestedNetwork = req.body.network;
+          if (requestedNetwork && (requestedNetwork === 'testnet' || requestedNetwork === 'mainnet')) {
+            console.log(`Frontend requested network: ${requestedNetwork}, current server network: ${getCurrentNetwork()}`);
+          }
+
           try {
             // Create a transaction for admin_approve_members
             console.log(`Building moveCall for adding multiple members to circle: ${req.body.circleId}, member count: ${req.body.memberAddresses.length}`);
             
             try {
-              // Get the correct package ID for this circle
-              const circlePackageId = await getCirclePackageId(req.body.circleId, account.userAddr);
-              console.log(`Using package ID for bulk approve in circle ${req.body.circleId}: ${circlePackageId}`);
+              // Temporarily set the network to match the frontend request
+              const originalNetwork = getCurrentNetwork();
+              let txResult;
               
-              // Normalize all addresses
-              const normalizedAddresses = req.body.memberAddresses.map((addr: string) => {
-                // Ensure all addresses have 0x prefix and are lowercase
-                return addr.toLowerCase().startsWith('0x') ? addr.toLowerCase() : `0x${addr.toLowerCase()}`;
-              });
+              try {
+                if (requestedNetwork && requestedNetwork !== originalNetwork) {
+                  console.log(`Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for transaction`);
+                  setCurrentNetwork(requestedNetwork as NetworkType);
+                  // Reinitialize the EnokiZkLoginService with the new network configuration
+                  instance.initializeWithNetwork();
+                }
+                
+                // Get the correct package ID for this circle using the current network context
+                const circlePackageId = await getCirclePackageId(req.body.circleId, account.userAddr);
+                console.log(`Using package ID for bulk approve in circle ${req.body.circleId}: ${circlePackageId} (network: ${getCurrentNetwork()})`);
+                
+                // Normalize all addresses
+                const normalizedAddresses = req.body.memberAddresses.map((addr: string) => {
+                  // Ensure all addresses have 0x prefix and are lowercase
+                  return addr.toLowerCase().startsWith('0x') ? addr.toLowerCase() : `0x${addr.toLowerCase()}`;
+                });
 
-              // Send transaction using zkLogin service
-              const txResult = await instance.sendTransaction(
-                account,
-                (txb: Transaction) => {
-                  txb.setSender(account.userAddr);
-                  
-                  // Create a move vector of addresses
-                  const addressArgs = normalizedAddresses.map((addr: string) => txb.pure.address(addr));
-                  
-                  // Call our implemented admin_approve_members function
-                  txb.moveCall({
-                    target: `${circlePackageId}::njangi_circles::admin_approve_members`,
-                    arguments: [
-                      txb.object(req.body.circleId),
-                      txb.makeMoveVec({ elements: addressArgs, type: 'address' }),
-                      txb.object("0x6")  // Clock object
-                    ]
-                  });
-                },
-                { gasBudget: 150000000 } // Higher gas budget for multiple member approvals
-              );
+                // Send transaction using zkLogin service
+                txResult = await instance.sendTransaction(
+                  account,
+                  (txb: Transaction) => {
+                    txb.setSender(account.userAddr);
+                    
+                    // Create a move vector of addresses
+                    const addressArgs = normalizedAddresses.map((addr: string) => txb.pure.address(addr));
+                    
+                    // Call our implemented admin_approve_members function
+                    txb.moveCall({
+                      target: `${circlePackageId}::njangi_circles::admin_approve_members`,
+                      arguments: [
+                        txb.object(req.body.circleId),
+                        txb.makeMoveVec({ elements: addressArgs, type: 'address' }),
+                        txb.object("0x6")  // Clock object
+                      ]
+                    });
+                  },
+                  { gasBudget: 150000000 } // Higher gas budget for multiple member approvals
+                );
+              } finally {
+                // Always restore the original network and reinitialize the service
+                if (requestedNetwork && requestedNetwork !== originalNetwork) {
+                  console.log(`Restoring server network back to ${originalNetwork}`);
+                  setCurrentNetwork(originalNetwork as NetworkType);
+                  instance.initializeWithNetwork();
+                }
+              }
               
               console.log('Admin approve multiple members transaction successful:', txResult);
               return res.status(200).json({
@@ -1458,33 +1510,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
+          // Handle network parameter if provided by frontend
+          const requestedNetwork = req.body.network;
+          if (requestedNetwork && (requestedNetwork === 'testnet' || requestedNetwork === 'mainnet')) {
+            console.log(`Frontend requested network: ${requestedNetwork}, current server network: ${getCurrentNetwork()}`);
+          }
+
           try {
             console.log(`Building moveCall for removing member: ${req.body.memberAddress} from circle: ${req.body.circleId}`);
             
             try {
-              // Get the correct package ID for this circle
-              const circlePackageId = await getCirclePackageId(req.body.circleId, account.userAddr);
-              console.log(`Using package ID for circle ${req.body.circleId}: ${circlePackageId}`);
+              // Temporarily set the network to match the frontend request
+              const originalNetwork = getCurrentNetwork();
+              let txResult;
               
-              // Send transaction using zkLogin service
-              const txResult = await instance.sendTransaction(
-                account,
-                (txb: Transaction) => {
-                  txb.setSender(account.userAddr);
-                  
-                  // Call the admin_remove_member function
-                  txb.moveCall({
-                    target: `${circlePackageId}::njangi_circles::admin_remove_member`,
-                    arguments: [
-                      txb.object(req.body.circleId),
-                      txb.pure.address(req.body.memberAddress),
-                      txb.object(req.body.walletId),
-                      txb.object("0x6")  // Clock object
-                    ]
-                  });
-                },
-                { gasBudget: 100000000 } // Higher gas budget for member removal
-              );
+              try {
+                if (requestedNetwork && requestedNetwork !== originalNetwork) {
+                  console.log(`Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for transaction`);
+                  setCurrentNetwork(requestedNetwork as NetworkType);
+                  // Reinitialize the EnokiZkLoginService with the new network configuration
+                  instance.initializeWithNetwork();
+                }
+                
+                // Get the correct package ID for this circle using the current network context
+                const circlePackageId = await getCirclePackageId(req.body.circleId, account.userAddr);
+                console.log(`Using package ID for circle ${req.body.circleId}: ${circlePackageId} (network: ${getCurrentNetwork()})`);
+              
+                // Send transaction using zkLogin service
+                txResult = await instance.sendTransaction(
+                  account,
+                  (txb: Transaction) => {
+                    txb.setSender(account.userAddr);
+                    
+                    // Call the admin_remove_member function
+                    txb.moveCall({
+                      target: `${circlePackageId}::njangi_circles::admin_remove_member`,
+                      arguments: [
+                        txb.object(req.body.circleId),
+                        txb.pure.address(req.body.memberAddress),
+                        txb.object(req.body.walletId),
+                        txb.object("0x6")  // Clock object
+                      ]
+                    });
+                  },
+                  { gasBudget: 100000000 } // Higher gas budget for member removal
+                );
+              } finally {
+                // Always restore the original network and reinitialize the service
+                if (requestedNetwork && requestedNetwork !== originalNetwork) {
+                  console.log(`Restoring server network back to ${originalNetwork}`);
+                  setCurrentNetwork(originalNetwork as NetworkType);
+                  instance.initializeWithNetwork();
+                }
+              }
               
               console.log('Admin remove member transaction successful:', txResult);
               return res.status(200).json({
@@ -2252,6 +2330,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
+          // Handle network parameter if provided by frontend
+          const requestedNetwork = req.body.network;
+          if (requestedNetwork && (requestedNetwork === 'testnet' || requestedNetwork === 'mainnet')) {
+            console.log(`Frontend requested network: ${requestedNetwork}, current server network: ${getCurrentNetwork()}`);
+          }
+
           console.log(`Creating SUI security deposit transaction for circle ${circleId}, wallet ${walletId}, amount ${depositAmount}`);
           
           // Let's verify the deposit amount matches what's required by the circle
@@ -2316,38 +2400,63 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             // Continue with the original amount
           }
 
-          // Execute the transaction with zkLogin
-            const txResult = await instance.sendTransaction(
+          // Execute the transaction with zkLogin and network switching
+          let txResult;
+          const originalNetwork = getCurrentNetwork();
+          
+          try {
+            // Temporarily set the network to match the frontend request
+            if (requestedNetwork && requestedNetwork !== originalNetwork) {
+              console.log(`Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for transaction`);
+              setCurrentNetwork(requestedNetwork as NetworkType);
+              // Reinitialize the EnokiZkLoginService with the new network configuration
+              instance.initializeWithNetwork();
+            }
+            
+            // Get the correct package ID for this circle using the current network context
+            const circlePackageId = await getCirclePackageId(circleId, session.account!.userAddr);
+            const packageIdToUse = circlePackageId || getCurrentPackageId();
+            console.log(`Using package ID for paySecurityDeposit: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
+            
+            txResult = await instance.sendTransaction(
               session.account,
-            (txb) => {
-              txb.setSender(session.account!.userAddr);
-              
-              // Split SUI from gas payment
-              const [depositCoin] = txb.splitCoins(txb.gas, [
-                txb.pure.u64(depositAmount)
-              ]);
+              (txb) => {
+                txb.setSender(session.account!.userAddr);
                 
-              // Call the NEW entry function in njangi_circles with the resulting coin
+                // Split SUI from gas payment
+                const [depositCoin] = txb.splitCoins(txb.gas, [
+                  txb.pure.u64(depositAmount)
+                ]);
+                  
+                // Call the NEW entry function in njangi_circles with the resulting coin
                 txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_circles::member_deposit_security_deposit`,
-                arguments: [
-                  txb.object(circleId), // Pass circleId first
-                  txb.object(walletId),
-                  depositCoin,
-                  txb.object("0x6"), // Clock object
-                ],
-                typeArguments: [SUI_COIN_TYPE] // Specify SUI type argument
-              });
+                  target: `${packageIdToUse}::njangi_circles::member_deposit_security_deposit`,
+                  arguments: [
+                    txb.object(circleId), // Pass circleId first
+                    txb.object(walletId),
+                    depositCoin,
+                    txb.object("0x6"), // Clock object
+                  ],
+                  typeArguments: [SUI_COIN_TYPE] // Specify SUI type argument
+                });
             },
             { gasBudget: 100000000 } // Keep increased gas budget
-          );
+            );
+          } finally {
+            // Always restore the original network and reinitialize the service
+            if (requestedNetwork && requestedNetwork !== originalNetwork) {
+              console.log(`Restoring server network back to ${originalNetwork}`);
+              setCurrentNetwork(originalNetwork as NetworkType);
+              instance.initializeWithNetwork();
+            }
+          }
           
           console.log('Security deposit transaction successful:', txResult);
-            return res.status(200).json({ 
-              digest: txResult.digest,
-              status: txResult.status,
-              gasUsed: txResult.gasUsed
-            });
+          return res.status(200).json({ 
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
         } catch (err) {
           console.error('Security deposit error:', err);
           if (err instanceof Error && 
