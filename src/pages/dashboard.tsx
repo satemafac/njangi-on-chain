@@ -171,6 +171,8 @@ interface Circle {
   isAdmin: boolean;
   isActive: boolean;
   walletId?: string; // Add optional wallet ID
+  createdAt?: number; // Add creation timestamp for better sorting
+  transactionDigest?: string; // Add transaction digest for reference
 }
 
 // Type definitions for SUI event payloads
@@ -300,6 +302,25 @@ declare global {
 }
 
 // Update the TokenIcon component to use existing SVG files for SUI and USDC
+// Skeleton loading component for circle cards
+const CircleCardSkeleton = () => (
+  <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 animate-pulse">
+    <div className="flex justify-between items-start mb-4">
+      <div className="h-6 bg-gray-200 dark:bg-gray-600 rounded w-3/4"></div>
+      <div className="h-5 bg-gray-200 dark:bg-gray-600 rounded w-16"></div>
+    </div>
+    <div className="space-y-3">
+      <div className="h-4 bg-gray-200 dark:bg-gray-600 rounded w-1/2"></div>
+      <div className="h-4 bg-gray-200 dark:bg-gray-600 rounded w-2/3"></div>
+      <div className="h-4 bg-gray-200 dark:bg-gray-600 rounded w-1/3"></div>
+    </div>
+    <div className="mt-4 flex justify-between items-center">
+      <div className="h-4 bg-gray-200 dark:bg-gray-600 rounded w-1/4"></div>
+      <div className="h-8 bg-gray-200 dark:bg-gray-600 rounded w-20"></div>
+    </div>
+  </div>
+);
+
 const TokenIcon = ({ symbol }: { symbol: string }) => {
   // Define the path to each token icon
   const iconPath = (tokenSymbol: string): string => {
@@ -773,9 +794,9 @@ export default function Dashboard() {
   const [packageId, setPackageId] = useState<string>(() => getCurrentPackageId());
 
   // Pagination state
-  const [displayedCirclesCount, setDisplayedCirclesCount] = useState(9); // Start with 9 circles
+  const [displayedCirclesCount, setDisplayedCirclesCount] = useState(6); // Start with 6 circles for better initial load
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const CIRCLES_PER_PAGE = 9; // Load 9 more each time
+  const CIRCLES_PER_PAGE = 6; // Load 6 more each time for optimal performance
 
   // Add MoonPay state for the current implementation
   const [moonpayWidget, setMoonpayWidget] = useState<{ show: () => void; close: () => void } | null>(null);
@@ -989,22 +1010,73 @@ export default function Dashboard() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const savedNetwork = localStorage.getItem('sui-network') as 'testnet' | 'mainnet' | null;
+      console.log('🌍 Dashboard: Initializing network configuration...', { savedNetwork, currentNetwork: network });
+      
       if (savedNetwork && savedNetwork !== network) {
         // Update centralized network configuration
+        console.log('🌍 Dashboard: Setting network from localStorage:', savedNetwork);
         setCurrentNetwork(savedNetwork);
-        getCurrentNetworkConfig();
+        
+        // Wait for network config to be updated then update local state
+        const updatedConfig = getCurrentNetworkConfig();
+        console.log('🌍 Dashboard: Updated network config:', { 
+          network: savedNetwork, 
+          rpcUrl: updatedConfig.rpcUrl,
+          packageId: updatedConfig.packageId 
+        });
         
         setNetwork(savedNetwork);
-        setRpcUrl(getCurrentRpcUrl());
-        setPackageId(getCurrentPackageId());
+        setRpcUrl(updatedConfig.rpcUrl);
+        setPackageId(updatedConfig.packageId);
         setShowTestnetBanner(savedNetwork === 'testnet');
         
-        console.log(`Loaded network preference: ${savedNetwork}`);
+        // Update global window configuration for consistency
+        if (typeof window !== 'undefined') {
+          window.CURRENT_NETWORK_CONFIG = {
+            rpcUrl: updatedConfig.rpcUrl,
+            packageId: updatedConfig.packageId,
+            usdcAddress: updatedConfig.coinTypes.USDC,
+            networkName: savedNetwork,
+            enoki: {
+              apiKey: updatedConfig.enoki.apiKey,
+              baseUrl: updatedConfig.enoki.network === 'mainnet' ? 'https://enoki.mystenlabs.com' : 'https://enoki.testnet.mystenlabs.com',
+              graphqlUrl: updatedConfig.enoki.network === 'mainnet' ? 'https://enoki.mystenlabs.com/v1/graphql' : 'https://enoki.testnet.mystenlabs.com/v1/graphql'
+            }
+          };
+        }
+        
+        console.log(`✅ Dashboard: Network configuration loaded: ${savedNetwork}`);
       } else {
         // Ensure centralized config is initialized with current network
+        console.log('🌍 Dashboard: Using default network:', network);
         setCurrentNetwork(network);
-        // Also ensure banner visibility matches current network
+        
+        // Ensure local state matches centralized config
+        const currentConfig = getCurrentNetworkConfig();
+        setRpcUrl(currentConfig.rpcUrl);
+        setPackageId(currentConfig.packageId);
         setShowTestnetBanner(getCurrentNetwork() === 'testnet');
+        
+        // Update global window configuration for consistency
+        if (typeof window !== 'undefined') {
+          window.CURRENT_NETWORK_CONFIG = {
+            rpcUrl: currentConfig.rpcUrl,
+            packageId: currentConfig.packageId,
+            usdcAddress: currentConfig.coinTypes.USDC,
+            networkName: getCurrentNetwork(),
+            enoki: {
+              apiKey: currentConfig.enoki.apiKey,
+              baseUrl: currentConfig.enoki.network === 'mainnet' ? 'https://enoki.mystenlabs.com' : 'https://enoki.testnet.mystenlabs.com',
+              graphqlUrl: currentConfig.enoki.network === 'mainnet' ? 'https://enoki.mystenlabs.com/v1/graphql' : 'https://enoki.testnet.mystenlabs.com/v1/graphql'
+            }
+          };
+        }
+        
+        console.log('✅ Dashboard: Default network configuration set:', { 
+          network: getCurrentNetwork(), 
+          rpcUrl: currentConfig.rpcUrl,
+          packageId: currentConfig.packageId 
+        });
       }
     }
   }, []); // Run only once on mount
@@ -1202,7 +1274,7 @@ export default function Dashboard() {
 
 
   // Process circle data correctly after the contract restructuring
-  const processCircleObject = async (objectData: EnhancedObjectData, userAddress: string, circleCreationData?: CircleCreatedEvent, client?: SuiClient) => {
+  const processCircleObject = async (objectData: EnhancedObjectData, userAddress: string, circleCreationData?: CircleCreatedEvent, client?: SuiClient, transactionTimestamp?: number, transactionDigest?: string) => {
     // Use optional chaining and nullish coalescing for safer access
     if (!objectData?.data?.content?.fields) { 
       console.warn('Invalid object data structure or missing fields', objectData);
@@ -1383,7 +1455,9 @@ export default function Dashboard() {
       nextPayoutTime: nextPayoutTime,
       memberStatus: 'active' as const,
       isAdmin: admin === userAddress,
-      isActive: isActive
+      isActive: isActive,
+      createdAt: transactionTimestamp, // Add creation timestamp
+      transactionDigest: transactionDigest // Add transaction digest for reference
     };
   };
 
@@ -1704,8 +1778,29 @@ export default function Dashboard() {
     setLoadingProgress({ stage: 'network_validation', current: 0, total: 0, message: 'Validating network configuration...' });
     
     try {
-      // Create the Sui client
-      const client = createSuiClientWithRetry(rpcUrl);
+      // Validate network configuration before proceeding
+      const currentRpcUrl = getCurrentRpcUrl();
+      const currentPackageId = getCurrentPackageId();
+      const currentNetwork = getCurrentNetwork();
+      
+      console.log('🌍 fetchUserCircles: Network validation:', { 
+        currentNetwork, 
+        currentRpcUrl, 
+        currentPackageId,
+        localRpcUrl: rpcUrl 
+      });
+      
+      // Ensure we have valid network configuration
+      if (!currentRpcUrl || !currentPackageId) {
+        throw new Error(`Invalid network configuration for ${currentNetwork}: missing RPC URL or package ID`);
+      }
+      
+      // Use the centralized network configuration instead of local state
+      const validatedRpcUrl = currentRpcUrl;
+      console.log('🌍 fetchUserCircles: Using validated RPC URL:', validatedRpcUrl);
+      
+      // Create the Sui client with validated configuration
+      const client = createSuiClientWithRetry(validatedRpcUrl);
       
       // Get all user addresses for comprehensive circle fetching
       const allUserAddresses = await getAllUserAddresses();
@@ -2099,7 +2194,12 @@ export default function Dashboard() {
       
       // First, collect all unique circle IDs where user is involved (admin or member)
       const allUserCircleIds = new Set<string>();
-      const circleMetadata = new Map<string, { isAdmin: boolean; eventData: any }>();
+      const circleMetadata = new Map<string, { 
+        isAdmin: boolean; 
+        eventData: any; 
+        createdAt?: number; 
+        transactionDigest?: string; 
+      }>();
       
       // Collect admin circles
       allCircleEvents
@@ -2110,7 +2210,12 @@ export default function Dashboard() {
         .forEach(event => {
           const parsedEvent = event.parsedJson as CircleCreatedEvent;
           allUserCircleIds.add(parsedEvent.circle_id);
-          circleMetadata.set(parsedEvent.circle_id, { isAdmin: true, eventData: parsedEvent });
+          circleMetadata.set(parsedEvent.circle_id, { 
+            isAdmin: true, 
+            eventData: parsedEvent,
+            createdAt: event.timestampMs ? Number(event.timestampMs) : undefined,
+            transactionDigest: event.id?.txDigest
+          });
         });
       
       // Collect member circles from MemberJoined events
@@ -2124,7 +2229,12 @@ export default function Dashboard() {
           allUserCircleIds.add(parsedEvent.circle_id);
           // Only set as member if not already marked as admin
           if (!circleMetadata.has(parsedEvent.circle_id)) {
-            circleMetadata.set(parsedEvent.circle_id, { isAdmin: false, eventData: parsedEvent });
+            circleMetadata.set(parsedEvent.circle_id, { 
+              isAdmin: false, 
+              eventData: parsedEvent,
+              createdAt: event.timestampMs ? Number(event.timestampMs) : undefined,
+              transactionDigest: event.id?.txDigest
+            });
           }
         });
       
@@ -2139,7 +2249,12 @@ export default function Dashboard() {
           allUserCircleIds.add(parsedEvent.circle_id);
           // Only set as member if not already marked as admin
           if (!circleMetadata.has(parsedEvent.circle_id)) {
-            circleMetadata.set(parsedEvent.circle_id, { isAdmin: false, eventData: parsedEvent });
+            circleMetadata.set(parsedEvent.circle_id, { 
+              isAdmin: false, 
+              eventData: parsedEvent,
+              createdAt: event.timestampMs ? Number(event.timestampMs) : undefined,
+              transactionDigest: event.id?.txDigest
+            });
           }
         });
       
@@ -2239,7 +2354,14 @@ export default function Dashboard() {
             // Process circle using the helper function with all data sources
             let processedCircle;
             try {
-              processedCircle = await processCircleObject(circleData, userAddress, metadata.eventData, client);
+              processedCircle = await processCircleObject(
+                circleData, 
+                userAddress, 
+                metadata.eventData, 
+                client, 
+                metadata.createdAt, 
+                metadata.transactionDigest
+              );
             } catch (error) {
               console.error(`Error processing circle ${circleId}:`, error);
               
@@ -2396,7 +2518,11 @@ export default function Dashboard() {
       let canRetry = true;
       
       if (error instanceof Error) {
-        if (error.message.includes('Network mismatch') || error.message.includes('not found')) {
+        if (error.message.includes('Invalid network configuration')) {
+          errorType = 'service_unavailable';
+          userMessage = 'Network configuration error. Please refresh the page to reinitialize network settings.';
+          canRetry = true;
+        } else if (error.message.includes('Network mismatch') || error.message.includes('not found')) {
           errorType = 'network_mismatch';
           userMessage = `Some circles may not be available on ${getCurrentNetwork()} network. Try switching networks or refreshing.`;
           canRetry = true;
@@ -2404,9 +2530,9 @@ export default function Dashboard() {
           errorType = 'service_unavailable';
           userMessage = 'Service is temporarily unavailable due to high load. Please wait a moment and try again.';
           canRetry = true;
-        } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+        } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError') || error.message.includes('fetch')) {
           errorType = 'connection_failed';
-          userMessage = 'Connection failed. Please check your internet connection and try again.';
+          userMessage = 'Connection failed. This might be due to network configuration or connectivity issues. Please check your internet connection and try again.';
           canRetry = true;
         } else if (error.message.includes('timeout')) {
           errorType = 'connection_failed';
@@ -2538,13 +2664,31 @@ export default function Dashboard() {
     setIsConfirmModalOpen(true);
   }, [userAddress, setConfirmModalProps, setIsConfirmModalOpen]);
 
-  // Utility function to sort circles chronologically (newest to oldest)
+  // Enhanced utility function to sort circles chronologically (newest to oldest)
   const getSortedCircles = useCallback((circleList: Circle[]) => {
     return [...circleList].sort((a, b) => {
-      // Use creation timestamp if available, otherwise use nextPayoutTime as proxy
+      // Priority 1: Use creation timestamp if available (most accurate)
+      const createdAtA = a.createdAt || 0;
+      const createdAtB = b.createdAt || 0;
+      
+      if (createdAtA && createdAtB) {
+        return createdAtB - createdAtA; // Newest first (descending order)
+      }
+      
+      // Priority 2: If one has creation timestamp and other doesn't, prioritize the one with timestamp
+      if (createdAtA && !createdAtB) return -1; // a comes first
+      if (!createdAtA && createdAtB) return 1;  // b comes first
+      
+      // Priority 3: Fallback to nextPayoutTime as proxy for creation order
       const timeA = a.nextPayoutTime || 0;
       const timeB = b.nextPayoutTime || 0;
-      return timeB - timeA; // Newest first (descending order)
+      
+      if (timeA !== timeB) {
+        return timeB - timeA; // Newest first (descending order)
+      }
+      
+      // Priority 4: Final fallback to alphabetical by name for consistency
+      return a.name.localeCompare(b.name);
     });
   }, []);
 
@@ -2554,24 +2698,62 @@ export default function Dashboard() {
     return sortedCircles.slice(0, count);
   }, [getSortedCircles]);
 
-  // Function to load more circles
+  // Enhanced function to load more circles with better performance
   const loadMoreCircles = useCallback(() => {
+    if (isLoadingMore) return; // Prevent multiple simultaneous loads
+    
     setIsLoadingMore(true);
-    // Simulate a small delay for better UX
-    setTimeout(() => {
-      setDisplayedCirclesCount(prev => prev + CIRCLES_PER_PAGE);
-      setIsLoadingMore(false);
-    }, 300);
-  }, [CIRCLES_PER_PAGE]);
+    
+    // Use requestAnimationFrame for smoother UI updates
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        setDisplayedCirclesCount(prev => {
+          const newCount = prev + CIRCLES_PER_PAGE;
+          console.log(`📄 Loading more circles: ${prev} → ${newCount}`);
+          
+          // Show a subtle success message
+          setTimeout(() => {
+            toast.success(`Loaded ${CIRCLES_PER_PAGE} more circles`, { 
+              duration: 2000,
+              position: 'bottom-right'
+            });
+          }, 100);
+          
+          return newCount;
+        });
+        setIsLoadingMore(false);
+      }, 150); // Reduced delay for faster loading
+    });
+  }, [CIRCLES_PER_PAGE, isLoadingMore]);
 
   // Reset displayed count when circles change (after refresh)
   useEffect(() => {
-    setDisplayedCirclesCount(9); // Reset to initial value
+    setDisplayedCirclesCount(6); // Reset to initial value
   }, [circles.length]);
 
   // Enhanced useEffect to handle initial load and cache validation
   useEffect(() => {
     if (!userAddress) return;
+    
+    // Ensure network configuration is properly initialized before fetching
+    const currentRpcUrl = getCurrentRpcUrl();
+    const currentPackageId = getCurrentPackageId();
+    const currentNetwork = getCurrentNetwork();
+    
+    if (!currentRpcUrl || !currentPackageId) {
+      console.log('⏳ Network configuration not ready, waiting...', { 
+        currentNetwork, 
+        currentRpcUrl: currentRpcUrl || 'MISSING', 
+        currentPackageId: currentPackageId || 'MISSING' 
+      });
+      return;
+    }
+    
+    console.log('✅ Network configuration ready, proceeding with circle fetch...', { 
+      currentNetwork, 
+      currentRpcUrl, 
+      currentPackageId 
+    });
     
     // Check if we're coming from create-circle page
     const shouldForceRefresh = router.query.refreshCircles === 'true';
@@ -2608,7 +2790,7 @@ export default function Dashboard() {
     // Only fetch if we don't have cached data or cache is stale
     console.log('Cache miss or stale, fetching circles...');
     fetchUserCircles(false);
-  }, [userAddress, router]); // Added router to dependencies
+  }, [userAddress, router, rpcUrl, packageId]); // Added network config dependencies
 
   // Add manual refresh function
   const handleManualRefresh = useCallback(() => {
@@ -4186,11 +4368,25 @@ export default function Dashboard() {
                 </div>
 
               {loading ? (
-                <div className="flex justify-center items-center py-12">
-                  <svg className="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {Array.from({ length: 6 }, (_, i) => (
+                      <CircleCardSkeleton key={i} />
+                    ))}
+                  </div>
+                  <div className="text-center py-4">
+                    <div className="text-sm text-gray-500 dark:text-gray-400">
+                      {loadingProgress.message}
+                    </div>
+                    <div className="mt-2 w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                      <div 
+                        className="bg-blue-600 h-2 rounded-full transition-all duration-300" 
+                        style={{ 
+                          width: `${loadingProgress.total > 0 ? (loadingProgress.current / loadingProgress.total) * 100 : 0}%` 
+                        }}
+                      ></div>
+                    </div>
+                  </div>
                 </div>
               ) : error ? (
                 <div className="bg-red-50 rounded-lg p-8 text-center">
