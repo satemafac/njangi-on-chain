@@ -7,7 +7,6 @@ import * as Select from '@radix-ui/react-select';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
-import { SuiClient } from '@mysten/sui.js/client';
 import { getCurrentRpcUrl, getCurrentPackageId, getCurrentNetwork } from '../services/network-config';
 
 // Add batch optimization imports
