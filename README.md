@@ -1,7 +1,10 @@
-# Njangi Rotational Circle Smart Contract
+<img width="1714" alt="image" src="https://github.com/user-attachments/assets/9e928b07-3395-4cc6-9e17-b7b2b7950742" />
+
+# Njangi On-Chain Rotational Circle Smart Contract
+Try it out https://njangi-on-chain-1014e48e59ae.herokuapp.com/
 
 ## Overview
-Njangi is a decentralized implementation of the classic Rotational Savings and Credit Association (ROSCA).  
+Njangi On-Chain is a decentralized implementation of the classic Rotational Savings and Credit Association (ROSCA).  
 Members contribute a fixed amount of stable-value tokens each cycle, and the pooled funds are paid out to one member per cycle following a predefined rotation order.  
 All logic is enforced on-chain by a Move smart contract deployed to the Sui blockchain.
 
@@ -17,6 +20,14 @@ All logic is enforced on-chain by a Move smart contract deployed to the Sui bloc
 3. **Cycle Contributions** – During each cycle every member deposits the fixed amount before the deadline.  
 4. **Automated Payout** – At cycle close the contract automatically transfers the pooled balance to that cycle's designated recipient.  
 5. **Completion** – After the final cycle, security deposits are released (minus any penalties) and the circle is closed.
+
+
+<img width="1722" alt="image" src="https://github.com/user-attachments/assets/dbc5dcf2-6345-4a5e-9d3a-633f910c43bd" />
+
+<img width="1722" alt="image" src="https://github.com/user-attachments/assets/055a9b24-3014-4cbb-9a4d-971e780d96c9" />
+
+<img width="1720" alt="image" src="https://github.com/user-attachments/assets/9ef55a5a-bcac-4199-b452-ef8051d6f96a" />
+
 
 ## Contract Interface (Move)
 ```move
@@ -110,5 +121,4 @@ Front-end, API and automated scripts live under `web/` and `scripts/` directorie
 - 🌐 Multicurrency support & automatic stablecoin swaps  
 - 🛡️ Formal verification of critical contract invariants
 
-## License
-[Specify License]
+
