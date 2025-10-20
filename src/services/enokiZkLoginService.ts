@@ -40,9 +40,10 @@ const MAX_EPOCH = 2; // keep ephemeral keys active for this many Sui epochs from
 // Dynamic GraphQL URL based on network
 function getGraphQLUrl(): string {
   const network = getCurrentNetwork();
+  // Use the official Sui RPC GraphQL endpoints
   return network === 'mainnet' 
-    ? 'https://sui-mainnet.mystenlabs.com/graphql'
-    : 'https://sui-testnet.mystenlabs.com/graphql';
+    ? 'https://mainnet.sui.io:443/graphql'
+    : 'https://testnet.sui.io:443/graphql';
 }
 
 export type OAuthProvider = 'Google' | 'Facebook' | 'Apple';
@@ -607,7 +608,9 @@ export class EnokiZkLoginService {
         return verifyResult.success;
     } catch (err) {
         console.error('Signature verification error:', err);
-        throw err;
+        // Don't throw - signature verification is optional and transaction may have already succeeded
+        console.warn('Signature verification failed, but this does not necessarily mean the transaction failed');
+        return false;
     }
   }
 

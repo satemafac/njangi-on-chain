@@ -6,26 +6,26 @@ edition = "2024"
 
 [dependencies]
 Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "041c5f2bae2fe52079e44b70514333532d69f4e6" }
-Pyth = { git = "https://github.com/pyth-network/pyth-crosschain.git", subdir = "target_chains/sui/contracts", rev = "sui-contract-mainnet" }
+Pyth = { git = "https://github.com/pyth-network/pyth-crosschain.git", subdir = "target_chains/sui/contracts", rev = "sui-contract-testnet" }
 # Note: Wormhole is a dependency of Pyth, so we don't need to include it explicitly to avoid conflicts
 
 # DYNAMIC NETWORK CONFIGURATION
 # This file is dynamically updated by scripts/switch-network.sh
-# Current configuration: MAINNET
+# Current configuration: TESTNET
 
-# CETUS INTEGRATION - MAINNET DEPENDENCIES
-# Using official mainnet package addresses (mainnet-v1.49.0) for production protocol integration
+# CETUS INTEGRATION - TESTNET DEPENDENCIES
+# Using official testnet package addresses for protocol integration
 # Source: https://cetus-1.gitbook.io/cetus-developer-docs/developer/via-contract
 
 [addresses]
 njangi = "0x0"
-# Official Cetus mainnet package addresses (mainnet-v1.49.0)
-cetus_clmm = "0x75b2e9ecad34944b8d0c874e568c90db0cf9437f0d7392abfd4cb902972f3e40"
-cetus_dca = "0x587614620d0d30aed66d86ffd3ba385a661a86aa573a4d579017068f561c6d8f"
-cetus_limit_order = "0xaf524efdc97a0e221db17252ab5feaa3b96234c2819a5baa552190f79e40b6d2"
-cetus_lp_burn = "0xf80a6bb02d98cebf90a6476e8c106a4ddf1865ef79d6067a66933eb57b9f0f7b"
-cetus_stable_farming = "0x7dba8e74b5d512a3c3bd8a1f7ef111fe9f624ddeb935635385645ca5db1f7850"
-cetus_xcetus = "0x07d45ee8fc56ddce3232304c1191f3c0319fa8240305c5ee2231a2da7cbb49e6"
-cetus_dividend = "0x5aa58e1623885bd93de2331d05c29bf4930e54e56beeabcab8fe5385de2d31dc"
-# Pyth mainnet address
-pyth_network = "0x8d97f1cd6ac663735be08d48a218f259dcb83244b6b5b94a999e689b86929519" 
+# Official Cetus testnet package addresses (latest versions)
+cetus_clmm = "0xb2a1d27337788bda89d350703b8326952413bd94b35b9b573ac8401b9803d018"  # testnet-v1.26.0
+cetus_dca = "0x19dd42e05fa6c9988a60d30686ee3feb776672b5547e328d6dab16563da65293"  # testnet-v1.25.0
+cetus_limit_order = "0xc65bc51d2bc2fdbce8c701f8d812da80fb37dba9cdf97ce38f60ab18c5202b17"  # testnet-v1.25.0
+cetus_lp_burn = "0x9c751fccc633f3ebad2becbe7884e5f38b4e497127689be0d404b24f79d95d71"  # testnet-v1.25.1
+cetus_stable_farming = "0x3c4582ee27a09f7e6c091022d0d279fdc8e54c1f782916bf135a71a8e8006aa5"  # testnet-v1.25.0
+cetus_xcetus = "0xdebaab6b851fd3414c0a62dbdf8eb752d6b0d31f5cfce5e38541bc6c6daa8966"  # testnet-v1.24.0
+cetus_dividend = "0x20d948d640edd0c749f533d41efc5f843f212d441220324ad7959c6e1d281828"  # testnet-v1.25.0
+# Pyth testnet address
+pyth_network = "0x41c21c1c0c8d43e39b1fcf0cb61e8b3e84acea99877e1948fd1fb87cc60e69b4" 

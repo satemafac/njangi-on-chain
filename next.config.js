@@ -14,7 +14,7 @@ const nextConfig = {
     dangerouslyAllowSVG: true,
     contentDispositionType: 'attachment',
     contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
-    unoptimized: process.env.NODE_ENV === 'production', // Use unoptimized images in production
+    unoptimized: false, // Enable image optimization
   },
   // Handle CORS for API routes and security headers
   async headers() {

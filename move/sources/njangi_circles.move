@@ -124,11 +124,17 @@ module njangi::njangi_circles {
         toggled_by: address,
     }
     
-    // Add the MemberJoined event that we need
+    // Enhanced MemberJoined event with comprehensive member information
     public struct MemberJoined has copy, drop {
         circle_id: ID,
         member: address,
         position: Option<u64>,
+        member_status: u8,                  // Member status (0=active, 1=pending, 2=suspended, 3=exited)
+        currency_type: String,              // Currency code (e.g., "USD", "XAF", "NGN")
+        contribution_amount_local: u64,     // Contribution amount in local currency
+        security_deposit_local: u64,        // Security deposit in local currency
+        deposit_paid: bool,                 // Whether the member has paid their deposit
+        joined_at: u64,                     // Timestamp when member joined
     }
 
     // Add these events near other event definitions around line 140
@@ -385,11 +391,17 @@ module njangi::njangi_circles {
             cycle_length,
         });
         
-        // Emit MemberJoined event for admin
+        // Emit enhanced MemberJoined event for admin with full member details
         event::emit(MemberJoined {
             circle_id: object::uid_to_inner(&circle.id),
             member: admin,
             position: option::some(0),
+            member_status: core::member_status_active(),
+            currency_type: string::utf8(currency_type),
+            contribution_amount_local,
+            security_deposit_local,
+            deposit_paid: false,
+            joined_at: current_time,
         });
 
         // Make the newly created `Circle` object shared
@@ -1124,11 +1136,17 @@ module njangi::njangi_circles {
         // Add the member to the circle
         add_member(circle, member_addr, member);
         
-        // Emit MemberJoined event so the dashboard can detect this user's membership
+        // Emit enhanced MemberJoined event so the dashboard can detect this user's membership with full details
         event::emit(MemberJoined {
             circle_id: object::uid_to_inner(&circle.id),
             member: member_addr,
             position: option::none(),
+            member_status: core::member_status_active(),
+            currency_type: config::get_currency_type(&circle.id),
+            contribution_amount_local: config::get_contribution_amount_local(&circle.id),
+            security_deposit_local: config::get_security_deposit_local(&circle.id),
+            deposit_paid: false,
+            joined_at: current_time,
         });
     }
     
@@ -1172,11 +1190,17 @@ module njangi::njangi_circles {
                 // Add the member to the circle
                 add_member(circle, member_addr, member);
                 
-                // Emit MemberJoined event
+                // Emit enhanced MemberJoined event with full member details
                 event::emit(MemberJoined {
                     circle_id: object::uid_to_inner(&circle.id),
                     member: member_addr,
                     position: option::none(),
+                    member_status: core::member_status_active(),
+                    currency_type: config::get_currency_type(&circle.id),
+                    contribution_amount_local: config::get_contribution_amount_local(&circle.id),
+                    security_deposit_local: config::get_security_deposit_local(&circle.id),
+                    deposit_paid: false,
+                    joined_at: current_time,
                 });
             };
             

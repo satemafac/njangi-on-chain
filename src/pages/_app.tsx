@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import '@/styles/globals.css';
 import type { AppProps } from 'next/app';
 import { AuthProvider } from '../contexts/AuthContext';
@@ -7,6 +7,13 @@ import { IdleWarningModal } from '@/components/IdleWarningModal';
 import { useAuth } from '@/contexts/AuthContext';
 import { Navbar } from '@/components/ui/Navbar';
 import { Toaster } from 'react-hot-toast';
+import dynamic from 'next/dynamic';
+
+// Dynamically import MoonPayProvider to avoid SSR issues
+const MoonPayProvider = dynamic(
+  () => import('@moonpay/moonpay-react').then(mod => ({ default: mod.MoonPayProvider })),
+  { ssr: false }
+);
 
 function AppContent({ Component, pageProps }: AppProps) {
   const { isAuthenticated } = useAuth();
@@ -42,8 +49,12 @@ function AppContent({ Component, pageProps }: AppProps) {
 }
 
 export default function App(props: AppProps) {
+  const [isMounted, setIsMounted] = useState(false);
+
   // Initialize automation service on app startup (client-side only)
   useEffect(() => {
+    setIsMounted(true);
+    
     // Only run on client side
     if (typeof window !== 'undefined') {
       console.log('🤖 Initializing Njangi Automation System...');
@@ -64,9 +75,23 @@ export default function App(props: AppProps) {
     }
   }, []);
 
+  // Render without MoonPayProvider during SSR
+  if (!isMounted) {
+    return (
+      <AuthProvider>
+        <AppContent {...props} />
+      </AuthProvider>
+    );
+  }
+
   return (
     <AuthProvider>
-      <AppContent {...props} />
+      <MoonPayProvider
+        apiKey={process.env.NEXT_PUBLIC_MOONPAY_API_KEY || ""}
+        debug={process.env.NODE_ENV === 'development'}
+      >
+        <AppContent {...props} />
+      </MoonPayProvider>
     </AuthProvider>
   );
 } 

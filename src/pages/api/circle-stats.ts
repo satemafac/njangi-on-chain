@@ -23,10 +23,6 @@ export default async function handler(
   }
 
   try {
-    console.log('[API] Fetching circle count from blockchain...');
-    console.log(`[API] Using PACKAGE_ID: ${PACKAGE_ID}`);
-    console.log(`[API] Environment NEXT_PUBLIC_PACKAGE_ID: ${process.env.NEXT_PUBLIC_PACKAGE_ID || 'Not set'}`);
-    
     let circleCount = 0;
 
     // Query specifically for CircleCreated events
@@ -52,13 +48,9 @@ export default async function handler(
       });
 
       const eventsData = await eventsResponse.json();
-      console.log('[API] CircleCreated events response:', JSON.stringify(eventsData, null, 2));
 
       if (eventsData.result && eventsData.result.data) {
         circleCount = eventsData.result.data.length;
-        console.log(`[API] Found ${circleCount} CircleCreated events`);
-      } else {
-        console.log('[API] No CircleCreated events found or invalid response');
       }
     } catch (error) {
       console.error('[API] Error querying CircleCreated events:', error);
@@ -67,8 +59,6 @@ export default async function handler(
     // Fallback: If specific event query fails, try querying all events from njangi_circles module
     if (circleCount === 0) {
       try {
-        console.log('[API] Trying fallback method - querying all njangi_circles events...');
-        
         const eventsResponse = await fetch(SUI_TESTNET_RPC, {
           method: 'POST',
           headers: {
@@ -93,7 +83,6 @@ export default async function handler(
         });
 
         const eventsData = await eventsResponse.json();
-        console.log('[API] All njangi_circles events response:', JSON.stringify(eventsData, null, 2));
 
         if (eventsData.result && eventsData.result.data) {
           // Filter for CircleCreated events specifically
@@ -102,7 +91,6 @@ export default async function handler(
           });
           
           circleCount = circleCreatedEvents.length;
-          console.log(`[API] Found ${circleCount} CircleCreated events from module query`);
         }
       } catch (error) {
         console.error('[API] Error querying njangi_circles module events:', error);
@@ -111,11 +99,8 @@ export default async function handler(
 
     // Final fallback to ensure we show at least some activity
     if (circleCount === 0) {
-      console.log('[API] No events found, using fallback count');
       circleCount = 3; // Reasonable fallback for demo
     }
-
-    console.log(`[API] Final circle count: ${circleCount}`);
 
     return res.status(200).json({
       success: true,

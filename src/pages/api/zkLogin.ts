@@ -804,10 +804,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Get important parameters from the request
           const circleId = req.body.circleId;
           let walletId = req.body.walletId; // This might be undefined
+          const circlePackageId = req.body.packageId; // Circle-specific package ID from frontend
           
           if (!circleId) {
             return res.status(400).json({ error: 'Circle ID is required' });
           }
+          
+          console.log(`Circle-specific package ID from frontend: ${circlePackageId || '(not provided)'}`);
+
           
           // Handle network parameter if provided by frontend
           const requestedNetwork = req.body.network;
@@ -830,10 +834,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             console.log("No wallet ID provided, trying to find it from events");
             
             try {
+              // Use circle-specific package ID for querying events, fall back to default
+              const packageIdForEvents = circlePackageId || PACKAGE_ID;
+              console.log(`Querying wallet events with package ID: ${packageIdForEvents}`);
+              
               // Query CustodyWalletCreated events to find the wallet ID for this circle
               const events = await suiClient.queryEvents({
                 query: {
-                  MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyWalletCreated`
+                  MoveEventType: `${packageIdForEvents}::njangi_custody::CustodyWalletCreated`
                 },
                 limit: 100
               });
@@ -1014,11 +1022,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 instance.initializeWithNetwork();
               }
               
-              // Get the package ID that was used to create this specific circle
-              const circlePackageId = await getCirclePackageId(circleId, session.account!.userAddr);
-              const packageIdToUse = circlePackageId || getCurrentPackageId();
+              // Use the package ID from the frontend if provided, otherwise fetch from blockchain
+              const packageIdToUse = circlePackageId || 
+                                     await getCirclePackageId(circleId, session.account!.userAddr) || 
+                                     getCurrentPackageId();
               
-              console.log(`Using package ID ${packageIdToUse} for circle ${circleId} (circle-specific: ${!!circlePackageId})`);
+              console.log(`Using package ID ${packageIdToUse} for circle ${circleId} (from frontend: ${!!circlePackageId})`);
               
               txResult = await instance.sendTransaction(
                 session.account!,

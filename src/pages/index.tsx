@@ -2,7 +2,6 @@ import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../contexts/AuthContext';
 import { LoginButton } from '../components/LoginButton';
-import Image from 'next/image';
 import Link from 'next/link';
 import Head from 'next/head';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -574,12 +573,12 @@ export default function Home() {
         <div className="py-12 md:py-20">
           <div className="text-center">
             <div className="flex justify-center mb-8">
-              <Image
+              <img
                 src="/njangi-on-chain-logo.png"
                 alt="Njangi on-chain"
                 width={120}
                 height={120}
-                priority
+                className="w-30 h-30"
               />
             </div>
             <h1 className="text-4xl tracking-tight font-extrabold text-gray-900 sm:text-5xl md:text-6xl">
@@ -1153,12 +1152,12 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between">
             <div className="flex items-center mb-4 md:mb-0">
-              <Image
+              <img
                 src="/njangi-on-chain-logo.png"
                 alt="Njangi on-chain"
                 width={40}
                 height={40}
-                className="mr-3"
+                className="mr-3 w-10 h-10"
               />
               <div>
                 <span className="text-lg font-semibold">Njangi On-Chain</span>

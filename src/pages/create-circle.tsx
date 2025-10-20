@@ -10,6 +10,12 @@ import { toast } from 'react-hot-toast';
 import { SuiClient } from '@mysten/sui.js/client';
 import { getCurrentRpcUrl, getCurrentPackageId, getCurrentNetwork } from '../services/network-config';
 
+// Add batch optimization imports
+import { 
+  getSuiClientFromPool, 
+  batchQueryEvents
+} from '../services/circle-service';
+
 // Get package ID dynamically based on current network
 const getPackageId = () => {
   return getCurrentPackageId() || process.env.NEXT_PUBLIC_PACKAGE_ID || '0x123';
@@ -634,31 +640,33 @@ export default function CreateCircle() {
     }
 
     try {
-      // Create the Sui client with network-aware RPC URL
-      const client = new SuiClient({
-        url: getCurrentRpcUrl()
-      });
+      // Use connection pool and batch query for better performance
+      const client = getSuiClientFromPool(getCurrentRpcUrl());
 
-      // Query for CircleCreated events where the user is the admin
-      const circleEvents = await client.queryEvents({
-        query: {
-          MoveEventType: `${getPackageId()}::njangi_circles::CircleCreated`
-        },
-        limit: 50, // Get recent events
-        order: 'descending' // Most recent first
-      });
+      // Query for CircleCreated events using batch query
+      const adminEvents = await batchQueryEvents(
+        [getPackageId()],
+        'CircleCreated',
+        client,
+        {
+          maxConcurrent: 5,
+          limit: 100,
+          order: 'descending'
+        }
+      );
 
-      console.log('Fetched circle events:', circleEvents.data.length);
+      console.log('Fetched circle events:', adminEvents.length);
 
       // Find the most recent circle created by this user
-      for (const event of circleEvents.data) {
-        if (event.parsedJson && typeof event.parsedJson === 'object') {
-          const parsedEvent = event.parsedJson as CircleCreatedEvent;
-          if (parsedEvent.admin === account.userAddr && parsedEvent.circle_id) {
-            console.log('Found circle ID:', parsedEvent.circle_id);
-            return parsedEvent.circle_id;
-          }
-        }
+      const foundEvent = adminEvents.find(event => {
+        const parsedEvent = event.parsedJson as CircleCreatedEvent;
+        return parsedEvent?.admin === account.userAddr && parsedEvent?.circle_id;
+      });
+
+      if (foundEvent) {
+        const parsedEvent = foundEvent.parsedJson as CircleCreatedEvent;
+        console.log('Found circle ID:', parsedEvent.circle_id);
+        return parsedEvent.circle_id;
       }
 
       throw new Error('No circle found for this user');

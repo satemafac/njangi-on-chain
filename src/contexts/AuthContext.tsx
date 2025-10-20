@@ -34,7 +34,7 @@ interface AuthContextType {
   setPendingAction: (action: string | null) => void;
   isLocalDevMode: boolean;
   setLocalDevMode: (mode: boolean) => void;
-  deleteCircle: (circleId: string, walletId?: string) => Promise<{ 
+  deleteCircle: (circleId: string, walletId?: string, packageId?: string) => Promise<{ 
     success: boolean; 
     digest?: string; 
     error?: string; 
@@ -242,12 +242,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return digest;
   };
 
-  const deleteCircle = async (circleId: string, walletId?: string) => {
+  const deleteCircle = async (circleId: string, walletId?: string, packageId?: string) => {
     if (!account) throw new Error('Not logged in');
     // Reset idle timer on transaction
     resetIdleTimerWithLogging();
     
     console.log(`AuthContext: Sending delete request for circle ${circleId}`);
+    console.log(`AuthContext: Using package ID: ${packageId || '(default)'}`);
     
     try {
       const response = await fetch('/api/zkLogin', {
@@ -258,6 +259,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           account,
           circleId,
           walletId,
+          packageId, // Pass the circle-specific package ID
           network: getCurrentNetwork() // Add current network to request
         })
       });
