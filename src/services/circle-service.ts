@@ -293,6 +293,9 @@ const KNOWN_PACKAGE_IDS: Record<'testnet' | 'mainnet', string[]> = {
   ],
   mainnet: [
     // Add mainnet package IDs here as needed after mainnet deployment
+    '0xcec9cfc2bd69cd02e302433333142db502ab1566fab71d8489630b164927177b',
+    '0x7bf5274804a6008ebfbd9bfe766defb7fd5aa5fe6777419c2b6531ec99120b55'
+
   ]
 };
 
