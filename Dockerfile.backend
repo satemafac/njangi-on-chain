@@ -1,8 +1,43 @@
-FROM mysten/zklogin:prover-stable
+FROM node:18-alpine3.19
+
 WORKDIR /app
-COPY zkLogin.zkey /app/zkey/zkLogin.zkey
-COPY zkLogin.zkey /app/binaries/prod/zkLogin.zkey
-ENV RUST_LOG=info
-ENV ZKEY=/app/zkey/zkLogin.zkey
-ENV WITNESS_BINARIES=/app/binaries
-CMD sed -i "s/8080/$PORT/g" /app/service/run.sh && /app/service/run.sh
+
+# Install build dependencies
+RUN apk add --no-cache python3 make g++
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies (including dev for ts-node if needed)
+RUN npm ci --legacy-peer-deps && \
+    npm cache clean --force
+
+# Copy TypeScript config and source
+COPY tsconfig.json ./
+COPY src ./src
+COPY public ./public
+COPY next.config.js ./
+
+# Set environment
+ENV NODE_ENV=production
+ENV PORT=${PORT:-3000}
+
+# Create non-root user for security
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001
+
+# Create logs directory with proper permissions
+RUN mkdir -p logs && chown -R nodejs:nodejs logs
+
+# Switch to non-root user
+USER nodejs
+
+# Expose port
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+
+# Start application with npm
+CMD ["npm", "start"]

@@ -1,17 +1,40 @@
-FROM mysten/zklogin:prover-fe-stable
+FROM node:18-alpine3.19
 
-# Set environment variables
+WORKDIR /app
+
+# Install build dependencies
+RUN apk add --no-cache python3 make g++
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies (including dev for ts-node if needed)
+RUN npm ci --legacy-peer-deps && \
+    npm cache clean --force
+
+# Copy everything needed for the app
+COPY tsconfig.json ./
+COPY src ./src
+COPY public ./public
+COPY next.config.js ./
+
+# Set environment
 ENV NODE_ENV=production
-ENV DEBUG=zkLogin:info,jwks
-ENV PROVER_TIMEOUT=45
-ENV PROVER_URI="https://zklogin-backend-fix3-46730ab9ae9f.herokuapp.com/input"
+ENV PORT=3000
 
-# Create start script
-COPY start.sh /app/start.sh
-RUN chmod +x /app/start.sh
+# Create non-root user for security
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001
+
+# Switch to non-root user
+USER nodejs
 
 # Expose port
-EXPOSE 8080
+EXPOSE 3000
 
-# Start the service
-CMD ["/app/start.sh"] 
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+
+# Start application with npm
+CMD ["npm", "start"] 

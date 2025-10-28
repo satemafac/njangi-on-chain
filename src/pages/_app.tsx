@@ -57,21 +57,26 @@ export default function App(props: AppProps) {
     
     // Only run on client side
     if (typeof window !== 'undefined') {
-      console.log('🤖 Initializing Njangi Automation System...');
+      console.log('ℹ️ Using new WhatsApp Bot Backend for notifications...');
       
-      // Start automation service in background
-      fetch('/api/automation/start', { method: 'POST' })
-        .then(response => response.json())
-        .then(data => {
-          if (data.success) {
-            console.log('✅ Automation service started successfully');
-          } else {
-            console.warn('⚠️ Automation service startup failed:', data.error);
-          }
-        })
-        .catch(error => {
-          console.warn('⚠️ Could not connect to automation service:', error.message);
-        });
+      // DISABLED: Start automation service in background
+      // The old automation service has been replaced by the new WhatsApp Bot Backend Service
+      // which runs independently and handles blockchain events, data fetching, and WhatsApp notifications.
+      // New service: whatsapp-bot-backend (separate Node.js service)
+      // 
+      // Old code:
+      // fetch('/api/automation/start', { method: 'POST' })
+      //   .then(response => response.json())
+      //   .then(data => {
+      //     if (data.success) {
+      //       console.log('✅ Automation service started successfully');
+      //     } else {
+      //       console.warn('⚠️ Automation service startup failed:', data.error);
+      //     }
+      //   })
+      //   .catch(error => {
+      //     console.warn('⚠️ Could not connect to automation service:', error.message);
+      //   });
     }
   }, []);
 

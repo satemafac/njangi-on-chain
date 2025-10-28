@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
-    "build": "next build",
+    "build": "npm run build:main && npm run build:bot",
+    "build:main": "next build",
+    "build:bot": "cd whatsapp-bot-backend && npm run build",
     "start": "next start -p $PORT",
     "lint": "next lint",
     "heroku-postbuild": "npm run build"

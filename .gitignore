@@ -152,6 +152,7 @@ src/pages/*.md
 *.sln
 *.sw?
 # OS specific
+
 # Task files
 tasks.json
 tasks/ 

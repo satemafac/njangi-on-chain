@@ -15,6 +15,7 @@ import ConfirmationModal from '../../../../components/ConfirmationModal';
 import { ZkLoginClient, ZkLoginError } from '../../../../services/zkLoginClient';
 import { YieldStrategySection } from '../../../../components/YieldManagement';
 import { yieldTrackingService, TrackedYieldData } from '../../../../services/yield-tracking-service';
+import WhatsAppCircleIntegration from '../../../../components/WhatsAppCircleIntegration';
 
 import type { YieldStrategy } from '../../../../components/YieldManagement/types/yield.types';
 
@@ -5171,7 +5172,7 @@ export default function ManageCircle() {
                       </svg>
                       Verify Deposits
                     </button>
-                    
+
                     {/* Add Trigger Payout button */}
                     <Tooltip.Provider>
                       <Tooltip.Root>
@@ -5470,6 +5471,22 @@ export default function ManageCircle() {
                       userAddress={userAddress || undefined}
                       onYieldConfigCreated={handleYieldConfigCreated}
                       packageId={circlePackageId}
+                    />
+                  )}
+                </div>
+
+                {/* WhatsApp Integration Section */}
+                <div className="pt-4 sm:pt-6 border-t border-gray-200 px-1 sm:px-2 mt-2 sm:mt-6">
+                  {circle && account && (
+                    <WhatsAppCircleIntegration
+                      circleId={id as string}
+                      adminAddress={userAddress || ''}
+                      adminToken={account.provider === 'zkLogin' ? account.userAddr : ''}
+                      onLinked={(status) => {
+                        if (status) {
+                          toast.success('Circle linked to WhatsApp!');
+                        }
+                      }}
                     />
                   )}
                 </div>

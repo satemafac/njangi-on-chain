@@ -1,0 +1,25 @@
+# ============================================================
+# Heroku Configuration for Docker Deployment
+# ============================================================
+
+build:
+  docker:
+    web: Dockerfile
+
+run:
+  web: node dist/server.js
+
+# Release phase (run before starting web dyno)
+# Useful for migrations, setup scripts, etc.
+# release:
+#   image: web
+#   command: npm run migrate
+
+# Environment variables (use Heroku config vars instead)
+# Environment variables should be set in Heroku dashboard:
+# heroku config:set KEY=value
+# or via Heroku CLI
+
+# Health check configuration
+# Heroku will use /health endpoint
+# Defined in Dockerfile HEALTHCHECK
