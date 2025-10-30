@@ -29,8 +29,47 @@ interface LinkCircleRequest {
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method === 'GET') {
+    // Query current link status
+    try {
+      const { circleId } = req.query;
+      
+      if (!circleId || typeof circleId !== 'string') {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing circleId'
+        });
+      }
+
+      const registryObjectId = process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID;
+      if (!registryObjectId) {
+        throw new Error('SUI_WHATSAPP_LINKS_REGISTRY_ID not configured');
+      }
+
+      // In a full implementation, we would:
+      // 1. Query the WhatsAppLinksRegistry object from the blockchain
+      // 2. Look up the circleId in the registry
+      // 3. Return the linked phone number/group if found
+      
+      // For MVP, return not found (would need dynamic field queries to Sui)
+      return res.status(200).json({
+        success: true,
+        data: {
+          isLinked: false,
+          message: 'Circle not linked or link data not yet indexed'
+        }
+      });
+    } catch (error) {
+      console.error('❌ Error querying link status:', error);
+      return res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to query link status'
+      });
+    }
+  }
+
   if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
+    res.setHeader('Allow', ['GET', 'POST']);
     return res.status(405).json({
       success: false,
       error: 'Method not allowed'

@@ -49,11 +49,35 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   const checkLinkStatus = async () => {
     try {
       setLoading(true);
-      // In production, call API to check if circle is linked
-      // For now, we'll assume it's not linked
-      setLinkedStatus({ isLinked: false });
+      
+      // Query the API to check if circle is linked on blockchain
+      const response = await fetch(`/api/whatsapp/admin-link-circle?circleId=${circleId}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.data?.isLinked) {
+          setLinkedStatus({
+            isLinked: true,
+            linkType: data.data.linkType,
+            recipient: data.data.recipient,
+            linkedAt: data.data.linkedAt
+          });
+        } else {
+          setLinkedStatus({ isLinked: false });
+        }
+      } else {
+        // Assume not linked if query fails
+        setLinkedStatus({ isLinked: false });
+      }
     } catch (error) {
       console.error('Error checking link status:', error);
+      // Default to not linked on error
+      setLinkedStatus({ isLinked: false });
     } finally {
       setLoading(false);
     }
