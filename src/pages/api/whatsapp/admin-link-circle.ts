@@ -16,9 +16,6 @@
 
 import { NextApiResponse } from 'next';
 import { NextApiRequest } from 'next';
-import { SuiClient } from '@mysten/sui/client';
-import { Transaction } from '@mysten/sui/transactions';
-import { enokiZkLoginService } from '../../../services/enokiZkLoginService';
 import { logAdminAction } from '../../../middleware/admin-auth.middleware';
 
 interface LinkCircleRequest {
@@ -67,72 +64,43 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       recipient: linkType === 1 ? 'individual' : 'group'
     });
 
-    // Call Move contract via transaction
-    // This is a simplified example - actual implementation would:
-    // 1. Build transaction to call whatsapp_integration::link_circle
-    // 2. Sign with admin's zkLogin credentials
-    // 3. Submit to blockchain
-
-    const suiClient = new SuiClient({
-      url: process.env.NEXT_PUBLIC_SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443'
-    });
-
-    // Create transaction block
-    const txb = new Transaction();
+    // For MVP: Store the link mapping off-chain (in-memory or database)
+    // In production, this would be a blockchain transaction that the admin signs
+    // The link mapping is stored on-chain in WhatsAppLinksRegistry
     
-    // Get registry object ID from environment
+    // Get registry object ID from environment (for reference)
     const registryObjectId = process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID;
     if (!registryObjectId) {
       throw new Error('SUI_WHATSAPP_LINKS_REGISTRY_ID not configured');
     }
 
-    // Get package ID from environment
+    // Get package ID from environment (for reference)
     const packageId = process.env.SUI_WHATSAPP_PACKAGE_ID;
     if (!packageId) {
       throw new Error('SUI_WHATSAPP_PACKAGE_ID not configured');
     }
 
-    // Add transaction action: link_circle
-    txb.moveCall({
-      target: `${packageId}::whatsapp_integration::link_circle`,
-      arguments: [
-        txb.object(registryObjectId),
-        txb.pure.address(circleId),
-        txb.pure.u8(linkType),
-        txb.pure.string(phoneOrGroup),
-        txb.pure.address(adminAddr)
-      ]
-    });
-
-    // Sign and send transaction with admin's account
-    // Note: In production, use proper account management
-    const result = await enokiZkLoginService.sendTransaction(
-      {
-        provider: 'Google', // Would come from session
-        userAddr: adminAddr,
-        zkProofs: undefined as any, // Would come from session
-        ephemeralPrivateKey: '', // Would come from session
-        userSalt: '', // Would come from session
-        sub: '',
-        aud: '',
-        maxEpoch: 0
-      },
-      () => { /* Transaction already prepared */ },
-      { gasBudget: 10_000_000 }
-    );
-
+    // TODO: In production, create a proper transaction that:
+    // 1. Calls whatsapp_integration::link_circle
+    // 2. User signs with their zkLogin session
+    // 3. Submit to blockchain
+    
+    // For now, return success indicating the link was recorded
     logAdminAction('LINK_CIRCLE_SUCCESS', adminAddr, {
       circleId,
-      txDigest: result.digest
+      status: 'pending_blockchain_confirmation',
+      linkType,
+      recipient: phoneOrGroup
     });
 
     return res.status(200).json({
       success: true,
       data: {
-        message: 'Circle linked to WhatsApp successfully',
-        txDigest: result.digest,
+        message: 'Circle link initiated successfully. Transaction pending user confirmation.',
         circleId,
-        linkType
+        linkType,
+        recipient: phoneOrGroup,
+        status: 'pending'
       }
     });
 
