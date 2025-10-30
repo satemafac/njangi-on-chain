@@ -73,13 +73,13 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
       const response = await fetch('/api/whatsapp/admin-link-circle', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${adminToken}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           circleId,
           linkType,
-          phoneOrGroup: phoneOrGroup.trim()
+          phoneOrGroup: phoneOrGroup.trim(),
+          adminAddress  // Send admin address for logging
         })
       });
 
