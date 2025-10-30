@@ -81,15 +81,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const txb = new Transaction();
     
     // Get registry object ID from environment
-    const registryObjectId = process.env.WHATSAPP_REGISTRY_OBJECT_ID;
+    const registryObjectId = process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID;
     if (!registryObjectId) {
-      throw new Error('WHATSAPP_REGISTRY_OBJECT_ID not configured');
+      throw new Error('SUI_WHATSAPP_LINKS_REGISTRY_ID not configured');
     }
 
     // Get package ID from environment
-    const packageId = process.env.NJANGI_PACKAGE_ID;
+    const packageId = process.env.SUI_WHATSAPP_PACKAGE_ID;
     if (!packageId) {
-      throw new Error('NJANGI_PACKAGE_ID not configured');
+      throw new Error('SUI_WHATSAPP_PACKAGE_ID not configured');
     }
 
     // Add transaction action: link_circle
