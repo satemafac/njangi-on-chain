@@ -287,7 +287,8 @@ export async function getCirclePackageId(circleId: string, userAddress?: string)
 const KNOWN_PACKAGE_IDS: Record<'testnet' | 'mainnet', string[]> = {
   testnet: [
     '0x9f916ce4a0a4970e1d466a79ec2a916ec930feac10218e2b94c282a3906d7926', // Old testnet package (user requested)
-    '0x8d44cd03809c95bd8b46c3f26cc9f7a62085d0f8b1bb22082b6ff768be0cb78f', // Previous testnet package
+    '0x8d44cd03809c95bd8b46c3f26cc9f7a62085d0f8b1bb22082b6ff768be0cb78f',
+    '0x475347f09313693b52afaa843ce0ee47931cbda1edd628170202de9c03622624', // Previous testnet package
     // Note: Current package ID is automatically added from getPackageId()
     // Add more old package IDs here after future upgrades
   ],

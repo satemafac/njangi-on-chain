@@ -2,7 +2,7 @@
 
 [move]
 version = 3
-manifest_digest = "CCF08A26CB3DE4FFBE483494F7B1B0E07A0649BD46D47D1DF0832414270E237D"
+manifest_digest = "0E2C2D767C0B236FEDF7446804F4B9DB5E31F81A7418E664B19BB7621910978F"
 deps_digest = "3C4103934B1E040BB6B23F1D610B4EF9F2F1166A50A104EADCF77467C004C600"
 dependencies = [
   { id = "Pyth", name = "Pyth" },
@@ -15,7 +15,7 @@ source = { git = "https://github.com/MystenLabs/sui.git", rev = "041c5f2bae2fe52
 
 [[move.package]]
 id = "Pyth"
-source = { git = "https://github.com/pyth-network/pyth-crosschain.git", rev = "sui-contract-mainnet", subdir = "target_chains/sui/contracts" }
+source = { git = "https://github.com/pyth-network/pyth-crosschain.git", rev = "sui-contract-testnet", subdir = "target_chains/sui/contracts" }
 
 dependencies = [
   { id = "Sui", name = "Sui" },
@@ -32,7 +32,7 @@ dependencies = [
 
 [[move.package]]
 id = "Wormhole"
-source = { git = "https://github.com/wormhole-foundation/wormhole.git", rev = "sui/mainnet", subdir = "sui/wormhole" }
+source = { git = "https://github.com/wormhole-foundation/wormhole.git", rev = "sui/testnet", subdir = "sui/wormhole" }
 
 dependencies = [
   { id = "Sui", name = "Sui" },
@@ -47,8 +47,8 @@ flavor = "sui"
 
 [env.testnet]
 chain-id = "4c78adac"
-original-published-id = "0xf6db2b371a16d8a70e8b96ac4a3624a3d66ce98f35c8fcadfb172811855b4ed6"
-latest-published-id = "0xf6db2b371a16d8a70e8b96ac4a3624a3d66ce98f35c8fcadfb172811855b4ed6"
+original-published-id = "0x475347f09313693b52afaa843ce0ee47931cbda1edd628170202de9c03622624"
+latest-published-id = "0x475347f09313693b52afaa843ce0ee47931cbda1edd628170202de9c03622624"
 published-version = "1"
 
 [env.mainnet]

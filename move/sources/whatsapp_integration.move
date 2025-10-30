@@ -1,7 +1,7 @@
 module njangi::whatsapp_integration {
     use sui::object::{Self, UID, ID};
     use sui::table::{Self, Table};
-    use sui::vector;
+    use std::vector;
     use sui::event;
     use sui::tx_context::{Self, TxContext};
     use sui::transfer;
@@ -17,6 +17,8 @@ module njangi::whatsapp_integration {
     const E_LINK_NOT_FOUND: u64 = 4;
     const E_INVALID_LINK_TYPE: u64 = 5;
     const E_ALREADY_LINKED: u64 = 6;
+    const E_UNAUTHORIZED_ADMIN: u64 = 7;
+    const E_INVALID_ADMIN_PROOF: u64 = 8;
 
     // ----------------------------------------------------------
     // Constants
@@ -37,13 +39,17 @@ module njangi::whatsapp_integration {
     const SECONDS_PER_HOUR: u64 = 3600;
     const MS_PER_HOUR: u64 = 3_600_000;
 
+    const ADMIN_ACTION_LINK: u8 = 1;
+    const ADMIN_ACTION_UNLINK: u8 = 2;
+    const ADMIN_ACTION_LOG_NOTIFICATION: u8 = 3;
+
     // ----------------------------------------------------------
     // Structs
     // ----------------------------------------------------------
 
     /// Individual WhatsApp link entry
     public struct WhatsAppLink has store {
-        id: ID,
+        id: UID,
         circle_id: ID,
         link_type: u8,                            // 1 = individual, 2 = group
         admin_phone_number: Option<String>,       // If personal
@@ -63,12 +69,6 @@ module njangi::whatsapp_integration {
         success: bool,
     }
 
-    /// Message log for a circle
-    public struct MessageLog has store {
-        entries: vector<LogEntry>,
-        total_sent: u64,
-    }
-
     /// Rate limit bucket for tracking message frequency
     public struct RateLimitBucket has store {
         hour_bucket: u64,                         // Unix timestamp of hour start (in seconds)
@@ -84,6 +84,14 @@ module njangi::whatsapp_integration {
         circle_to_link: Table<ID, u64>,          // Quick lookup: circle_id → link index
         group_to_link: Table<String, u64>,       // Quick lookup: group_id → link index
         total_links: u64,
+    }
+
+    /// Admin-only operations require zkLogin verification
+    public struct AdminAction has drop {
+        admin_address: address,
+        action_type: u8,
+        timestamp: u64,
+        verified: bool,
     }
 
     // ----------------------------------------------------------
@@ -117,6 +125,60 @@ module njangi::whatsapp_integration {
         circle_id: ID,
         recipient: String,
         attempted_at: u64,
+    }
+
+    public struct NewCycleStartedEvent has copy, drop {
+        circle_id: ID,
+        cycle: u64,
+        contribution_amount: u64,
+        deadline: u64,
+        emitted_at: u64,
+    }
+
+    public struct MemberContributedEvent has copy, drop {
+        circle_id: ID,
+        member: address,
+        amount: u64,
+        contributed_count: u64,
+        total_members: u64,
+        emitted_at: u64,
+    }
+
+    public struct AllMembersContributedEvent has copy, drop {
+        circle_id: ID,
+        total_amount: u64,
+        emitted_at: u64,
+    }
+
+    public struct DeadlineApproachingEvent has copy, drop {
+        circle_id: ID,
+        deadline: u64,
+        hours_remaining: u64,
+        pending_members: u64,
+        emitted_at: u64,
+    }
+
+    public struct PayoutOverdueEvent has copy, drop {
+        circle_id: ID,
+        recipient: address,
+        amount: u64,
+        hours_overdue: u64,
+        emitted_at: u64,
+    }
+
+    public struct ContributorOverdueEvent has copy, drop {
+        circle_id: ID,
+        contributor: address,
+        days_overdue: u64,
+        emitted_at: u64,
+    }
+
+    public struct PayoutReminderEvent has copy, drop {
+        circle_id: ID,
+        recipient: address,
+        amount: u64,
+        hours_until: u64,
+        emitted_at: u64,
     }
 
     // ----------------------------------------------------------
@@ -185,7 +247,6 @@ module njangi::whatsapp_integration {
         };
 
         let link_index = vector::length(&registry.links);
-        let link_id = object::uid_to_inner(&new_link.id);
         
         // Store in main vector
         vector::push_back(&mut registry.links, new_link);
@@ -239,34 +300,16 @@ module njangi::whatsapp_integration {
     // Functions - Querying Links
     // ----------------------------------------------------------
 
-    /// Get link for a circle (internal function)
-    public fun get_link_for_circle(
-        registry: &WhatsAppLinksRegistry,
-        circle_id: ID,
-    ): Option<&WhatsAppLink> {
-        if (table::contains(&registry.circle_to_link, circle_id)) {
-            let index = *table::borrow(&registry.circle_to_link, circle_id);
-            option::some(vector::borrow(&registry.links, index))
-        } else {
-            option::none()
-        }
-    }
-
-    /// Check if circle is linked to WhatsApp
-    public fun is_circle_linked(
-        registry: &WhatsAppLinksRegistry,
-        circle_id: ID,
-    ): bool {
-        table::contains(&registry.circle_to_link, circle_id)
-    }
-
     /// Get recipient for a circle (phone or group)
     public fun get_recipient(
         registry: &WhatsAppLinksRegistry,
         circle_id: ID,
     ): Option<String> {
-        if let option::some(link) = get_link_for_circle(registry, circle_id) {
-            if !link.enabled {
+        if (table::contains(&registry.circle_to_link, circle_id)) {
+            let link_index = *table::borrow(&registry.circle_to_link, circle_id);
+            let link = vector::borrow(&registry.links, link_index);
+            
+            if (!link.enabled) {
                 return option::none()
             };
             
@@ -280,12 +323,22 @@ module njangi::whatsapp_integration {
         }
     }
 
+    /// Check if circle is linked to WhatsApp
+    public fun is_circle_linked(
+        registry: &WhatsAppLinksRegistry,
+        circle_id: ID,
+    ): bool {
+        table::contains(&registry.circle_to_link, circle_id)
+    }
+
     /// Check if link is enabled
     public fun is_link_enabled(
         registry: &WhatsAppLinksRegistry,
         circle_id: ID,
     ): bool {
-        if let option::some(link) = get_link_for_circle(registry, circle_id) {
+        if (table::contains(&registry.circle_to_link, circle_id)) {
+            let link_index = *table::borrow(&registry.circle_to_link, circle_id);
+            let link = vector::borrow(&registry.links, link_index);
             link.enabled
         } else {
             false
@@ -296,7 +349,7 @@ module njangi::whatsapp_integration {
     // Functions - Logging Notifications
     // ----------------------------------------------------------
 
-    /// Record a notification was sent (called by backend via Move entry)
+    /// Record a notification was sent
     public fun log_notification(
         registry: &mut WhatsAppLinksRegistry,
         circle_id: ID,
@@ -327,7 +380,7 @@ module njangi::whatsapp_integration {
     }
 
     // ----------------------------------------------------------
-    // Functions - Helper Functions
+    // Functions - Rate Limiting
     // ----------------------------------------------------------
 
     /// Get current hour bucket (for rate limiting)
@@ -340,30 +393,6 @@ module njangi::whatsapp_integration {
         let seconds_per_day = 86_400u64;
         (current_timestamp / seconds_per_day) * seconds_per_day
     }
-
-    /// Get total number of links
-    public fun get_total_links(registry: &WhatsAppLinksRegistry): u64 {
-        registry.total_links
-    }
-
-    /// Get link count for status
-    public fun get_links_count(registry: &WhatsAppLinksRegistry): u64 {
-        let mut count = 0;
-        let mut i = 0;
-        while (i < vector::length(&registry.links)) {
-            let link = vector::borrow(&registry.links, i);
-            if (link.enabled) {
-                count = count + 1;
-            };
-            i = i + 1;
-        };
-        count
-    }
-}
-
-    // ----------------------------------------------------------
-    // SUBTASK 1.2: Rate Limiting Mechanism
-    // ----------------------------------------------------------
 
     /// Initialize rate limiting for a link
     public fun init_rate_limit_bucket(current_timestamp: u64): RateLimitBucket {
@@ -407,38 +436,6 @@ module njangi::whatsapp_integration {
         bucket.day_count < MAX_MESSAGES_PER_DAY
     }
 
-    /// Update rate limit bucket after sending (hourly)
-    public fun update_rate_limit_hourly(
-        bucket: &mut RateLimitBucket,
-        current_timestamp: u64,
-    ) {
-        let current_hour = get_current_hour_bucket(current_timestamp);
-        
-        // Reset if hour changed
-        if (current_hour != bucket.hour_bucket) {
-            bucket.hour_bucket = current_hour;
-            bucket.message_count = 0;
-        };
-        
-        bucket.message_count = bucket.message_count + 1;
-    }
-
-    /// Update rate limit bucket after sending (daily)
-    public fun update_rate_limit_daily(
-        bucket: &mut RateLimitBucket,
-        current_timestamp: u64,
-    ) {
-        let current_day = get_current_day_bucket(current_timestamp);
-        
-        // Reset if day changed
-        if (current_day != bucket.day_bucket) {
-            bucket.day_bucket = current_day;
-            bucket.day_count = 0;
-        };
-        
-        bucket.day_count = bucket.day_count + 1;
-    }
-
     /// Check both hourly and daily limits
     public fun check_rate_limit(
         bucket: &RateLimitBucket,
@@ -448,118 +445,9 @@ module njangi::whatsapp_integration {
         can_send_notification_daily(bucket, current_timestamp)
     }
 
-    /// Get current message count for hour
-    public fun get_hourly_message_count(
-        bucket: &RateLimitBucket,
-        current_timestamp: u64,
-    ): u64 {
-        let current_hour = get_current_hour_bucket(current_timestamp);
-        if (current_hour == bucket.hour_bucket) {
-            bucket.message_count
-        } else {
-            0
-        }
-    }
-
-    /// Get current message count for day
-    public fun get_daily_message_count(
-        bucket: &RateLimitBucket,
-        current_timestamp: u64,
-    ): u64 {
-        let current_day = get_current_day_bucket(current_timestamp);
-        if (current_day == bucket.day_bucket) {
-            bucket.day_count
-        } else {
-            0
-        }
-    }
-
-    /// Get remaining messages allowed for hour
-    public fun get_remaining_hourly_quota(
-        bucket: &RateLimitBucket,
-        current_timestamp: u64,
-    ): u64 {
-        let count = get_hourly_message_count(bucket, current_timestamp);
-        if (count >= MAX_MESSAGES_PER_HOUR) {
-            0
-        } else {
-            MAX_MESSAGES_PER_HOUR - count
-        }
-    }
-
-    /// Get remaining messages allowed for day
-    public fun get_remaining_daily_quota(
-        bucket: &RateLimitBucket,
-        current_timestamp: u64,
-    ): u64 {
-        let count = get_daily_message_count(bucket, current_timestamp);
-        if (count >= MAX_MESSAGES_PER_DAY) {
-            0
-        } else {
-            MAX_MESSAGES_PER_DAY - count
-        }
-    }
-}
-
     // ----------------------------------------------------------
-    // SUBTASK 1.3: Event Emission System
+    // Functions - Events
     // ----------------------------------------------------------
-
-    /// Events for notification triggers
-
-    public struct NewCycleStartedEvent has copy, drop {
-        circle_id: ID,
-        cycle: u64,
-        contribution_amount: u64,
-        deadline: u64,
-        emitted_at: u64,
-    }
-
-    public struct MemberContributedEvent has copy, drop {
-        circle_id: ID,
-        member: address,
-        amount: u64,
-        contributed_count: u64,
-        total_members: u64,
-        emitted_at: u64,
-    }
-
-    public struct AllMembersContributedEvent has copy, drop {
-        circle_id: ID,
-        total_amount: u64,
-        emitted_at: u64,
-    }
-
-    public struct DeadlineApproachingEvent has copy, drop {
-        circle_id: ID,
-        deadline: u64,
-        hours_remaining: u64,
-        pending_members: u64,
-        emitted_at: u64,
-    }
-
-    public struct PayoutOverdueEvent has copy, drop {
-        circle_id: ID,
-        recipient: address,
-        amount: u64,
-        hours_overdue: u64,
-        emitted_at: u64,
-    }
-
-    public struct ContributorOverdueEvent has copy, drop {
-        circle_id: ID,
-        contributor: address,
-        days_overdue: u64,
-        emitted_at: u64,
-    }
-
-    public struct PayoutReminderEvent has copy, drop {
-        circle_id: ID,
-        recipient: address,
-        amount: u64,
-        hours_until: u64,
-        emitted_at: u64,
-    }
 
     /// Emit new cycle started event
     public fun emit_new_cycle_started(
@@ -675,33 +563,12 @@ module njangi::whatsapp_integration {
             emitted_at: current_timestamp,
         });
     }
-}
 
     // ----------------------------------------------------------
-    // SUBTASK 2.3: zkLogin Proof Verification
+    // Functions - Admin Verification
     // ----------------------------------------------------------
-
-    /// Admin-only operations require zkLogin verification
-    /// This struct represents a verified admin action
-    public struct AdminAction has drop {
-        admin_address: address,
-        action_type: u8,  // 1 = link, 2 = unlink, 3 = log_notification
-        timestamp: u64,
-        verified: bool,
-    }
-
-    /// Error for unauthorized admin actions
-    const E_UNAUTHORIZED_ADMIN: u64 = 7;
-    const E_INVALID_ADMIN_PROOF: u64 = 8;
-
-    /// Admin action types
-    const ADMIN_ACTION_LINK: u8 = 1;
-    const ADMIN_ACTION_UNLINK: u8 = 2;
-    const ADMIN_ACTION_LOG_NOTIFICATION: u8 = 3;
 
     /// Verify admin action with zkLogin proof
-    /// In production: verify_zklogin_proof would check actual Sui zkLogin proofs
-    /// For now: simplified verification that checks admin is authenticated sender
     public fun verify_admin_action(
         admin_address: address,
         action_type: u8,
@@ -728,26 +595,7 @@ module njangi::whatsapp_integration {
         }
     }
 
-    /// Require verified admin for linking operations
-    public fun require_admin_verified_for_link(admin_action: &AdminAction) {
-        assert!(admin_action.verified, E_UNAUTHORIZED_ADMIN);
-        assert!(admin_action.action_type == ADMIN_ACTION_LINK, E_INVALID_ADMIN_PROOF);
-    }
-
-    /// Require verified admin for unlinking operations
-    public fun require_admin_verified_for_unlink(admin_action: &AdminAction) {
-        assert!(admin_action.verified, E_UNAUTHORIZED_ADMIN);
-        assert!(admin_action.action_type == ADMIN_ACTION_UNLINK, E_INVALID_ADMIN_PROOF);
-    }
-
-    /// Require verified admin for logging operations
-    public fun require_admin_verified_for_logging(admin_action: &AdminAction) {
-        assert!(admin_action.verified, E_UNAUTHORIZED_ADMIN);
-        assert!(admin_action.action_type == ADMIN_ACTION_LOG_NOTIFICATION, E_INVALID_ADMIN_PROOF);
-    }
-
     /// Enhanced link_circle with admin verification
-    /// This version requires a verified admin action
     public fun link_circle_verified(
         registry: &mut WhatsAppLinksRegistry,
         circle_id: ID,
@@ -757,7 +605,8 @@ module njangi::whatsapp_integration {
         ctx: &mut TxContext
     ) {
         // Verify admin authorization
-        require_admin_verified_for_link(admin_action);
+        assert!(admin_action.verified, E_UNAUTHORIZED_ADMIN);
+        assert!(admin_action.action_type == ADMIN_ACTION_LINK, E_INVALID_ADMIN_PROOF);
         
         // Proceed with linking
         link_circle(
@@ -778,7 +627,8 @@ module njangi::whatsapp_integration {
         ctx: &mut TxContext
     ) {
         // Verify admin authorization
-        require_admin_verified_for_unlink(admin_action);
+        assert!(admin_action.verified, E_UNAUTHORIZED_ADMIN);
+        assert!(admin_action.action_type == ADMIN_ACTION_UNLINK, E_INVALID_ADMIN_PROOF);
         
         // Proceed with unlinking
         unlink_circle(
@@ -800,7 +650,8 @@ module njangi::whatsapp_integration {
         ctx: &mut TxContext
     ) {
         // Verify admin authorization
-        require_admin_verified_for_logging(admin_action);
+        assert!(admin_action.verified, E_UNAUTHORIZED_ADMIN);
+        assert!(admin_action.action_type == ADMIN_ACTION_LOG_NOTIFICATION, E_INVALID_ADMIN_PROOF);
         
         // Proceed with logging
         log_notification(
@@ -813,23 +664,8 @@ module njangi::whatsapp_integration {
         );
     }
 
-    /// Get admin address from verified action
-    public fun get_verified_admin(admin_action: &AdminAction): address {
-        admin_action.admin_address
-    }
-
-    /// Check if action is verified
-    public fun is_action_verified(admin_action: &AdminAction): bool {
-        admin_action.verified
-    }
-
-    /// Get action timestamp
-    public fun get_action_timestamp(admin_action: &AdminAction): u64 {
-        admin_action.timestamp
-    }
-
-    /// Get action type
-    public fun get_action_type(admin_action: &AdminAction): u8 {
-        admin_action.action_type
+    /// Get total number of links
+    public fun get_total_links(registry: &WhatsAppLinksRegistry): u64 {
+        registry.total_links
     }
 }

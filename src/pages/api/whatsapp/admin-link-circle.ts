@@ -55,7 +55,7 @@ async function handler(req: AuthenticatedRequest, res: NextApiResponse) {
 
     // Check permission
     if (!checkAdminPermission(req, 'link_circle', req.body.circleId)) {
-      logAdminAction('PERMISSION_DENIED', authResult.suiAddress, {
+      logAdminAction('PERMISSION_DENIED', authResult.suiAddress || 'unknown', {
         action: 'link_circle',
         circleId: req.body.circleId,
         reason: 'Missing link_circle permission'
@@ -85,7 +85,7 @@ async function handler(req: AuthenticatedRequest, res: NextApiResponse) {
     }
 
     // Log the action
-    logAdminAction('LINK_CIRCLE_INITIATED', authResult.suiAddress, {
+    logAdminAction('LINK_CIRCLE_INITIATED', authResult.suiAddress || 'unknown', {
       circleId,
       linkType,
       recipient: linkType === 1 ? 'individual' : 'group'
@@ -124,7 +124,7 @@ async function handler(req: AuthenticatedRequest, res: NextApiResponse) {
         txb.pure.address(circleId),
         txb.pure.u8(linkType),
         txb.pure.string(phoneOrGroup),
-        txb.pure.address(authResult.suiAddress)
+        txb.pure.address(authResult.suiAddress || '')
       ]
     });
 
@@ -133,7 +133,7 @@ async function handler(req: AuthenticatedRequest, res: NextApiResponse) {
     const result = await enokiZkLoginService.sendTransaction(
       {
         provider: 'Google', // Would come from session
-        userAddr: authResult.suiAddress,
+        userAddr: authResult.suiAddress || '',
         zkProofs: undefined as any, // Would come from session
         ephemeralPrivateKey: '', // Would come from session
         userSalt: '', // Would come from session
@@ -145,7 +145,7 @@ async function handler(req: AuthenticatedRequest, res: NextApiResponse) {
       { gasBudget: 10_000_000 }
     );
 
-    logAdminAction('LINK_CIRCLE_SUCCESS', authResult.suiAddress, {
+    logAdminAction('LINK_CIRCLE_SUCCESS', authResult.suiAddress || 'unknown', {
       circleId,
       txDigest: result.digest
     });

@@ -172,7 +172,7 @@ export class SuiEventListenerService {
         // Parse and process events
         const parsedEvents = events
           .map((event: SuiEvent) => this.parserService.parseEvent(event, eventType))
-          .filter((event): event is ParsedBlockchainEvent => event !== null);
+          .filter((event: ParsedBlockchainEvent | null): event is ParsedBlockchainEvent => event !== null);
 
         // Emit events to handlers
         for (const parsedEvent of parsedEvents) {

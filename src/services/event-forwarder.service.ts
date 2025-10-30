@@ -4,7 +4,14 @@
  * with queue-based forwarding, retry logic, and acknowledgment
  */
 
-import { appLogger } from '../utils/logger';
+// Simple logger for this service
+const appLogger = {
+  info: (msg: string, data?: unknown) => console.log(`[INFO] ${msg}`, data),
+  warn: (msg: string, data?: unknown) => console.warn(`[WARN] ${msg}`, data),
+  error: (msg: string, data?: unknown) => console.error(`[ERROR] ${msg}`, data),
+  debug: (msg: string, data?: unknown) => console.debug(`[DEBUG] ${msg}`, data),
+};
+
 import { ParsedBlockchainEvent } from '../utils/sui-event-types';
 
 /**
