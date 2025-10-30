@@ -17,8 +17,6 @@
 import { NextApiResponse } from 'next';
 import { NextApiRequest } from 'next';
 import { logAdminAction } from '../../../middleware/admin-auth.middleware';
-import { SuiClient } from '@mysten/sui/client';
-import { Transaction } from '@mysten/sui/transactions';
 import { enokiZkLoginService } from '../../../services/enokiZkLoginService';
 import { AccountData } from '../../../services/zkLoginService';
 
@@ -83,24 +81,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     // If account data is provided, send the blockchain transaction
     if (account && account.zkProofs && account.ephemeralPrivateKey) {
-      const txb = new Transaction();
-      
-      // Build the link_circle transaction
-      txb.moveCall({
-        target: `${packageId}::whatsapp_integration::link_circle`,
-        arguments: [
-          txb.object(registryObjectId),
-          txb.pure.address(circleId),
-          txb.pure.u8(linkType),
-          txb.pure.string(phoneOrGroup),
-          txb.pure.address(adminAddr || account.userAddr)
-        ]
-      });
-
       // Send transaction using zkLogin credentials
+      // The callback receives a TransactionBlock and must build the transaction within it
       const result = await enokiZkLoginService.sendTransaction(
         account,
-        () => txb,
+        (txb) => {
+          // Build the link_circle transaction in the provided txb
+          txb.moveCall({
+            target: `${packageId}::whatsapp_integration::link_circle`,
+            arguments: [
+              txb.object(registryObjectId),
+              txb.pure.address(circleId),
+              txb.pure.u8(linkType),
+              txb.pure.string(phoneOrGroup),
+              txb.pure.address(adminAddr || account.userAddr)
+            ]
+          });
+        },
         { gasBudget: 10_000_000 }
       );
 
