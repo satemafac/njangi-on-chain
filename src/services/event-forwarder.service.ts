@@ -4,14 +4,7 @@
  * with queue-based forwarding, retry logic, and acknowledgment
  */
 
-// Simple logger for this service
-const appLogger = {
-  info: (msg: string, data?: unknown) => console.log(`[INFO] ${msg}`, data),
-  warn: (msg: string, data?: unknown) => console.warn(`[WARN] ${msg}`, data),
-  error: (msg: string, data?: unknown) => console.error(`[ERROR] ${msg}`, data),
-  debug: (msg: string, data?: unknown) => console.debug(`[DEBUG] ${msg}`, data),
-};
-
+import { appLogger } from '../utils/logger';
 import { ParsedBlockchainEvent } from '../utils/sui-event-types';
 
 /**
@@ -239,7 +232,7 @@ export class EventForwarderService {
       const itemsToProcess: QueuedEvent[] = [];
 
       // Get items ready to forward
-      for (const [_, queuedEvent] of this.queue) {
+      for (const [, queuedEvent] of this.queue) {
         // Skip if retry delay not elapsed
         if (queuedEvent.lastAttempt) {
           const delayMs = this.calculateBackoffDelay(queuedEvent.retryCount);
