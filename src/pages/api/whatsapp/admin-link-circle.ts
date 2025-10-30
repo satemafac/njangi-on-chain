@@ -17,12 +17,17 @@
 import { NextApiResponse } from 'next';
 import { NextApiRequest } from 'next';
 import { logAdminAction } from '../../../middleware/admin-auth.middleware';
+import { SuiClient } from '@mysten/sui/client';
+import { Transaction } from '@mysten/sui/transactions';
+import { enokiZkLoginService } from '../../../services/enokiZkLoginService';
+import { AccountData } from '../../../services/zkLoginService';
 
 interface LinkCircleRequest {
   circleId: string;
   linkType: 1 | 2;  // 1 = individual, 2 = group
   phoneOrGroup: string;
   adminAddress?: string;  // Admin's Sui address
+  account?: AccountData;   // Full zkLogin account for transaction signing
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -39,6 +44,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // This endpoint is only accessible from protected routes
     
     const adminAddr = req.body?.adminAddress || 'unknown';
+    const account = req.body?.account as AccountData | undefined;
     
     // Validate request body
     const { circleId, linkType, phoneOrGroup } = req.body as LinkCircleRequest;
@@ -64,45 +70,79 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       recipient: linkType === 1 ? 'individual' : 'group'
     });
 
-    // For MVP: Store the link mapping off-chain (in-memory or database)
-    // In production, this would be a blockchain transaction that the admin signs
-    // The link mapping is stored on-chain in WhatsAppLinksRegistry
-    
-    // Get registry object ID from environment (for reference)
+    // Get registry object ID and package ID from environment
     const registryObjectId = process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID;
     if (!registryObjectId) {
       throw new Error('SUI_WHATSAPP_LINKS_REGISTRY_ID not configured');
     }
 
-    // Get package ID from environment (for reference)
     const packageId = process.env.SUI_WHATSAPP_PACKAGE_ID;
     if (!packageId) {
       throw new Error('SUI_WHATSAPP_PACKAGE_ID not configured');
     }
 
-    // TODO: In production, create a proper transaction that:
-    // 1. Calls whatsapp_integration::link_circle
-    // 2. User signs with their zkLogin session
-    // 3. Submit to blockchain
-    
-    // For now, return success indicating the link was recorded
-    logAdminAction('LINK_CIRCLE_SUCCESS', adminAddr, {
-      circleId,
-      status: 'pending_blockchain_confirmation',
-      linkType,
-      recipient: phoneOrGroup
-    });
+    // If account data is provided, send the blockchain transaction
+    if (account && account.zkProofs && account.ephemeralPrivateKey) {
+      const txb = new Transaction();
+      
+      // Build the link_circle transaction
+      txb.moveCall({
+        target: `${packageId}::whatsapp_integration::link_circle`,
+        arguments: [
+          txb.object(registryObjectId),
+          txb.pure.address(circleId),
+          txb.pure.u8(linkType),
+          txb.pure.string(phoneOrGroup),
+          txb.pure.address(adminAddr || account.userAddr)
+        ]
+      });
 
-    return res.status(200).json({
-      success: true,
-      data: {
-        message: 'Circle link initiated successfully. Transaction pending user confirmation.',
+      // Send transaction using zkLogin credentials
+      const result = await enokiZkLoginService.sendTransaction(
+        account,
+        () => txb,
+        { gasBudget: 10_000_000 }
+      );
+
+      logAdminAction('LINK_CIRCLE_SUCCESS', adminAddr, {
         circleId,
         linkType,
         recipient: phoneOrGroup,
-        status: 'pending'
-      }
-    });
+        txDigest: result.digest,
+        status: 'confirmed_on_blockchain'
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          message: 'Circle successfully linked to WhatsApp on-chain!',
+          circleId,
+          linkType,
+          recipient: phoneOrGroup,
+          txDigest: result.digest,
+          status: 'confirmed'
+        }
+      });
+    } else {
+      // Fallback: Account data not provided, just log and return pending
+      logAdminAction('LINK_CIRCLE_SUCCESS', adminAddr, {
+        circleId,
+        status: 'pending_blockchain_confirmation',
+        linkType,
+        recipient: phoneOrGroup
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          message: 'Circle link initiated. Waiting for blockchain confirmation...',
+          circleId,
+          linkType,
+          recipient: phoneOrGroup,
+          status: 'pending'
+        }
+      });
+    }
 
   } catch (error) {
     const suiAddress = req.body?.adminAddress;
@@ -116,10 +156,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     console.error('❌ Admin link circle error:', error);
     return res.status(500).json({
       success: false,
-      error: error instanceof Error ? error.message : 'Internal server error'
+      error: error instanceof Error ? error.message : 'Failed to link circle'
     });
   }
 }
 
-// Export handler with middlewares applied
 export default handler;

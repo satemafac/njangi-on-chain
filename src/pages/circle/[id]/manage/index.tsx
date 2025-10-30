@@ -5481,7 +5481,7 @@ export default function ManageCircle() {
                     <WhatsAppCircleIntegration
                       circleId={id as string}
                       adminAddress={userAddress || ''}
-                      adminToken={account.provider === 'zkLogin' ? account.userAddr : ''}
+                      account={account}
                       onLinked={(status) => {
                         if (status) {
                           toast.success('Circle linked to WhatsApp!');

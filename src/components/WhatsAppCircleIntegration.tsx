@@ -11,11 +11,12 @@
 import React, { useState, useEffect } from 'react';
 import { MessageCircle, Link as LinkIcon, Unlink, Loader } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import { AccountData } from '@/services/zkLoginService';
 
 interface WhatsAppIntegrationProps {
   circleId: string;
   adminAddress: string;
-  adminToken: string; // Pass the admin's auth token
+  account: AccountData;  // Full zkLogin account data
   onLinked?: (status: boolean) => void;
 }
 
@@ -29,7 +30,7 @@ interface LinkedStatus {
 const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   circleId,
   adminAddress,
-  adminToken,
+  account,
   onLinked
 }) => {
   const [linkedStatus, setLinkedStatus] = useState<LinkedStatus>({ isLinked: false });
@@ -69,7 +70,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
         return;
       }
 
-      // Call admin-link-circle endpoint
+      // Call admin-link-circle endpoint with full zkLogin account for transaction signing
       const response = await fetch('/api/whatsapp/admin-link-circle', {
         method: 'POST',
         headers: {
@@ -79,7 +80,17 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
           circleId,
           linkType,
           phoneOrGroup: phoneOrGroup.trim(),
-          adminAddress  // Send admin address for logging
+          adminAddress,
+          account: {
+            provider: account.provider,
+            userAddr: account.userAddr,
+            zkProofs: account.zkProofs,
+            ephemeralPrivateKey: account.ephemeralPrivateKey,
+            userSalt: account.userSalt,
+            sub: account.sub,
+            aud: account.aud,
+            maxEpoch: account.maxEpoch
+          }
         })
       });
 
@@ -119,10 +130,22 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
       const response = await fetch('/api/whatsapp/admin-unlink-circle', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${adminToken}`
+          'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ circleId })
+        body: JSON.stringify({ 
+          circleId,
+          adminAddress,
+          account: {
+            provider: account.provider,
+            userAddr: account.userAddr,
+            zkProofs: account.zkProofs,
+            ephemeralPrivateKey: account.ephemeralPrivateKey,
+            userSalt: account.userSalt,
+            sub: account.sub,
+            aud: account.aud,
+            maxEpoch: account.maxEpoch
+          }
+        })
       });
 
       const data = await response.json();
