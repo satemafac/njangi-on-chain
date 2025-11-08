@@ -19,7 +19,7 @@ import { logAdminAction } from '../../../middleware/admin-auth.middleware';
 import { enokiZkLoginService } from '../../../services/enokiZkLoginService';
 import { AccountData } from '../../../services/zkLoginService';
 import { SuiClient } from '@mysten/sui/client';
-import { getCurrentRpcUrl } from '../../../services/network-config';
+import { getNetworkConfig } from '../../../services/network-config';
 import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry-service';
 import type { NetworkType } from '../../../services/whatsapp-registry-service';
 
@@ -50,8 +50,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         throw new Error('SUI_WHATSAPP_LINKS_REGISTRY_ID not configured');
       }
 
-      // Query the registry object from blockchain
-       const suiClient = new SuiClient({ url: getCurrentRpcUrl() });
+      // Query the registry object from blockchain using testnet RPC (default for queries)
+      const testnetConfig = getNetworkConfig('testnet');
+       const suiClient = new SuiClient({ url: testnetConfig.rpcUrl });
        
        try {
          const registryObject = await suiClient.getObject({
@@ -222,7 +223,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (account && account.zkProofs && account.ephemeralPrivateKey) {
       // Send transaction using zkLogin credentials
       // The callback receives a TransactionBlock and must build the transaction within it
-      console.log(`🔗 Using RPC URL: ${getCurrentRpcUrl()}`);
+      const networkConfig = getNetworkConfig(network);
+      const rpcUrl = networkConfig.rpcUrl;
+      console.log(`🔗 Using RPC URL for network ${network}: ${rpcUrl}`);
       console.log(`📦 Transaction details:`, { packageId, registryObjectId, network });
       
       const result = await enokiZkLoginService.sendTransaction(

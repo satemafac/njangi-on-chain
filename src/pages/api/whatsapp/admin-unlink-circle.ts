@@ -17,6 +17,7 @@ import { NextApiResponse, NextApiRequest } from 'next';
 import { logAdminAction } from '../../../middleware/admin-auth.middleware';
 import { enokiZkLoginService } from '../../../services/enokiZkLoginService';
 import { AccountData } from '../../../services/zkLoginService';
+import { getNetworkConfig } from '../../../services/network-config';
 import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry-service';
 import type { NetworkType } from '../../../services/whatsapp-registry-service';
 
