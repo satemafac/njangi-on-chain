@@ -7,7 +7,7 @@
     "build": "npm run build:main && npm run build:bot",
     "build:main": "next build",
     "build:bot": "cd whatsapp-bot-backend && npm run build",
-    "postinstall": "cd whatsapp-bot-backend && npm install",
+    "postinstall": "cd whatsapp-bot-backend && npm ci --legacy-peer-deps 2>/dev/null || npm install --legacy-peer-deps",
     "start": "next start -p $PORT",
     "lint": "next lint",
     "heroku-postbuild": "npm run build"
