@@ -142,7 +142,9 @@ export function loadConfig(): Config {
       testnetPackageId: validateRequiredVar('NEXT_PUBLIC_TESTNET_PACKAGE_ID', process.env.NEXT_PUBLIC_TESTNET_PACKAGE_ID),
       mainnetPackageId: validateRequiredVar('NEXT_PUBLIC_MAINNET_PACKAGE_ID', process.env.NEXT_PUBLIC_MAINNET_PACKAGE_ID),
       defaultPackageId: validateRequiredVar('NEXT_PUBLIC_PACKAGE_ID', process.env.NEXT_PUBLIC_PACKAGE_ID),
-      whatsappLinksRegistryId: validateRequiredVar('SUI_WHATSAPP_LINKS_REGISTRY_ID', process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID),
+      // Use testnet registry by default, support legacy name for backward compatibility
+      whatsappLinksRegistryId: validateRequiredVar('NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID', 
+        process.env.NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID || process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID),
     };
 
     // WhatsApp Configuration

@@ -12,6 +12,7 @@ import React, { useState, useEffect } from 'react';
 import { MessageCircle, Link as LinkIcon, Unlink, Loader } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { AccountData } from '@/services/zkLoginService';
+import ConfirmationModal from './ConfirmationModal';
 
 interface WhatsAppIntegrationProps {
   circleId: string;
@@ -27,6 +28,95 @@ interface LinkedStatus {
   linkedAt?: string;
 }
 
+// Validation functions
+const validatePhoneNumber = (phone: string): { valid: boolean; error?: string } => {
+  const trimmed = phone.trim();
+  
+  // Check if empty
+  if (!trimmed) {
+    return { valid: false, error: 'Phone number is required' };
+  }
+  
+  // Must start with +
+  if (!trimmed.startsWith('+')) {
+    return { valid: false, error: 'Phone number must start with + (e.g., +1234567890)' };
+  }
+  
+  // Remove + for digit check
+  const digitsOnly = trimmed.substring(1);
+  
+  // Must contain only digits
+  if (!/^\d+$/.test(digitsOnly)) {
+    return { valid: false, error: 'Phone number must contain only digits after +' };
+  }
+  
+  // Check length (most E.164 numbers are 7-15 digits)
+  if (digitsOnly.length < 7 || digitsOnly.length > 15) {
+    return { valid: false, error: 'Phone number must be 7-15 digits long' };
+  }
+  
+  return { valid: true };
+};
+
+const validateGroupId = (groupId: string): { valid: boolean; error?: string } => {
+  const trimmed = groupId.trim();
+  
+  // Check if empty
+  if (!trimmed) {
+    return { valid: false, error: 'Group ID is required' };
+  }
+  
+  // Must end with @g.us (WhatsApp group format - universal across all regions)
+  if (!trimmed.endsWith('@g.us')) {
+    return { valid: false, error: 'Group ID must end with @g.us' };
+  }
+  
+  // Extract the part before @g.us
+  const groupPart = trimmed.substring(0, trimmed.length - 5);
+  
+  // WhatsApp supports two formats:
+  // Format 1: XXXXXXXXXX-XXXXXXXXXX@g.us (timestamp-creation ID)
+  // Format 2: XXXXXXXXXXXXXXXXX@g.us (single long ID)
+  
+  // Check if it's format 1 (with hyphen)
+  if (groupPart.includes('-')) {
+    // Must be numbers-numbers
+    if (!/^\d+-\d+$/.test(groupPart)) {
+      return { valid: false, error: 'Group ID format should be: numbers-numbers@g.us' };
+    }
+    
+    const parts = groupPart.split('-');
+    const [part1, part2] = parts;
+    
+    // Each part should be reasonably sized
+    if (part1.length < 5 || part1.length > 20 || part2.length < 5 || part2.length > 20) {
+      return { valid: false, error: 'Group ID parts should be 5-20 digits each' };
+    }
+  } else {
+    // Format 2: single long ID (must be all digits)
+    if (!/^\d+$/.test(groupPart)) {
+      return { valid: false, error: 'Group ID must contain only digits' };
+    }
+    
+    // Should be 10-20 digits for a single format
+    if (groupPart.length < 10 || groupPart.length > 20) {
+      return { valid: false, error: 'Group ID should be 10-20 digits (or use timestamp-ID format)' };
+    }
+  }
+  
+  return { valid: true };
+};
+
+const getValidationError = (linkType: 1 | 2, value: string): string | null => {
+  if (linkType === 1) {
+    const result = validatePhoneNumber(value);
+    return result.error || null;
+  } else {
+    const result = validateGroupId(value);
+    return result.error || null;
+  }
+};
+
 const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   circleId,
   adminAddress,
@@ -37,9 +127,11 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   const [loading, setLoading] = useState(false);
   const [linking, setLinking] = useState(false);
   const [showLinkForm, setShowLinkForm] = useState(false);
+  const [showUnlinkConfirm, setShowUnlinkConfirm] = useState(false);
   
   const [linkType, setLinkType] = useState<1 | 2>(1);
   const [phoneOrGroup, setPhoneOrGroup] = useState('');
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   // Fetch current link status
   useEffect(() => {
@@ -87,10 +179,23 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
     e.preventDefault();
     
     try {
+      setValidationError(null);
       setLinking(true);
 
       if (!phoneOrGroup.trim()) {
-        toast.error('Please enter phone number or group ID');
+        const error = `${linkType === 1 ? 'Phone number' : 'Group ID'} is required`;
+        setValidationError(error);
+        toast.error(error);
+        setLinking(false);
+        return;
+      }
+
+      // Validate input
+      const error = getValidationError(linkType, phoneOrGroup);
+      if (error) {
+        setValidationError(error);
+        toast.error(error);
+        setLinking(false);
         return;
       }
 
@@ -134,6 +239,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
       });
       setShowLinkForm(false);
       setPhoneOrGroup('');
+      setValidationError(null);
       onLinked?.(true);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to link circle');
@@ -143,10 +249,6 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   };
 
   const handleUnlinkCircle = async () => {
-    if (!window.confirm('Are you sure you want to unlink this circle from WhatsApp?')) {
-      return;
-    }
-
     try {
       setLinking(true);
 
@@ -181,6 +283,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
 
       toast.success('✅ Circle unlinked from WhatsApp');
       setLinkedStatus({ isLinked: false });
+      setShowUnlinkConfirm(false);
       onLinked?.(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to unlink circle');
@@ -242,7 +345,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
           </div>
 
           <button
-            onClick={handleUnlinkCircle}
+            onClick={() => setShowUnlinkConfirm(true)}
             disabled={linking}
             className="w-full px-4 py-2 bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition flex items-center justify-center text-sm font-medium disabled:opacity-60"
           >
@@ -278,7 +381,11 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
                 </label>
                 <select
                   value={linkType}
-                  onChange={(e) => setLinkType(parseInt(e.target.value) as 1 | 2)}
+                  onChange={(e) => {
+                    setLinkType(parseInt(e.target.value) as 1 | 2);
+                    setPhoneOrGroup('');
+                    setValidationError(null);
+                  }}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
                 >
                   <option value={1}>📱 Individual (Phone Number)</option>
@@ -293,21 +400,35 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
                 <input
                   type="text"
                   value={phoneOrGroup}
-                  onChange={(e) => setPhoneOrGroup(e.target.value)}
-                  placeholder={linkType === 1 ? '+1234567890' : 'group-id@g.us'}
+                  onChange={(e) => {
+                    const newValue = e.target.value;
+                    setPhoneOrGroup(newValue);
+                    // Real-time validation
+                    if (newValue.trim()) {
+                      const error = getValidationError(linkType, newValue);
+                      setValidationError(error);
+                    } else {
+                      setValidationError(null);
+                    }
+                  }}
+                  placeholder={linkType === 1 ? '+1234567890' : '123456789-1234567890@g.us or 120363043968066561@g.us'}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
                   disabled={linking}
                 />
+                {validationError && (
+                  <p className="text-xs text-red-500 mt-1">{validationError}</p>
+                )}
               </div>
 
-              <div className="bg-blue-50 border border-blue-200 p-2 rounded text-xs text-blue-700">
-                <p>💡 Tip: Circle admins will receive WhatsApp notifications for circle events.</p>
+              <div className="bg-blue-50 border border-blue-200 p-2 rounded text-xs text-blue-700 space-y-1">
+                <p>💡 <strong>Tip:</strong> Circle admins will receive WhatsApp notifications for circle events.</p>
+                <p className="text-xs text-blue-600">Group ID formats: <code className="bg-blue-100 px-1 rounded">123456789-1234567890@g.us</code> or <code className="bg-blue-100 px-1 rounded">120363043968066561@g.us</code></p>
               </div>
 
               <div className="flex space-x-2">
                 <button
                   type="submit"
-                  disabled={linking || !phoneOrGroup.trim()}
+                  disabled={linking || !phoneOrGroup.trim() || !!validationError}
                   className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center"
                 >
                   {linking ? (
@@ -327,6 +448,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
                   onClick={() => {
                     setShowLinkForm(false);
                     setPhoneOrGroup('');
+                    setValidationError(null);
                   }}
                   disabled={linking}
                   className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition text-sm font-medium disabled:opacity-60"
@@ -338,6 +460,15 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
           )}
         </div>
       )}
+      <ConfirmationModal
+        isOpen={showUnlinkConfirm}
+        onClose={() => setShowUnlinkConfirm(false)}
+        onConfirm={handleUnlinkCircle}
+        title="Confirm Unlink"
+        message="Are you sure you want to unlink this circle from WhatsApp? This action cannot be undone."
+        confirmText="Unlink"
+        cancelText="Cancel"
+      />
     </div>
   );
 };

@@ -1,0 +1,231 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                  HEROKU WHATSAPP WEBHOOK SETUP - SUMMARY                    ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+📋 DOCUMENTS CREATED:
+  1. HEROKU_WHATSAPP_WEBHOOK_SETUP.md     - Complete architecture guide
+  2. ENV_SETUP_HEROKU.md                  - Environment variables guide
+  3. HEROKU_DEPLOYMENT_CHECKLIST.md       - Step-by-step deployment checklist
+  4. scripts/heroku-deploy.sh             - Automated deployment script
+  5. HEROKU_SETUP_SUMMARY.txt             - This file
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🏗️  ARCHITECTURE
+
+Your Heroku app runs TWO separate processes:
+
+┌──────────────────────────────────────────────────────────┐
+│  Heroku App: njangi-on-chain                             │
+├──────────────────────────────────────────────────────────┤
+│                                                          │
+│  WEB PROCESS (Port 3000)          BOT PROCESS (Port 3001)│
+│  ├─ Next.js Frontend             ├─ Node.js Backend     │
+│  ├─ Admin Dashboard              ├─ Event Listener      │
+│  ├─ /api/whatsapp/* endpoints    ├─ Message Sender      │
+│  └─ WhatsApp Webhooks            └─ Blockchain Events   │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+
+Both processes share the SAME environment variables (set in Heroku Config)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔑 KEY POINTS
+
+1. Environment Variables
+   • Frontend uses: NEXT_PUBLIC_* (browser accessible)
+   • Backend uses: ALL variables (server only)
+   • Both use: Shared Heroku Config Vars
+
+2. Procfile Already Configured
+   • web: npm start (Next.js)
+   • bot: cd whatsapp-bot-backend && npm start (Node.js)
+   • Both processes start automatically on deployment
+
+3. WhatsApp Webhook Flow
+   WhatsApp Cloud → POST https://njangi-on-chain.herokuapp.com/api/whatsapp/webhook
+   ↓
+   Heroku Router → web dyno (port 3000)
+   ↓
+   Next.js API handler → /api/whatsapp/webhook.ts
+   ↓
+   Processes webhook, stores/queues message
+   ↓
+   Bot process (async) picks up from queue
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚀 QUICK START
+
+Step 1: Set Environment Variables on Heroku
+──────────────────────────────────────────────
+heroku config:set \
+  NEXT_PUBLIC_TESTNET_WHATSAPP_PACKAGE_ID=0x2ee55011e9d3c27a2743f83fb9f4498de8cdb6078cc175bec03362326f9ec1a1 \
+  NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID=0x65fad7ceeb6a960af0702280052c85b9e4e467f33531e9b8d3f08c6244bf0150 \
+  WHATSAPP_PHONE_NUMBER_ID=981828818344477 \
+  WHATSAPP_ACCESS_TOKEN=EAAKXb13PeesBP0KAQ... \
+  WHATSAPP_BUSINESS_ACCOUNT_ID=698579130000 \
+  WHATSAPP_VERIFY_TOKEN=ABC123 \
+  WHATSAPP_APP_SECRET=53b58922cb5bfe562af7 \
+  --app njangi-on-chain
+
+(See ENV_SETUP_HEROKU.md for complete list)
+
+Step 2: Deploy
+──────────────
+git checkout main
+git add .
+git commit -m "chore: deploy whatsapp bot with heroku"
+git push heroku main
+
+Step 3: Verify
+──────────────
+heroku ps -a njangi-on-chain              # Check processes running
+heroku logs -a njangi-on-chain --tail     # Monitor logs
+
+Step 4: Configure WhatsApp
+───────────────────────────
+1. Meta Business Platform > WhatsApp > Settings
+2. Webhook Callback URL: https://njangi-on-chain.herokuapp.com/api/whatsapp/webhook
+3. Verify Token: (matching WHATSAPP_VERIFY_TOKEN)
+4. Click "Verify and Save"
+5. Should see: "Webhook verified ✓"
+
+Step 5: Test
+────────────
+Send message to bot via WhatsApp → Should see in logs
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 VARIABLE ORGANIZATION
+
+ENVIRONMENT VARIABLES ARE ORGANIZED IN 3 CATEGORIES:
+
+1. PUBLIC VARIABLES (in browser)
+   • NEXT_PUBLIC_TESTNET_RPC_URL
+   • NEXT_PUBLIC_MAINNET_RPC_URL
+   • NEXT_PUBLIC_*_PACKAGE_ID
+   • NEXT_PUBLIC_*_WHATSAPP_*
+   • NEXT_PUBLIC_*_ENOKI
+   • NEXT_PUBLIC_ZKLOGIN_*_CLIENT_ID
+
+2. SERVER VARIABLES (backend only)
+   • ZKLOGIN_*_ENOKI_KEY
+   • ZKLOGIN_*_CLIENT_SECRET
+   • WHATSAPP_*
+   • NODE_ENV
+   • LOG_LEVEL
+
+3. SHARED VARIABLES (both use same value)
+   • RPC URLs
+   • Package IDs
+   • Enoki keys
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 YOUR CURRENT CONFIG
+
+✅ Procfile: Ready (web + bot processes)
+✅ Heroku App: njangi-on-chain
+✅ WhatsApp Package: 0x2ee55011e9d3c27a2743f83fb9f4498de8cdb6078cc175bec03362326f9ec1a1
+✅ WhatsApp Registry: 0x65fad7ceeb6a960af0702280052c85b9e4e467f33531e9b8d3f08c6244bf0150
+✅ WhatsApp Phone ID: 981828818344477
+✅ Webhook URL: https://njangi-on-chain.herokuapp.com/api/whatsapp/webhook
+
+TODO:
+⏳ Set all remaining environment variables on Heroku
+⏳ Update OAuth client secrets
+⏳ Deploy to Heroku
+⏳ Verify both processes running
+⏳ Configure webhook in WhatsApp dashboard
+⏳ Test with message
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📚 HELPFUL COMMANDS
+
+# View all environment variables
+heroku config -a njangi-on-chain
+
+# Check running processes
+heroku ps -a njangi-on-chain
+
+# Monitor logs in real-time
+heroku logs -a njangi-on-chain --tail
+
+# Monitor specific process
+heroku logs -a njangi-on-chain --dyno=bot --tail
+heroku logs -a njangi-on-chain --dyno=web --tail
+
+# Restart a process
+heroku ps:restart bot -a njangi-on-chain
+
+# Scale processes (for high traffic)
+heroku ps:scale bot=2 -a njangi-on-chain
+
+# View release history
+heroku releases -a njangi-on-chain
+
+# Rollback to previous version
+heroku releases:rollback v123 -a njangi-on-chain
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚡ TROUBLESHOOTING QUICK REFERENCE
+
+Bot won't start?
+  → Check: WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN, ZKLOGIN_*_ENOKI_KEY
+  → Run: heroku logs -a njangi-on-chain --dyno=bot --tail
+
+Webhook not receiving messages?
+  → Verify: Callback URL matches exactly in WhatsApp dashboard
+  → Check: WHATSAPP_VERIFY_TOKEN matches
+  → Resend subscription in WhatsApp dashboard
+
+Variables not loading?
+  → Check: heroku config:get VARIABLE_NAME -a njangi-on-chain
+  → Set: heroku config:set VARIABLE_NAME=value -a njangi-on-chain
+
+Both processes failing?
+  → Check both logs: heroku logs -a njangi-on-chain --tail
+  → Common: Missing .env variables
+  → Fix: Set all required variables, then redeploy
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📖 NEXT STEPS
+
+1. Read: ENV_SETUP_HEROKU.md
+   → Understand all required variables
+   → Find where to get credentials
+
+2. Read: HEROKU_DEPLOYMENT_CHECKLIST.md
+   → Follow step-by-step instructions
+   → Check off boxes as you complete
+
+3. Run: scripts/heroku-deploy.sh
+   → Automated deployment helper
+   → Handles git, deployment, verification
+
+4. Monitor: heroku logs -a njangi-on-chain --tail
+   → Watch both processes start
+   → Verify no errors
+
+5. Test: Send WhatsApp message
+   → Should see webhook received
+   → Bot should process message
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✨ YOU'RE READY TO DEPLOY! ✨
+
+Everything is set up. Now it's just:
+1. Set environment variables
+2. Deploy: git push heroku main
+3. Verify both processes
+4. Configure WhatsApp webhook
+5. Test with a message
+
+Good luck! 🚀
+

@@ -1,0 +1,289 @@
+╔════════════════════════════════════════════════════════════════════════════════╗
+║           HEROKU WHATSAPP BOT DEPLOYMENT - COMPLETE FLOW DIAGRAM              ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+
+PART 1: LOCAL DEVELOPMENT
+═════════════════════════════════════════════════════════════════════════════════
+
+Your Machine
+├── Project Root
+│   ├── .env.local                          ← Frontend env (git ignored)
+│   ├── Procfile                            ← Process definitions
+│   ├── package.json                        ← Frontend dependencies
+│   └── whatsapp-bot-backend/
+│       ├── .env.local                      ← Backend env (git ignored)
+│       └── package.json                    ← Backend dependencies
+│
+└── npm run dev                             ← Runs both locally
+    ├── Port 3000: Next.js frontend
+    └── Port 3001: Bot backend
+
+
+PART 2: GIT COMMIT & PUSH
+═════════════════════════════════════════════════════════════════════════════════
+
+$ git add .
+$ git commit -m "chore: deploy whatsapp bot"
+$ git push heroku main
+
+       ↓
+       
+GitHub Repository (main branch)
+       ↓
+Heroku Receives Push
+       ├─ Detects Procfile
+       ├─ Reads process definitions
+       └─ Starts building
+
+
+PART 3: HEROKU BUILD & DEPLOYMENT
+═════════════════════════════════════════════════════════════════════════════════
+
+Heroku Build Process
+│
+├─ Parse Procfile
+│  ├─ web: npm start
+│  └─ bot: cd whatsapp-bot-backend && npm start
+│
+├─ Install Dependencies
+│  ├─ Root: npm install (Next.js, dependencies)
+│  └─ Bot: cd whatsapp-bot-backend && npm install
+│
+├─ Build
+│  ├─ Next.js: Build optimized bundle
+│  └─ Bot: Compile TypeScript
+│
+├─ Launch Processes
+│  ├─ web dyno → npm start (port 3000)
+│  └─ bot dyno → npm start (port 3001)
+│
+└─ Read Environment Variables
+   └─ All processes get Heroku Config Vars
+
+
+PART 4: RUNTIME - WHATSAPP WEBHOOK FLOW
+═════════════════════════════════════════════════════════════════════════════════
+
+User sends WhatsApp Message
+        ↓
+Meta WhatsApp Cloud API
+        ↓
+Detects webhook configured for app
+        ↓
+Makes POST request to:
+https://njangi-on-chain.herokuapp.com/api/whatsapp/webhook
+        ↓
+Heroku Load Balancer
+        ↓
+Routes to "web" dyno (Next.js, port 3000)
+        ↓
+Next.js API Handler
+/api/whatsapp/webhook.ts
+        ├─ Verify webhook signature (HMAC)
+        ├─ Parse incoming message
+        ├─ Store in message queue
+        └─ Return 200 OK
+        ↓
+Bot Process (async)
+/whatsapp-bot-backend
+        ├─ Read from message queue
+        ├─ Call Sui blockchain (fetch account data, etc)
+        ├─ Generate response message
+        ├─ Send via WhatsApp API
+        ├─ Track delivery status
+        └─ Store analytics
+
+
+PART 5: RUNTIME - BOT BACKGROUND TASKS
+═════════════════════════════════════════════════════════════════════════════════
+
+Bot Process Running Continuously
+├─ Event Listener (every N seconds)
+│  ├─ Query Sui blockchain for events
+│  ├─ Filter for circle-related events
+│  └─ Queue messages to send
+│
+├─ Message Processor
+│  ├─ Pick message from queue
+│  ├─ Process through template engine
+│  └─ Add action links
+│
+├─ WhatsApp Sender
+│  ├─ Send via Meta Cloud API
+│  ├─ Track delivery status
+│  └─ Retry on failure
+│
+└─ Analytics
+   └─ Track message metrics
+
+
+PART 6: DYNO ARCHITECTURE
+═════════════════════════════════════════════════════════════════════════════════
+
+                         Heroku Router
+                              ↓
+                    ┌─────────────────────┐
+                    │  Load Balancer      │
+                    └────────┬────────────┘
+                             │
+                ┌────────────┴────────────┐
+                ↓                         ↓
+        ┌──────────────┐        ┌──────────────┐
+        │  Web Dyno    │        │  Bot Dyno    │
+        │  (Scaling)   │        │  (Scaling)   │
+        ├──────────────┤        ├──────────────┤
+        │ Next.js      │        │ Node.js      │
+        │ Port 3000    │        │ Port 3001    │
+        │              │        │              │
+        │ • Webhooks   │        │ • Listener   │
+        │ • API Routes │        │ • Processor  │
+        │ • Frontend   │        │ • Sender     │
+        │ • Admin UI   │        │ • Analytics  │
+        └──────────────┘        └──────────────┘
+        
+        (Each can be scaled independently)
+        
+        Example:
+        heroku ps:scale web=2 bot=3
+
+
+PART 7: ENVIRONMENT VARIABLES (Shared)
+═════════════════════════════════════════════════════════════════════════════════
+
+Heroku Config Vars (all processes read these)
+│
+├─ PUBLIC (in browser too)
+│  ├─ NEXT_PUBLIC_TESTNET_RPC_URL
+│  ├─ NEXT_PUBLIC_MAINNET_RPC_URL
+│  ├─ NEXT_PUBLIC_*_PACKAGE_ID
+│  ├─ NEXT_PUBLIC_*_WHATSAPP_*
+│  └─ NEXT_PUBLIC_ZKLOGIN_*_CLIENT_ID
+│
+├─ PRIVATE (backend only)
+│  ├─ ZKLOGIN_*_ENOKI_KEY
+│  ├─ ZKLOGIN_*_CLIENT_SECRET
+│  ├─ WHATSAPP_ACCESS_TOKEN
+│  ├─ WHATSAPP_APP_SECRET
+│  └─ NODE_ENV=production
+│
+└─ SHARED (same value for both)
+   ├─ RPC URLs
+   ├─ Package IDs
+   └─ Enoki keys
+
+
+PART 8: LOGGING & MONITORING
+═════════════════════════════════════════════════════════════════════════════════
+
+heroku logs -a njangi-on-chain --tail
+        ↓
+Shows logs from ALL processes in real-time
+        ├─ [web.1] Next.js startup logs
+        ├─ [bot.1] Bot process logs
+        ├─ [bot.1] Webhook: Message received
+        └─ [bot.1] WhatsApp: Message sent
+
+Specific process:
+heroku logs -a njangi-on-chain --dyno=bot --tail
+        ↓
+Shows only bot process logs
+
+
+PART 9: COMPLETE MESSAGE FLOW (Visual)
+═════════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         USER SENDS WHATSAPP MESSAGE                         │
+└─────────────────────┬───────────────────────────────────────────────────────┘
+                      │
+                      ↓
+        ┌─────────────────────────┐
+        │ Meta WhatsApp Cloud     │
+        │ Webhook POST request    │
+        └────────────┬────────────┘
+                     │
+                     ↓
+        ┌─────────────────────────────────────────┐
+        │ https://njangi-on-chain.herokuapp.com/  │
+        │          api/whatsapp/webhook           │
+        └────────────┬────────────────────────────┘
+                     │
+                     ↓
+        ┌─────────────────────────────┐
+        │ Heroku Load Balancer        │
+        │ Routes to web dyno          │
+        └────────────┬────────────────┘
+                     │
+                     ↓
+        ┌─────────────────────────────┐
+        │ Web Dyno (Next.js)          │
+        │ /api/whatsapp/webhook.ts    │
+        │                             │
+        │ 1. Verify signature         │
+        │ 2. Parse message            │
+        │ 3. Queue message            │
+        │ 4. Return 200 OK            │
+        └────────────┬────────────────┘
+                     │
+                     ↓ (async)
+        ┌─────────────────────────────┐
+        │ Bot Dyno (Node.js)          │
+        │ Message Queue Processor     │
+        │                             │
+        │ 1. Get message from queue   │
+        │ 2. Query Sui blockchain     │
+        │ 3. Generate response        │
+        │ 4. Format with templates    │
+        │ 5. Add action links         │
+        └────────────┬────────────────┘
+                     │
+                     ↓
+        ┌─────────────────────────────┐
+        │ Meta WhatsApp Cloud API     │
+        │ Send response message       │
+        └────────────┬────────────────┘
+                     │
+                     ↓
+        ┌─────────────────────────────┐
+        │ User receives message       │
+        └─────────────────────────────┘
+
+
+PART 10: DEPLOYMENT CHECKLIST SUMMARY
+═════════════════════════════════════════════════════════════════════════════════
+
+✅ BEFORE DEPLOYMENT
+   ✓ Procfile configured and committed
+   ✓ Code on main branch
+   ✓ Heroku CLI installed and logged in
+
+✅ DURING DEPLOYMENT
+   ✓ Set all environment variables on Heroku
+   ✓ git push heroku main
+   ✓ Wait for build to complete
+
+✅ AFTER DEPLOYMENT
+   ✓ Check processes running: heroku ps
+   ✓ Check logs: heroku logs --tail
+   ✓ Configure webhook in WhatsApp dashboard
+   ✓ Send test message
+   ✓ Verify message received in logs
+
+✅ SUCCESS
+   ✓ Web dyno running (port 3000)
+   ✓ Bot dyno running (port 3001)
+   ✓ Webhook receiving messages
+   ✓ Bot responding to messages
+
+
+═════════════════════════════════════════════════════════════════════════════════
+
+Key Takeaways:
+1. Procfile defines TWO processes (web + bot)
+2. Both run independently with shared environment variables
+3. Web dyno receives WhatsApp webhooks
+4. Bot dyno processes messages asynchronously
+5. Each can be scaled independently
+6. Monitor both with: heroku logs --tail
+
+Ready to deploy! 🚀

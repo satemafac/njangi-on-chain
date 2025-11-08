@@ -281,13 +281,27 @@ module njangi::whatsapp_integration {
         assert!(table::contains(&registry.circle_to_link, circle_id), E_LINK_NOT_FOUND);
         
         let link_index = *table::borrow(&registry.circle_to_link, circle_id);
-        let link = vector::borrow_mut(&mut registry.links, link_index);
+        let link = vector::borrow(&registry.links, link_index);
         
         // Verify admin
         assert!(link.linked_by == admin_address, E_NOT_CIRCLE_ADMIN);
         
-        // Disable the link
-        link.enabled = false;
+        // Store the link type and phone/group for cleanup
+        let link_type = link.link_type;
+        let group_id = if (link_type == LINK_TYPE_GROUP) {
+            link.group_id
+        } else {
+            option::none()
+        };
+        
+        // Remove from lookup tables
+        table::remove(&mut registry.circle_to_link, circle_id);
+        if (option::is_some(&group_id)) {
+            let group = option::borrow(&group_id);
+            table::remove(&mut registry.group_to_link, *group);
+        };
+        
+        registry.total_links = registry.total_links - 1;
 
         event::emit(CircleUnlinked {
             circle_id,
