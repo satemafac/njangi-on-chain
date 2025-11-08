@@ -662,7 +662,8 @@ export class EnokiZkLoginService {
   public async sendTransaction(
     account: AccountData,
     prepareBlock: (txb: TransactionBlock) => void,
-    options: TransactionOptions = {}
+    options: TransactionOptions = {},
+    networkOverride?: 'testnet' | 'mainnet'
   ): Promise<TransactionResult> {
     try {
       // Validate account data and check epoch expiration
@@ -671,8 +672,15 @@ export class EnokiZkLoginService {
       // Get ephemeral keypair from stored private key
       const ephemeralKeyPair = this.keypairFromSecretKey(account.ephemeralPrivateKey);
 
+      // Use network-specific RPC URL if override provided
+      const suiClient = networkOverride 
+        ? new SuiClient({ url: networkOverride === 'testnet' 
+            ? 'https://fullnode.testnet.sui.io:443' 
+            : 'https://fullnode.mainnet.sui.io:443' })
+        : this.suiClient;
+
       // Validate current epoch against maxEpoch
-      const { epoch } = await this.suiClient.getLatestSuiSystemState();
+      const { epoch } = await suiClient.getLatestSuiSystemState();
       const currentEpoch = Number(epoch);
       console.log(`Current epoch: ${currentEpoch}, maxEpoch: ${account.maxEpoch}`);
       if (currentEpoch >= account.maxEpoch) {
@@ -710,7 +718,7 @@ export class EnokiZkLoginService {
 
       // Build transaction to get bytes for signing
       const { bytes, signature: userSignature } = await txb.sign({
-        client: this.suiClient,
+        client: suiClient,
         signer: ephemeralKeyPair,
       });
 
@@ -783,7 +791,7 @@ export class EnokiZkLoginService {
         
         // Execute transaction
         console.log('Executing transaction with zkLogin signature...');
-        const result = await this.suiClient.executeTransactionBlock({
+        const result = await suiClient.executeTransactionBlock({
           transactionBlock: bytes,
           signature: zkLoginSignature,
           options: {

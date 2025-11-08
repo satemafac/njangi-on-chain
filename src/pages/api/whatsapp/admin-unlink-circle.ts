@@ -86,7 +86,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             ]
           });
         },
-        { gasBudget: 10_000_000 }
+        { gasBudget: 10_000_000 },
+        network as 'testnet' | 'mainnet'  // Pass network override
       );
 
       logAdminAction('UNLINK_CIRCLE_SUCCESS', adminAddr, {
