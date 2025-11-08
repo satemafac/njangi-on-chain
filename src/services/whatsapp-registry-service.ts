@@ -33,11 +33,11 @@ const WHATSAPP_REGISTRIES: Record<NetworkType, WhatsAppRegistryConfig[]> = {
       // Current testnet - support both naming conventions
       packageId: process.env.NEXT_PUBLIC_TESTNET_WHATSAPP_PACKAGE_ID 
         || process.env.NEXT_PUBLIC_WHATSAPP_PACKAGE_ID 
-        || '',
+        || '0x2ee55011e9d3c27a2743f83fb9f4498de8cdb6078cc175bec03362326f9ec1a1',
       registryObjectId: process.env.NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID 
         || process.env.NEXT_PUBLIC_WHATSAPP_REGISTRY_ID 
         || process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID 
-        || '',
+        || '0x65fad7ceeb6a960af0702280052c85b9e4e467f33531e9b8d3f08c6244bf0150',
       description: 'Current testnet deployment (with unlink fix)',
       deprecated: false,
     },
@@ -103,7 +103,19 @@ export function getAllWhatsAppRegistries(network?: NetworkType): WhatsAppRegistr
  */
 export function getActiveWhatsAppRegistries(network?: NetworkType): WhatsAppRegistryConfig[] {
   const targetNetwork = network || getCurrentNetwork();
-  return WHATSAPP_REGISTRIES[targetNetwork].filter(r => !r.deprecated);
+  const activeRegistries = WHATSAPP_REGISTRIES[targetNetwork].filter(r => !r.deprecated);
+  
+  // Debug logging
+  console.log(`📱 WhatsApp Active Registries (${targetNetwork}):`, {
+    count: activeRegistries.length,
+    registries: activeRegistries.map(r => ({
+      packageId: r.packageId?.slice(0, 10) + '...',
+      registryId: r.registryObjectId?.slice(0, 10) + '...',
+      description: r.description
+    }))
+  });
+  
+  return activeRegistries;
 }
 
 /**
