@@ -222,6 +222,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (account && account.zkProofs && account.ephemeralPrivateKey) {
       // Send transaction using zkLogin credentials
       // The callback receives a TransactionBlock and must build the transaction within it
+      console.log(`🔗 Using RPC URL: ${getCurrentRpcUrl()}`);
+      console.log(`📦 Transaction details:`, { packageId, registryObjectId, network });
+      
       const result = await enokiZkLoginService.sendTransaction(
         account,
         (txb) => {
