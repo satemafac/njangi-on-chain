@@ -166,15 +166,15 @@ export function loadConfig(): Config {
       defaultEnoki: validateRequiredVar('ZKLOGIN_DEFAULT_ENOKI_KEY', process.env.ZKLOGIN_DEFAULT_ENOKI_KEY),
       google: {
         clientId: validateRequiredVar('ZKLOGIN_GOOGLE_CLIENT_ID', process.env.ZKLOGIN_GOOGLE_CLIENT_ID),
-        clientSecret: validateRequiredVar('ZKLOGIN_GOOGLE_CLIENT_SECRET', process.env.ZKLOGIN_GOOGLE_CLIENT_SECRET),
+        clientSecret: process.env.ZKLOGIN_GOOGLE_CLIENT_SECRET || 'not-configured',
       },
       facebook: {
         clientId: validateRequiredVar('ZKLOGIN_FACEBOOK_CLIENT_ID', process.env.ZKLOGIN_FACEBOOK_CLIENT_ID),
-        clientSecret: validateRequiredVar('ZKLOGIN_FACEBOOK_CLIENT_SECRET', process.env.ZKLOGIN_FACEBOOK_CLIENT_SECRET),
+        clientSecret: process.env.NEXT_PUBLIC_FACEBOOK_CLIENT_SECRET || process.env.ZKLOGIN_FACEBOOK_CLIENT_SECRET || 'not-configured',
       },
       apple: {
         clientId: validateRequiredVar('ZKLOGIN_APPLE_CLIENT_ID', process.env.ZKLOGIN_APPLE_CLIENT_ID),
-        clientSecret: validateRequiredVar('ZKLOGIN_APPLE_CLIENT_SECRET', process.env.ZKLOGIN_APPLE_CLIENT_SECRET),
+        clientSecret: process.env.ZKLOGIN_APPLE_CLIENT_SECRET || 'not-configured',
       },
       redirectUrl: validateUrl('ZKLOGIN_REDIRECT_URL', process.env.ZKLOGIN_REDIRECT_URL || 'http://localhost:3000/api/auth/callback'),
     };
