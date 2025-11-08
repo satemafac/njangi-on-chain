@@ -1,5 +1,6 @@
 import { AccountData } from './zkLoginService';
 import type { OAuthProvider } from './zkLoginService';
+import { getCurrentNetwork } from './network-config';
 
 // Custom error class for zkLogin errors that includes requireRelogin property
 export class ZkLoginError extends Error {
@@ -77,12 +78,16 @@ export class ZkLoginClient {
     const maxRetries = 3;
     const baseBackoff = 1500; // 1.5 seconds base
     
+    // Get the current network to pass to the backend
+    const network = getCurrentNetwork();
+    console.log('🌍 ZkLoginClient.handleCallback: Using network:', network);
+    
     while (true) {
       try {
         const response = await fetch('/api/zkLogin', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'handleCallback', jwt })
+          body: JSON.stringify({ action: 'handleCallback', jwt, network })
         });
         
         // Handle processing status (202)

@@ -384,7 +384,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { action, jwt, account, provider, circleData, circleId, newMaxMembers } = req.body; // Add newMaxMembers
+    const { action, jwt, account, provider, circleData, circleId, newMaxMembers, network } = req.body; // Add newMaxMembers and network
     let sessionId = req.cookies['session-id'];
 
     // Always log the current session state for debugging
@@ -448,6 +448,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           // Get and validate setup data
           const savedSetup = validateSession(sessionId, 'handleCallback');
+          
+          // Add network from request body if provided
+          if (network) {
+            (savedSetup as any).network = network;
+            console.log('📱 handleCallback: Network added to setupData:', network);
+          }
           
           // If we already have account data, return it immediately
           if (savedSetup.account) {

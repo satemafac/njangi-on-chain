@@ -12,7 +12,7 @@ import {
 } from '@mysten/sui/zklogin';
 import { decodeJwt } from 'jose';
 import { SuiTransactionBlockResponse, ExecuteTransactionRequestType } from '@mysten/sui/client';
-import { getCurrentRpcUrl, getCurrentEnokiConfig, getCurrentNetwork } from './network-config';
+import { getCurrentRpcUrl, getCurrentEnokiConfig, getCurrentNetwork, getNetworkConfig } from './network-config';
 
 // Dynamic RPC URL based on network configuration
 function getNetworkRpcUrl(): string {
@@ -28,8 +28,16 @@ const FACEBOOK_CLIENT_ID = process.env.NEXT_PUBLIC_FACEBOOK_CLIENT_ID;
 const APPLE_CLIENT_ID = process.env.NEXT_PUBLIC_APPLE_CLIENT_ID;
 const REDIRECT_URI = process.env.NEXT_PUBLIC_REDIRECT_URI;
 
+// Network override for server-side session handling
+let networkOverride: 'testnet' | 'mainnet' | undefined = undefined;
+
 // Dynamic Enoki API configuration based on network
 function getEnokiConfig() {
+  // Use network override if set (for server-side callback processing)
+  if (networkOverride) {
+    console.log('🌍 Using network override:', networkOverride);
+    return getNetworkConfig(networkOverride).enoki;
+  }
   return getCurrentEnokiConfig();
 }
 
@@ -66,6 +74,7 @@ export interface SetupData {
   maxEpoch: number;
   randomness: string;
   ephemeralPrivateKey: string;
+  network?: 'testnet' | 'mainnet';  // Network selected on the frontend
 }
 
 export interface AccountData {
@@ -356,31 +365,39 @@ export class EnokiZkLoginService {
     picture?: string;
     name?: string;
   }> {
-    // The token is a JWT directly
-    const jwt = token;
-
-    // Decode and validate the JWT
-    const jwtPayload = decodeJwt(jwt);
-    if (!jwtPayload.sub || !jwtPayload.aud) {
-      throw new Error('Missing required JWT claims');
+    // Set network override for server-side callback processing
+    if (setupData.network) {
+      networkOverride = setupData.network;
+      console.log('🌍 handleCallback: Using network from setupData:', setupData.network);
     }
 
-    console.log('Processing JWT payload:', {
-      sub: jwtPayload.sub,
-      aud: jwtPayload.aud,
-      exp: jwtPayload.exp,
-      iat: jwtPayload.iat,
-      provider: setupData.provider,
-      // Log all available claims for debugging
-      allClaims: Object.keys(jwtPayload),
-      name: jwtPayload.name || 'not provided',
-      email: jwtPayload.email || 'not provided',
-      picture: jwtPayload.picture || 'not provided'
-    });
+    try {
+      // The token is a JWT directly
+      const jwt = token;
 
-    // Get salt from Enoki salt service
-    const saltString = await this.getUserSalt(jwt);
-    const userSalt = BigInt(saltString);
+      // Decode and validate the JWT
+      const jwtPayload = decodeJwt(jwt);
+      if (!jwtPayload.sub || !jwtPayload.aud) {
+        throw new Error('Missing required JWT claims');
+      }
+
+      console.log('Processing JWT payload:', {
+        sub: jwtPayload.sub,
+        aud: jwtPayload.aud,
+        exp: jwtPayload.exp,
+        iat: jwtPayload.iat,
+        provider: setupData.provider,
+        network: setupData.network,
+        // Log all available claims for debugging
+        allClaims: Object.keys(jwtPayload),
+        name: jwtPayload.name || 'not provided',
+        email: jwtPayload.email || 'not provided',
+        picture: jwtPayload.picture || 'not provided'
+      });
+
+      // Get salt from Enoki salt service
+      const saltString = await this.getUserSalt(jwt);
+      const userSalt = BigInt(saltString);
 
     // Generate user address
     const userAddr = await this.generateUserAddress(jwt, userSalt);
@@ -444,6 +461,10 @@ export class EnokiZkLoginService {
       picture,
       name
     };
+    } finally {
+      // Always clear the network override after callback processing
+      networkOverride = undefined;
+    }
   }
 
   private keypairFromSecretKey(privateKeyBase64: string): Ed25519Keypair {

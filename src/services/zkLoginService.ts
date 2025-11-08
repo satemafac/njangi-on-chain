@@ -25,6 +25,7 @@ export interface SetupData {
   maxEpoch: number;
   randomness: string;
   ephemeralPrivateKey: string;
+  network?: 'testnet' | 'mainnet';  // Network selected on the frontend
 }
 
 export interface AccountData {
