@@ -17,11 +17,14 @@ import { NextApiResponse, NextApiRequest } from 'next';
 import { logAdminAction } from '../../../middleware/admin-auth.middleware';
 import { enokiZkLoginService } from '../../../services/enokiZkLoginService';
 import { AccountData } from '../../../services/zkLoginService';
+import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry-service';
+import type { NetworkType } from '../../../services/whatsapp-registry-service';
 
 interface UnlinkCircleRequest {
   circleId: string;
   adminAddress?: string;
   account?: AccountData;
+  network?: NetworkType;
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -36,7 +39,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const adminAddr = req.body?.adminAddress || 'unknown';
     const account = req.body?.account as AccountData | undefined;
-    const { circleId } = req.body as UnlinkCircleRequest;
+    const { circleId, network = 'mainnet' } = req.body as UnlinkCircleRequest;
 
     if (!circleId) {
       return res.status(400).json({
@@ -48,18 +51,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // Log the unlink action
     logAdminAction('UNLINK_CIRCLE_INITIATED', adminAddr, {
       circleId,
+      network,
       timestamp: new Date().toISOString()
     });
 
-    // Get package ID and registry from environment
-    const registryObjectId = process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID;
-    if (!registryObjectId) {
-      throw new Error('SUI_WHATSAPP_LINKS_REGISTRY_ID not configured');
+    // Get WhatsApp registry for the current network
+    const activeRegistries = getActiveWhatsAppRegistries(network);
+    if (!activeRegistries || activeRegistries.length === 0) {
+      throw new Error(`No active WhatsApp registry configured for ${network} network`);
     }
 
-    const packageId = process.env.SUI_WHATSAPP_PACKAGE_ID;
-    if (!packageId) {
-      throw new Error('SUI_WHATSAPP_PACKAGE_ID not configured');
+    // Use the first (current) active registry
+    const whatsappRegistry = activeRegistries[0];
+    const packageId = whatsappRegistry.packageId;
+    const registryObjectId = whatsappRegistry.registryObjectId;
+
+    if (!packageId || !registryObjectId) {
+      throw new Error(`WhatsApp configuration incomplete for ${network} network`);
     }
 
     // If account data provided, send the blockchain transaction

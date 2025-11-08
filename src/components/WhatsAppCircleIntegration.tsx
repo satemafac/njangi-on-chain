@@ -12,6 +12,7 @@ import React, { useState, useEffect } from 'react';
 import { MessageCircle, Link as LinkIcon, Unlink, Loader } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { AccountData } from '@/services/zkLoginService';
+import { getCurrentNetwork } from '@/services/network-config';
 import ConfirmationModal from './ConfirmationModal';
 
 interface WhatsAppIntegrationProps {
@@ -199,6 +200,9 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
         return;
       }
 
+      // Get current network selection
+      const currentNetwork = getCurrentNetwork();
+
       // Call admin-link-circle endpoint with full zkLogin account for transaction signing
       const response = await fetch('/api/whatsapp/admin-link-circle', {
         method: 'POST',
@@ -210,6 +214,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
           linkType,
           phoneOrGroup: phoneOrGroup.trim(),
           adminAddress,
+          network: currentNetwork,
           account: {
             provider: account.provider,
             userAddr: account.userAddr,
@@ -252,6 +257,9 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
     try {
       setLinking(true);
 
+      // Get current network selection
+      const currentNetwork = getCurrentNetwork();
+
       // Call unlink endpoint
       const response = await fetch('/api/whatsapp/admin-unlink-circle', {
         method: 'POST',
@@ -261,6 +269,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
         body: JSON.stringify({ 
           circleId,
           adminAddress,
+          network: currentNetwork,
           account: {
             provider: account.provider,
             userAddr: account.userAddr,

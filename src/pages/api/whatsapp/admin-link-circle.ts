@@ -20,6 +20,8 @@ import { enokiZkLoginService } from '../../../services/enokiZkLoginService';
 import { AccountData } from '../../../services/zkLoginService';
 import { SuiClient } from '@mysten/sui/client';
 import { getCurrentRpcUrl } from '../../../services/network-config';
+import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry-service';
+import type { NetworkType } from '../../../services/whatsapp-registry-service';
 
 interface LinkCircleRequest {
   circleId: string;
@@ -27,12 +29,7 @@ interface LinkCircleRequest {
   phoneOrGroup: string;
   adminAddress?: string;  // Admin's Sui address
   account?: AccountData;   // Full zkLogin account for transaction signing
-}
-
-interface UnlinkCircleRequest {
-  circleId: string;
-  adminAddress?: string;
-  account?: AccountData;
+  network?: NetworkType;   // Current network selection (testnet/mainnet)
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -76,13 +73,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
          // Extract the registry fields
          if ('fields' in registryObject.data.content) {
-           const registryFields = (registryObject.data.content as any).fields;
+           const content = registryObject.data.content as Record<string, unknown>;
+           const registryFields = content.fields as Record<string, unknown> | undefined;
+           
+           if (!registryFields) {
+             return res.status(200).json({
+               success: true,
+               data: {
+                 isLinked: false,
+                 message: 'Registry fields not found'
+               }
+             });
+           }
            
            console.log('Registry fields keys:', Object.keys(registryFields));
            console.log('Registry total_links:', registryFields.total_links);
            
            // The links are stored in the registry.links vector
-           const links = registryFields.links;
+           const links = registryFields.links as unknown[];
            if (!Array.isArray(links)) {
              return res.status(200).json({
                success: true,
@@ -95,7 +103,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
            // Search through the links vector for our circle
            for (const link of links) {
-             const linkFields = link.fields || link;
+             const linkObj = link as Record<string, unknown>;
+             const linkFields = (linkObj.fields as Record<string, unknown>) || linkObj;
              console.log('Checking link:', { 
                circle_id: linkFields.circle_id, 
                link_type: linkFields.link_type,
@@ -105,9 +114,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
              if (linkFields.circle_id === circleId && linkFields.enabled === true) {
                // Found the link!
+               const adminPhone = linkFields.admin_phone_number as Record<string, unknown> | undefined;
+               const groupId = linkFields.group_id as Record<string, unknown> | undefined;
                const recipient = linkFields.link_type === 1 
-                 ? linkFields.admin_phone_number?.value || linkFields.admin_phone_number
-                 : linkFields.group_id?.value || linkFields.group_id;
+                 ? adminPhone?.value || linkFields.admin_phone_number
+                 : groupId?.value || linkFields.group_id;
 
                return res.status(200).json({
                  success: true,
@@ -168,7 +179,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const account = req.body?.account as AccountData | undefined;
     
     // Validate request body
-    const { circleId, linkType, phoneOrGroup } = req.body as LinkCircleRequest;
+    const { circleId, linkType, phoneOrGroup, network = 'mainnet' } = req.body as LinkCircleRequest;
 
     if (!circleId || !linkType || !phoneOrGroup) {
       return res.status(400).json({
@@ -188,18 +199,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     logAdminAction('LINK_CIRCLE_INITIATED', adminAddr, {
       circleId,
       linkType,
-      recipient: linkType === 1 ? 'individual' : 'group'
+      recipient: linkType === 1 ? 'individual' : 'group',
+      network
     });
 
-    // Get registry object ID and package ID from environment
-    const registryObjectId = process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID;
-    if (!registryObjectId) {
-      throw new Error('SUI_WHATSAPP_LINKS_REGISTRY_ID not configured');
+    // Get WhatsApp registry for the current network
+    const activeRegistries = getActiveWhatsAppRegistries(network);
+    if (!activeRegistries || activeRegistries.length === 0) {
+      throw new Error(`No active WhatsApp registry configured for ${network} network`);
     }
 
-    const packageId = process.env.SUI_WHATSAPP_PACKAGE_ID;
-    if (!packageId) {
-      throw new Error('SUI_WHATSAPP_PACKAGE_ID not configured');
+    // Use the first (current) active registry
+    const whatsappRegistry = activeRegistries[0];
+    const packageId = whatsappRegistry.packageId;
+    const registryObjectId = whatsappRegistry.registryObjectId;
+
+    if (!packageId || !registryObjectId) {
+      throw new Error(`WhatsApp configuration incomplete for ${network} network`);
     }
 
     // If account data is provided, send the blockchain transaction
