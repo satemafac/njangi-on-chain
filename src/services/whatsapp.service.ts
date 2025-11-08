@@ -672,9 +672,10 @@ Type /help to see all available commands.`;
   public async healthCheck(): Promise<boolean> {
     try {
       // Try to send a test message to verify API connectivity
+      // Use the actual phone number instead of phone ID
       const testMessage = {
         messaging_product: 'whatsapp',
-        to: whatsappConfig.phoneNumberId, // Send to self
+        to: '+13019790161', // Send to authorized test recipient
         type: 'text',
         text: { body: 'Health check' },
       };
