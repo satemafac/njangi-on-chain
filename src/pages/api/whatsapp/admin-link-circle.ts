@@ -48,6 +48,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // Get the network parameter (default to testnet)
       const network = (networkParam as NetworkType) || 'testnet';
       
+      console.log('🔍 GET /admin-link-circle:', {
+        circleId,
+        networkParam,
+        network,
+        queryKeys: Object.keys(req.query)
+      });
+      
       // Use getActiveWhatsAppRegistries to get the correct registry for the network
       const activeRegistries = getActiveWhatsAppRegistries(network);
       if (!activeRegistries || activeRegistries.length === 0) {
@@ -190,7 +197,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const account = req.body?.account as AccountData | undefined;
     
     // Validate request body
-    const { circleId, linkType, phoneOrGroup, network = 'mainnet' } = req.body as LinkCircleRequest;
+    const { circleId, linkType, phoneOrGroup, network: networkParam } = req.body as LinkCircleRequest;
+    
+    // Default to testnet if not provided
+    const network = networkParam || 'testnet';
 
     if (!circleId || !linkType || !phoneOrGroup) {
       return res.status(400).json({
@@ -205,6 +215,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         error: 'Invalid linkType (must be 1 or 2)'
       });
     }
+
+    console.log('🔗 POST /admin-link-circle:', {
+      circleId,
+      linkType,
+      networkParam,
+      network,
+      phoneOrGroup: phoneOrGroup.slice(0, 5) + '...'
+    });
 
     // Log the action
     logAdminAction('LINK_CIRCLE_INITIATED', adminAddr, {

@@ -40,7 +40,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const adminAddr = req.body?.adminAddress || 'unknown';
     const account = req.body?.account as AccountData | undefined;
-    const { circleId, network = 'mainnet' } = req.body as UnlinkCircleRequest;
+    const { circleId, network: networkParam } = req.body as UnlinkCircleRequest;
+    
+    // Default to testnet if not provided
+    const network = networkParam || 'testnet';
 
     if (!circleId) {
       return res.status(400).json({
@@ -48,6 +51,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         error: 'Missing circleId'
       });
     }
+
+    console.log('🔗 POST /admin-unlink-circle:', {
+      circleId,
+      networkParam,
+      network,
+      adminAddr: adminAddr.slice(0, 10) + '...'
+    });
 
     // Log the unlink action
     logAdminAction('UNLINK_CIRCLE_INITIATED', adminAddr, {
