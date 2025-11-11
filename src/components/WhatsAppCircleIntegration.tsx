@@ -143,8 +143,11 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
     try {
       setLoading(true);
       
+      // Get current network selection
+      const currentNetwork = getCurrentNetwork();
+      
       // Query the API to check if circle is linked on blockchain
-      const response = await fetch(`/api/whatsapp/admin-link-circle?circleId=${circleId}`, {
+      const response = await fetch(`/api/whatsapp/admin-link-circle?circleId=${circleId}&network=${currentNetwork}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json'

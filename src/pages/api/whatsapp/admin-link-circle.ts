@@ -36,7 +36,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
     // Query current link status from blockchain
     try {
-      const { circleId } = req.query;
+      const { circleId, network: networkParam } = req.query;
       
       if (!circleId || typeof circleId !== 'string') {
         return res.status(400).json({
@@ -45,14 +45,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
       }
 
-      const registryObjectId = process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID;
+      // Get the network parameter (default to testnet)
+      const network = (networkParam as NetworkType) || 'testnet';
+      
+      // Use getActiveWhatsAppRegistries to get the correct registry for the network
+      const activeRegistries = getActiveWhatsAppRegistries(network);
+      if (!activeRegistries || activeRegistries.length === 0) {
+        throw new Error(`No active WhatsApp registry configured for ${network} network`);
+      }
+      
+      const whatsappRegistry = activeRegistries[0];
+      const registryObjectId = whatsappRegistry.registryObjectId;
       if (!registryObjectId) {
-        throw new Error('SUI_WHATSAPP_LINKS_REGISTRY_ID not configured');
+        throw new Error(`WhatsApp registry not configured for ${network} network`);
       }
 
-      // Query the registry object from blockchain using testnet RPC (default for queries)
-      const testnetConfig = getNetworkConfig('testnet');
-       const suiClient = new SuiClient({ url: testnetConfig.rpcUrl });
+      // Query the registry object from blockchain using the correct RPC
+      const networkConfig = getNetworkConfig(network);
+      const suiClient = new SuiClient({ url: networkConfig.rpcUrl });
        
        try {
          const registryObject = await suiClient.getObject({
