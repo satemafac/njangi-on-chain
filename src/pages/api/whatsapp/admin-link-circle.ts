@@ -123,6 +123,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
            for (const link of links) {
              const linkObj = link as Record<string, unknown>;
              const linkFields = (linkObj.fields as Record<string, unknown>) || linkObj;
+             
+             // Skip empty or deleted links (they may still appear in the vector but have no circle_id)
+             if (!linkFields.circle_id) {
+               console.log('⏭️ Skipping empty/deleted link entry');
+               continue;
+             }
+             
              console.log('Checking link:', { 
                circle_id: linkFields.circle_id, 
                link_type: linkFields.link_type,
@@ -138,6 +145,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
                  ? adminPhone?.value || linkFields.admin_phone_number
                  : groupId?.value || linkFields.group_id;
 
+               console.log('✅ Link found for circle:', circleId);
                return res.status(200).json({
                  success: true,
                  data: {
@@ -149,6 +157,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
                });
              }
            }
+           
+           console.log('❌ No active link found for circle:', circleId);
          }
 
          // Not found in links vector

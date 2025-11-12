@@ -3,9 +3,14 @@
  * 
  * Manages multiple WhatsApp registry versions across different package deployments.
  * Similar to circle-service, this handles backward compatibility when contracts are updated.
+ * 
+ * Registry Discovery:
+ * For testnet/mainnet deployment coins, we can auto-discover registry IDs from init_registry transactions.
+ * Instead of manually tracking, we query the transaction history of the deployment coin to find all created registries.
  */
 
-import { getCurrentNetwork } from './network-config';
+import { getCurrentNetwork, getNetworkConfig } from './network-config';
+import { SuiClient } from '@mysten/sui/client';
 
 export type NetworkType = 'testnet' | 'mainnet';
 
@@ -52,6 +57,117 @@ const WHATSAPP_REGISTRIES: Record<NetworkType, WhatsAppRegistryConfig[]> = {
     },
   ],
 };
+
+/**
+ * Configuration for deployment coins per network
+ * These coins are used to fund all init_registry transactions
+ * We query their transaction history to discover all created registries
+ */
+const DEPLOYMENT_COINS: Record<NetworkType, string> = {
+  testnet: process.env.NEXT_PUBLIC_TESTNET_DEPLOYMENT_COIN || '0x0649a5b68500d73a7fb57bf2b4e9983562da1af970b7fd6fe24e247b7c9c7ed5',
+  mainnet: process.env.NEXT_PUBLIC_MAINNET_DEPLOYMENT_COIN || '',
+};
+
+/**
+ * Auto-discover WhatsApp registries from deployment coin transaction history
+ * Queries the coin's transactions to find all init_registry calls and extract created registry IDs
+ */
+export async function discoverWhatsAppRegistries(network: NetworkType): Promise<WhatsAppRegistryConfig[]> {
+  const deploymentCoin = DEPLOYMENT_COINS[network];
+  
+  if (!deploymentCoin) {
+    console.warn(`⚠️ No deployment coin configured for ${network}, skipping auto-discovery`);
+    return [];
+  }
+
+  try {
+    const networkConfig = getNetworkConfig(network);
+    const suiClient = new SuiClient({ url: networkConfig.rpcUrl });
+    
+    console.log(`🔍 Discovering WhatsApp registries for ${network} from coin ${deploymentCoin.slice(0, 10)}...`);
+    
+    // Query all transactions involving the deployment coin
+    const transactions = await suiClient.queryTransactionBlocks({
+      options: {
+        showObjectChanges: true,
+        showEvents: true,
+      },
+      limit: 100, // Adjust as needed
+    });
+
+    const discoveredRegistries: WhatsAppRegistryConfig[] = [];
+
+    // Look through transactions for init_registry calls that created WhatsAppLinksRegistry objects
+    for (const tx of transactions.data) {
+      if (tx.objectChanges) {
+        for (const change of tx.objectChanges) {
+          // Look for created WhatsAppLinksRegistry objects
+          if (
+            change.type === 'created' &&
+            change.objectType?.includes('WhatsAppLinksRegistry')
+          ) {
+            const registryId = change.objectId;
+            const packageId = change.objectType?.split('::')[0];
+
+            if (registryId && packageId && packageId !== '0x2') {
+              // Extract just the package ID before ::
+              const cleanPackageId = packageId.split('::')[0];
+              
+              discoveredRegistries.push({
+                packageId: cleanPackageId,
+                registryObjectId: registryId,
+                description: `Auto-discovered ${network} registry from package ${cleanPackageId.slice(0, 10)}...`,
+                deprecated: false,
+              });
+              
+              console.log(`✅ Discovered registry: ${registryId.slice(0, 10)}... from package ${cleanPackageId.slice(0, 10)}...`);
+            }
+          }
+        }
+      }
+    }
+
+    return discoveredRegistries;
+  } catch (error) {
+    console.error(`❌ Error discovering registries for ${network}:`, error);
+    return [];
+  }
+}
+
+/**
+ * Refresh registries from blockchain (auto-discovery)
+ * Can be called on app startup to keep registry list current
+ */
+export async function refreshRegistriesFromBlockchain(): Promise<void> {
+  try {
+    console.log('🔄 Refreshing WhatsApp registries from blockchain...');
+    
+    // Discover registries for testnet
+    const testnetRegistries = await discoverWhatsAppRegistries('testnet');
+    if (testnetRegistries.length > 0) {
+      // Merge with existing, keeping manually configured ones and adding new discoveries
+      const existingTestnet = WHATSAPP_REGISTRIES.testnet;
+      const newPackageIds = testnetRegistries.map(r => r.packageId);
+      const manuallyConfigured = existingTestnet.filter(r => !newPackageIds.includes(r.packageId));
+      
+      WHATSAPP_REGISTRIES.testnet = [...manuallyConfigured, ...testnetRegistries];
+      console.log(`✅ Updated testnet registries: ${WHATSAPP_REGISTRIES.testnet.length} total`);
+    }
+    
+    // Discover registries for mainnet
+    const mainnetRegistries = await discoverWhatsAppRegistries('mainnet');
+    if (mainnetRegistries.length > 0) {
+      const existingMainnet = WHATSAPP_REGISTRIES.mainnet;
+      const newPackageIds = mainnetRegistries.map(r => r.packageId);
+      const manuallyConfigured = existingMainnet.filter(r => !newPackageIds.includes(r.packageId));
+      
+      WHATSAPP_REGISTRIES.mainnet = [...manuallyConfigured, ...mainnetRegistries];
+      console.log(`✅ Updated mainnet registries: ${WHATSAPP_REGISTRIES.mainnet.length} total`);
+    }
+  } catch (error) {
+    console.error('❌ Error refreshing registries:', error);
+  }
+}
 
 /**
  * Get the current active WhatsApp registry for the given network
@@ -220,6 +336,8 @@ const whatsappRegistryService = {
   getMigrationSuggestion,
   validateWhatsAppRegistry,
   logWhatsAppRegistry,
+  discoverWhatsAppRegistries,
+  refreshRegistriesFromBlockchain,
 };
 
 export default whatsappRegistryService;

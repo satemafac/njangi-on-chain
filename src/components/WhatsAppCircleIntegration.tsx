@@ -239,16 +239,17 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
       }
 
       toast.success('✅ Circle linked to WhatsApp successfully!');
-      setLinkedStatus({
-        isLinked: true,
-        linkType,
-        recipient: phoneOrGroup,
-        linkedAt: new Date().toISOString()
-      });
       setShowLinkForm(false);
       setPhoneOrGroup('');
       setValidationError(null);
       onLinked?.(true);
+      
+      // Wait a bit for blockchain indexing, then refresh status from chain
+      console.log('⏳ Waiting for blockchain indexing before refreshing status...');
+      setTimeout(() => {
+        console.log('🔄 Refreshing WhatsApp link status from blockchain...');
+        checkLinkStatus();
+      }, 2000);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to link circle');
     } finally {
@@ -294,9 +295,15 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
       }
 
       toast.success('✅ Circle unlinked from WhatsApp');
-      setLinkedStatus({ isLinked: false });
       setShowUnlinkConfirm(false);
       onLinked?.(false);
+      
+      // Wait a bit for blockchain indexing, then refresh status from chain
+      console.log('⏳ Waiting for blockchain indexing before refreshing status...');
+      setTimeout(() => {
+        console.log('🔄 Refreshing WhatsApp link status from blockchain...');
+        checkLinkStatus();
+      }, 2000);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to unlink circle');
     } finally {

@@ -281,7 +281,7 @@ module njangi::whatsapp_integration {
         assert!(table::contains(&registry.circle_to_link, circle_id), E_LINK_NOT_FOUND);
         
         let link_index = *table::borrow(&registry.circle_to_link, circle_id);
-        let link = vector::borrow(&registry.links, link_index);
+        let link = vector::borrow_mut(&mut registry.links, link_index);
         
         // Verify admin
         assert!(link.linked_by == admin_address, E_NOT_CIRCLE_ADMIN);
@@ -293,6 +293,10 @@ module njangi::whatsapp_integration {
         } else {
             option::none()
         };
+        
+        // Disable the link instead of removing it from the vector
+        // This preserves the vector structure while marking the link as inactive
+        link.enabled = false;
         
         // Remove from lookup tables
         table::remove(&mut registry.circle_to_link, circle_id);
