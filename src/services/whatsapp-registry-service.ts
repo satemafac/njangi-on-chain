@@ -38,11 +38,11 @@ const WHATSAPP_REGISTRIES: Record<NetworkType, WhatsAppRegistryConfig[]> = {
       // Current testnet - support both naming conventions
       packageId: process.env.NEXT_PUBLIC_TESTNET_WHATSAPP_PACKAGE_ID 
         || process.env.NEXT_PUBLIC_WHATSAPP_PACKAGE_ID 
-        || '0x2ee55011e9d3c27a2743f83fb9f4498de8cdb6078cc175bec03362326f9ec1a1',
+        || '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc',
       registryObjectId: process.env.NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID 
         || process.env.NEXT_PUBLIC_WHATSAPP_REGISTRY_ID 
         || process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID 
-        || '0x65fad7ceeb6a960af0702280052c85b9e4e467f33531e9b8d3f08c6244bf0150',
+        || '0x9e203f7dd2d56b058d82fb4f1fafe135133245fef347d8de4967e2c1c78b9459',
       description: 'Current testnet deployment (with unlink fix)',
       deprecated: false,
     },
