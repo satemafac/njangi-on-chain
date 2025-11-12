@@ -102,25 +102,24 @@ export async function discoverWhatsAppRegistries(network: NetworkType): Promise<
       if (tx.objectChanges) {
         for (const change of tx.objectChanges) {
           // Look for created WhatsAppLinksRegistry objects
+          // objectType format: "0xpackageid::module::struct"
           if (
             change.type === 'created' &&
             change.objectType?.includes('WhatsAppLinksRegistry')
           ) {
             const registryId = change.objectId;
+            // Extract package ID (first part before ::)
             const packageId = change.objectType?.split('::')[0];
 
             if (registryId && packageId && packageId !== '0x2') {
-              // Extract just the package ID before ::
-              const cleanPackageId = packageId.split('::')[0];
-              
               discoveredRegistries.push({
-                packageId: cleanPackageId,
+                packageId, // Already just the package ID
                 registryObjectId: registryId,
-                description: `Auto-discovered ${network} registry from package ${cleanPackageId.slice(0, 10)}...`,
+                description: `Auto-discovered ${network} registry from package ${packageId.slice(0, 10)}...`,
                 deprecated: false,
               });
               
-              console.log(`✅ Discovered registry: ${registryId.slice(0, 10)}... from package ${cleanPackageId.slice(0, 10)}...`);
+              console.log(`✅ Discovered registry: ${registryId.slice(0, 10)}... from package ${packageId.slice(0, 10)}...`);
             }
           }
         }
