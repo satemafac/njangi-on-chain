@@ -35,14 +35,15 @@ const WHATSAPP_REGISTRIES: Record<NetworkType, WhatsAppRegistryConfig[]> = {
       deprecated: true,
     },
     {
-      // Current testnet - support both naming conventions
+      // Current testnet - Priority: env vars > hardcoded fallback
+      // If env vars are set, they WILL be used instead of the hardcoded values below
       packageId: process.env.NEXT_PUBLIC_TESTNET_WHATSAPP_PACKAGE_ID 
         || process.env.NEXT_PUBLIC_WHATSAPP_PACKAGE_ID 
-        || '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc',
+        || '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc', // Fallback only if env vars missing
       registryObjectId: process.env.NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID 
         || process.env.NEXT_PUBLIC_WHATSAPP_REGISTRY_ID 
         || process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID 
-        || '0x9e203f7dd2d56b058d82fb4f1fafe135133245fef347d8de4967e2c1c78b9459',
+        || '0x9e203f7dd2d56b058d82fb4f1fafe135133245fef347d8de4967e2c1c78b9459', // Fallback only if env vars missing
       description: 'Current testnet deployment (with unlink fix)',
       deprecated: false,
     },
