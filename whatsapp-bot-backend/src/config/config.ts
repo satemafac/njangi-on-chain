@@ -159,9 +159,18 @@ export function loadConfig(): Config {
     };
 
     // WhatsApp Configuration
+    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    
+    // Debug logging for WhatsApp config
+    console.log('📱 WhatsApp Configuration Loading:');
+    console.log(`  - Access Token Present: ${accessToken ? 'YES (' + accessToken.substring(0, 30) + '...)' : 'MISSING'}`);
+    console.log(`  - Phone Number ID Present: ${phoneNumberId ? 'YES' : 'MISSING'}`);
+    console.log(`  - NODE_ENV: ${process.env.NODE_ENV}`);
+    
     const whatsapp: WhatsAppConfig = {
-      phoneNumberId: validateRequiredVar('WHATSAPP_PHONE_NUMBER_ID', process.env.WHATSAPP_PHONE_NUMBER_ID),
-      accessToken: validateRequiredVar('WHATSAPP_ACCESS_TOKEN', process.env.WHATSAPP_ACCESS_TOKEN),
+      phoneNumberId: validateRequiredVar('WHATSAPP_PHONE_NUMBER_ID', phoneNumberId),
+      accessToken: validateRequiredVar('WHATSAPP_ACCESS_TOKEN', accessToken),
       verifyToken: validateRequiredVar('WHATSAPP_VERIFY_TOKEN', process.env.WHATSAPP_VERIFY_TOKEN),
       appSecret: validateRequiredVar('WHATSAPP_APP_SECRET', process.env.WHATSAPP_APP_SECRET),
       apiVersion: process.env.WHATSAPP_API_VERSION || 'v21.0',
