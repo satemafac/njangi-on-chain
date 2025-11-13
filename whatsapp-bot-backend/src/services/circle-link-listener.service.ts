@@ -12,6 +12,7 @@ export class CircleLinkListenerService {
   private suiClient: SuiClient;
   private checkInterval = 5000; // Check every 5 seconds
   private processedEvents: Set<string> = new Set();
+  private sentMessages: Map<string, number> = new Map(); // Track recently sent messages with timestamp
 
   constructor() {
     const config = getConfig();
@@ -128,6 +129,21 @@ export class CircleLinkListenerService {
         linked_at,
       } = parsedJson;
 
+      // Check if we recently sent a message for this circle (within last 2 minutes)
+      const messageKey = `${circle_id}:${recipient}`;
+      const lastSentTime = this.sentMessages.get(messageKey);
+      const now = Date.now();
+      const twoMinutesAgo = now - (2 * 60 * 1000);
+
+      if (lastSentTime && lastSentTime > twoMinutesAgo) {
+        appLogger.info('Skipping duplicate message - recently sent', {
+          circleId: circle_id.slice(0, 10),
+          recipient: recipient.slice(0, 10),
+          lastSent: new Date(lastSentTime).toISOString(),
+        });
+        return;
+      }
+
       appLogger.info('CircleLinked event detected', {
         circleId: circle_id,
         recipient,
@@ -176,6 +192,17 @@ Type *help* for more information.`;
       });
 
       if (result.success) {
+        // Track that we sent this message
+        const messageKey = `${circleId}:${phoneNumber}`;
+        this.sentMessages.set(messageKey, Date.now());
+
+        // Clean up old entries to prevent memory bloat
+        if (this.sentMessages.size > 100) {
+          const entries = Array.from(this.sentMessages.entries());
+          const sorted = entries.sort((a, b) => b[1] - a[1]);
+          this.sentMessages = new Map(sorted.slice(0, 50));
+        }
+
         appLogger.info('Link confirmation message sent', {
           to: phoneNumber,
           circleId,
