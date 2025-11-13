@@ -173,16 +173,27 @@ export class CircleLinkListenerService {
     adminAddress: string
   ): Promise<void> {
     try {
-      // Use the pre-approved "hello_world" template to initiate conversation
+      // Use the "circle_linked" template with circle ID as a parameter
       // Once the user replies, we can send free-form text messages for 24 hours
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
         type: 'template',
         template: {
-          name: 'hello_world', // Pre-approved template by Meta
+          name: 'circle_linked', // Custom template with circle ID link
           language: {
             code: 'en_US',
           },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                {
+                  type: 'text',
+                  text: circleId, // Pass circle ID to {{1}} placeholder
+                },
+              ],
+            },
+          ],
         },
       });
 
