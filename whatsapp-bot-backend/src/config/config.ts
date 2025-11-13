@@ -14,19 +14,19 @@ import fs from 'fs';
 
 // Load environment variables from .env.local or .env
 // On Heroku, environment variables are passed directly via process.env
-// Only try to load from .env file if it exists or if not in production
+// Skip dotenv loading in production - use Heroku's process.env directly
 if (process.env.NODE_ENV !== 'production') {
+  // Development: try to load from local .env file
   const envPath = path.resolve(process.cwd(), '.env.local');
   if (fs.existsSync(envPath)) {
+    console.log(`📋 Loading .env.local from: ${envPath}`);
     dotenv.config({ path: envPath });
+  } else {
+    console.log(`📋 No .env.local found at: ${envPath}, using process.env`);
   }
 } else {
-  // In production (Heroku), check if .env exists before loading
-  const envPath = path.resolve(process.cwd(), '.env');
-  if (fs.existsSync(envPath)) {
-    dotenv.config({ path: envPath });
-  }
-  // If .env doesn't exist, process.env already has Heroku config vars
+  // Production (Heroku): Don't load from file, use Heroku's process.env directly
+  console.log('📋 Production mode - using Heroku environment variables directly');
 }
 
 // ============================================================
