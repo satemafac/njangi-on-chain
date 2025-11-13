@@ -116,7 +116,7 @@ export class WhatsAppSenderService {
       throw new ValidationError('Missing WhatsApp API credentials in configuration');
     }
 
-    this.baseUrl = `https://graph.instagram.com/${this.apiVersion}/${this.phoneNumberId}`;
+    this.baseUrl = `https://graph.facebook.com/${this.apiVersion}/${this.phoneNumberId}`;
 
     // Initialize axios client
     this.apiClient = axios.create({
