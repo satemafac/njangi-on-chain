@@ -14,6 +14,7 @@ import { getConfig, validateConfig } from './config';
 import { appLogger } from './utils/logger';
 import { requestLoggerMiddleware, userIdMiddleware } from './middleware/requestLogger';
 import { errorHandler, asyncHandler, notFoundHandler } from './middleware/errorHandler';
+import { circleLinkListener } from './services/circle-link-listener.service';
 
 dotenv.config();
 
@@ -194,4 +195,8 @@ app.listen(PORT, () => {
 ╚════════════════════════════════════════════════════════╝
     `
   );
+
+  // Start circle link listener
+  appLogger.info('Starting CircleLinked event listener...');
+  circleLinkListener.start();
 });
