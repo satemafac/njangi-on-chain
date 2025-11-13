@@ -1,6 +1,6 @@
 import { SuiClient } from '@mysten/sui/client';
-import { getNetworkConfig } from '../../../src/services/network-config';
-import { appLogger } from '../config/logger';
+import { getConfig } from '../config';
+import { appLogger } from '../utils/logger';
 import { whatsappSender } from './whatsapp-sender.service';
 
 // ============================================================================
@@ -10,16 +10,16 @@ import { whatsappSender } from './whatsapp-sender.service';
 export class CircleLinkListenerService {
   private isRunning = false;
   private suiClient: SuiClient;
-  private lastCheckpoint = 0;
   private checkInterval = 5000; // Check every 5 seconds
   private processedEvents: Set<string> = new Set();
 
   constructor() {
-    const networkConfig = getNetworkConfig('testnet');
-    this.suiClient = new SuiClient({ url: networkConfig.rpcUrl });
+    const config = getConfig();
+    const rpcUrl = config.sui.testnetRpcUrl;
+    this.suiClient = new SuiClient({ url: rpcUrl });
 
     appLogger.info('CircleLinkListenerService initialized', {
-      rpcUrl: networkConfig.rpcUrl,
+      rpcUrl,
     });
   }
 
@@ -139,7 +139,7 @@ export class CircleLinkListenerService {
       await this.sendLinkConfirmation(recipient, circle_id, admin_address);
 
       // Send notification to all circle members
-      await this.notifyCircleMembers(circle_id, recipient);
+      await this.notifyCircleMembers(circle_id);
     } catch (error) {
       appLogger.error('Error handling CircleLinked event', {
         error: error instanceof Error ? error.message : String(error),
@@ -198,25 +198,15 @@ Type *help* for more information.`;
    * Notify all circle members about the WhatsApp link
    */
   private async notifyCircleMembers(
-    circleId: string,
-    linkedPhoneNumber: string
+    circleId: string
   ): Promise<void> {
     try {
-      const message = `📢 *Circle Update*
-
-Your circle admin has successfully linked this circle to WhatsApp! 
-
-You will now receive real-time notifications for all circle updates.
-
-Circle ID: ${circleId.slice(0, 10)}...`;
-
-      appLogger.info('Preparing to notify circle members', {
-        circleId,
-        linkedPhoneNumber,
-      });
-
       // Note: In a real implementation, you'd fetch actual circle members
       // For now, we're logging the intent
+      appLogger.info('Preparing to notify circle members', {
+        circleId,
+      });
+
       // TODO: Implement member notification in follow-up phase
     } catch (error) {
       appLogger.error('Error notifying circle members', {
