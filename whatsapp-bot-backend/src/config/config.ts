@@ -130,7 +130,7 @@ function validateBoolean(_varName: string, value: string | undefined, defaultVal
 // ============================================================
 
 export function loadConfig(): Config {
-  console.log('📋 Loading configuration from:', envPath);
+  console.log('📋 Loading configuration from environment variables (Node env: ' + (process.env.NODE_ENV || 'development') + ')');
 
   try {
     // App Configuration
