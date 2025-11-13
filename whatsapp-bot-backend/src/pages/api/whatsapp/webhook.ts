@@ -129,14 +129,48 @@ function handleIncomingMessage(
   });
 
   if (message?.body) {
-    appLogger.debug('Message content', {
+    const content = message.body.trim().toLowerCase();
+    
+    appLogger.info('Message content', {
       from,
       content: message.body.substring(0, 100),
     });
-  }
 
-  // TODO: Process incoming message
-  // Could be a command, a reply to a notification, etc.
+    // Handle confirmation replies to circle_linked template
+    if (content.includes('confirm') || content.includes('ok') || content === 'yes') {
+      appLogger.info('User confirmed circle link', {
+        from,
+        messageId,
+        timestamp,
+      });
+
+      // TODO: Store confirmation in database
+      // This opens a 24-hour window for sending free-form messages
+      // Can be used to:
+      // 1. Send welcome message with instructions
+      // 2. Send circle member list
+      // 3. Send current cycle status
+      // 4. Enable receiving user commands (help, status, etc.)
+    }
+
+    // Handle help requests
+    if (content.includes('help') || content === '?') {
+      appLogger.info('User requested help', {
+        from,
+        messageId,
+      });
+
+      // TODO: Send help message
+      // Send instructions on available commands once confirmation is received
+    }
+
+    // Log any other messages for debugging
+    appLogger.debug('Processing incoming message', {
+      from,
+      content,
+      messageId,
+    });
+  }
 }
 
 /**

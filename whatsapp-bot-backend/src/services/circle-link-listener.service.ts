@@ -245,8 +245,58 @@ export class CircleLinkListenerService {
       });
     }
   }
+
+  /**
+   * Send welcome message after user confirms circle link
+   * Can be called via webhook when user replies
+   */
+  public async sendWelcomeMessage(
+    phoneNumber: string,
+    circleId: string
+  ): Promise<void> {
+    try {
+      const welcomeMessage = `👋 *Welcome to Your Circle!*
+
+Your WhatsApp is now connected to your circle. You'll receive updates about:
+
+📅 *Cycles & Deadlines*
+💰 *Member Contributions*
+🎯 *Important Announcements*
+💸 *Payout Notifications*
+
+Type *help* anytime for available commands.
+
+Ready to manage your circle! 🚀`;
+
+      const result = await whatsappSender.sendMessage({
+        to: phoneNumber,
+        type: 'text',
+        text: welcomeMessage,
+      });
+
+      if (result.success) {
+        appLogger.info('Welcome message sent', {
+          to: phoneNumber,
+          circleId,
+          messageId: result.messageId,
+        });
+      } else {
+        appLogger.warn('Failed to send welcome message', {
+          to: phoneNumber,
+          error: result.error,
+        });
+      }
+    } catch (error) {
+      appLogger.error('Error sending welcome message', {
+        error: error instanceof Error ? error.message : String(error),
+        phoneNumber,
+        circleId,
+      });
+    }
+  }
 }
 
-// Export singleton instance
+/**
+ * Export singleton instance
+ */
 export const circleLinkListener = new CircleLinkListenerService();
-
