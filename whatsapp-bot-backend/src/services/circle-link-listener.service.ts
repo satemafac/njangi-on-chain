@@ -164,7 +164,8 @@ export class CircleLinkListenerService {
   }
 
   /**
-   * Send link confirmation message to admin
+   * Send link confirmation message to admin using template
+   * Note: Meta WhatsApp API requires template-based messages to initiate conversation
    */
   private async sendLinkConfirmation(
     phoneNumber: string,
@@ -172,23 +173,17 @@ export class CircleLinkListenerService {
     adminAddress: string
   ): Promise<void> {
     try {
-      const message = `✅ *WhatsApp Linked Successfully!*
-
-Your circle has been successfully linked to WhatsApp. You will now receive notifications for:
-• New cycle started
-• Member contributions
-• Deadline reminders  
-• Payout notifications
-
-Circle ID: ${circleId.slice(0, 10)}...
-Admin: ${adminAddress.slice(0, 10)}...
-
-Type *help* for more information.`;
-
+      // Use the pre-approved "hello_world" template to initiate conversation
+      // Once the user replies, we can send free-form text messages for 24 hours
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
-        type: 'text',
-        text: message,
+        type: 'template',
+        template: {
+          name: 'hello_world', // Pre-approved template by Meta
+          language: {
+            code: 'en_US',
+          },
+        },
       });
 
       if (result.success) {
