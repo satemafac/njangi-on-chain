@@ -122,7 +122,6 @@ export class CircleLinkListenerService {
       }
 
       const {
-        admin_address,
         circle_id,
         link_type,
         recipient,
@@ -152,7 +151,7 @@ export class CircleLinkListenerService {
       });
 
       // Send confirmation message to the linked phone number
-      await this.sendLinkConfirmation(recipient, circle_id, admin_address);
+      await this.sendLinkConfirmation(recipient, circle_id);
 
       // Send notification to all circle members
       await this.notifyCircleMembers(circle_id);
@@ -169,8 +168,7 @@ export class CircleLinkListenerService {
    */
   private async sendLinkConfirmation(
     phoneNumber: string,
-    circleId: string,
-    adminAddress: string
+    circleId: string
   ): Promise<void> {
     try {
       // Use the "circle_linked" template with circle ID as a parameter
