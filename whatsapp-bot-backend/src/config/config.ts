@@ -10,13 +10,24 @@
 
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 
 // Load environment variables from .env.local or .env
-const envPath = process.env.NODE_ENV === 'production' 
-  ? path.resolve(process.cwd(), '.env')
-  : path.resolve(process.cwd(), '.env.local');
-
-dotenv.config({ path: envPath });
+// On Heroku, environment variables are passed directly via process.env
+// Only try to load from .env file if it exists or if not in production
+if (process.env.NODE_ENV !== 'production') {
+  const envPath = path.resolve(process.cwd(), '.env.local');
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+  }
+} else {
+  // In production (Heroku), check if .env exists before loading
+  const envPath = path.resolve(process.cwd(), '.env');
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+  }
+  // If .env doesn't exist, process.env already has Heroku config vars
+}
 
 // ============================================================
 // Type Definitions
