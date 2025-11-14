@@ -11,6 +11,8 @@ import crypto from 'crypto';
 import { appLogger } from '../../../utils/logger';
 import { asyncHandler } from '../../../middleware/errorHandler';
 import { getConfig } from '../../../config';
+import { circleLinkListener } from '../../../services/circle-link-listener.service';
+import { whatsappSender } from '../../../services/whatsapp-sender.service';
 
 interface WebhookMessage {
   object: string;
@@ -115,12 +117,12 @@ function handleStatusUpdate(
 /**
  * Handle incoming messages
  */
-function handleIncomingMessage(
+async function handleIncomingMessage(
   from: string,
   messageId: string,
   timestamp: string,
   message: { body: string } | undefined
-): void {
+): Promise<void> {
   appLogger.info('Incoming WhatsApp message', {
     from,
     messageId,
@@ -144,25 +146,94 @@ function handleIncomingMessage(
         timestamp,
       });
 
-      // Emit event or call service to send welcome message
-      // This opens a 24-hour window for sending free-form messages
-      // TODO: In production, store confirmation in database with timestamp
-      // For now, immediately send welcome message
-      appLogger.info('User confirmed - would send welcome message here', {
-        from,
-        timestamp: new Date(Number(timestamp) * 1000).toISOString(),
-      });
+      // Send help instructions after confirmation
+      const helpMessage = `ℹ️ *Available Commands:*
+
+📋 *help* - Show this message
+💰 *balance* - Check your balance
+🔔 *status* - Get circle status
+❓ *info* - Get more information
+
+Type any command to get started!`;
+
+      try {
+        const result = await whatsappSender.sendMessage({
+          to: from,
+          type: 'text',
+          text: helpMessage,
+        });
+
+        if (result.success) {
+          appLogger.info('Help message sent after confirmation', {
+            to: from,
+            messageId: result.messageId,
+          });
+        } else {
+          appLogger.warn('Failed to send help message', {
+            to: from,
+            error: result.error,
+          });
+        }
+      } catch (error) {
+        appLogger.error('Error sending help message', {
+          error: error instanceof Error ? error.message : String(error),
+          to: from,
+        });
+      }
     }
 
     // Handle help requests
-    if (content.includes('help') || content === '?') {
+    if (content.includes('help') || content === '?' || content === '/help') {
       appLogger.info('User requested help', {
         from,
         messageId,
       });
 
-      // TODO: Send help message
-      // Send instructions on available commands once confirmation is received
+      const helpMessage = `ℹ️ *Available Commands:*
+
+📋 *help* - Show this message
+💰 *balance* - Check your balance
+🔔 *status* - Get circle status
+❓ *info* - Get more information
+
+Type any command to get started!`;
+
+      try {
+        const result = await whatsappSender.sendMessage({
+          to: from,
+          type: 'text',
+          text: helpMessage,
+        });
+
+        if (result.success) {
+          appLogger.info('Help message sent', {
+            to: from,
+            messageId: result.messageId,
+          });
+        }
+      } catch (error) {
+        appLogger.error('Error sending help message', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // Handle other unknown commands
+    if (content.startsWith('/') || (content.length > 0 && !content.includes('confirm') && !content.includes('ok') && !content.includes('yes') && !content.includes('help'))) {
+      if (content.startsWith('/')) {
+        // Unknown command
+        const response = `❌ Unknown command: ${content}\n\nType /help for available commands.`;
+        
+        try {
+          await whatsappSender.sendMessage({
+            to: from,
+            type: 'text',
+            text: response,
+          });
+        } catch (error) {
+          appLogger.error('Error sending unknown command response', { error });
+        }
+      }
     }
 
     // Log any other messages for debugging
@@ -229,8 +300,8 @@ export default asyncHandler(
         });
 
         // Process each entry
-        webhook.entry?.forEach((entry) => {
-          entry.changes?.forEach((change) => {
+        for (const entry of webhook.entry || []) {
+          for (const change of entry.changes || []) {
             const value = change.value;
 
             // Handle status updates
@@ -255,17 +326,17 @@ export default asyncHandler(
                 count: value.messages.length,
               });
 
-              value.messages.forEach((message) => {
-                handleIncomingMessage(
+              for (const message of value.messages) {
+                await handleIncomingMessage(
                   message.from,
                   message.id,
                   message.timestamp,
                   message.text
                 );
-              });
+              }
             }
-          });
-        });
+          }
+        }
 
         appLogger.info('Webhook processed successfully');
 
