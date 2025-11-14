@@ -91,6 +91,21 @@ export class WhatsAppService {
     logger.warn('healthCheck is deprecated - use bot backend');
     return false;
   }
+
+  public async sendInteractiveMessage(phoneNumber: string, message: any): Promise<any> {
+    logger.warn('sendInteractiveMessage is deprecated - use bot backend');
+    return null;
+  }
+
+  public async sendTemplateMessage(phoneNumber: string, message: any): Promise<any> {
+    logger.warn('sendTemplateMessage is deprecated - use bot backend');
+    return null;
+  }
+
+  public getStats(): any {
+    logger.warn('getStats is deprecated - use bot backend');
+    return {};
+  }
 }
 
 export const whatsappService = WhatsAppService.getInstance();
