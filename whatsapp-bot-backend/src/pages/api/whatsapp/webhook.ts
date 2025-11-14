@@ -11,7 +11,6 @@ import crypto from 'crypto';
 import { appLogger } from '../../../utils/logger';
 import { asyncHandler } from '../../../middleware/errorHandler';
 import { getConfig } from '../../../config';
-import { circleLinkListener } from '../../../services/circle-link-listener.service';
 import { whatsappSender } from '../../../services/whatsapp-sender.service';
 
 interface WebhookMessage {
