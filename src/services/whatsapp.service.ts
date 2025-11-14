@@ -86,6 +86,11 @@ export class WhatsAppService {
   private isGreeting(message: string): boolean {
     return false;
   }
+
+  public async healthCheck(): Promise<boolean> {
+    logger.warn('healthCheck is deprecated - use bot backend');
+    return false;
+  }
 }
 
 export const whatsappService = WhatsAppService.getInstance();
