@@ -201,63 +201,34 @@ Type /help to see all available commands.`;
    * Handle input during active conversation flow
    */
   private async handleConversationInput(phoneNumber: string, input: string): Promise<void> {
-    const result = this.conversationFlow.processInput(phoneNumber, input);
-    
-    if (result.isComplete) {
-      // Conversation finished
-      if (result.success && result.result) {
-        // Execute the completed command
-        await this.executeCompletedCommand(phoneNumber, result.result);
-      } else {
-        // Conversation failed or cancelled
-        await this.sendTextMessage(phoneNumber, result.message);
-      }
-    } else {
-      // Continue conversation
-      let response = result.message;
-      if (result.nextPrompt) {
-        response += '\n\n' + result.nextPrompt;
-      }
-      await this.sendTextMessage(phoneNumber, response);
-    }
+    // ⚠️ DEPRECATED: All conversation flow logic removed
+    logger.info('Conversation input processing disabled', { phoneNumber });
+    // Entire method disabled - use bot backend instead
+    // const result = this.conversationFlow.processInput(phoneNumber, input);
+    // if (result.isComplete) {
+    //   if (result.success && result.result) {
+    //     await this.executeCompletedCommand(phoneNumber, result.result);
+    //   } else {
+    //     await this.sendTextMessage(phoneNumber, result.message);
+    //   }
+    // } else {
+    //   let response = result.message;
+    //   if (result.nextPrompt) {
+    //     response += '\n\n' + result.nextPrompt;
+    //   }
+    //   await this.sendTextMessage(phoneNumber, response);
+    // }
   }
 
   /**
    * Handle new command from user
    */
   private async handleNewCommand(phoneNumber: string, messageText: string): Promise<void> {
-    const parsedCommand = this.commandParser.parseMessage(messageText);
-    
-    logger.info(`Parsed command for ${phoneNumber}:`, parsedCommand);
-
-    // Handle invalid commands
-    if (!parsedCommand.isValid) {
-      if (parsedCommand.type === 'help') {
-        await this.sendHelpMessage(phoneNumber);
-      } else {
-        await this.sendTextMessage(
-          phoneNumber, 
-          `❌ ${parsedCommand.errors.join(', ')}\n\nType /help to see available commands.`
-        );
-      }
-      return;
-    }
-
-    // Check authentication requirement
-    if (parsedCommand.requiresAuth && !this.isUserAuthenticated(phoneNumber)) {
-      await this.sendAuthenticationRequired(phoneNumber);
-      return;
-    }
-
-    // Handle multi-step commands
-    if (parsedCommand.requiresMultiStep) {
-      const prompt = this.conversationFlow.startFlow(phoneNumber, parsedCommand.type);
-      await this.sendTextMessage(phoneNumber, prompt);
-      return;
-    }
-
-    // Handle single-step commands
-    await this.executeSingleStepCommand(phoneNumber, parsedCommand);
+    // ⚠️ DEPRECATED: All command parsing and execution disabled
+    logger.info('New command processing disabled', { phoneNumber, messageText });
+    // Use bot backend for all WhatsApp functionality
+    // const parsedCommand = this.commandParser.parseMessage(messageText);
+    // ... entire method disabled ...
   }
 
   /**
