@@ -43,7 +43,8 @@ function getEnokiConfig() {
 
 const ENOKI_BASE_URL = 'https://api.enoki.mystenlabs.com/v1';
 
-const MAX_EPOCH = 2; // keep ephemeral keys active for this many Sui epochs from now (1 epoch ~= 24h)
+const MAX_EPOCH = 1; // keep ephemeral keys active for this many Sui epochs from now (1 epoch ~= 24h)
+// Note: Sui rejects zkLogin proofs where maxEpoch > currentEpoch + 30, so keep this conservative
 
 // Dynamic GraphQL URL based on network
 function getGraphQLUrl(): string {
@@ -701,13 +702,20 @@ export class EnokiZkLoginService {
         : this.suiClient;
 
       // Validate current epoch against maxEpoch
-      // Note: Sui accepts transactions where currentEpoch < maxEpoch
-      // Adding a 1-epoch buffer to handle race conditions during epoch advancement
+      // Note: Sui accepts transactions where currentEpoch < maxEpoch (strictly less than)
+      // So if currentEpoch === maxEpoch, the transaction will be rejected
       const { epoch } = await suiClient.getLatestSuiSystemState();
       const currentEpoch = Number(epoch);
-      console.log(`Current epoch: ${currentEpoch}, maxEpoch: ${account.maxEpoch}, accepted max: ${account.maxEpoch - 1}`);
-      if (currentEpoch > account.maxEpoch) {
+      const epochsRemaining = account.maxEpoch - currentEpoch;
+      console.log(`Current epoch: ${currentEpoch}, maxEpoch: ${account.maxEpoch}, epochs remaining: ${epochsRemaining}`);
+      
+      if (currentEpoch >= account.maxEpoch) {
         throw new Error('Session has expired. Please re-authenticate to get a new proof.');
+      }
+      
+      // Warn if proof is expiring soon (less than 1 epoch remaining)
+      if (epochsRemaining < 1) {
+        console.warn(`⚠️  WARNING: Proof expiring very soon! Only ${epochsRemaining} epochs remaining. Consider re-authenticating.`);
       }
 
       // Check all proof fields are present
