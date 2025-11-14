@@ -234,7 +234,10 @@ Type /help to see all available commands.`;
   /**
    * Execute single-step commands immediately
    */
-  private async executeSingleStepCommand(phoneNumber: string, parsedCommand: ParsedCommand): Promise<void> {
+  // ⚠️ DEPRECATED: Method disabled
+  private async executeSingleStepCommand(phoneNumber: string, parsedCommand: any): Promise<void> {
+    logger.info('Single-step command execution disabled', { phoneNumber });
+    return;
     switch (parsedCommand.type) {
       case 'help':
         await this.sendHelpMessage(phoneNumber);
