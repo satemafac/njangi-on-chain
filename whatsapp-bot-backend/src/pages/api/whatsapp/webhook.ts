@@ -12,6 +12,7 @@ import { appLogger } from '../../../utils/logger';
 import { asyncHandler } from '../../../middleware/errorHandler';
 import { getConfig } from '../../../config';
 import { whatsappSender } from '../../../services/whatsapp-sender.service';
+import { circleLinkListener } from '../../../services/circle-link-listener.service';
 
 interface WebhookMessage {
   object: string;
@@ -145,8 +146,22 @@ async function handleIncomingMessage(
         timestamp,
       });
 
-      // Send help instructions after confirmation
-      const helpMessage = `ℹ️ *Available Commands:*
+      // Get the circle ID for this phone number
+      const circleId = circleLinkListener.getCircleIdForPhone(from);
+      
+      // Send personalized help instructions after confirmation
+      const helpMessage = circleId 
+        ? `ℹ️ *Available Commands:*
+
+📋 *help* - Show this message
+💰 *balance* - Check your balance
+🔔 *status* - Get circle status
+❓ *info* - Get more information
+
+📱 *Your Circle:* https://njangionchain.com/circle/${circleId}
+
+Type any command to get started!`
+        : `ℹ️ *Available Commands:*
 
 📋 *help* - Show this message
 💰 *balance* - Check your balance

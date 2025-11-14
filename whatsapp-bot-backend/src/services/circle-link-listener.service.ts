@@ -12,7 +12,8 @@ export class CircleLinkListenerService {
   private suiClient: SuiClient;
   private checkInterval = 5000; // Check every 5 seconds
   private processedEvents: Set<string> = new Set();
-  private sentMessages: Map<string, number> = new Map(); // Track recently sent messages with timestamp
+  private sentMessages: Map<string, any> = new Map(); // Track recently sent messages and circle IDs
+  private circleIdMap: Map<string, string> = new Map(); // Map phone numbers to circle IDs
 
   constructor() {
     const config = getConfig();
@@ -171,9 +172,8 @@ export class CircleLinkListenerService {
     circleId: string
   ): Promise<void> {
     try {
-      // Send the "circle_linked" template without parameters
-      // Template is static: "WhatsApp Linked Successfully! Your circle has been successfully linked..."
-      // After user replies "OK", we'll store the circle ID for follow-up messages
+      // Send the "circle_linked" template with circle ID as parameter
+      // Template now includes: {{1}} = circle ID with link
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
         type: 'template',
@@ -182,16 +182,27 @@ export class CircleLinkListenerService {
           language: {
             code: 'en_US',
           },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                {
+                  type: 'text',
+                  text: circleId, // Pass circle ID for the link in the template
+                },
+              ],
+            },
+          ],
         },
       });
       
       if (result.success) {
-        // Store circle ID and phone number pairing for later use after user confirmation
+        // Store circle ID and phone number pairing for later use
+        this.circleIdMap.set(phoneNumber, circleId);
+        
+        // Track message send time for deduplication
         const messageKey = `circle_id:${phoneNumber}`;
-        const circleIdKey = `circle:${phoneNumber}`;
         this.sentMessages.set(messageKey, Date.now());
-        // Store circle ID in a special format for retrieval after user replies
-        (this.sentMessages as any)[circleIdKey] = circleId;
 
         // Clean up old entries to prevent memory bloat
         if (this.sentMessages.size > 100) {
@@ -243,6 +254,13 @@ export class CircleLinkListenerService {
    * Send welcome message after user confirms circle link
    * Can be called via webhook when user replies
    */
+  /**
+   * Get the circle ID associated with a phone number
+   */
+  public getCircleIdForPhone(phoneNumber: string): string | undefined {
+    return this.circleIdMap.get(phoneNumber);
+  }
+
   public async sendWelcomeMessage(
     phoneNumber: string,
     circleId: string
