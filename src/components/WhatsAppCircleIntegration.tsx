@@ -168,7 +168,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
         }
       } else {
         // Assume not linked if query fails
-        setLinkedStatus({ isLinked: false });
+      setLinkedStatus({ isLinked: false });
       }
     } catch (error) {
       console.error('Error checking link status:', error);
