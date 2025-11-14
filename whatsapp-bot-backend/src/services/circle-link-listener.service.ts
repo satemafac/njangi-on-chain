@@ -171,34 +171,27 @@ export class CircleLinkListenerService {
     circleId: string
   ): Promise<void> {
     try {
-      // Use the "circle_linked" template with circle ID as a parameter
-      // Once the user replies, we can send free-form text messages for 24 hours
+      // Send the "circle_linked" template without parameters
+      // Template is static: "WhatsApp Linked Successfully! Your circle has been successfully linked..."
+      // After user replies "OK", we'll store the circle ID for follow-up messages
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
         type: 'template',
         template: {
-          name: 'circle_linked', // Custom template with circle ID link
+          name: 'circle_linked',
           language: {
             code: 'en_US',
           },
-          components: [
-            {
-              type: 'body',
-              parameters: [
-                {
-                  type: 'text',
-                  text: circleId, // Pass circle ID to {{1}} placeholder
-                },
-              ],
-            },
-          ],
         },
       });
-
+      
       if (result.success) {
-        // Track that we sent this message
-        const messageKey = `${circleId}:${phoneNumber}`;
+        // Store circle ID and phone number pairing for later use after user confirmation
+        const messageKey = `circle_id:${phoneNumber}`;
+        const circleIdKey = `circle:${phoneNumber}`;
         this.sentMessages.set(messageKey, Date.now());
+        // Store circle ID in a special format for retrieval after user replies
+        (this.sentMessages as any)[circleIdKey] = circleId;
 
         // Clean up old entries to prevent memory bloat
         if (this.sentMessages.size > 100) {

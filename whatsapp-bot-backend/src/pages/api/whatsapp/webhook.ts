@@ -144,13 +144,14 @@ function handleIncomingMessage(
         timestamp,
       });
 
-      // TODO: Store confirmation in database
+      // Emit event or call service to send welcome message
       // This opens a 24-hour window for sending free-form messages
-      // Can be used to:
-      // 1. Send welcome message with instructions
-      // 2. Send circle member list
-      // 3. Send current cycle status
-      // 4. Enable receiving user commands (help, status, etc.)
+      // TODO: In production, store confirmation in database with timestamp
+      // For now, immediately send welcome message
+      appLogger.info('User confirmed - would send welcome message here', {
+        from,
+        timestamp: new Date(Number(timestamp) * 1000).toISOString(),
+      });
     }
 
     // Handle help requests
