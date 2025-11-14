@@ -117,6 +117,10 @@ function handleStatusUpdate(
 /**
  * Handle incoming messages
  */
+/**
+ * Handle incoming messages - notification channel only
+ * Users receive updates but don't send commands
+ */
 async function handleIncomingMessage(
   from: string,
   messageId: string,
@@ -138,8 +142,11 @@ async function handleIncomingMessage(
       content: message.body.substring(0, 100),
     });
 
-    // Handle confirmation replies to circle_linked template
-    if (content.includes('confirm') || content.includes('ok') || content === 'yes') {
+    // ========================================
+    // CONFIRMATION HANDLING
+    // ========================================
+    // When user replies to circle_linked template confirmation prompt
+    if (content.includes('ok') || content.includes('confirm') || content === 'yes') {
       appLogger.info('User confirmed circle link', {
         from,
         messageId,
@@ -149,113 +156,84 @@ async function handleIncomingMessage(
       // Get the circle ID for this phone number
       const circleId = circleLinkListener.getCircleIdForPhone(from);
       
-      // Send personalized help instructions after confirmation
-      const helpMessage = circleId 
-        ? `ℹ️ *Available Commands:*
+      // Send welcome message with circle link
+      const welcomeMessage = circleId 
+        ? `✅ *Welcome to Your Circle!*
 
-📋 *help* - Show this message
-💰 *balance* - Check your balance
-🔔 *status* - Get circle status
-❓ *info* - Get more information
+Your WhatsApp is now connected to your circle. You'll receive updates about:
 
-📱 *Your Circle:* https://njangionchain.com/circle/${circleId}
+📅 *Cycles & Deadlines*
+💰 *Member Contributions*
+🎯 *Important Announcements*
+💸 *Payout Notifications*
 
-Type any command to get started!`
-        : `ℹ️ *Available Commands:*
+📱 *View Your Circle:*
+https://njangionchain.com/circle/${circleId}
 
-📋 *help* - Show this message
-💰 *balance* - Check your balance
-🔔 *status* - Get circle status
-❓ *info* - Get more information
+We'll keep you updated! 🚀`
+        : `✅ *Welcome to Your Circle!*
 
-Type any command to get started!`;
+Your WhatsApp is now connected. You'll receive updates about cycles, contributions, deadlines, and more.
+
+We'll keep you updated! 🚀`;
 
       try {
         const result = await whatsappSender.sendMessage({
           to: from,
           type: 'text',
-          text: helpMessage,
+          text: welcomeMessage,
         });
 
         if (result.success) {
-          appLogger.info('Help message sent after confirmation', {
+          appLogger.info('Welcome message sent after confirmation', {
             to: from,
+            circleId,
             messageId: result.messageId,
           });
         } else {
-          appLogger.warn('Failed to send help message', {
+          appLogger.warn('Failed to send welcome message', {
             to: from,
             error: result.error,
           });
         }
       } catch (error) {
-        appLogger.error('Error sending help message', {
+        appLogger.error('Error sending welcome message', {
           error: error instanceof Error ? error.message : String(error),
           to: from,
         });
       }
+      return;
     }
 
-    // Handle help requests
-    if (content.includes('help') || content === '?' || content === '/help') {
-      appLogger.info('User requested help', {
-        from,
-        messageId,
-      });
-
-      const helpMessage = `ℹ️ *Available Commands:*
-
-📋 *help* - Show this message
-💰 *balance* - Check your balance
-🔔 *status* - Get circle status
-❓ *info* - Get more information
-
-Type any command to get started!`;
-
-      try {
-        const result = await whatsappSender.sendMessage({
-          to: from,
-          type: 'text',
-          text: helpMessage,
-        });
-
-        if (result.success) {
-          appLogger.info('Help message sent', {
-            to: from,
-            messageId: result.messageId,
-          });
-        }
-      } catch (error) {
-        appLogger.error('Error sending help message', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    // Handle other unknown commands
-    if (content.startsWith('/') || (content.length > 0 && !content.includes('confirm') && !content.includes('ok') && !content.includes('yes') && !content.includes('help'))) {
-      if (content.startsWith('/')) {
-        // Unknown command
-        const response = `❌ Unknown command: ${content}\n\nType /help for available commands.`;
-        
-        try {
-          await whatsappSender.sendMessage({
-            to: from,
-            type: 'text',
-            text: response,
-          });
-        } catch (error) {
-          appLogger.error('Error sending unknown command response', { error });
-        }
-      }
-    }
-
-    // Log any other messages for debugging
-    appLogger.debug('Processing incoming message', {
+    // ========================================
+    // GENERAL ACKNOWLEDGMENTS
+    // ========================================
+    // NOTE: This is a NOTIFICATION-ONLY channel
+    // Commands like /help, /auth, /create, /join are NOT supported
+    // Users only receive circle updates and insights
+    // Any other messages are acknowledged but not processed
+    appLogger.info('Message received (notification channel - commands not processed)', {
       from,
-      content,
+      content: message.body.substring(0, 50),
       messageId,
+      note: 'This is notification-only; commands are ignored',
     });
+
+    // Send simple acknowledgment (don't suggest commands)
+    try {
+      const ackMessage = `✓ Thanks for your message! This is a notification channel - you'll receive circle updates here.`;
+      
+      await whatsappSender.sendMessage({
+        to: from,
+        type: 'text',
+        text: ackMessage,
+      });
+    } catch (error) {
+      appLogger.error('Error sending acknowledgment', {
+        error: error instanceof Error ? error.message : String(error),
+        to: from,
+      });
+    }
   }
 }
 

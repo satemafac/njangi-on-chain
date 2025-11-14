@@ -18,11 +18,16 @@ import {
   sessionConfig, 
   errorMessages
 } from '../config/whatsapp.config';
-import { WhatsAppAuthBridgeService } from './whatsapp-auth-bridge.service';
-import { StatelessWhatsAppAuthService } from './whatsapp-stateless-auth.service';
-import { WhatsAppCommandParserService } from './whatsapp-command-parser.service';
-import { WhatsAppConversationFlowService } from './whatsapp-conversation-flow.service';
-import { ParsedCommand } from '../types/whatsapp-commands';
+
+/**
+ * ⚠️ DEPRECATED: This service imports deleted dependencies
+ * 
+ * Kept for backwards compatibility only.
+ * Use whatsapp-bot-backend services instead:
+ * - whatsapp-sender.service.ts
+ * - whatsapp-notification-handler.service.ts
+ * - circle-link-listener.service.ts
+ */
 
 // Configure logger
 const logger = createLogger({
@@ -41,16 +46,16 @@ export class WhatsAppService {
   private static instance: WhatsAppService;
   private sessions: Map<string, WhatsAppUserSession> = new Map();
   private auditLogs: WhatsAppAuditLog[] = [];
-  private authBridge: WhatsAppAuthBridgeService;
-  private statelessAuth: StatelessWhatsAppAuthService;
-  private commandParser: WhatsAppCommandParserService;
-  private conversationFlow: WhatsAppConversationFlowService;
+  
+  // ⚠️ DEPRECATED: Former dependencies removed
+  // private authBridge: WhatsAppAuthBridgeService;
+  // private statelessAuth: StatelessWhatsAppAuthService;
+  // private commandParser: WhatsAppCommandParserService;
+  // private conversationFlow: WhatsAppConversationFlowService;
 
   private constructor() {
-    this.authBridge = WhatsAppAuthBridgeService.getInstance();
-    this.statelessAuth = StatelessWhatsAppAuthService.getInstance();
-    this.commandParser = WhatsAppCommandParserService.getInstance();
-    this.conversationFlow = WhatsAppConversationFlowService.getInstance();
+    // ⚠️ DEPRECATED: Service initialization removed
+    // Kept for backwards compatibility only
     this.initializeService();
   }
 

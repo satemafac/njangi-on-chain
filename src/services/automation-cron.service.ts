@@ -2,7 +2,9 @@ import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
 import { Transaction as TransactionBlock } from '@mysten/sui/transactions';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { fromHEX } from '@mysten/sui/utils';
-import { WhatsAppNotificationService } from './whatsapp-notification.service';
+// ⚠️ DEPRECATED: Removed import of deleted notification service
+// import { WhatsAppNotificationService } from './whatsapp-notification.service';
+// Use whatsapp-bot-backend for notifications instead
 import { circleMemberManager } from './circle-member-manager.service';
 import { automationAuditLogger } from './automation-audit-logger.service';
 import { automationAdminAlertsService } from './automation-admin-alerts.service';
@@ -52,7 +54,8 @@ export class AutomationCronService {
   // Core services
   private suiClient: SuiClient;
   private adminKeypair: Ed25519Keypair | null = null;
-  private notificationService: WhatsAppNotificationService;
+  // ⚠️ DEPRECATED: Notification service removed
+  // private notificationService: WhatsAppNotificationService;
   
   // Cron intervals
   private payoutCheckInterval: NodeJS.Timeout | null = null;
@@ -79,8 +82,9 @@ export class AutomationCronService {
       url: getFullnodeUrl(process.env.NODE_ENV === 'production' ? 'mainnet' : 'testnet') 
     });
     
-    // Initialize notification service
-    this.notificationService = WhatsAppNotificationService.getInstance();
+    // ⚠️ DEPRECATED: Notification service initialization removed
+    // Use bot backend notification handler instead
+    // this.notificationService = WhatsAppNotificationService.getInstance();
     
     // Initialize metrics
     this.metrics = {

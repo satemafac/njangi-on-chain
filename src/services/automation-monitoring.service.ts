@@ -1,6 +1,8 @@
 import { createLogger, format, transports } from 'winston';
 import { automationAuditLogger, AuditEventType } from './automation-audit-logger.service';
-import { whatsappNotificationService } from './whatsapp-notification.service';
+// ⚠️ DEPRECATED: Removed import of deleted notification service
+// import { whatsappNotificationService } from './whatsapp-notification.service';
+// Use whatsapp-bot-backend for notifications instead
 import { circleMemberManager } from './circle-member-manager.service';
 
 // Create logger instance
