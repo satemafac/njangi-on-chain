@@ -377,7 +377,9 @@ export class AutomationMonitoringService {
   public getSystemStatistics(): SystemStatistics {
     // Get statistics from various services
     const auditStats = automationAuditLogger.getStatistics();
-    const notificationStats = whatsappNotificationService.getStats();
+    // ⚠️ DEPRECATED: WhatsApp notification service removed
+    // const notificationStats = whatsappNotificationService.getStats();
+    const notificationStats = null;
     const circleStats = circleMemberManager.getCacheStats();
     
     return {
@@ -559,7 +561,9 @@ export class AutomationMonitoringService {
 
   private async checkNotificationService(): Promise<ComponentHealth> {
     try {
-      const stats = whatsappNotificationService.getStats();
+      // ⚠️ DEPRECATED: WhatsApp notification service removed
+      // const stats = whatsappNotificationService.getStats();
+      const stats = null;
       
       return {
         status: 'healthy',
@@ -701,22 +705,25 @@ export class AutomationMonitoringService {
         `**Time:** ${alert.timestamp.toISOString()}\n\n` +
         `Please check the automation system immediately.`;
       
-      // Send to all admin phone numbers
-      const promises = this.alertConfig.adminPhoneNumbers.map(phoneNumber =>
-        whatsappNotificationService.sendImmediateNotification(
-          phoneNumber,
-          'admin_alert',
-          {
-            alertType: alert.type,
-            severity: alert.severity,
-            message: alertMessage,
-            timestamp: alert.timestamp.toISOString()
-          }
-        )
-      );
+      // ⚠️ DEPRECATED: WhatsApp notification service removed
+      // Send to all admin phone numbers (now disabled)
+      // const promises = this.alertConfig.adminPhoneNumbers.map(phoneNumber =>
+      //   whatsappNotificationService.sendImmediateNotification(
+      //     phoneNumber,
+      //     'admin_alert',
+      //     {
+      //       alertType: alert.type,
+      //       severity: alert.severity,
+      //       message: alertMessage,
+      //       timestamp: alert.timestamp.toISOString()
+      //     }
+      //   )
+      // );
+      //
+      // const results = await Promise.allSettled(promises);
+      // const successful = results.filter(r => r.status === 'fulfilled' && r.value).length;
       
-      const results = await Promise.allSettled(promises);
-      const successful = results.filter(r => r.status === 'fulfilled' && r.value).length;
+      const successful = 0; // Disabled
       
       logger.info(`Alert notification sent to ${successful}/${this.alertConfig.adminPhoneNumbers.length} admins`);
       

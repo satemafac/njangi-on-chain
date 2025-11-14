@@ -590,30 +590,26 @@ export class AutomationAdminAlertsService {
 
   private async sendWhatsAppAlert(admin: AdminContact, alert: AlertInstance): Promise<boolean> {
     try {
-      const severityEmoji = {
-        low: 'ℹ️',
-        medium: '⚠️',
-        high: '🚨',
-        critical: '🔴'
-      };
+      // ⚠️ DEPRECATED: WhatsApp notification service removed
+      // Use bot backend send-notification endpoint instead
+      // 
+      // For now, just log instead of sending
+      logger.info(`Alert notification (WhatsApp disabled): ${alert.title} to ${admin.name}`);
       
-      const success = await whatsappNotificationService.sendImmediateNotification(
-        admin.phoneNumber!,
-        'admin_alert',
-        {
-          adminName: admin.name,
-          alertId: alert.id,
-          alertType: alert.type,
-          severity: alert.severity,
-          title: alert.title,
-          description: alert.description,
-          timestamp: alert.timestamp.toISOString(),
-          severityEmoji: severityEmoji[alert.severity],
-          actionUrl: alert.actionUrl
-        }
-      );
+      // TODO: Call bot backend /api/whatsapp/send-notification endpoint
+      // const response = await fetch('https://bot-backend-url/api/whatsapp/send-notification', {
+      //   method: 'POST',
+      //   headers: { 'Content-Type': 'application/json' },
+      //   body: JSON.stringify({
+      //     phoneNumber: admin.phoneNumber,
+      //     circleId: alert.relatedCircleId,
+      //     circleName: 'Admin Alert',
+      //     notificationType: 'custom',
+      //     customMessage: alert.description
+      //   })
+      // });
       
-      return success;
+      return false; // Currently disabled
     } catch (error) {
       logger.error(`Failed to send WhatsApp alert to ${admin.name}:`, error);
       return false;
