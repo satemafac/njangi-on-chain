@@ -151,16 +151,16 @@ export class WhatsAppService {
         return;
       }
 
-      // Check if user is in an active conversation flow
-      const activeFlow = this.conversationFlow.getCurrentFlow(phoneNumber);
-      
-      if (activeFlow) {
-        // Handle ongoing conversation
-        await this.handleConversationInput(phoneNumber, messageText);
-      } else {
-        // Parse new command
-        await this.handleNewCommand(phoneNumber, messageText);
-      }
+      // ⚠️ DEPRECATED: All conversation flow logic removed
+      // Old WhatsApp command processing disabled
+      // Use bot backend for all WhatsApp functionality
+      logger.info('Message processing disabled (deprecated service)', { phoneNumber });
+      // const activeFlow = this.conversationFlow.getCurrentFlow(phoneNumber);
+      // if (activeFlow) {
+      //   await this.handleConversationInput(phoneNumber, messageText);
+      // } else {
+      //   await this.handleNewCommand(phoneNumber, messageText);
+      // }
 
     } catch (error) {
       logger.error(`Error processing message from ${phoneNumber}:`, error);
