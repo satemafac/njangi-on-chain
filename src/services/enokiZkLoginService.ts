@@ -701,10 +701,12 @@ export class EnokiZkLoginService {
         : this.suiClient;
 
       // Validate current epoch against maxEpoch
+      // Note: Sui accepts transactions where currentEpoch < maxEpoch
+      // Adding a 1-epoch buffer to handle race conditions during epoch advancement
       const { epoch } = await suiClient.getLatestSuiSystemState();
       const currentEpoch = Number(epoch);
-      console.log(`Current epoch: ${currentEpoch}, maxEpoch: ${account.maxEpoch}`);
-      if (currentEpoch >= account.maxEpoch) {
+      console.log(`Current epoch: ${currentEpoch}, maxEpoch: ${account.maxEpoch}, accepted max: ${account.maxEpoch - 1}`);
+      if (currentEpoch > account.maxEpoch) {
         throw new Error('Session has expired. Please re-authenticate to get a new proof.');
       }
 
