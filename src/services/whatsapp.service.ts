@@ -1,32 +1,14 @@
-import axios, { AxiosResponse } from 'axios';
-import crypto from 'crypto';
 import { createLogger, format, transports } from 'winston';
-import { 
-  WhatsAppMessage, 
-  WhatsAppAPIResponse, 
-  WhatsAppWebhookPayload, 
-  WhatsAppWebhookMessage,
-  WhatsAppTextMessage,
-  WhatsAppInteractiveMessage,
-  WhatsAppTemplateMessage,
-  WhatsAppUserSession,
-  WhatsAppAuditLog
-} from '../types/whatsapp';
-import { 
-  whatsappConfig, 
-  whatsappApiUrl, 
-  sessionConfig, 
-  errorMessages
-} from '../config/whatsapp.config';
 
 /**
- * ⚠️ DEPRECATED: This service imports deleted dependencies
+ * ⚠️ DEPRECATED SERVICE - DO NOT USE
  * 
- * Kept for backwards compatibility only.
- * Use whatsapp-bot-backend services instead:
- * - whatsapp-sender.service.ts
- * - whatsapp-notification-handler.service.ts
- * - circle-link-listener.service.ts
+ * This service is deprecated and kept only for backwards compatibility.
+ * All WhatsApp functionality has been moved to the bot backend:
+ * - whatsapp-bot-backend/src/services/circle-link-listener.service.ts
+ * - whatsapp-bot-backend/src/services/whatsapp-sender.service.ts
+ * - whatsapp-bot-backend/src/services/whatsapp-notification-handler.service.ts
+ * - whatsapp-bot-backend/src/pages/api/whatsapp/webhook.ts
  */
 
 // Configure logger
@@ -44,19 +26,9 @@ const logger = createLogger({
 
 export class WhatsAppService {
   private static instance: WhatsAppService;
-  private sessions: Map<string, WhatsAppUserSession> = new Map();
-  private auditLogs: WhatsAppAuditLog[] = [];
-  
-  // ⚠️ DEPRECATED: Former dependencies removed
-  // private authBridge: WhatsAppAuthBridgeService;
-  // private statelessAuth: StatelessWhatsAppAuthService;
-  // private commandParser: WhatsAppCommandParserService;
-  // private conversationFlow: WhatsAppConversationFlowService;
 
   private constructor() {
-    // ⚠️ DEPRECATED: Service initialization removed
-    // Kept for backwards compatibility only
-    this.initializeService();
+    logger.warn('⚠️ DEPRECATED: WhatsAppService initialized - use bot backend instead');
   }
 
   public static getInstance(): WhatsAppService {
@@ -66,622 +38,54 @@ export class WhatsAppService {
     return WhatsAppService.instance;
   }
 
-  private initializeService(): void {
-    // Clean up expired sessions every 5 minutes
-    setInterval(() => {
-      this.cleanupExpiredSessions();
-    }, 5 * 60 * 1000);
-
-    logger.info('WhatsApp service initialized');
-  }
-
-  /**
-   * Verify webhook signature for security
-   */
+  // Stub methods for backwards compatibility
   public verifyWebhookSignature(payload: string, signature: string): boolean {
-    try {
-      const expectedSignature = crypto
-        .createHmac('sha256', whatsappConfig.appSecret)
-        .update(payload)
-        .digest('hex');
-      
-      const signatureHash = signature.replace('sha256=', '');
-      return crypto.timingSafeEqual(
-        Buffer.from(expectedSignature),
-        Buffer.from(signatureHash)
-      );
-    } catch (error) {
-      logger.error('Webhook signature verification failed:', error);
-      return false;
-    }
+    return false;
   }
 
-  /**
-   * Handle incoming webhook messages
-   */
-  public async handleWebhookMessage(payload: WhatsAppWebhookPayload): Promise<void> {
-    try {
-      for (const entry of payload.entry) {
-        for (const change of entry.changes) {
-          if (change.field === 'messages' && change.value.messages) {
-            for (const message of change.value.messages) {
-              await this.processIncomingMessage(message);
-            }
-          }
-        }
-      }
-    } catch (error) {
-      logger.error('Error handling webhook message:', error);
-      throw error;
-    }
+  public async handleWebhookMessage(payload: any): Promise<void> {
+    logger.warn('handleWebhookMessage is deprecated - use bot backend');
   }
 
-  /**
-   * Process individual incoming messages
-   */
-  private async processIncomingMessage(message: WhatsAppWebhookMessage): Promise<void> {
-    const phoneNumber = message.from;
-    const messageText = message.text?.body || '';
-    
-    logger.info(`Processing message from ${phoneNumber}: ${messageText}`);
-    
-    try {
-      // Get or create user session
-      let session = this.getSession(phoneNumber);
-      if (!session) {
-        session = this.createSession(phoneNumber);
-        // Send welcome message for new users
-        await this.sendWelcomeMessage(phoneNumber);
-        return;
-      }
-
-      // Update last activity
-      session.lastActivity = new Date();
-      
-      // Log the interaction
-      await this.logAuditEvent(phoneNumber, 'message_received', {
-        messageId: message.id,
-        messageType: message.type,
-        content: messageText,
-      });
-
-      // Check if this is a greeting message
-      if (this.isGreeting(messageText.toLowerCase())) {
-        await this.sendWelcomeMessage(phoneNumber);
-        return;
-      }
-
-      // ⚠️ DEPRECATED: All conversation flow logic removed
-      // Old WhatsApp command processing disabled
-      // Use bot backend for all WhatsApp functionality
-      logger.info('Message processing disabled (deprecated service)', { phoneNumber });
-      // const activeFlow = this.conversationFlow.getCurrentFlow(phoneNumber);
-      // if (activeFlow) {
-      //   await this.handleConversationInput(phoneNumber, messageText);
-      // } else {
-      //   await this.handleNewCommand(phoneNumber, messageText);
-      // }
-
-    } catch (error) {
-      logger.error(`Error processing message from ${phoneNumber}:`, error);
-      await this.sendErrorMessage(phoneNumber, errorMessages.NETWORK_ERROR);
-    }
+  public getSession(phoneNumber: string): any {
+    return null;
   }
 
-  /**
-   * Check if message is a greeting
-   */
-  private isGreeting(message: string): boolean {
-    const greetings = ['hello', 'hi', 'hey', 'hola', 'good morning', 'good afternoon', 'good evening'];
-    return greetings.some(greeting => message.includes(greeting));
+  public createSession(phoneNumber: string): any {
+    return null;
   }
 
-  /**
-   * Send welcome message to new users
-   */
-  private async sendWelcomeMessage(phoneNumber: string): Promise<void> {
-    const welcomeMessage = `Welcome to Njangi! 🎉
-
-I'm your Njangi assistant. To get started, you'll need to authenticate your account.
-
-Type /auth to connect your phone number to a blockchain address.
-
-After authentication, I can help you:
-• Create new savings circles
-• Join existing circles
-• Make contributions
-• Check your status
-
-Type /help to see all available commands.`;
-
-    await this.sendTextMessage(phoneNumber, welcomeMessage);
+  public async sendTextMessage(phoneNumber: string, message: string): Promise<void> {
+    logger.warn('sendTextMessage is deprecated - use bot backend');
   }
 
-  /**
-   * Handle input during active conversation flow
-   */
-  private async handleConversationInput(phoneNumber: string, input: string): Promise<void> {
-    // ⚠️ DEPRECATED: All conversation flow logic removed
-    logger.info('Conversation input processing disabled', { phoneNumber });
-    // Entire method disabled - use bot backend instead
-    // const result = this.conversationFlow.processInput(phoneNumber, input);
-    // if (result.isComplete) {
-    //   if (result.success && result.result) {
-    //     await this.executeCompletedCommand(phoneNumber, result.result);
-    //   } else {
-    //     await this.sendTextMessage(phoneNumber, result.message);
-    //   }
-    // } else {
-    //   let response = result.message;
-    //   if (result.nextPrompt) {
-    //     response += '\n\n' + result.nextPrompt;
-    //   }
-    //   await this.sendTextMessage(phoneNumber, response);
-    // }
+  public async sendWelcomeMessage(phoneNumber: string): Promise<void> {
+    logger.warn('sendWelcomeMessage is deprecated - use bot backend');
   }
 
-  /**
-   * Handle new command from user
-   */
-  private async handleNewCommand(phoneNumber: string, messageText: string): Promise<void> {
-    // ⚠️ DEPRECATED: All command parsing and execution disabled
-    logger.info('New command processing disabled', { phoneNumber, messageText });
-    // Use bot backend for all WhatsApp functionality
-    // const parsedCommand = this.commandParser.parseMessage(messageText);
-    // ... entire method disabled ...
+  public async sendErrorMessage(phoneNumber: string, errorMessage: string): Promise<void> {
+    logger.warn('sendErrorMessage is deprecated - use bot backend');
   }
 
-  /**
-   * Execute single-step commands immediately
-   */
-  // ⚠️ DEPRECATED: Method disabled
-  private async executeSingleStepCommand(phoneNumber: string, parsedCommand: any): Promise<void> {
-    logger.info('Single-step command execution disabled', { phoneNumber });
-    return;
-    switch (parsedCommand.type) {
-      case 'help':
-        await this.sendHelpMessage(phoneNumber);
-        break;
-
-      case 'auth':
-        await this.handleAuthenticationCommand(phoneNumber);
-        break;
-
-      case 'status':
-        await this.handleStatusCommand(phoneNumber);
-        break;
-
-      case 'circles':
-        await this.handleCirclesCommand(phoneNumber);
-        break;
-
-      case 'balance':
-        await this.handleBalanceCommand(phoneNumber);
-        break;
-
-      case 'join':
-        await this.handleJoinCommand(phoneNumber, parsedCommand.parameters);
-        break;
-
-      case 'contribute':
-        await this.handleContributeCommand(phoneNumber, parsedCommand.parameters);
-        break;
-
-      default:
-        await this.sendTextMessage(
-          phoneNumber, 
-          `🚧 The "${parsedCommand.type}" command is coming soon!\n\nType /help to see available commands.`
-        );
-    }
+  public async sendHelpMessage(phoneNumber: string): Promise<void> {
+    logger.warn('sendHelpMessage is deprecated - use bot backend');
   }
 
-  /**
-   * Execute completed multi-step commands
-   */
-  private async executeCompletedCommand(phoneNumber: string, commandData: Record<string, unknown>): Promise<void> {
-    // This would integrate with your circle creation logic
-    await this.sendTextMessage(
-      phoneNumber,
-      `🎉 Circle creation completed!\n\n📋 **Summary:**\n• Type: ${commandData.circleType}\n• Currency: ${commandData.currency}\n• Name: ${commandData.name}\n• Contribution: ${commandData.contributionAmount} ${commandData.currency}\n• Cycle: ${commandData.cycleLength}\n\n🔗 Circle will be created on the blockchain. You'll receive a confirmation shortly.`
-    );
-  }
-
-  /**
-   * Send help message
-   */
-  private async sendHelpMessage(phoneNumber: string): Promise<void> {
-    const helpText = this.commandParser.generateHelpMessage();
-    await this.sendTextMessage(phoneNumber, helpText);
-  }
-
-  /**
-   * Handle status command
-   */
-  private async handleStatusCommand(phoneNumber: string): Promise<void> {
-    if (!this.isUserAuthenticated(phoneNumber)) {
-      await this.sendAuthenticationRequired(phoneNumber);
-      return;
-    }
-
-    const userAddress = this.getUserSuiAddress(phoneNumber);
-    await this.sendTextMessage(
-      phoneNumber,
-      `📊 **Your Status**\n\n🏦 Sui Address: ${userAddress}\n📱 Phone: ${phoneNumber}\n\n💡 Type /circles to see your circles or /balance to check balances.`
-    );
-  }
-
-  /**
-   * Handle circles command
-   */
-  private async handleCirclesCommand(phoneNumber: string): Promise<void> {
-    await this.sendTextMessage(
-      phoneNumber,
-      `🔄 **Your Circles**\n\n🚧 Circle listing is coming soon!\n\nFor now, you can:\n• /create - Start a new circle\n• /join [circle-id] - Join an existing circle`
-    );
-  }
-
-  /**
-   * Handle balance command
-   */
-  private async handleBalanceCommand(phoneNumber: string): Promise<void> {
-    await this.sendTextMessage(
-      phoneNumber,
-      `💰 **Your Balance**\n\n🚧 Balance checking is coming soon!\n\nThis will show your:\n• Wallet balances\n• Circle contributions\n• Pending payouts`
-    );
-  }
-
-  /**
-   * Handle join command
-   */
-  private async handleJoinCommand(phoneNumber: string, parameters: Record<string, unknown>): Promise<void> {
-    const circleId = parameters.circleId;
-    await this.sendTextMessage(
-      phoneNumber,
-      `🤝 **Join Circle**\n\n🚧 Circle joining is coming soon!\n\nYou want to join circle: ${circleId}\n\nThis will check circle availability and start the joining process.`
-    );
-  }
-
-  /**
-   * Handle contribute command
-   */
-  private async handleContributeCommand(phoneNumber: string, parameters: Record<string, unknown>): Promise<void> {
-    const { amount, currency, circleId } = parameters;
-    await this.sendTextMessage(
-      phoneNumber,
-      `💰 **Make Contribution**\n\n🚧 Contributions are coming soon!\n\nYou want to contribute:\n• Amount: ${amount} ${currency}\n• Circle: ${circleId || 'default'}\n\nThis will process your contribution to the circle.`
-    );
-  }
-
-  /**
-   * Send a text message
-   */
-  public async sendTextMessage(phoneNumber: string, text: string): Promise<WhatsAppAPIResponse | null> {
-    const message: WhatsAppTextMessage = {
-      messaging_product: 'whatsapp',
-      to: phoneNumber,
-      type: 'text',
-      text: {
-        body: text,
-      },
-    };
-
-    return this.sendMessage(message);
-  }
-
-  /**
-   * Send an interactive message with buttons
-   */
-  public async sendInteractiveMessage(
-    phoneNumber: string,
-    bodyText: string,
-    buttons: Array<{ id: string; title: string }>,
-    headerText?: string,
-    footerText?: string
-  ): Promise<WhatsAppAPIResponse | null> {
-    const message: WhatsAppInteractiveMessage = {
-      messaging_product: 'whatsapp',
-      to: phoneNumber,
-      type: 'interactive',
-      interactive: {
-        type: 'button',
-        header: headerText ? {
-          type: 'text',
-          text: headerText,
-        } : undefined,
-        body: {
-          text: bodyText,
-        },
-        footer: footerText ? {
-          text: footerText,
-        } : undefined,
-        action: {
-          buttons: buttons.map(button => ({
-            type: 'reply',
-            reply: {
-              id: button.id,
-              title: button.title,
-            },
-          })),
-        },
-      },
-    };
-
-    return this.sendMessage(message);
-  }
-
-  /**
-   * Send a template message
-   */
-  public async sendTemplateMessage(
-    phoneNumber: string,
-    templateName: string,
-    languageCode: string = 'en',
-    parameters?: Array<{ type: 'text'; text: string }>
-  ): Promise<WhatsAppAPIResponse | null> {
-    const message: WhatsAppTemplateMessage = {
-      messaging_product: 'whatsapp',
-      to: phoneNumber,
-      type: 'template',
-      template: {
-        name: templateName,
-        language: {
-          code: languageCode,
-        },
-        components: parameters ? [{
-          type: 'body',
-          parameters: parameters,
-        }] : undefined,
-      },
-    };
-
-    return this.sendMessage(message);
-  }
-
-  /**
-   * Generic message sending method
-   */
-  private async sendMessage(message: WhatsAppMessage): Promise<WhatsAppAPIResponse | null> {
-    try {
-      const response: AxiosResponse<WhatsAppAPIResponse> = await axios.post(
-        whatsappApiUrl,
-        message,
-        {
-          headers: {
-            'Authorization': `Bearer ${whatsappConfig.accessToken}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-
-      logger.info(`Message sent successfully to ${message.to}`);
-      
-      // Log the sent message
-      await this.logAuditEvent(message.to, 'message_sent', {
-        messageType: message.type,
-        success: true,
-      });
-
-      return response.data;
-    } catch (error) {
-      logger.error(`Failed to send message to ${message.to}:`, error);
-      
-      // Log the failure
-      await this.logAuditEvent(message.to, 'message_send_failed', {
-        messageType: message.type,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        success: false,
-      });
-      
-      return null;
-    }
-  }
-
-  /**
-   * Handle authentication command
-   */
-  public async handleAuthenticationCommand(phoneNumber: string): Promise<void> {
-    try {
-      // Check if already authenticated using stateless auth service
-      if (this.statelessAuth.isPhoneAuthenticated(phoneNumber)) {
-        const suiAddress = this.statelessAuth.getSuiAddressForPhone(phoneNumber);
-        await this.sendTextMessage(
-          phoneNumber, 
-          `✅ You're already authenticated!\n\n📱 Phone: ${phoneNumber}\n🔗 Address: ${suiAddress || 'Not available'}\n\nYou can now use all Njangi commands. Type /help to see available options.`
-        );
-        return;
-      }
-
-      // Start authentication flow using stateless auth service
-      const authResult = await this.statelessAuth.handleAuthenticationRequest(phoneNumber, 'Google');
-      
-      if (authResult.success && authResult.authUrl) {
-        // Send authentication link
-        await this.sendTextMessage(
-          phoneNumber,
-          `🔐 **Authentication Required**\n\nPlease click the link below to authenticate with your Google account:\n\n${authResult.authUrl}\n\nAfter authentication, you'll be able to use all Njangi features!`
-        );
-      } else {
-        await this.sendTextMessage(
-          phoneNumber,
-          `❌ Authentication setup failed. Please try again later or contact support.`
-        );
-      }
-
-    } catch (error) {
-      logger.error(`Authentication command failed for ${phoneNumber}:`, error);
-      await this.sendErrorMessage(phoneNumber, errorMessages.NETWORK_ERROR);
-    }
-  }
-
-  /**
-   * Check if user is authenticated for restricted commands
-   */
   public isUserAuthenticated(phoneNumber: string): boolean {
-    return this.statelessAuth.isPhoneAuthenticated(phoneNumber);
+    return false;
   }
 
-  /**
-   * Get user's Sui address
-   */
-  public getUserSuiAddress(phoneNumber: string): string | null {
-    return this.statelessAuth.getSuiAddressForPhone(phoneNumber);
-  }
-
-  /**
-   * Get user's account data
-   */
-  public getUserAccountData(phoneNumber: string) {
-    // For stateless auth, we can return the session data
-    const session = this.statelessAuth.getWhatsAppSession(phoneNumber);
-    return session.isAuthenticated ? { userAddr: session.suiAddress } : null;
-  }
-
-  /**
-   * Send authentication required message
-   */
   public async sendAuthenticationRequired(phoneNumber: string): Promise<void> {
-    await this.sendTextMessage(
-      phoneNumber,
-      `🔒 ${errorMessages.AUTHENTICATION_REQUIRED}\n\nType /auth to authenticate your account.`
-    );
-  }
-
-  /**
-   * Send error message to user
-   */
-  private async sendErrorMessage(phoneNumber: string, errorMessage: string): Promise<void> {
-    await this.sendTextMessage(phoneNumber, `❌ ${errorMessage}`);
-  }
-
-  /**
-   * Session management methods
-   */
-  public getSession(phoneNumber: string): WhatsAppUserSession | null {
-    return this.sessions.get(phoneNumber) || null;
-  }
-
-  public createSession(phoneNumber: string): WhatsAppUserSession {
-    const session: WhatsAppUserSession = {
-      phoneNumber,
-      isAuthenticated: false,
-      lastActivity: new Date(),
-    };
-    
-    this.sessions.set(phoneNumber, session);
-    logger.info(`Created new session for ${phoneNumber}`);
-    
-    return session;
-  }
-
-  public updateSession(phoneNumber: string, updates: Partial<WhatsAppUserSession>): void {
-    const session = this.sessions.get(phoneNumber);
-    if (session) {
-      Object.assign(session, updates, { lastActivity: new Date() });
-      this.sessions.set(phoneNumber, session);
-    }
-  }
-
-  public deleteSession(phoneNumber: string): void {
-    this.sessions.delete(phoneNumber);
-    logger.info(`Deleted session for ${phoneNumber}`);
+    logger.warn('sendAuthenticationRequired is deprecated - use bot backend');
   }
 
   private cleanupExpiredSessions(): void {
-    const now = Date.now();
-    const expiredSessions: string[] = [];
-
-    for (const [phoneNumber, session] of this.sessions.entries()) {
-      if (now - session.lastActivity.getTime() > sessionConfig.sessionTimeout) {
-        expiredSessions.push(phoneNumber);
-      }
-    }
-
-    expiredSessions.forEach(phoneNumber => {
-      this.deleteSession(phoneNumber);
-    });
-
-    if (expiredSessions.length > 0) {
-      logger.info(`Cleaned up ${expiredSessions.length} expired sessions`);
-    }
+    // No-op
   }
 
-  /**
-   * Audit logging
-   */
-  private async logAuditEvent(
-    phoneNumber: string,
-    action: string,
-    details: Record<string, unknown>,
-    success: boolean = true,
-    errorMessage?: string
-  ): Promise<void> {
-    const auditLog: WhatsAppAuditLog = {
-      id: crypto.randomUUID(),
-      userId: phoneNumber,
-      phoneNumber,
-      action,
-      details,
-      timestamp: new Date(),
-      success,
-      errorMessage,
-    };
-
-    this.auditLogs.push(auditLog);
-    
-    // Keep only last 1000 audit logs in memory
-    if (this.auditLogs.length > 1000) {
-      this.auditLogs = this.auditLogs.slice(-1000);
-    }
-
-    logger.info('Audit log created:', auditLog);
+  private isGreeting(message: string): boolean {
+    return false;
   }
+}
 
-  /**
-   * Get audit logs for a specific user
-   */
-  public getAuditLogs(phoneNumber: string, limit: number = 50): WhatsAppAuditLog[] {
-    return this.auditLogs
-      .filter(log => log.phoneNumber === phoneNumber)
-      .slice(-limit);
-  }
-
-  /**
-   * Health check method
-   */
-  public async healthCheck(): Promise<boolean> {
-    try {
-      // Try to send a test message to verify API connectivity
-      // Use the actual phone number instead of phone ID
-      const testMessage = {
-        messaging_product: 'whatsapp',
-        to: '+13019790161', // Send to authorized test recipient
-        type: 'text',
-        text: { body: 'Health check' },
-      };
-
-      const response = await axios.post(whatsappApiUrl, testMessage, {
-        headers: {
-          'Authorization': `Bearer ${whatsappConfig.accessToken}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      return response.status === 200;
-    } catch (error) {
-      logger.error('Health check failed:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Get service statistics
-   */
-  public getStats(): Record<string, unknown> {
-    return {
-      activeSessions: this.sessions.size,
-      totalAuditLogs: this.auditLogs.length,
-      uptime: process.uptime(),
-      memoryUsage: process.memoryUsage(),
-    };
-  }
-} 
+export const whatsappService = WhatsAppService.getInstance();
