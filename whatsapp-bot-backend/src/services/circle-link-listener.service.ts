@@ -11,9 +11,10 @@ export class CircleLinkListenerService {
   private isRunning = false;
   private suiClient: SuiClient;
   private checkInterval = 5000; // Check every 5 seconds
-  private processedEvents: Set<string> = new Set();
+  private processedEvents: Set<string> = new Set(); // Track events in current session only
   private sentMessages: Map<string, any> = new Map(); // Track recently sent messages and circle IDs
   private circleIdMap: Map<string, string> = new Map(); // Map phone numbers to circle IDs
+  private startTime: number = 0; // Track when listener started
 
   constructor() {
     const config = getConfig();
@@ -22,11 +23,13 @@ export class CircleLinkListenerService {
 
     appLogger.info('CircleLinkListenerService initialized', {
       rpcUrl,
+      note: 'Will only process events from startup onwards (skipping old events)',
     });
   }
 
   /**
    * Start listening for CircleLinked events
+   * Only processes events that occur AFTER this method is called
    */
   public start(): void {
     if (this.isRunning) {
@@ -35,8 +38,11 @@ export class CircleLinkListenerService {
     }
 
     this.isRunning = true;
+    this.startTime = Date.now(); // Record startup time to skip old events
+
     appLogger.info('CircleLinkListenerService started', {
       checkInterval: this.checkInterval,
+      note: 'Listening for NEW events only (skipping historical events)',
     });
 
     this.listen();
@@ -70,6 +76,7 @@ export class CircleLinkListenerService {
 
   /**
    * Check for CircleLinked events
+   * Only processes events that occurred after the listener started
    */
   private async checkForCircleLinkedEvents(): Promise<void> {
     try {
@@ -87,15 +94,21 @@ export class CircleLinkListenerService {
 
       for (const event of events.data) {
         const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
 
-        // Skip if already processed
+        // Skip events that occurred before listener started
+        if (eventTimestampMs < this.startTime) {
+          continue;
+        }
+
+        // Skip if already processed in this session
         if (this.processedEvents.has(eventId)) {
           continue;
         }
 
         this.processedEvents.add(eventId);
 
-        // Keep only last 1000 processed events in memory
+        // Keep only last 1000 events in memory for this session
         if (this.processedEvents.size > 1000) {
           const processedArray = Array.from(this.processedEvents);
           this.processedEvents = new Set(processedArray.slice(-500));
