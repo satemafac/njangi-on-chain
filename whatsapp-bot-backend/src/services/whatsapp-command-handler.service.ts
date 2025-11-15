@@ -4,10 +4,8 @@
  * Provides help, circle status, rotation info, and cycle details
  */
 
-import { SuiClient } from '@mysten/sui/client';
 import { appLogger } from '../utils/logger';
-import { getConfig } from '../config';
-import { whatsappSender, WhatsAppTemplate } from './whatsapp-sender.service';
+import { whatsappSender } from './whatsapp-sender.service';
 
 // ============================================================================
 // TYPES & INTERFACES
@@ -30,11 +28,8 @@ export interface CircleStatusData {
 // ============================================================================
 
 export class WhatsAppCommandHandlerService {
-  private suiClient: SuiClient;
-
   constructor() {
-    const config = getConfig();
-    this.suiClient = new SuiClient({ url: config.sui.testnetRpcUrl });
+    // Service initialized with whatsappSender
   }
 
   /**
