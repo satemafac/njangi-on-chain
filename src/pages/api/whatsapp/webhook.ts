@@ -104,14 +104,14 @@ async function handler(
       // Parse the webhook body
       const body = typeof req.body === 'object' ? req.body : JSON.parse(rawBody);
 
-      // Log incoming message details
+      // Process incoming messages
       if (body.entry && Array.isArray(body.entry)) {
         for (const entry of body.entry) {
           if (entry.changes && Array.isArray(entry.changes)) {
             for (const change of entry.changes) {
               const value = change.value;
               
-              // Log message details
+              // Process incoming messages
               if (value.messages && Array.isArray(value.messages)) {
                 for (const msg of value.messages) {
                   appLogger.info('📱 Incoming WhatsApp message', {
@@ -120,6 +120,89 @@ async function handler(
                     text: msg.text?.body || '<non-text>',
                     messageId: msg.id,
                   });
+
+                  // Process the message
+                  const messageText = msg.text?.body || '';
+                  const sender = msg.from;
+
+                  // Handle different message types
+                  if (messageText.toLowerCase().includes('help') || messageText === '?') {
+                    // Send help message
+                    const helpMessage = `✅ *Njangi WhatsApp Channel*\n\nThis is a notification-only channel. You will receive:\n\n• 🔄 Cycle started notifications\n• 💰 Contribution confirmations\n• ⏰ Deadline reminders\n• 💵 Payout notifications\n• 👥 Member joined alerts\n• 📊 Circle insights\n\nNo commands needed - just sit back and get updates!`;
+
+                    try {
+                      const whatsappResponse = await fetch(
+                        `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                        {
+                          method: 'POST',
+                          headers: {
+                            'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+                            'Content-Type': 'application/json',
+                          },
+                          body: JSON.stringify({
+                            messaging_product: 'whatsapp',
+                            to: sender,
+                            type: 'text',
+                            text: {
+                              body: helpMessage,
+                            },
+                          }),
+                        }
+                      );
+
+                      if (!whatsappResponse.ok) {
+                        const errorText = await whatsappResponse.text();
+                        appLogger.error('Failed to send help message', {
+                          status: whatsappResponse.status,
+                          error: errorText,
+                        });
+                      } else {
+                        appLogger.info('✅ Help message sent', { to: sender });
+                      }
+                    } catch (sendError) {
+                      appLogger.error('Error sending help message', {
+                        error: sendError instanceof Error ? sendError.message : String(sendError),
+                      });
+                    }
+                  } else {
+                    // For any other message, send a generic acknowledgment
+                    const ackMessage = `✓ Thanks for your message! This is a notification channel. You will receive circle updates here.`;
+
+                    try {
+                      const whatsappResponse = await fetch(
+                        `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                        {
+                          method: 'POST',
+                          headers: {
+                            'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+                            'Content-Type': 'application/json',
+                          },
+                          body: JSON.stringify({
+                            messaging_product: 'whatsapp',
+                            to: sender,
+                            type: 'text',
+                            text: {
+                              body: ackMessage,
+                            },
+                          }),
+                        }
+                      );
+
+                      if (!whatsappResponse.ok) {
+                        const errorText = await whatsappResponse.text();
+                        appLogger.error('Failed to send acknowledgment', {
+                          status: whatsappResponse.status,
+                          error: errorText,
+                        });
+                      } else {
+                        appLogger.debug('✓ Acknowledgment sent', { to: sender });
+                      }
+                    } catch (sendError) {
+                      appLogger.error('Error sending acknowledgment', {
+                        error: sendError instanceof Error ? sendError.message : String(sendError),
+                      });
+                    }
+                  }
                 }
               }
 
