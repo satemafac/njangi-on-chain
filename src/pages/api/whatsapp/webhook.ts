@@ -15,6 +15,41 @@ interface WebhookResponse {
   message?: string;
 }
 
+// In-memory deduplication cache for webhook messages
+// Keeps track of recently processed message IDs to avoid duplicate processing
+const processedMessages = new Map<string, number>();
+const MESSAGE_DEDUP_WINDOW = 60000; // 60 seconds
+
+function isMessageProcessed(messageId: string): boolean {
+  const lastProcessedTime = processedMessages.get(messageId);
+  if (!lastProcessedTime) {
+    return false;
+  }
+
+  const now = Date.now();
+  if (now - lastProcessedTime > MESSAGE_DEDUP_WINDOW) {
+    // Message is older than the dedup window, forget it
+    processedMessages.delete(messageId);
+    return false;
+  }
+
+  return true;
+}
+
+function markMessageProcessed(messageId: string): void {
+  processedMessages.set(messageId, Date.now());
+  
+  // Clean up old entries periodically
+  if (processedMessages.size > 1000) {
+    const now = Date.now();
+    for (const [id, time] of processedMessages.entries()) {
+      if (now - time > MESSAGE_DEDUP_WINDOW) {
+        processedMessages.delete(id);
+      }
+    }
+  }
+}
+
 async function handler(
   req: NextApiRequest,
   res: NextApiResponse<WebhookResponse | string>
@@ -114,12 +149,24 @@ async function handler(
               // Process incoming messages
               if (value.messages && Array.isArray(value.messages)) {
                 for (const msg of value.messages) {
+                  // Check if we've already processed this message
+                  if (isMessageProcessed(msg.id)) {
+                    appLogger.debug('⏭️  Skipping duplicate message', {
+                      messageId: msg.id,
+                      from: msg.from,
+                    });
+                    continue;
+                  }
+
                   appLogger.info('📱 Incoming WhatsApp message', {
                     from: msg.from,
                     type: msg.type,
                     text: msg.text?.body || '<non-text>',
                     messageId: msg.id,
                   });
+
+                  // Mark this message as processed
+                  markMessageProcessed(msg.id);
 
                   // Process the message
                   const messageText = msg.text?.body || '';
