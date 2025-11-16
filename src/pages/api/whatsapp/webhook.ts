@@ -18,7 +18,7 @@ interface WebhookResponse {
 
 async function handler(
   req: NextApiRequest,
-  res: NextApiResponse<WebhookResponse>
+  res: NextApiResponse<WebhookResponse | string>
 ) {
   // Handle GET for webhook verification
   if (req.method === 'GET') {
