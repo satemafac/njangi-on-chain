@@ -48,39 +48,59 @@ async function handler(
     try {
       const signature = req.headers['x-hub-signature-256'] as string | undefined;
       const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+      const appSecret = process.env.WHATSAPP_APP_SECRET;
 
-      // Verify webhook signature
-      if (signature && process.env.WHATSAPP_APP_SECRET) {
-        const hash = crypto
-          .createHmac('sha256', process.env.WHATSAPP_APP_SECRET)
-          .update(rawBody)
-          .digest('hex');
+      appLogger.debug('Webhook POST received', {
+        hasSignature: !!signature,
+        hasAppSecret: !!appSecret,
+        bodySize: rawBody.length,
+      });
 
-        const expectedSignature = `sha256=${hash}`;
-
+      // Verify webhook signature if both signature and app secret are present
+      if (signature && appSecret) {
         try {
+          const hash = crypto
+            .createHmac('sha256', appSecret)
+            .update(rawBody)
+            .digest('hex');
+
+          const expectedSignature = `sha256=${hash}`;
+
           const isValid = crypto.timingSafeEqual(
             Buffer.from(signature),
             Buffer.from(expectedSignature)
           );
 
           if (!isValid) {
-            appLogger.warn('Invalid webhook signature');
+            appLogger.warn('Invalid webhook signature', {
+              received: signature.substring(0, 20),
+              expected: expectedSignature.substring(0, 20),
+            });
             return res.status(403).json({
               success: false,
               error: 'Invalid signature',
             });
           }
-        } catch {
-          appLogger.warn('Webhook signature verification failed');
+
+          appLogger.debug('Webhook signature verified successfully');
+        } catch (signatureError) {
+          appLogger.warn('Webhook signature verification failed', {
+            error: signatureError instanceof Error ? signatureError.message : String(signatureError),
+          });
           return res.status(403).json({
             success: false,
             error: 'Signature verification failed',
           });
         }
+      } else if (!signature) {
+        appLogger.warn('Missing webhook signature header', {
+          availableHeaders: Object.keys(req.headers).join(', '),
+        });
+        // For now, allow requests without signature (Meta might not always send it)
+        // In production, this should reject unsigned requests
       }
 
-      appLogger.info('Webhook received', {
+      appLogger.info('Webhook received and processed', {
         bodySize: rawBody.length,
       });
 
