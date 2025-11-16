@@ -100,7 +100,44 @@ async function handler(
         // In production, this should reject unsigned requests
       }
 
-      appLogger.info('Webhook received and processed', {
+      // Parse the webhook body
+      const body = typeof req.body === 'object' ? req.body : JSON.parse(rawBody);
+
+      // Log incoming message details
+      if (body.entry && Array.isArray(body.entry)) {
+        for (const entry of body.entry) {
+          if (entry.changes && Array.isArray(entry.changes)) {
+            for (const change of entry.changes) {
+              const value = change.value;
+              
+              // Log message details
+              if (value.messages && Array.isArray(value.messages)) {
+                for (const msg of value.messages) {
+                  appLogger.info('📱 Incoming WhatsApp message', {
+                    from: msg.from,
+                    type: msg.type,
+                    text: msg.text?.body || '<non-text>',
+                    messageId: msg.id,
+                  });
+                }
+              }
+
+              // Log status updates
+              if (value.statuses && Array.isArray(value.statuses)) {
+                for (const status of value.statuses) {
+                  appLogger.debug('📤 Message status update', {
+                    messageId: status.id,
+                    status: status.status,
+                    timestamp: status.timestamp,
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+
+      appLogger.debug('Webhook received and processed', {
         bodySize: rawBody.length,
       });
 
