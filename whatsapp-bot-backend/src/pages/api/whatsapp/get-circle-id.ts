@@ -31,7 +31,7 @@ export default async function handler(
 
     appLogger.debug('Looking up circle ID for phone', { phoneNumber });
 
-    const circleId = circleLinkListener.getCircleIdForPhone(phoneNumber);
+    const circleId = await circleLinkListener.getCircleIdForPhone(phoneNumber);
 
     if (!circleId) {
       return res.status(404).json({
