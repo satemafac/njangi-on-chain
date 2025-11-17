@@ -12,7 +12,6 @@ import { appLogger } from '../../../utils/logger';
 import { asyncHandler } from '../../../middleware/errorHandler';
 import { getConfig } from '../../../config';
 import { whatsappSender } from '../../../services/whatsapp-sender.service';
-import { circleLinkListener } from '../../../services/circle-link-listener.service';
 
 interface WebhookMessage {
   object: string;
@@ -153,27 +152,17 @@ async function handleIncomingMessage(
         timestamp,
       });
 
-      // Get the circle ID for this phone number
-      const circleId = circleLinkListener.getCircleIdForPhone(from);
-      
-      // Send welcome message with circle link
-      const welcomeMessage = circleId 
-        ? `✅ *Welcome to Your Circle!*
+      // Send welcome message
+      const welcomeMessage = `✅ *Welcome to Your Circle!*
 
-Your WhatsApp is now connected to your circle. You'll receive updates about:
+Your WhatsApp is now connected. You'll receive updates about:
 
 📅 *Cycles & Deadlines*
 💰 *Member Contributions*
 🎯 *Important Announcements*
 💸 *Payout Notifications*
 
-📱 *View Your Circle:*
-https://njangionchain.com/circle/${circleId}
-
-We'll keep you updated! 🚀`
-        : `✅ *Welcome to Your Circle!*
-
-Your WhatsApp is now connected. You'll receive updates about cycles, contributions, deadlines, and more.
+Type /status to check your circle status anytime.
 
 We'll keep you updated! 🚀`;
 
@@ -187,7 +176,6 @@ We'll keep you updated! 🚀`;
         if (result.success) {
           appLogger.info('Welcome message sent after confirmation', {
             to: from,
-            circleId,
             messageId: result.messageId,
           });
         } else {

@@ -1,5 +1,4 @@
 import { SuiClient } from '@mysten/sui/client';
-import Redis from 'ioredis';
 import { getConfig } from '../config';
 import { appLogger } from '../utils/logger';
 import { whatsappSender } from './whatsapp-sender.service';
@@ -11,41 +10,15 @@ import { whatsappSender } from './whatsapp-sender.service';
 export class CircleLinkListenerService {
   private isRunning = false;
   private suiClient: SuiClient;
-  private redis: Redis;
   private checkInterval = 5000; // Check every 5 seconds
   private processedEvents: Set<string> = new Set(); // Track events in current session only
-  private sentMessages: Map<string, any> = new Map(); // Track recently sent messages and circle IDs
-  private circleIdMap: Map<string, string> = new Map(); // Map phone numbers to circle IDs (local cache)
+  private sentMessages: Map<string, any> = new Map(); // Track recently sent messages for deduplication
   private startTime: number = 0; // Track when listener started
-  private redisKeyPrefix = 'whatsapp:circle:'; // Redis key prefix for circle mappings
 
   constructor() {
     const config = getConfig();
     const rpcUrl = config.sui.testnetRpcUrl;
     this.suiClient = new SuiClient({ url: rpcUrl });
-
-    // Initialize Redis connection for shared state across dynos
-    try {
-      this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-        // Disable SSL verification for Heroku Redis (uses self-signed certs)
-        tls: process.env.REDIS_URL ? { rejectUnauthorized: false } : undefined,
-        retryStrategy: (times) => Math.min(times * 50, 2000),
-        maxRetriesPerRequest: 3,
-      });
-      this.redis.on('error', (err) => {
-        appLogger.warn('Redis connection error', { error: err.message });
-      });
-      this.redis.on('connect', () => {
-        appLogger.debug('Redis connection established');
-      });
-      appLogger.debug('Redis client initialized for circle-phone mappings');
-    } catch (error) {
-      appLogger.warn('Failed to initialize Redis', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      // Redis is optional, fall back to in-memory storage
-      this.redis = null as any;
-    }
 
     appLogger.info('CircleLinkListenerService initialized', {
       rpcUrl,
@@ -115,15 +88,39 @@ export class CircleLinkListenerService {
       });
 
       if (!events.data || events.data.length === 0) {
+        appLogger.debug('No CircleLinked events found', {
+          startTime: this.startTime,
+          now: Date.now(),
+        });
         return;
       }
+
+      appLogger.info('Found CircleLinked events', {
+        count: events.data.length,
+        startTime: new Date(this.startTime).toISOString(),
+        now: new Date().toISOString(),
+        timeSinceStart: Date.now() - this.startTime,
+      });
 
       for (const event of events.data) {
         const eventId = event.id.txDigest + ':' + event.id.eventSeq;
         const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
 
+        appLogger.debug('Checking CircleLinked event', {
+          eventId,
+          eventTimestampMs,
+          startTime: this.startTime,
+          isAfterStart: eventTimestampMs >= this.startTime,
+          recipient: (event.parsedJson as any)?.recipient,
+          circleId: (event.parsedJson as any)?.circle_id?.slice(0, 10),
+        });
+
         // Skip events that occurred before listener started
         if (eventTimestampMs < this.startTime) {
+          appLogger.debug('Skipping event - occurred before listener started', {
+            eventTimestampMs,
+            startTime: this.startTime,
+          });
           continue;
         }
 
@@ -236,27 +233,11 @@ export class CircleLinkListenerService {
       });
       
       if (result.success) {
-        // Store circle ID and phone number pairing for later use
-        this.circleIdMap.set(phoneNumber, circleId);
-        
-        // Also store in Redis for access across dynos
-        if (this.redis) {
-          try {
-            const redisKey = `${this.redisKeyPrefix}${phoneNumber}`;
-            // Store with 90-day expiration
-            await this.redis.setex(redisKey, 7776000, circleId);
-            appLogger.debug('Circle ID stored in Redis', {
-              phoneNumber,
-              circleId,
-              redisKey,
-            });
-          } catch (error) {
-            appLogger.warn('Failed to store circle ID in Redis', {
-              error: error instanceof Error ? error.message : String(error),
-              phoneNumber,
-            });
-          }
-        }
+        appLogger.info('✅ CircleLinked event processed and message sent', {
+          phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
+          circleId: circleId.slice(0, 10) + '...',
+          note: 'Circle linkage is queried from on-chain registry when needed',
+        });
         
         // Track message send time for deduplication
         const messageKey = `circle_id:${phoneNumber}`;
@@ -312,71 +293,6 @@ export class CircleLinkListenerService {
    * Send welcome message after user confirms circle link
    * Can be called via webhook when user replies
    */
-  /**
-   * Get the circle ID associated with a phone number
-   * Handles both formats: +1234567890 and 1234567890
-   * Checks Redis first (for cross-dyno access), then local cache
-   */
-  public async getCircleIdForPhone(phoneNumber: string): Promise<string | undefined> {
-    // Normalize phone number by removing '+' prefix
-    const normalizedPhone = phoneNumber.replace(/^\+/, '');
-    
-    // Try Redis first (for access across dynos)
-    if (this.redis) {
-      try {
-        const redisKey = `${this.redisKeyPrefix}${normalizedPhone}`;
-        const circleId = await this.redis.get(redisKey);
-        if (circleId) {
-          appLogger.debug('Circle ID found in Redis', {
-            phoneNumber,
-            redisKey,
-            circleId,
-          });
-          return circleId;
-        }
-      } catch (error) {
-        appLogger.warn('Error checking Redis for circle ID', {
-          error: error instanceof Error ? error.message : String(error),
-          phoneNumber,
-        });
-      }
-    }
-
-    // Fall back to local cache
-    // Try exact match first
-    let circleId = this.circleIdMap.get(phoneNumber);
-    if (circleId) return circleId;
-
-    // Try normalized version
-    circleId = this.circleIdMap.get(normalizedPhone);
-    if (circleId) return circleId;
-
-    // Try with + prefix
-    const phoneWithPlus = `+${normalizedPhone}`;
-    circleId = this.circleIdMap.get(phoneWithPlus);
-    if (circleId) return circleId;
-
-    // Check all entries and try to match normalized versions
-    for (const [storedPhone, id] of this.circleIdMap.entries()) {
-      const storedNormalized = storedPhone.replace(/^\+/, '');
-      if (storedNormalized === normalizedPhone) {
-        appLogger.debug('Circle ID found in local cache after normalization', {
-          original: phoneNumber,
-          normalized: normalizedPhone,
-          stored: storedPhone,
-        });
-        return id;
-      }
-    }
-
-    appLogger.debug('No circle ID found for phone number', {
-      phoneNumber,
-      normalized: normalizedPhone,
-      mappingCount: this.circleIdMap.size,
-    });
-
-    return undefined;
-  }
 
   public async sendWelcomeMessage(
     phoneNumber: string,

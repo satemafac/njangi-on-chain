@@ -7,8 +7,9 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import crypto from 'crypto';
-import Redis from 'ioredis';
+import { SuiClient } from '@mysten/sui/client';
 import { appLogger } from '../../../utils/logger';
+import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry-service';
 
 interface WebhookResponse {
   success?: boolean;
@@ -21,52 +22,75 @@ interface WebhookResponse {
 const processedMessages = new Map<string, number>();
 const MESSAGE_DEDUP_WINDOW = 60000; // 60 seconds
 
-// Redis client for accessing circle-phone mappings stored by bot dyno
-let redisClient: Redis | null = null;
-const REDIS_KEY_PREFIX = 'whatsapp:circle:';
-
-function getRedisClient(): Redis | null {
-  if (!redisClient && process.env.REDIS_URL) {
-    try {
-      redisClient = new Redis(process.env.REDIS_URL, {
-        tls: { rejectUnauthorized: false },
-        retryStrategy: (times) => Math.min(times * 50, 2000),
-        maxRetriesPerRequest: 3,
-      });
-      appLogger.debug('Redis client initialized for webhook');
-    } catch (error) {
-      appLogger.warn('Failed to initialize Redis client', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-  return redisClient;
-}
-
-async function getCircleIdFromRedis(phoneNumber: string): Promise<string | null> {
-  const redis = getRedisClient();
-  if (!redis) return null;
-
+/**
+ * Query the WhatsApp Link Registry on-chain to find linked circle for a phone number
+ */
+async function getLinkedCircleFromRegistry(phoneNumber: string): Promise<string | null> {
   try {
-    const normalizedPhone = phoneNumber.replace(/^\+/, '');
-    const redisKey = `${REDIS_KEY_PREFIX}${normalizedPhone}`;
-    const circleId = await redis.get(redisKey);
-    
-    if (circleId) {
-      appLogger.debug('Circle ID found in Redis', {
-        phoneNumber,
-        redisKey,
-      });
-      return circleId;
+    const registries = getActiveWhatsAppRegistries('testnet');
+    if (!registries || registries.length === 0) {
+      appLogger.warn('No active WhatsApp registries configured');
+      return null;
     }
+
+    const registry = registries[0];
+    const rpcUrl = process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://fullnode.testnet.sui.io:443';
+    const suiClient = new SuiClient({ url: rpcUrl });
+
+    // Normalize phone number (remove + prefix)
+    const normalizedPhone = phoneNumber.replace(/^\+/, '');
+
+    appLogger.debug('Querying WhatsApp registry for linked circle', {
+      phoneNumber: normalizedPhone,
+      registryId: registry.registryObjectId?.slice(0, 10),
+    });
+
+    // Query the registry object to get current linked circles
+    const registryObject = await suiClient.getObject({
+      id: registry.registryObjectId,
+      options: {
+        showContent: true,
+      },
+    });
+
+    if (!registryObject.data?.content || registryObject.data.content.dataType !== 'moveObject') {
+      appLogger.warn('Registry object not found or invalid', {
+        registryId: registry.registryObjectId,
+      });
+      return null;
+    }
+
+    const registryFields = (registryObject.data.content as any).fields;
+    const links = registryFields?.links || [];
+
+    appLogger.debug('Searching registry links', {
+      phoneNumber: normalizedPhone,
+      totalLinks: links.length,
+    });
+
+    // Search for a matching link in the registry
+    for (const link of links) {
+      if (link.phone_or_group === normalizedPhone && link.enabled === true) {
+        appLogger.info('✅ Found linked circle in registry', {
+          phoneNumber: normalizedPhone,
+          circleId: link.circle_id?.slice(0, 10),
+        });
+        return link.circle_id;
+      }
+    }
+
+    appLogger.debug('No linked circle found in registry', {
+      phoneNumber: normalizedPhone,
+      linksChecked: links.length,
+    });
+    return null;
   } catch (error) {
-    appLogger.warn('Error fetching from Redis', {
+    appLogger.error('Error querying WhatsApp registry', {
       error: error instanceof Error ? error.message : String(error),
       phoneNumber,
     });
+    return null;
   }
-
-  return null;
 }
 
 function isMessageProcessed(messageId: string): boolean {
@@ -265,11 +289,11 @@ async function handler(
                     }
                   } else if (lowerText.includes('status') || lowerText === '/status') {
                     // Handle /status command - get circle status from blockchain
-                    // First, try to get circle ID linked to this phone number
+                    // First, query the registry to find circle linked to this phone number
                     let circleId = null;
 
-                    // Try to get linked circle ID from Redis
-                    circleId = await getCircleIdFromRedis(sender);
+                    // Query on-chain registry for linked circle
+                    circleId = await getLinkedCircleFromRegistry(sender);
 
                     // If no linked circle, check if user provided one
                     if (!circleId) {
