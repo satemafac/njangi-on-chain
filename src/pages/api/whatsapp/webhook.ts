@@ -216,17 +216,37 @@ async function handler(
                     }
                   } else if (lowerText.includes('status') || lowerText === '/status') {
                     // Handle /status command - get circle status from blockchain
-                    // Parse circle ID from message if provided (e.g., "/status 0x123...")
-                    const parts = messageText.split(' ');
+                    // First, try to get circle ID linked to this phone number
                     let circleId = null;
 
-                    if (parts.length > 1) {
-                      // User provided a circle ID
-                      circleId = parts[1].trim();
+                    try {
+                      const botBaseUrl =
+                        process.env.BOT_BACKEND_URL || 'http://localhost:3001';
+                      const circleIdResponse = await fetch(
+                        `${botBaseUrl}/api/whatsapp/get-circle-id?phoneNumber=${sender}`
+                      );
+
+                      if (circleIdResponse.ok) {
+                        const circleIdData = await circleIdResponse.json();
+                        circleId = circleIdData.circleId;
+                      }
+                    } catch (error) {
+                      appLogger.warn('Error fetching linked circle ID', {
+                        error: error instanceof Error ? error.message : String(error),
+                        sender,
+                      });
+                    }
+
+                    // If no linked circle, check if user provided one
+                    if (!circleId) {
+                      const parts = messageText.split(' ');
+                      if (parts.length > 1) {
+                        circleId = parts[1].trim();
+                      }
                     }
 
                     if (!circleId) {
-                      const noCircleMessage = `❌ To get your circle status, use:\n/status <circle-id>\n\nExample: /status 0x1639fcff0c0f7a48ba0a1aa9f727985f1c9360d399bd8210dc99f26c07237d8e`;
+                      const noCircleMessage = `❌ No circle linked to your number. Please link a circle via the Njangi app first. Or use:\n/status <circle-id>`;
 
                       try {
                         const whatsappResponse = await fetch(
