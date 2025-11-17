@@ -7,6 +7,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import crypto from 'crypto';
+import Redis from 'ioredis';
 import { appLogger } from '../../../utils/logger';
 
 interface WebhookResponse {
@@ -19,6 +20,54 @@ interface WebhookResponse {
 // Keeps track of recently processed message IDs to avoid duplicate processing
 const processedMessages = new Map<string, number>();
 const MESSAGE_DEDUP_WINDOW = 60000; // 60 seconds
+
+// Redis client for accessing circle-phone mappings stored by bot dyno
+let redisClient: Redis | null = null;
+const REDIS_KEY_PREFIX = 'whatsapp:circle:';
+
+function getRedisClient(): Redis | null {
+  if (!redisClient && process.env.REDIS_URL) {
+    try {
+      redisClient = new Redis(process.env.REDIS_URL, {
+        tls: { rejectUnauthorized: false },
+        retryStrategy: (times) => Math.min(times * 50, 2000),
+        maxRetriesPerRequest: 3,
+      });
+      appLogger.debug('Redis client initialized for webhook');
+    } catch (error) {
+      appLogger.warn('Failed to initialize Redis client', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return redisClient;
+}
+
+async function getCircleIdFromRedis(phoneNumber: string): Promise<string | null> {
+  const redis = getRedisClient();
+  if (!redis) return null;
+
+  try {
+    const normalizedPhone = phoneNumber.replace(/^\+/, '');
+    const redisKey = `${REDIS_KEY_PREFIX}${normalizedPhone}`;
+    const circleId = await redis.get(redisKey);
+    
+    if (circleId) {
+      appLogger.debug('Circle ID found in Redis', {
+        phoneNumber,
+        redisKey,
+      });
+      return circleId;
+    }
+  } catch (error) {
+    appLogger.warn('Error fetching from Redis', {
+      error: error instanceof Error ? error.message : String(error),
+      phoneNumber,
+    });
+  }
+
+  return null;
+}
 
 function isMessageProcessed(messageId: string): boolean {
   const lastProcessedTime = processedMessages.get(messageId);
@@ -219,25 +268,8 @@ async function handler(
                     // First, try to get circle ID linked to this phone number
                     let circleId = null;
 
-                    try {
-                      const botBaseUrl =
-                        process.env.BOT_BACKEND_URL || 'http://localhost:3001';
-                      // Normalize phone number (remove + prefix)
-                      const normalizedPhone = sender.replace(/^\+/, '');
-                      const circleIdResponse = await fetch(
-                        `${botBaseUrl}/api/whatsapp/get-circle-id?phoneNumber=${normalizedPhone}`
-                      );
-
-                      if (circleIdResponse.ok) {
-                        const circleIdData = await circleIdResponse.json();
-                        circleId = circleIdData.circleId;
-                      }
-                    } catch (error) {
-                      appLogger.warn('Error fetching linked circle ID', {
-                        error: error instanceof Error ? error.message : String(error),
-                        sender,
-                      });
-                    }
+                    // Try to get linked circle ID from Redis
+                    circleId = await getCircleIdFromRedis(sender);
 
                     // If no linked circle, check if user provided one
                     if (!circleId) {
@@ -283,25 +315,10 @@ async function handler(
                         });
                       }
                     } else {
-                      // Get circle status from bot backend
+                      // Send circle link to view status on the app
                       try {
-                        const botBaseUrl =
-                          process.env.BOT_BACKEND_URL || 'http://localhost:3001';
-                        const statusResponse = await fetch(
-                          `${botBaseUrl}/api/circle/status?circleId=${circleId}`
-                        );
-
-                        let statusMessage = `❌ Could not fetch circle status. Please try again.`;
-
-                        if (statusResponse.ok) {
-                          const statusData = await statusResponse.json();
-                          statusMessage = statusData.message || statusMessage;
-                        } else {
-                          appLogger.warn('Failed to get circle status from bot backend', {
-                            status: statusResponse.status,
-                            circleId,
-                          });
-                        }
+                        const circleLink = `https://njangionchain.com/circle/${circleId}`;
+                        const statusMessage = `📊 View your circle status here:\n${circleLink}`;
 
                         // Send status message
                         const whatsappResponse = await fetch(
@@ -333,7 +350,7 @@ async function handler(
                           appLogger.info('✅ Status message sent', { to: sender, circleId });
                         }
                       } catch (statusError) {
-                        appLogger.error('Error getting circle status', {
+                        appLogger.error('Error sending status message', {
                           error: statusError instanceof Error ? statusError.message : String(statusError),
                           sender,
                         });
