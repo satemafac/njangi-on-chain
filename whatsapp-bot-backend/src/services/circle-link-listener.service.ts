@@ -269,9 +269,45 @@ export class CircleLinkListenerService {
    */
   /**
    * Get the circle ID associated with a phone number
+   * Handles both formats: +1234567890 and 1234567890
    */
   public getCircleIdForPhone(phoneNumber: string): string | undefined {
-    return this.circleIdMap.get(phoneNumber);
+    // Normalize phone number by removing '+' prefix
+    const normalizedPhone = phoneNumber.replace(/^\+/, '');
+    
+    // Try exact match first
+    let circleId = this.circleIdMap.get(phoneNumber);
+    if (circleId) return circleId;
+
+    // Try normalized version
+    circleId = this.circleIdMap.get(normalizedPhone);
+    if (circleId) return circleId;
+
+    // Try with + prefix
+    const phoneWithPlus = `+${normalizedPhone}`;
+    circleId = this.circleIdMap.get(phoneWithPlus);
+    if (circleId) return circleId;
+
+    // Check all entries and try to match normalized versions
+    for (const [storedPhone, id] of this.circleIdMap.entries()) {
+      const storedNormalized = storedPhone.replace(/^\+/, '');
+      if (storedNormalized === normalizedPhone) {
+        appLogger.debug('Circle ID found after normalization', {
+          original: phoneNumber,
+          normalized: normalizedPhone,
+          stored: storedPhone,
+        });
+        return id;
+      }
+    }
+
+    appLogger.debug('No circle ID found for phone number', {
+      phoneNumber,
+      normalized: normalizedPhone,
+      mappingCount: this.circleIdMap.size,
+    });
+
+    return undefined;
   }
 
   public async sendWelcomeMessage(

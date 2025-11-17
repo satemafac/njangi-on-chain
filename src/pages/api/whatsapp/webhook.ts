@@ -222,8 +222,10 @@ async function handler(
                     try {
                       const botBaseUrl =
                         process.env.BOT_BACKEND_URL || 'http://localhost:3001';
+                      // Normalize phone number (remove + prefix)
+                      const normalizedPhone = sender.replace(/^\+/, '');
                       const circleIdResponse = await fetch(
-                        `${botBaseUrl}/api/whatsapp/get-circle-id?phoneNumber=${sender}`
+                        `${botBaseUrl}/api/whatsapp/get-circle-id?phoneNumber=${normalizedPhone}`
                       );
 
                       if (circleIdResponse.ok) {
