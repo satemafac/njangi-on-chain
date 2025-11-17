@@ -26,9 +26,17 @@ export class CircleLinkListenerService {
 
     // Initialize Redis connection for shared state across dynos
     try {
-      this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+      this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
+        // Disable SSL verification for Heroku Redis (uses self-signed certs)
+        tls: process.env.REDIS_URL ? { rejectUnauthorized: false } : undefined,
+        retryStrategy: (times) => Math.min(times * 50, 2000),
+        maxRetriesPerRequest: 3,
+      });
       this.redis.on('error', (err) => {
         appLogger.warn('Redis connection error', { error: err.message });
+      });
+      this.redis.on('connect', () => {
+        appLogger.debug('Redis connection established');
       });
       appLogger.debug('Redis client initialized for circle-phone mappings');
     } catch (error) {
