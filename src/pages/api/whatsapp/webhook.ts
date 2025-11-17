@@ -173,9 +173,12 @@ async function handler(
                   const sender = msg.from;
 
                   // Handle different message types
-                  if (messageText.toLowerCase().includes('help') || messageText === '?') {
+                  const lowerText = messageText.toLowerCase();
+
+                  if (lowerText.includes('help') || lowerText === '?') {
                     // Send help message
-                    const helpMessage = `✅ *Njangi WhatsApp Channel*\n\nThis is a notification-only channel. You will receive:\n\n• 🔄 Cycle started notifications\n• 💰 Contribution confirmations\n• ⏰ Deadline reminders\n• 💵 Payout notifications\n• 👥 Member joined alerts\n• 📊 Circle insights\n\nNo commands needed - just sit back and get updates!`;
+                    const helpMessage = `✅ *Njangi WhatsApp Channel*\n\nThis is a notification-only channel. You will receive:\n\n• 🔄 Cycle started notifications\n• 💰 Contribution confirmations\n• ⏰ Deadline reminders\n• 💵 Payout notifications\n• 👥 Member joined alerts\n• 📊 Circle insights\n\n*Available Commands:*\n/status <circle-id> - Get live circle status from blockchain\n/help - Show this message\n\n*Example:*\n/status 0x1639fcff0c0f7a48ba0a1aa9f727985f1c9360d399bd8210dc99f26c07237d8e`;
+
 
                     try {
                       const whatsappResponse = await fetch(
@@ -211,9 +214,112 @@ async function handler(
                         error: sendError instanceof Error ? sendError.message : String(sendError),
                       });
                     }
+                  } else if (lowerText.includes('status') || lowerText === '/status') {
+                    // Handle /status command - get circle status from blockchain
+                    // Parse circle ID from message if provided (e.g., "/status 0x123...")
+                    const parts = messageText.split(' ');
+                    let circleId = null;
+
+                    if (parts.length > 1) {
+                      // User provided a circle ID
+                      circleId = parts[1].trim();
+                    }
+
+                    if (!circleId) {
+                      const noCircleMessage = `❌ To get your circle status, use:\n/status <circle-id>\n\nExample: /status 0x1639fcff0c0f7a48ba0a1aa9f727985f1c9360d399bd8210dc99f26c07237d8e`;
+
+                      try {
+                        const whatsappResponse = await fetch(
+                          `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                          {
+                            method: 'POST',
+                            headers: {
+                              'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+                              'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                              messaging_product: 'whatsapp',
+                              to: sender,
+                              type: 'text',
+                              text: {
+                                body: noCircleMessage,
+                              },
+                            }),
+                          }
+                        );
+
+                        if (!whatsappResponse.ok) {
+                          const errorText = await whatsappResponse.text();
+                          appLogger.error('Failed to send no circle message', {
+                            status: whatsappResponse.status,
+                            error: errorText,
+                          });
+                        }
+                      } catch (sendError) {
+                        appLogger.error('Error sending no circle message', {
+                          error: sendError instanceof Error ? sendError.message : String(sendError),
+                        });
+                      }
+                    } else {
+                      // Get circle status from bot backend
+                      try {
+                        const botBaseUrl =
+                          process.env.BOT_BACKEND_URL || 'http://localhost:3001';
+                        const statusResponse = await fetch(
+                          `${botBaseUrl}/api/circle/status?circleId=${circleId}`
+                        );
+
+                        let statusMessage = `❌ Could not fetch circle status. Please try again.`;
+
+                        if (statusResponse.ok) {
+                          const statusData = await statusResponse.json();
+                          statusMessage = statusData.message || statusMessage;
+                        } else {
+                          appLogger.warn('Failed to get circle status from bot backend', {
+                            status: statusResponse.status,
+                            circleId,
+                          });
+                        }
+
+                        // Send status message
+                        const whatsappResponse = await fetch(
+                          `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                          {
+                            method: 'POST',
+                            headers: {
+                              'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+                              'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                              messaging_product: 'whatsapp',
+                              to: sender,
+                              type: 'text',
+                              text: {
+                                body: statusMessage,
+                              },
+                            }),
+                          }
+                        );
+
+                        if (!whatsappResponse.ok) {
+                          const errorText = await whatsappResponse.text();
+                          appLogger.error('Failed to send status message', {
+                            status: whatsappResponse.status,
+                            error: errorText,
+                          });
+                        } else {
+                          appLogger.info('✅ Status message sent', { to: sender, circleId });
+                        }
+                      } catch (statusError) {
+                        appLogger.error('Error getting circle status', {
+                          error: statusError instanceof Error ? statusError.message : String(statusError),
+                          sender,
+                        });
+                      }
+                    }
                   } else {
                     // For any other message, send a generic acknowledgment
-                    const ackMessage = `✓ Thanks for your message! This is a notification channel. You will receive circle updates here.`;
+                    const ackMessage = `✓ Thanks for your message! Use /status to get your circle's live status, or /help for more info.`;
 
                     try {
                       const whatsappResponse = await fetch(
