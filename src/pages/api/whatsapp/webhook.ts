@@ -10,6 +10,7 @@ import crypto from 'crypto';
 import { SuiClient } from '@mysten/sui/client';
 import { appLogger } from '../../../utils/logger';
 import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry-service';
+import { getCircleStatus, formatCircleStatusForWhatsApp } from '../../../services/circle-status.service';
 
 interface WebhookResponse {
   success?: boolean;
@@ -357,10 +358,27 @@ async function handler(
                         });
                       }
                     } else {
-                      // Send circle link to view status on the app
+                      // Fetch full circle status from blockchain and send formatted message
                       try {
-                        const circleLink = `https://njangionchain.com/circle/${circleId}`;
-                        const statusMessage = `📊 View your circle status here:\n${circleLink}`;
+                        appLogger.info('Fetching circle status from blockchain', { circleId });
+                        
+                        const circleStatus = await getCircleStatus(circleId);
+                        
+                        let statusMessage: string;
+                        if (circleStatus) {
+                          // Format full status for WhatsApp
+                          statusMessage = formatCircleStatusForWhatsApp(circleStatus, circleId);
+                          appLogger.info('Circle status fetched successfully', {
+                            circleName: circleStatus.name,
+                            members: circleStatus.currentMembers,
+                            cycle: circleStatus.currentCycle,
+                          });
+                        } else {
+                          // Fallback to simple link if status fetch fails
+                          const circleLink = `https://njangionchain.com/circle/${circleId}`;
+                          statusMessage = `📊 View your circle status here:\n${circleLink}`;
+                          appLogger.warn('Could not fetch circle status, sending link only', { circleId });
+                        }
 
                         // Send status message
                         const whatsappResponse = await fetch(
@@ -377,6 +395,7 @@ async function handler(
                               type: 'text',
                               text: {
                                 body: statusMessage,
+                                preview_url: true, // Enable link preview
                               },
                             }),
                           }
