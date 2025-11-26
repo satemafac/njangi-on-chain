@@ -53,11 +53,13 @@ export default function CircleDetails() {
   const [copiedId, setCopiedId] = useState(false);
 
   useEffect(() => {
-    if (!isAuthenticated) {
-      router.push('/');
+    if (!isAuthenticated && id) {
+      // Redirect to home with returnUrl so user comes back after login
+      const returnUrl = encodeURIComponent(`/circle/${id}`);
+      router.push(`/?returnUrl=${returnUrl}`);
       return;
     }
-  }, [isAuthenticated, router]);
+  }, [isAuthenticated, router, id]);
 
   useEffect(() => {
     // Fetch circle details when ID is available

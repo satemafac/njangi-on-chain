@@ -243,9 +243,30 @@ export default function Home() {
     }
   }, [network, NETWORK_CONFIG]);
 
+  // Store returnUrl in localStorage for redirect after login
+  useEffect(() => {
+    const { returnUrl } = router.query;
+    if (returnUrl && typeof returnUrl === 'string') {
+      const decodedUrl = decodeURIComponent(returnUrl);
+      // Only store if it's a valid internal path
+      if (decodedUrl.startsWith('/')) {
+        localStorage.setItem('redirectAfterLogin', decodedUrl);
+        console.log('Stored redirect URL:', decodedUrl);
+      }
+    }
+  }, [router.query]);
+
   useEffect(() => {
     if (account) {
-      router.push('/dashboard');
+      // Check for stored redirect URL
+      const redirectUrl = localStorage.getItem('redirectAfterLogin');
+      if (redirectUrl) {
+        localStorage.removeItem('redirectAfterLogin');
+        console.log('Redirecting to stored URL:', redirectUrl);
+        router.push(redirectUrl);
+      } else {
+        router.push('/dashboard');
+      }
     }
   }, [account, router]);
 
