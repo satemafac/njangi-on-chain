@@ -71,20 +71,15 @@ async function getLinkedCircleFromRegistry(phoneNumber: string): Promise<string 
     });
 
     // Search for a matching link in the registry
-    // The phone number is stored in admin_phone_number field WITH the + prefix
+    // The structure is: link.fields.admin_phone_number (nested under fields)
+    // Phone number is stored WITH the + prefix
     for (const link of links) {
-      // Get the phone number from the link - it's stored in admin_phone_number as Option<String>
-      const linkPhone = link.admin_phone_number || link.fields?.admin_phone_number;
-      const circleId = link.circle_id || link.fields?.circle_id;
-      const isEnabled = link.enabled ?? link.fields?.enabled ?? true;
+      // Get the phone number - it's nested under link.fields
+      const fields = link.fields || link;
+      const linkPhone = fields.admin_phone_number;
+      const circleId = fields.circle_id;
+      const isEnabled = fields.enabled === true; // Must be explicitly true
       
-      appLogger.debug('Checking link', {
-        linkPhone,
-        circleId: circleId?.slice?.(0, 10),
-        isEnabled,
-        linkKeys: Object.keys(link),
-      });
-
       // Compare with both formats (with and without +)
       if (linkPhone && isEnabled) {
         const linkPhoneNormalized = linkPhone.replace(/^\+/, '');
@@ -93,6 +88,7 @@ async function getLinkedCircleFromRegistry(phoneNumber: string): Promise<string 
             phoneNumber: normalizedPhone,
             linkPhone,
             circleId: circleId?.slice?.(0, 10),
+            isEnabled,
           });
           return circleId;
         }
@@ -101,7 +97,9 @@ async function getLinkedCircleFromRegistry(phoneNumber: string): Promise<string 
 
     appLogger.info('No linked circle found in registry', {
       phoneNumber: normalizedPhone,
+      phoneWithPlus: `+${normalizedPhone}`,
       linksChecked: links.length,
+      enabledLinks: links.filter((l: any) => (l.fields || l).enabled === true).length,
     });
     return null;
   } catch (error) {
