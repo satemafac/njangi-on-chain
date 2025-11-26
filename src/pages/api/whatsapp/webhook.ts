@@ -63,23 +63,43 @@ async function getLinkedCircleFromRegistry(phoneNumber: string): Promise<string 
     const registryFields = (registryObject.data.content as any).fields;
     const links = registryFields?.links || [];
 
-    appLogger.debug('Searching registry links', {
+    appLogger.info('Searching registry links', {
       phoneNumber: normalizedPhone,
+      phoneWithPlus: `+${normalizedPhone}`,
       totalLinks: links.length,
+      sampleLink: links[0] ? JSON.stringify(links[0]).slice(0, 200) : 'no links',
     });
 
     // Search for a matching link in the registry
+    // The phone number is stored in admin_phone_number field WITH the + prefix
     for (const link of links) {
-      if (link.phone_or_group === normalizedPhone && link.enabled === true) {
-        appLogger.info('✅ Found linked circle in registry', {
-          phoneNumber: normalizedPhone,
-          circleId: link.circle_id?.slice(0, 10),
-        });
-        return link.circle_id;
+      // Get the phone number from the link - it's stored in admin_phone_number as Option<String>
+      const linkPhone = link.admin_phone_number || link.fields?.admin_phone_number;
+      const circleId = link.circle_id || link.fields?.circle_id;
+      const isEnabled = link.enabled ?? link.fields?.enabled ?? true;
+      
+      appLogger.debug('Checking link', {
+        linkPhone,
+        circleId: circleId?.slice?.(0, 10),
+        isEnabled,
+        linkKeys: Object.keys(link),
+      });
+
+      // Compare with both formats (with and without +)
+      if (linkPhone && isEnabled) {
+        const linkPhoneNormalized = linkPhone.replace(/^\+/, '');
+        if (linkPhoneNormalized === normalizedPhone || linkPhone === `+${normalizedPhone}`) {
+          appLogger.info('✅ Found linked circle in registry', {
+            phoneNumber: normalizedPhone,
+            linkPhone,
+            circleId: circleId?.slice?.(0, 10),
+          });
+          return circleId;
+        }
       }
     }
 
-    appLogger.debug('No linked circle found in registry', {
+    appLogger.info('No linked circle found in registry', {
       phoneNumber: normalizedPhone,
       linksChecked: links.length,
     });

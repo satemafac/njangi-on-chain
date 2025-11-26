@@ -57,7 +57,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       networkParam,
       network,
       adminAddr: adminAddr.slice(0, 10) + '...'
-    });
+      });
 
     // Log the unlink action
     logAdminAction('UNLINK_CIRCLE_INITIATED', adminAddr, {
@@ -122,14 +122,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         status: 'pending_blockchain_confirmation'
       });
 
-      return res.status(200).json({
-        success: true,
-        data: {
+    return res.status(200).json({
+      success: true,
+      data: {
           message: 'Circle unlink initiated. Waiting for blockchain confirmation...',
           circleId,
           status: 'pending'
-        }
-      });
+      }
+    });
     }
 
   } catch (error) {
