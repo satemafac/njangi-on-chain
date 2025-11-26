@@ -38,27 +38,41 @@ export interface CircleStatusData {
  * Fetch comprehensive circle status from blockchain
  */
 export async function getCircleStatus(circleId: string): Promise<CircleStatusData | null> {
+  const rpcUrl = getCurrentRpcUrl();
+  console.log('[CircleStatus] Fetching status for circle:', circleId, 'using RPC:', rpcUrl);
+  
   try {
-    const client = new SuiClient({ url: getCurrentRpcUrl() });
+    const client = new SuiClient({ url: rpcUrl });
     
     // Get circle object
+    console.log('[CircleStatus] Getting circle object...');
     const objectData = await client.getObject({
       id: circleId,
       options: { showContent: true, showType: true }
     });
     
+    console.log('[CircleStatus] Object data received:', objectData.data ? 'found' : 'not found');
+    
     if (!objectData.data?.content || !('fields' in objectData.data.content)) {
-      console.error('Circle not found or invalid:', circleId);
+      console.error('[CircleStatus] Circle not found or invalid:', circleId, 'data:', JSON.stringify(objectData));
       return null;
     }
     
     const fields = objectData.data.content.fields as Record<string, any>;
+    console.log('[CircleStatus] Circle fields:', { 
+      name: fields.name, 
+      admin: fields.admin?.slice(0, 10), 
+      hasRotationOrder: !!fields.rotation_order 
+    });
     
     // Get package ID for this circle
+    console.log('[CircleStatus] Getting package ID...');
     const packageId = await getCirclePackageId(circleId, fields.admin);
+    console.log('[CircleStatus] Package ID:', packageId?.slice(0, 15));
     
     // Get dynamic fields for config
     const dynamicFieldsResult = await client.getDynamicFields({ parentId: circleId });
+    console.log('[CircleStatus] Dynamic fields count:', dynamicFieldsResult.data.length);
     
     // Initialize config values
     let contributionAmount = 0;
@@ -229,7 +243,11 @@ export async function getCircleStatus(circleId: string): Promise<CircleStatusDat
       totalCollected
     };
   } catch (error) {
-    console.error('Error fetching circle status:', error);
+    console.error('[CircleStatus] Error fetching circle status:', {
+      circleId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
+    });
     return null;
   }
 }
