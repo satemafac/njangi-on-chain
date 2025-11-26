@@ -23,20 +23,30 @@ interface WebhookResponse {
 const processedMessages = new Map<string, number>();
 const MESSAGE_DEDUP_WINDOW = 60000; // 60 seconds
 
+// Get the current network from environment (server-side)
+function getWhatsAppNetwork(): 'testnet' | 'mainnet' {
+  return (process.env.NEXT_PUBLIC_SUI_NETWORK as 'testnet' | 'mainnet') || 'testnet';
+}
+
 /**
  * Query the WhatsApp Link Registry on-chain to find linked circle for a phone number
  */
 async function getLinkedCircleFromRegistry(phoneNumber: string): Promise<string | null> {
   try {
-    const registries = getActiveWhatsAppRegistries('testnet');
+    const network = getWhatsAppNetwork();
+    const registries = getActiveWhatsAppRegistries(network);
     if (!registries || registries.length === 0) {
-      appLogger.warn('No active WhatsApp registries configured');
+      appLogger.warn('No active WhatsApp registries configured', { network });
       return null;
     }
 
     const registry = registries[0];
-    const rpcUrl = process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://fullnode.testnet.sui.io:443';
+    const rpcUrl = network === 'testnet'
+      ? (process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://fullnode.testnet.sui.io:443')
+      : (process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://fullnode.mainnet.sui.io:443');
     const suiClient = new SuiClient({ url: rpcUrl });
+    
+    appLogger.debug('Using network for WhatsApp registry', { network, rpcUrl: rpcUrl.slice(0, 30) });
 
     // Normalize phone number (remove + prefix)
     const normalizedPhone = phoneNumber.replace(/^\+/, '');
@@ -360,9 +370,10 @@ async function handler(
                     } else {
                       // Fetch full circle status from blockchain and send formatted message
                       try {
-                        appLogger.info('Fetching circle status from blockchain', { circleId });
+                        const network = getWhatsAppNetwork();
+                        appLogger.info('Fetching circle status from blockchain', { circleId, network });
                         
-                        const circleStatus = await getCircleStatus(circleId);
+                        const circleStatus = await getCircleStatus(circleId, network);
                         
                         let statusMessage: string;
                         if (circleStatus) {

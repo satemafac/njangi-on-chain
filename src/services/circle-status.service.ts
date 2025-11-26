@@ -36,10 +36,16 @@ export interface CircleStatusData {
 
 /**
  * Fetch comprehensive circle status from blockchain
+ * @param circleId - The circle object ID
+ * @param network - Optional network override. If not provided, uses getCurrentNetwork()
  */
-export async function getCircleStatus(circleId: string): Promise<CircleStatusData | null> {
-  const rpcUrl = getCurrentRpcUrl();
-  console.log('[CircleStatus] Fetching status for circle:', circleId, 'using RPC:', rpcUrl);
+export async function getCircleStatus(circleId: string, network?: 'testnet' | 'mainnet'): Promise<CircleStatusData | null> {
+  // Use the provided network or fall back to the app's current network setting
+  const targetNetwork = network || (process.env.NEXT_PUBLIC_SUI_NETWORK as 'testnet' | 'mainnet') || 'testnet';
+  const rpcUrl = targetNetwork === 'testnet' 
+    ? (process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://fullnode.testnet.sui.io:443')
+    : (process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://fullnode.mainnet.sui.io:443');
+  console.log('[CircleStatus] Fetching status for circle:', circleId, 'using RPC:', rpcUrl, 'network:', targetNetwork);
   
   try {
     const client = new SuiClient({ url: rpcUrl });
