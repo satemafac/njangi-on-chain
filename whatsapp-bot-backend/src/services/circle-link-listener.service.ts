@@ -62,6 +62,7 @@ export class CircleLinkListenerService {
     while (this.isRunning) {
       try {
         await this.checkForCircleLinkedEvents();
+        await this.checkForCircleUnlinkedEvents();
         await new Promise((resolve) => setTimeout(resolve, this.checkInterval));
       } catch (error) {
         appLogger.error('Error in listen loop', {
@@ -141,6 +142,150 @@ export class CircleLinkListenerService {
       }
     } catch (error) {
       appLogger.error('Error checking for CircleLinked events', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Check for CircleUnlinked events
+   * Only processes events that occurred after the listener started
+   */
+  private async checkForCircleUnlinkedEvents(): Promise<void> {
+    try {
+      const events = await this.suiClient.queryEvents({
+        query: {
+          MoveEventType: '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc::whatsapp_integration::CircleUnlinked',
+        },
+        limit: 50,
+        order: 'descending',
+      });
+
+      if (!events.data || events.data.length === 0) {
+        return;
+      }
+
+      appLogger.info('Found CircleUnlinked events', {
+        count: events.data.length,
+        startTime: new Date(this.startTime).toISOString(),
+        now: new Date().toISOString(),
+        timeSinceStart: Date.now() - this.startTime,
+      });
+
+      for (const event of events.data) {
+        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+        // Skip events that occurred before listener started
+        if (eventTimestampMs < this.startTime) {
+          continue;
+        }
+
+        // Skip if already processed in this session
+        if (this.processedEvents.has(eventId)) {
+          continue;
+        }
+
+        this.processedEvents.add(eventId);
+
+        await this.handleCircleUnlinkedEvent(event);
+      }
+    } catch (error) {
+      appLogger.error('Error checking for CircleUnlinked events', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Handle a CircleUnlinked event
+   */
+  private async handleCircleUnlinkedEvent(event: any): Promise<void> {
+    try {
+      const parsedJson = event.parsedJson as any;
+
+      if (!parsedJson) {
+        appLogger.warn('CircleUnlinked event has no parsedJson');
+        return;
+      }
+
+      const {
+        circle_id,
+        recipient,
+        unlinked_at,
+      } = parsedJson;
+
+      // Check if we recently sent a message for this circle (within last 2 minutes)
+      const messageKey = `unlink:${circle_id}:${recipient}`;
+      const lastSentTime = this.sentMessages.get(messageKey);
+      const now = Date.now();
+      const twoMinutesAgo = now - (2 * 60 * 1000);
+
+      if (lastSentTime && lastSentTime > twoMinutesAgo) {
+        appLogger.info('Skipping duplicate unlink message - recently sent', {
+          circleId: circle_id?.slice(0, 10),
+          recipient: recipient?.slice(0, 10),
+          lastSent: new Date(lastSentTime).toISOString(),
+        });
+        return;
+      }
+
+      appLogger.info('CircleUnlinked event detected', {
+        circleId: circle_id,
+        recipient,
+        unlinkedAt: unlinked_at,
+      });
+
+      // Send unlink confirmation message
+      await this.sendUnlinkConfirmation(recipient, circle_id);
+
+      // Track message send time for deduplication
+      this.sentMessages.set(messageKey, Date.now());
+    } catch (error) {
+      appLogger.error('Error handling CircleUnlinked event', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Send unlink confirmation message to admin
+   */
+  private async sendUnlinkConfirmation(
+    phoneNumber: string,
+    circleId: string
+  ): Promise<void> {
+    try {
+      const unlinkMessage = `🔓 *Circle Unlinked*
+
+Your WhatsApp has been disconnected from the circle.
+
+You will no longer receive notifications for this circle.
+
+If you'd like to reconnect, visit the circle management page in the Njangi app and link your WhatsApp again.
+
+📱 Circle ID: ${circleId.slice(0, 10)}...${circleId.slice(-6)}`;
+
+      const result = await whatsappSender.sendMessage({
+        to: phoneNumber,
+        type: 'text',
+        text: unlinkMessage,
+      });
+
+      if (result.success) {
+        appLogger.info('✅ Unlink confirmation message sent', {
+          phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
+          circleId: circleId.slice(0, 10) + '...',
+          messageId: result.messageId,
+        });
+      } else {
+        appLogger.warn('Failed to send unlink confirmation', {
+          to: phoneNumber,
+          error: result.error,
+        });
+      }
+    } catch (error) {
+      appLogger.error('Error sending unlink confirmation', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
