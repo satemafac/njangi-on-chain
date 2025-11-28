@@ -70,6 +70,7 @@
     "react-dnd-html5-backend": "^16.0.1",
     "react-dom": "^19.0.0",
     "react-hot-toast": "^2.5.2",
+    "react-phone-number-input": "^3.4.14",
     "react-router-dom": "^7.1.1",
     "sonner": "^2.0.3",
     "tailwind-merge": "^2.6.0",

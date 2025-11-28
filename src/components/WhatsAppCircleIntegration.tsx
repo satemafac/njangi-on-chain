@@ -14,6 +14,8 @@ import { toast } from 'react-hot-toast';
 import { AccountData } from '@/services/zkLoginService';
 import { getCurrentNetwork } from '@/services/network-config';
 import ConfirmationModal from './ConfirmationModal';
+import PhoneInput, { isValidPhoneNumber, getCountryCallingCode } from 'react-phone-number-input';
+import 'react-phone-number-input/style.css';
 
 interface WhatsAppIntegrationProps {
   circleId: string;
@@ -30,30 +32,14 @@ interface LinkedStatus {
 }
 
 // Validation functions
-const validatePhoneNumber = (phone: string): { valid: boolean; error?: string } => {
-  const trimmed = phone.trim();
-  
-  // Check if empty
-  if (!trimmed) {
+const validatePhoneNumber = (phone: string | undefined): { valid: boolean; error?: string } => {
+  if (!phone) {
     return { valid: false, error: 'Phone number is required' };
   }
   
-  // Must start with +
-  if (!trimmed.startsWith('+')) {
-    return { valid: false, error: 'Phone number must start with + (e.g., +1234567890)' };
-  }
-  
-  // Remove + for digit check
-  const digitsOnly = trimmed.substring(1);
-  
-  // Must contain only digits
-  if (!/^\d+$/.test(digitsOnly)) {
-    return { valid: false, error: 'Phone number must contain only digits after +' };
-  }
-  
-  // Check length (most E.164 numbers are 7-15 digits)
-  if (digitsOnly.length < 7 || digitsOnly.length > 15) {
-    return { valid: false, error: 'Phone number must be 7-15 digits long' };
+  // Use the library's validation
+  if (!isValidPhoneNumber(phone)) {
+    return { valid: false, error: 'Please enter a valid phone number' };
   }
   
   return { valid: true };
@@ -416,24 +402,123 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   {linkType === 1 ? 'Phone Number' : 'Group ID'}
                 </label>
-                <input
-                  type="text"
-                  value={phoneOrGroup}
-                  onChange={(e) => {
-                    const newValue = e.target.value;
-                    setPhoneOrGroup(newValue);
-                    // Real-time validation
-                    if (newValue.trim()) {
-                      const error = getValidationError(linkType, newValue);
-                      setValidationError(error);
-                    } else {
-                      setValidationError(null);
-                    }
-                  }}
-                  placeholder={linkType === 1 ? '+1234567890' : '123456789-1234567890@g.us or 120363043968066561@g.us'}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                  disabled={linking}
-                />
+                {linkType === 1 ? (
+                  <div className="phone-input-wrapper">
+                    <PhoneInput
+                      international
+                      countryCallingCodeEditable={false}
+                      defaultCountry="US"
+                      value={phoneOrGroup}
+                      onChange={(value) => {
+                        setPhoneOrGroup(value || '');
+                        // Real-time validation
+                        if (value) {
+                          const error = getValidationError(linkType, value);
+                          setValidationError(error);
+                        } else {
+                          setValidationError(null);
+                        }
+                      }}
+                      disabled={linking}
+                      className="phone-input-custom"
+                    />
+                    <style jsx global>{`
+                      .phone-input-wrapper .PhoneInput {
+                        display: flex;
+                        align-items: center;
+                        gap: 8px;
+                      }
+                      .phone-input-wrapper .PhoneInputCountry {
+                        display: flex;
+                        align-items: center;
+                        padding: 8px 12px;
+                        background: #f9fafb;
+                        border: 1px solid #d1d5db;
+                        border-radius: 8px;
+                        cursor: pointer;
+                        transition: all 0.2s;
+                      }
+                      .phone-input-wrapper .PhoneInputCountry:hover {
+                        background: #f3f4f6;
+                        border-color: #9ca3af;
+                      }
+                      .phone-input-wrapper .PhoneInputCountryIcon {
+                        width: 24px;
+                        height: 18px;
+                        border-radius: 2px;
+                        overflow: hidden;
+                        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+                      }
+                      .phone-input-wrapper .PhoneInputCountryIcon--border {
+                        background-color: transparent;
+                        box-shadow: none;
+                      }
+                      .phone-input-wrapper .PhoneInputCountrySelectArrow {
+                        margin-left: 8px;
+                        width: 8px;
+                        height: 8px;
+                        border-style: solid;
+                        border-color: #6b7280;
+                        border-width: 0 2px 2px 0;
+                        transform: rotate(45deg);
+                        opacity: 0.7;
+                      }
+                      .phone-input-wrapper .PhoneInputInput {
+                        flex: 1;
+                        padding: 10px 14px;
+                        border: 1px solid #d1d5db;
+                        border-radius: 8px;
+                        font-size: 15px;
+                        outline: none;
+                        transition: all 0.2s;
+                      }
+                      .phone-input-wrapper .PhoneInputInput:focus {
+                        border-color: #22c55e;
+                        box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
+                      }
+                      .phone-input-wrapper .PhoneInputInput:disabled {
+                        background: #f9fafb;
+                        cursor: not-allowed;
+                      }
+                      .phone-input-wrapper .PhoneInputInput::placeholder {
+                        color: #9ca3af;
+                      }
+                      .phone-input-wrapper .PhoneInputCountrySelect {
+                        position: absolute;
+                        top: 0;
+                        left: 0;
+                        height: 100%;
+                        width: 100%;
+                        z-index: 1;
+                        border: 0;
+                        opacity: 0;
+                        cursor: pointer;
+                      }
+                      .phone-input-wrapper .PhoneInputCountrySelect option {
+                        padding: 8px;
+                      }
+                    `}</style>
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    value={phoneOrGroup}
+                    onChange={(e) => {
+                      const newValue = e.target.value;
+                      setPhoneOrGroup(newValue);
+                      // Real-time validation
+                      if (newValue.trim()) {
+                        const error = getValidationError(linkType, newValue);
+                        setValidationError(error);
+                      } else {
+                        setValidationError(null);
+                      }
+                    }}
+                    placeholder="123456789-1234567890@g.us or 120363043968066561@g.us"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                    disabled={linking}
+                  />
+                )}
                 {validationError && (
                   <p className="text-xs text-red-500 mt-1">{validationError}</p>
                 )}
