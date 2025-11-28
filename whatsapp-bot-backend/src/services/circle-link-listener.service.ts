@@ -199,6 +199,8 @@ export class CircleLinkListenerService {
 
   /**
    * Handle a CircleUnlinked event
+   * Note: CircleUnlinked event only has circle_id and admin_address, not phone number
+   * We need to look up the phone number from the registry (the link is now disabled)
    */
   private async handleCircleUnlinkedEvent(event: any): Promise<void> {
     try {
@@ -211,12 +213,30 @@ export class CircleLinkListenerService {
 
       const {
         circle_id,
-        recipient,
+        admin_address,
         unlinked_at,
       } = parsedJson;
 
+      appLogger.info('CircleUnlinked event detected', {
+        circleId: circle_id,
+        adminAddress: admin_address,
+        unlinkedAt: unlinked_at,
+      });
+
+      // Look up the phone number from the registry
+      // The link should still exist but with enabled=false
+      const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
+
+      if (!phoneNumber) {
+        appLogger.warn('Could not find phone number for unlinked circle', {
+          circleId: circle_id,
+          adminAddress: admin_address,
+        });
+        return;
+      }
+
       // Check if we recently sent a message for this circle (within last 2 minutes)
-      const messageKey = `unlink:${circle_id}:${recipient}`;
+      const messageKey = `unlink:${circle_id}:${phoneNumber}`;
       const lastSentTime = this.sentMessages.get(messageKey);
       const now = Date.now();
       const twoMinutesAgo = now - (2 * 60 * 1000);
@@ -224,20 +244,14 @@ export class CircleLinkListenerService {
       if (lastSentTime && lastSentTime > twoMinutesAgo) {
         appLogger.info('Skipping duplicate unlink message - recently sent', {
           circleId: circle_id?.slice(0, 10),
-          recipient: recipient?.slice(0, 10),
+          phoneNumber: phoneNumber?.slice(0, 5) + '...',
           lastSent: new Date(lastSentTime).toISOString(),
         });
         return;
       }
 
-      appLogger.info('CircleUnlinked event detected', {
-        circleId: circle_id,
-        recipient,
-        unlinkedAt: unlinked_at,
-      });
-
       // Send unlink confirmation message
-      await this.sendUnlinkConfirmation(recipient, circle_id);
+      await this.sendUnlinkConfirmation(phoneNumber, circle_id);
 
       // Track message send time for deduplication
       this.sentMessages.set(messageKey, Date.now());
@@ -245,6 +259,57 @@ export class CircleLinkListenerService {
       appLogger.error('Error handling CircleUnlinked event', {
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  /**
+   * Look up the phone number associated with a circle from the registry
+   * This works even for disabled links (after unlink)
+   */
+  private async getPhoneNumberForCircle(circleId: string): Promise<string | null> {
+    try {
+      const registryId = '0x9e203f7dd2d56b058d82fb4f1fafe135133245fef347d8de4967e2c1c78b9459';
+
+      const registryObject = await this.suiClient.getObject({
+        id: registryId,
+        options: { showContent: true },
+      });
+
+      if (!registryObject.data?.content || registryObject.data.content.dataType !== 'moveObject') {
+        appLogger.warn('Registry object not found');
+        return null;
+      }
+
+      const registryFields = (registryObject.data.content as any).fields;
+      const links = registryFields?.links || [];
+
+      // Find the link for this circle (may be enabled or disabled)
+      for (const link of links) {
+        const fields = link.fields || link;
+        const linkCircleId = fields.circle_id;
+        const adminPhoneNumber = fields.admin_phone_number;
+
+        if (linkCircleId === circleId && adminPhoneNumber) {
+          appLogger.info('Found phone number for circle', {
+            circleId: circleId.slice(0, 10),
+            phoneNumber: adminPhoneNumber.slice(0, 5) + '...',
+            enabled: fields.enabled,
+          });
+          return adminPhoneNumber;
+        }
+      }
+
+      appLogger.warn('No link found for circle in registry', {
+        circleId: circleId.slice(0, 10),
+        totalLinks: links.length,
+      });
+      return null;
+    } catch (error) {
+      appLogger.error('Error looking up phone number for circle', {
+        error: error instanceof Error ? error.message : String(error),
+        circleId,
+      });
+      return null;
     }
   }
 
