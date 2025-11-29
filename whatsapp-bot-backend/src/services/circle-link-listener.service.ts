@@ -66,6 +66,8 @@ export class CircleLinkListenerService {
         await this.checkForMemberJoinedEvents();
         await this.checkForDepositEvents();
         await this.checkForContributionEvents();
+        await this.checkForMemberRemovedEvents();
+        await this.checkForRotationOrderChangedEvents();
         await new Promise((resolve) => setTimeout(resolve, this.checkInterval));
       } catch (error) {
         appLogger.error('Error in listen loop', {
@@ -948,6 +950,332 @@ The contribution has been recorded and added to the circle's funds.
       }
     } catch (error) {
       appLogger.error('Error sending contribution notification', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Check for MemberRemoved events (when admin removes a member)
+   */
+  private async checkForMemberRemovedEvents(): Promise<void> {
+    try {
+      const events = await this.suiClient.queryEvents({
+        query: {
+          MoveEventType: '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc::njangi_circles::MemberRemoved',
+        },
+        limit: 50,
+        order: 'descending',
+      });
+
+      if (!events.data || events.data.length === 0) {
+        return;
+      }
+
+      for (const event of events.data) {
+        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+        // Skip events that occurred before listener started
+        if (eventTimestampMs < this.startTime) {
+          continue;
+        }
+
+        // Skip if already processed in this session
+        if (this.processedEvents.has(eventId)) {
+          continue;
+        }
+
+        this.processedEvents.add(eventId);
+
+        await this.handleMemberRemovedEvent(event);
+      }
+    } catch (error) {
+      appLogger.error('Error checking for MemberRemoved events', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Handle a MemberRemoved event - notify admin when a member is removed
+   */
+  private async handleMemberRemovedEvent(event: any): Promise<void> {
+    try {
+      const parsedJson = event.parsedJson as any;
+
+      if (!parsedJson) {
+        appLogger.warn('MemberRemoved event has no parsedJson');
+        return;
+      }
+
+      const {
+        circle_id,
+        member,
+        removed_by,
+        deposit_returned,
+        deposit_amount,
+      } = parsedJson;
+
+      appLogger.info('MemberRemoved event detected', {
+        circleId: circle_id?.slice(0, 10),
+        member: member?.slice(0, 10),
+        removedBy: removed_by?.slice(0, 10),
+        depositReturned: deposit_returned,
+      });
+
+      // Look up the phone number for this circle
+      const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
+
+      if (!phoneNumber) {
+        appLogger.debug('Circle not linked to WhatsApp, skipping removal notification', {
+          circleId: circle_id?.slice(0, 10),
+        });
+        return;
+      }
+
+      // Check if we recently sent a message for this removal (within last 2 minutes)
+      const messageKey = `removed:${circle_id}:${member}`;
+      const lastSentTime = this.sentMessages.get(messageKey);
+      const now = Date.now();
+      const twoMinutesAgo = now - (2 * 60 * 1000);
+
+      if (lastSentTime && lastSentTime > twoMinutesAgo) {
+        appLogger.info('Skipping duplicate removal notification - recently sent', {
+          circleId: circle_id?.slice(0, 10),
+          member: member?.slice(0, 10),
+          lastSent: new Date(lastSentTime).toISOString(),
+        });
+        return;
+      }
+
+      // Look up the member's name from the join requests database
+      const memberInfo = await this.lookupMemberName(circle_id, member);
+      const memberName = memberInfo?.userName || null;
+
+      // Send removal notification
+      await this.sendMemberRemovedNotification(
+        phoneNumber,
+        circle_id,
+        member,
+        memberName,
+        deposit_returned,
+        deposit_amount
+      );
+
+      // Track message send time for deduplication
+      this.sentMessages.set(messageKey, Date.now());
+    } catch (error) {
+      appLogger.error('Error handling MemberRemoved event', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Send notification when a member is removed from the circle
+   */
+  private async sendMemberRemovedNotification(
+    phoneNumber: string,
+    circleId: string,
+    memberAddress: string,
+    memberName?: string | null,
+    depositReturned?: boolean,
+    depositAmount?: string
+  ): Promise<void> {
+    try {
+      const shortMember = `${memberAddress.slice(0, 6)}...${memberAddress.slice(-4)}`;
+      const memberDisplay = memberName 
+        ? `${memberName} (${shortMember})`
+        : shortMember;
+
+      const depositInfo = depositReturned && depositAmount && Number(depositAmount) > 0
+        ? `\n💰 *Deposit returned:* ${(Number(depositAmount) / 1e9).toFixed(4)} SUI`
+        : '';
+      
+      const removalMessage = `🚫 *Member Removed*
+
+A member has been removed from your circle:
+
+👤 *Member:* ${memberDisplay}${depositInfo}
+
+The member no longer has access to the circle.
+
+🔗 View circle: https://njangionchain.com/circle/${circleId}`;
+
+      const result = await whatsappSender.sendMessage({
+        to: phoneNumber,
+        type: 'text',
+        text: removalMessage,
+      });
+
+      if (result.success) {
+        appLogger.info('✅ Member removal notification sent', {
+          phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
+          circleId: circleId.slice(0, 10) + '...',
+          member: memberAddress.slice(0, 10) + '...',
+          memberName: memberName || 'N/A',
+          messageId: result.messageId,
+        });
+      } else {
+        appLogger.warn('Failed to send member removal notification', {
+          to: phoneNumber,
+          error: result.error,
+        });
+      }
+    } catch (error) {
+      appLogger.error('Error sending member removal notification', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Check for RotationOrderChanged events (when admin reorders members)
+   */
+  private async checkForRotationOrderChangedEvents(): Promise<void> {
+    try {
+      const events = await this.suiClient.queryEvents({
+        query: {
+          MoveEventType: '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc::njangi_circles::RotationOrderChanged',
+        },
+        limit: 50,
+        order: 'descending',
+      });
+
+      if (!events.data || events.data.length === 0) {
+        return;
+      }
+
+      for (const event of events.data) {
+        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+        // Skip events that occurred before listener started
+        if (eventTimestampMs < this.startTime) {
+          continue;
+        }
+
+        // Skip if already processed in this session
+        if (this.processedEvents.has(eventId)) {
+          continue;
+        }
+
+        this.processedEvents.add(eventId);
+
+        await this.handleRotationOrderChangedEvent(event);
+      }
+    } catch (error) {
+      appLogger.error('Error checking for RotationOrderChanged events', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Handle a RotationOrderChanged event - notify admin when rotation order is changed
+   */
+  private async handleRotationOrderChangedEvent(event: any): Promise<void> {
+    try {
+      const parsedJson = event.parsedJson as any;
+
+      if (!parsedJson) {
+        appLogger.warn('RotationOrderChanged event has no parsedJson');
+        return;
+      }
+
+      const {
+        circle_id,
+        admin,
+        member_count,
+      } = parsedJson;
+
+      appLogger.info('RotationOrderChanged event detected', {
+        circleId: circle_id?.slice(0, 10),
+        admin: admin?.slice(0, 10),
+        memberCount: member_count,
+      });
+
+      // Look up the phone number for this circle
+      const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
+
+      if (!phoneNumber) {
+        appLogger.debug('Circle not linked to WhatsApp, skipping rotation order notification', {
+          circleId: circle_id?.slice(0, 10),
+        });
+        return;
+      }
+
+      // Check if we recently sent a message for this reorder (within last 2 minutes)
+      const messageKey = `reorder:${circle_id}:${member_count}`;
+      const lastSentTime = this.sentMessages.get(messageKey);
+      const now = Date.now();
+      const twoMinutesAgo = now - (2 * 60 * 1000);
+
+      if (lastSentTime && lastSentTime > twoMinutesAgo) {
+        appLogger.info('Skipping duplicate rotation order notification - recently sent', {
+          circleId: circle_id?.slice(0, 10),
+          lastSent: new Date(lastSentTime).toISOString(),
+        });
+        return;
+      }
+
+      // Send rotation order changed notification
+      await this.sendRotationOrderChangedNotification(
+        phoneNumber,
+        circle_id,
+        member_count
+      );
+
+      // Track message send time for deduplication
+      this.sentMessages.set(messageKey, Date.now());
+    } catch (error) {
+      appLogger.error('Error handling RotationOrderChanged event', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Send notification when rotation order is changed
+   */
+  private async sendRotationOrderChangedNotification(
+    phoneNumber: string,
+    circleId: string,
+    memberCount: string
+  ): Promise<void> {
+    try {
+      const reorderMessage = `🔄 *Rotation Order Updated*
+
+The member rotation order has been changed by the admin.
+
+👥 *Members in new order:* ${memberCount}
+
+The updated rotation determines the order in which members receive payouts. Check the circle details to see the new arrangement.
+
+🔗 View circle: https://njangionchain.com/circle/${circleId}`;
+
+      const result = await whatsappSender.sendMessage({
+        to: phoneNumber,
+        type: 'text',
+        text: reorderMessage,
+      });
+
+      if (result.success) {
+        appLogger.info('✅ Rotation order notification sent', {
+          phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
+          circleId: circleId.slice(0, 10) + '...',
+          memberCount,
+          messageId: result.messageId,
+        });
+      } else {
+        appLogger.warn('Failed to send rotation order notification', {
+          to: phoneNumber,
+          error: result.error,
+        });
+      }
+    } catch (error) {
+      appLogger.error('Error sending rotation order notification', {
         error: error instanceof Error ? error.message : String(error),
       });
     }

@@ -198,6 +198,15 @@ module njangi::njangi_circles {
         timestamp: u64,
     }
 
+    // Rotation Order Changed Event - Emitted when admin reorders member rotation positions
+    public struct RotationOrderChanged has copy, drop {
+        circle_id: ID,
+        admin: address,
+        new_order: vector<address>,
+        member_count: u64,
+        timestamp: u64,
+    }
+
     // ----------------------------------------------------------
     // Automation Status Struct
     // ----------------------------------------------------------
@@ -764,6 +773,15 @@ module njangi::njangi_circles {
             members::set_payout_position(member, option::some(i));
             i = i + 1;
         };
+
+        // Emit RotationOrderChanged event
+        event::emit(RotationOrderChanged {
+            circle_id: object::id(circle),
+            admin: tx_context::sender(ctx),
+            new_order: circle.rotation_order,
+            member_count: order_length,
+            timestamp: tx_context::epoch_timestamp_ms(ctx),
+        });
     }
     
     // ----------------------------------------------------------

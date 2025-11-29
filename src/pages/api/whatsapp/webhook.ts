@@ -71,7 +71,7 @@ async function getLinkedCircleFromRegistry(phoneNumber: string): Promise<string 
       return null;
     }
 
-    const registryFields = (registryObject.data.content as any).fields;
+    const registryFields = (registryObject.data.content as { fields: { links?: unknown[] } }).fields;
     const links = registryFields?.links || [];
 
     appLogger.info('Searching registry links', {
@@ -84,8 +84,18 @@ async function getLinkedCircleFromRegistry(phoneNumber: string): Promise<string 
     // Search for a matching link in the registry
     // The structure is: link.fields.admin_phone_number (nested under fields)
     // Phone number is stored WITH the + prefix
-    for (const link of links) {
+    type LinkFields = {
+      admin_phone_number?: string;
+      circle_id?: string;
+      enabled?: boolean;
+    };
+    type LinkEntry = {
+      fields?: LinkFields;
+    } & LinkFields;
+
+    for (const linkItem of links) {
       // Get the phone number - it's nested under link.fields
+      const link = linkItem as LinkEntry;
       const fields = link.fields || link;
       const linkPhone = fields.admin_phone_number;
       const circleId = fields.circle_id;
@@ -101,7 +111,7 @@ async function getLinkedCircleFromRegistry(phoneNumber: string): Promise<string 
             circleId: circleId?.slice?.(0, 10),
             isEnabled,
           });
-          return circleId;
+          return circleId || null;
         }
       }
     }
@@ -110,7 +120,10 @@ async function getLinkedCircleFromRegistry(phoneNumber: string): Promise<string 
       phoneNumber: normalizedPhone,
       phoneWithPlus: `+${normalizedPhone}`,
       linksChecked: links.length,
-      enabledLinks: links.filter((l: any) => (l.fields || l).enabled === true).length,
+      enabledLinks: links.filter((l: unknown) => {
+        const link = l as { fields?: { enabled?: boolean }; enabled?: boolean };
+        return (link.fields || link).enabled === true;
+      }).length,
     });
     return null;
   } catch (error) {
