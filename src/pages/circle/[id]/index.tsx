@@ -51,7 +51,8 @@ export default function CircleDetails() {
   const [circle, setCircle] = useState<Circle | null>(null);
   const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
   const [copiedId, setCopiedId] = useState(false);
-  const [membershipVerified, setMembershipVerified] = useState<boolean | null>(null);
+  // Track membership verification status (used for access control flow)
+  const [, setMembershipVerified] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated && id) {
@@ -153,7 +154,7 @@ export default function CircleDetails() {
       verifyMembership().then(isMember => {
         setMembershipVerified(isMember);
         if (isMember) {
-      fetchCircleDetails();
+          fetchCircleDetails();
         } else {
           setLoading(false);
           toast.error('You are no longer a member of this circle');
@@ -161,6 +162,7 @@ export default function CircleDetails() {
         }
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, userAddress]);
 
   useEffect(() => {
