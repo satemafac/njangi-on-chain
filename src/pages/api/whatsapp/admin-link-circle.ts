@@ -146,13 +146,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
                  : groupId?.value || linkFields.group_id;
 
                console.log('✅ Link found for circle:', circleId);
+               // Note: linked_at is the Sui epoch number, not a timestamp
+               // We don't display it as a date since epoch numbers aren't meaningful dates
                return res.status(200).json({
                  success: true,
                  data: {
                    isLinked: true,
                    linkType: linkFields.link_type || 1,
                    recipient: recipient || 'Unknown',
-                   linkedAt: new Date(Number(linkFields.linked_at) * 1000).toISOString()
+                   // linkedAt omitted - epoch number is not a valid timestamp
                  }
                });
              }

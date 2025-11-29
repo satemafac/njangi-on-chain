@@ -470,6 +470,16 @@ interface MemberJoinedEvent {
   joined_at: string;                      // Timestamp when member joined (as string from blockchain)
 }
 
+// MemberRemoved event interface - emitted when admin removes a member
+interface MemberRemovedEvent {
+  circle_id: string;
+  member: string;
+  removed_by: string;
+  deposit_returned: boolean;
+  deposit_amount: string;
+  timestamp: string;
+}
+
 // Member status constants for easy filtering
 const MEMBER_STATUS = {
   ACTIVE: 0,
@@ -1817,8 +1827,52 @@ export default function Dashboard() {
         return parsedEvent?.member === userAddress;
       });
 
-      allMemberEvents.push(...userMemberEvents);
       console.log(`✅ Found ${userMemberEvents.length} member circles across all packages`);
+      
+      // 🔴 CRITICAL FIX: Query MemberRemoved events to filter out circles where user was removed
+      console.log('🔍 Checking for MemberRemoved events to filter out removed members...');
+      const memberRemovedEventsData = await batchQueryEvents(
+        userPackageIds,
+        'MemberRemoved',
+        client,
+        {
+          maxConcurrent: 5,
+          limit: 1000,
+          order: 'descending'
+        }
+      );
+
+      // Filter for circles where THIS user was removed
+      const userRemovedEvents = memberRemovedEventsData.filter((event: any) => {
+        const parsedEvent = event.parsedJson as MemberRemovedEvent;
+        return parsedEvent?.member === userAddress;
+      });
+      
+      // Create a set of circle IDs where user has been removed
+      const removedFromCircles = new Set<string>();
+      for (const event of userRemovedEvents) {
+        const parsedEvent = event.parsedJson as MemberRemovedEvent;
+        if (parsedEvent?.circle_id) {
+          removedFromCircles.add(parsedEvent.circle_id);
+          console.log(`⛔ User was removed from circle: ${parsedEvent.circle_id}`);
+        }
+      }
+      console.log(`⛔ User has been removed from ${removedFromCircles.size} circles`);
+      
+      // Filter out circles where user was removed from member events
+      // Note: We DON'T filter admin events - admins can remove themselves from the rotation but still own the circle
+      const filteredMemberEvents = userMemberEvents.filter((event: any) => {
+        const parsedEvent = event.parsedJson as MemberJoinedEvent;
+        const circleId = parsedEvent?.circle_id;
+        if (circleId && removedFromCircles.has(circleId)) {
+          console.log(`🚫 Filtering out circle ${circleId} - user was removed`);
+          return false;
+        }
+        return true;
+      });
+      
+      console.log(`✅ After filtering removed members: ${filteredMemberEvents.length} member circles (was ${userMemberEvents.length})`);
+      allMemberEvents.push(...filteredMemberEvents);
       
       // Sort all admin events by timestamp (most recent first) and add ALL of them
       allAdminEvents.sort((a, b) => (b.timestampMs || 0) - (a.timestampMs || 0));
