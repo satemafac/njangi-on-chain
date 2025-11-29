@@ -4764,6 +4764,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       case 'adminSetMaxMembers': {
+        // Handle network parameter if provided by frontend
+        const requestedNetwork = req.body.network;
+        if (requestedNetwork && (requestedNetwork === 'testnet' || requestedNetwork === 'mainnet')) {
+          console.log(`Frontend requested network: ${requestedNetwork}, current server network: ${getCurrentNetwork()}`);
+        }
+
         try {
           // Validate required parameters
           if (!account) {
@@ -4790,23 +4796,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
-          console.log(`Setting max members for circle ${circleId} to ${newMaxMembers}`);
+          console.log(`Setting max members for circle ${circleId} to ${newMaxMembers} on network: ${requestedNetwork || getCurrentNetwork()}`);
 
-          // Send the transaction
-          const txResult = await instance.sendTransaction(
-            session.account,
-            (txb: Transaction) => {
-              txb.setSender(session.account!.userAddr);
-              txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_circles::admin_set_max_members`,
-                arguments: [
-                  txb.object(circleId),
-                  txb.pure.u64(newMaxMembers),
-                ],
-              });
-            },
-            { gasBudget: 50000000 } // Standard gas budget should be sufficient
-          );
+          // Handle network switching like other endpoints
+          const originalNetwork = getCurrentNetwork();
+          let txResult;
+          
+          try {
+            // Temporarily set the network to match the frontend request
+            if (requestedNetwork && requestedNetwork !== originalNetwork) {
+              console.log(`Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for adminSetMaxMembers`);
+              setCurrentNetwork(requestedNetwork as NetworkType);
+              // Reinitialize the EnokiZkLoginService with the new network configuration
+              instance.initializeWithNetwork();
+            }
+            
+            // Get the correct package ID for this circle using the current network context
+            const circlePackageId = await getCirclePackageId(circleId, account.userAddr);
+            const packageIdToUse = circlePackageId || getCurrentPackageId();
+            console.log(`Using package ID for adminSetMaxMembers: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
+
+            // Send the transaction
+            txResult = await instance.sendTransaction(
+              session.account,
+              (txb: Transaction) => {
+                txb.setSender(session.account!.userAddr);
+                txb.moveCall({
+                  target: `${packageIdToUse}::njangi_circles::admin_set_max_members`,
+                  arguments: [
+                    txb.object(circleId),
+                    txb.pure.u64(newMaxMembers),
+                  ],
+                });
+              },
+              { gasBudget: 50000000 } // Standard gas budget should be sufficient
+            );
+          } finally {
+            // Always restore the original network and reinitialize the service
+            if (requestedNetwork && requestedNetwork !== originalNetwork) {
+              console.log(`Restoring server network back to ${originalNetwork}`);
+              setCurrentNetwork(originalNetwork as NetworkType);
+              instance.initializeWithNetwork();
+            }
+          }
 
           console.log('Set max members transaction successful:', txResult);
           return res.status(200).json({

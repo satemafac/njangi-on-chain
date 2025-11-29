@@ -674,7 +674,7 @@ export default function ContributeToCircle() {
   
   // Add dynamic package ID state
   const [circlePackageId, setCirclePackageId] = useState<string>(PACKAGE_ID);
-  
+
   // Membership verification state
   const [membershipVerified, setMembershipVerified] = useState<boolean | null>(null);
 
@@ -793,7 +793,7 @@ export default function ContributeToCircle() {
       verifyMembership().then(isMember => {
         setMembershipVerified(isMember);
         if (isMember) {
-          fetchCircleDetails();
+      fetchCircleDetails();
         } else {
           setLoading(false);
           toast.error('You are no longer a member of this circle');

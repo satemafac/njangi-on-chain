@@ -153,7 +153,7 @@ export default function CircleDetails() {
       verifyMembership().then(isMember => {
         setMembershipVerified(isMember);
         if (isMember) {
-          fetchCircleDetails();
+      fetchCircleDetails();
         } else {
           setLoading(false);
           toast.error('You are no longer a member of this circle');
