@@ -155,6 +155,33 @@ export class JoinRequestDatabase {
       return [];
     }
   }
+
+  // Get user info by address for a specific circle
+  // Returns the most recent request (any status) for this user/circle combination
+  async getUserByAddress(circleId: string, userAddress: string): Promise<JoinRequest | null> {
+    try {
+      console.log(`[DB] Looking up user: ${userAddress} for circle: ${circleId}`);
+      
+      const result = await pool.query(
+        `SELECT * FROM join_requests 
+         WHERE circle_id = $1 AND user_address = $2
+         ORDER BY updated_at DESC
+         LIMIT 1`,
+        [circleId, userAddress]
+      );
+
+      if (result.rows.length > 0) {
+        console.log(`[DB] Found user: ${result.rows[0].user_name}`);
+        return result.rows[0] as JoinRequest;
+      }
+
+      console.log(`[DB] No user found for address: ${userAddress}`);
+      return null;
+    } catch (error) {
+      console.error('[DB] Error looking up user by address:', error);
+      return null;
+    }
+  }
 }
 
 // Create a singleton instance for easy import

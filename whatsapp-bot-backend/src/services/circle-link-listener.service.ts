@@ -456,8 +456,27 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
         ? (Number(contribution_amount_local) / 100).toFixed(2)
         : 'N/A';
 
+      // Look up the member's name from the join requests database
+      const memberInfo = await this.lookupMemberName(circle_id, member);
+      const memberName = memberInfo?.userName || null;
+      const circleName = memberInfo?.circleName || null;
+
+      appLogger.info('Member info lookup result', {
+        memberAddress: member?.slice(0, 10),
+        memberName,
+        circleName,
+      });
+
       // Send member joined notification
-      await this.sendMemberJoinedNotification(phoneNumber, circle_id, member, contributionFormatted, currency_type);
+      await this.sendMemberJoinedNotification(
+        phoneNumber, 
+        circle_id, 
+        member, 
+        contributionFormatted, 
+        currency_type,
+        memberName,
+        circleName
+      );
 
       // Track message send time for deduplication
       this.sentMessages.set(messageKey, Date.now());
@@ -469,6 +488,47 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
   }
 
   /**
+   * Look up member name from the join requests database via API
+   */
+  private async lookupMemberName(circleId: string, memberAddress: string): Promise<{ userName: string | null; circleName: string | null } | null> {
+    try {
+      const apiUrl = process.env.FRONTEND_URL || 'https://njangionchain.com';
+      const response = await fetch(
+        `${apiUrl}/api/join-requests/lookup-user?circleId=${encodeURIComponent(circleId)}&userAddress=${encodeURIComponent(memberAddress)}`
+      );
+
+      if (!response.ok) {
+        appLogger.warn('Failed to lookup member name', {
+          status: response.status,
+          circleId: circleId?.slice(0, 10),
+          memberAddress: memberAddress?.slice(0, 10),
+        });
+        return null;
+      }
+
+      const data = await response.json() as { 
+        success: boolean; 
+        data?: { userName: string | null; circleName: string | null } 
+      };
+      if (data.success && data.data) {
+        return {
+          userName: data.data.userName,
+          circleName: data.data.circleName,
+        };
+      }
+
+      return null;
+    } catch (error) {
+      appLogger.error('Error looking up member name', {
+        error: error instanceof Error ? error.message : String(error),
+        circleId: circleId?.slice(0, 10),
+        memberAddress: memberAddress?.slice(0, 10),
+      });
+      return null;
+    }
+  }
+
+  /**
    * Send notification when a new member joins the circle
    */
   private async sendMemberJoinedNotification(
@@ -476,17 +536,29 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
     circleId: string,
     memberAddress: string,
     contribution: string,
-    currency: string
+    currency: string,
+    memberName?: string | null,
+    circleName?: string | null
   ): Promise<void> {
     try {
       const shortMember = `${memberAddress.slice(0, 6)}...${memberAddress.slice(-4)}`;
       const currencySymbol = currency === 'USD' ? '$' : currency;
       
+      // Build member display: name if available, otherwise just address
+      const memberDisplay = memberName 
+        ? `${memberName} (${shortMember})`
+        : shortMember;
+
+      // Build circle display: name if available
+      const circleDisplay = circleName 
+        ? `*${circleName}*`
+        : 'your circle';
+      
       const memberJoinedMessage = `👋 *New Member Approved!*
 
-A new member has joined your circle:
+A new member has joined ${circleDisplay}:
 
-👤 *Member:* ${shortMember}
+👤 *Member:* ${memberDisplay}
 💰 *Contribution:* ${currencySymbol}${contribution}
 
 They can now participate in the circle activities. Make sure they pay their security deposit to complete onboarding!
@@ -504,6 +576,7 @@ They can now participate in the circle activities. Make sure they pay their secu
           phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
           circleId: circleId.slice(0, 10) + '...',
           member: memberAddress.slice(0, 10) + '...',
+          memberName: memberName || 'N/A',
           messageId: result.messageId,
         });
       } else {
