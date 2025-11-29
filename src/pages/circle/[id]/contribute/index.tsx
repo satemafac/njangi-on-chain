@@ -674,6 +674,9 @@ export default function ContributeToCircle() {
   
   // Add dynamic package ID state
   const [circlePackageId, setCirclePackageId] = useState<string>(PACKAGE_ID);
+  
+  // Membership verification state
+  const [membershipVerified, setMembershipVerified] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -681,6 +684,90 @@ export default function ContributeToCircle() {
       return;
     }
   }, [isAuthenticated, router]);
+
+  // Verify user membership before allowing access to contribute page
+  const verifyMembership = async (): Promise<boolean> => {
+    if (!id || !userAddress) return false;
+    
+    try {
+      const client = new SuiClient({ url: getCurrentRpcUrl() });
+      const determinedPackageId = await getCirclePackageId(id as string, userAddress);
+      
+      // First check if user is the admin
+      const objectData = await client.getObject({
+        id: id as string,
+        options: { showContent: true }
+      });
+      
+      if (objectData.data?.content && 'fields' in objectData.data.content) {
+        const fields = objectData.data.content.fields as Record<string, unknown>;
+        // Admin always has access
+        if (fields.admin === userAddress) {
+          console.log('[Membership] User is admin, access granted');
+          return true;
+        }
+        
+        // Check if user is in the members table
+        const circleFields = fields as { members?: { fields?: { id?: { id: string } } } };
+        if (circleFields.members?.fields?.id?.id) {
+          const membersTableId = circleFields.members.fields.id.id;
+          try {
+            const memberField = await client.getDynamicFieldObject({
+              parentId: membersTableId,
+              name: { type: 'address', value: userAddress }
+            });
+            
+            if (memberField.data?.content) {
+              console.log('[Membership] User found in members table, access granted');
+              return true;
+            }
+          } catch {
+            // User not found in members table
+            console.log('[Membership] User not found in members table');
+          }
+        }
+      }
+      
+      // Check for MemberRemoved events to see if user was removed
+      const removedEvents = await client.queryEvents({
+        query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberRemoved` },
+        limit: 100
+      });
+      
+      const wasRemoved = removedEvents.data.some(event => {
+        const parsed = event.parsedJson as { circle_id?: string; member?: string };
+        return parsed?.circle_id === id && parsed?.member === userAddress;
+      });
+      
+      if (wasRemoved) {
+        console.log('[Membership] User was removed from this circle');
+        return false;
+      }
+      
+      // Check if user ever joined this circle
+      const joinEvents = await client.queryEvents({
+        query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
+        limit: 100
+      });
+      
+      const didJoin = joinEvents.data.some(event => {
+        const parsed = event.parsedJson as { circle_id?: string; member?: string };
+        return parsed?.circle_id === id && parsed?.member === userAddress;
+      });
+      
+      if (!didJoin) {
+        console.log('[Membership] User never joined this circle');
+        return false;
+      }
+      
+      // User joined but wasn't removed - they should have access
+      return true;
+      
+    } catch (error) {
+      console.error('[Membership] Error verifying membership:', error);
+      return false;
+    }
+  };
 
   useEffect(() => {
     // Fetch the current SUI price
@@ -701,9 +788,18 @@ export default function ContributeToCircle() {
   }, []);
 
   useEffect(() => {
-    // Fetch circle details when ID is available
+    // Verify membership and fetch circle details when ID is available
     if (id && userAddress) {
-      fetchCircleDetails();
+      verifyMembership().then(isMember => {
+        setMembershipVerified(isMember);
+        if (isMember) {
+          fetchCircleDetails();
+        } else {
+          setLoading(false);
+          toast.error('You are no longer a member of this circle');
+          router.push('/dashboard');
+        }
+      });
     }
   }, [id, userAddress]);
 

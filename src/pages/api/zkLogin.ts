@@ -3810,7 +3810,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       case 'reorderRotationPositions': {
         // Extract parameters properly
-        const { account, circleId, newOrder } = req.body;
+        const { account, circleId, newOrder, network: requestedNetwork } = req.body;
         
         // Validate required parameters
         if (!account) {
@@ -3823,37 +3823,68 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res.status(400).json({ error: 'newOrder is required and must be a non-empty array' });
         }
 
+        // Handle network parameter if provided by frontend
+        if (requestedNetwork && (requestedNetwork === 'testnet' || requestedNetwork === 'mainnet')) {
+          console.log(`Frontend requested network: ${requestedNetwork}, current server network: ${getCurrentNetwork()}`);
+        }
+
         try {
-          console.log(`Reordering rotation positions for circle ${circleId} with ${newOrder.length} members`);
+          console.log(`Reordering rotation positions for circle ${circleId} with ${newOrder.length} members on network: ${requestedNetwork || getCurrentNetwork()}`);
           
           // Get the ZkLoginService instance
-          const zkLoginService = enokiZkLoginService;
+          const instance = enokiZkLoginService;
           
-          // Send the transaction using the service's sendTransaction method
-          const result = await zkLoginService.sendTransaction(
-            account,
-            (txb) => {
-              // Convert the addresses array to an array of arguments
-              const addressArgs = newOrder.map(address => 
-                txb.pure.address(address.toLowerCase())
-              );
-              
-              // Build the transaction in this callback
-              txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_circles::reorder_rotation_positions_entry`,
-                arguments: [
-                  txb.object(circleId), // circle
-                  txb.makeMoveVec({ elements: addressArgs, type: 'address' }),
-                ],
-              });
+          // Handle network switching like other endpoints
+          const originalNetwork = getCurrentNetwork();
+          let txResult;
+          
+          try {
+            // Temporarily set the network to match the frontend request
+            if (requestedNetwork && requestedNetwork !== originalNetwork) {
+              console.log(`Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for reorderRotationPositions`);
+              setCurrentNetwork(requestedNetwork as NetworkType);
+              // Reinitialize the EnokiZkLoginService with the new network configuration
+              instance.initializeWithNetwork();
             }
-          );
+            
+            // Get the correct package ID for this circle using the current network context
+            const circlePackageId = await getCirclePackageId(circleId, account.userAddr);
+            const packageIdToUse = circlePackageId || getCurrentPackageId();
+            console.log(`Using package ID for reorderRotationPositions: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
+            
+            // Send the transaction using the service's sendTransaction method
+            txResult = await instance.sendTransaction(
+              account,
+              (txb) => {
+                // Convert the addresses array to an array of arguments
+                const addressArgs = newOrder.map((address: string) => 
+                  txb.pure.address(address.toLowerCase())
+                );
+                
+                // Build the transaction in this callback
+                txb.moveCall({
+                  target: `${packageIdToUse}::njangi_circles::reorder_rotation_positions_entry`,
+                  arguments: [
+                    txb.object(circleId), // circle
+                    txb.makeMoveVec({ elements: addressArgs, type: 'address' }),
+                  ],
+                });
+              }
+            );
+          } finally {
+            // Always restore the original network and reinitialize the service
+            if (requestedNetwork && requestedNetwork !== originalNetwork) {
+              console.log(`Restoring server network back to ${originalNetwork}`);
+              setCurrentNetwork(originalNetwork as NetworkType);
+              instance.initializeWithNetwork();
+            }
+          }
           
           return res.status(200).json({
-            digest: result.digest,
-            status: result.status,
+            digest: txResult.digest,
+            status: txResult.status,
             message: `Reordered rotation positions for circle ${circleId}`,
-            gasUsed: result.gasUsed,
+            gasUsed: txResult.gasUsed,
           });
         } catch (error) {
           console.error('Error reordering rotation positions:', error);

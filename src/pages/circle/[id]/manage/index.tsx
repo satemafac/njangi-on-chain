@@ -3089,7 +3089,8 @@ export default function ManageCircle() {
             await zkLoginClient.reorderRotationPositions(
               account!,
               id as string,
-              normalizedOrder
+              normalizedOrder,
+              getCurrentNetwork() // Include current network to ensure correct chain targeting
             );
             
             toast.success('Rotation order updated successfully!', { id: 'rotation-order' });

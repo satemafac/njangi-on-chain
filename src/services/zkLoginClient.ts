@@ -644,11 +644,13 @@ export class ZkLoginClient {
    * @param account ZkLogin account data
    * @param circleId The circle ID
    * @param newOrder Array of member addresses in the desired order
+   * @param network Optional network override (testnet/mainnet)
    */
   public async reorderRotationPositions(
     account: AccountData, 
     circleId: string,
-    newOrder: string[]
+    newOrder: string[],
+    network?: 'testnet' | 'mainnet'
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
     try {
       // Log key information for debugging
@@ -658,7 +660,8 @@ export class ZkLoginClient {
         newOrderLength: newOrder.length,
         hasProofPoints: !!account.zkProofs?.proofPoints,
         hasHeaderBase64: !!account.zkProofs?.headerBase64,
-        maxEpoch: account.maxEpoch
+        maxEpoch: account.maxEpoch,
+        network
       });
 
       // Verify the account has valid proof data
@@ -678,7 +681,8 @@ export class ZkLoginClient {
           action: 'reorderRotationPositions', 
           account,
           circleId,
-          newOrder
+          newOrder,
+          network // Include network parameter for correct chain targeting
         })
       });
       
