@@ -407,16 +407,45 @@ export default function JoinCircle() {
           }
         });
         
+        // 🔴 CRITICAL FIX: Also fetch MemberRemoved events to filter out removed members
+        const removedEvents = await client.queryEvents({
+          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::MemberRemoved` },
+          limit: 1000
+        });
+        
+        // Create a set of removed member addresses for this circle
+        const removedAddresses = new Set<string>();
+        removedEvents.data.forEach(event => {
+          if ((event.parsedJson as { circle_id?: string })?.circle_id === id && 
+              (event.parsedJson as { member?: string })?.member) {
+            removedAddresses.add((event.parsedJson as { member: string }).member);
+          }
+        });
+        
+        // Remove the removed members from the member set (except admin who can't be removed)
+        removedAddresses.forEach(removedAddr => {
+          if (removedAddr !== fields.admin) {
+            memberAddresses.delete(removedAddr);
+            console.log(`Join - Filtered out removed member: ${removedAddr}`);
+          }
+        });
+        
         memberCount = memberAddresses.size;
-        console.log(`Join - Final member count: ${memberCount}`);
+        console.log(`Join - Final member count after filtering removed: ${memberCount}`);
         
         // If user is authenticated, check membership
         if (userAddress) {
           console.log('Join - Checking if user is admin or member');
           isUserAdmin = fields.admin === userAddress;
           
-          // Set member status based on admin status or event membership
-          const isUserMember = isUserAdmin || memberAddresses.has(userAddress);
+          // Check if user was removed from this circle
+          const wasUserRemoved = removedAddresses.has(userAddress);
+          if (wasUserRemoved) {
+            console.log('Join - User was previously removed from this circle, allowing rejoin');
+          }
+          
+          // Set member status based on admin status or event membership (accounting for removals)
+          const isUserMember = isUserAdmin || (memberAddresses.has(userAddress) && !wasUserRemoved);
           setIsMember(isUserMember);
           
           // Show toast and redirect IF user is authenticated AND is admin/member
