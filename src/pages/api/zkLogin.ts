@@ -3645,7 +3645,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         break;
 
-      case 'activateCircle':
+      case 'activateCircle': {
+        // Handle network parameter if provided by frontend
+        const requestedNetwork = req.body.network;
+        if (requestedNetwork && (requestedNetwork === 'testnet' || requestedNetwork === 'mainnet')) {
+          console.log(`Frontend requested network: ${requestedNetwork}, current server network: ${getCurrentNetwork()}`);
+        }
+
         if (!account) {
           return res.status(400).json({ error: 'Account data is required' });
         }
@@ -3682,33 +3688,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
-          // Get the correct package ID for this circle
-          let packageIdToUse = PACKAGE_ID;
-          try {
-            const dynamicPackageId = await getCirclePackageId(circleId, session.account.userAddr);
-            if (dynamicPackageId) {
-              packageIdToUse = dynamicPackageId;
-              console.log(`Using dynamic package ID ${packageIdToUse} for circle ${circleId}`);
-            } else {
-              console.log(`No dynamic package ID found, using default ${PACKAGE_ID}`);
-            }
-          } catch (error) {
-            console.warn(`Failed to get dynamic package ID for circle ${circleId}, using default:`, error);
-            packageIdToUse = PACKAGE_ID;
-          }
+          console.log(`Activating circle ${circleId} on network: ${requestedNetwork || getCurrentNetwork()}`);
 
-          // Execute the activate circle transaction using ZkLoginService's sendTransaction method
-          const txResult = await instance.sendTransaction(
-            session.account,
-            (txb: Transaction) => {
-              txb.moveCall({
-                target: `${packageIdToUse}::njangi_circles::activate_circle`,
-                arguments: [
-                  txb.object(circleId)
-                ],
-              });
+          // Handle network switching like other endpoints
+          const originalNetwork = getCurrentNetwork();
+          let txResult;
+          
+          try {
+            // Temporarily set the network to match the frontend request
+            if (requestedNetwork && requestedNetwork !== originalNetwork) {
+              console.log(`Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for activateCircle`);
+              setCurrentNetwork(requestedNetwork as NetworkType);
+              // Reinitialize the EnokiZkLoginService with the new network configuration
+              instance.initializeWithNetwork();
             }
-          );
+            
+            // Get the correct package ID for this circle using the current network context
+            const circlePackageId = await getCirclePackageId(circleId, session.account.userAddr);
+            const packageIdToUse = circlePackageId || getCurrentPackageId();
+            console.log(`Using package ID for activateCircle: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
+
+            // Execute the activate circle transaction using ZkLoginService's sendTransaction method
+            txResult = await instance.sendTransaction(
+              session.account,
+              (txb: Transaction) => {
+                txb.moveCall({
+                  target: `${packageIdToUse}::njangi_circles::activate_circle`,
+                  arguments: [
+                    txb.object(circleId)
+                  ],
+                });
+              }
+            );
+          } finally {
+            // Always restore the original network and reinitialize the service
+            if (requestedNetwork && requestedNetwork !== originalNetwork) {
+              console.log(`Restoring server network back to ${originalNetwork}`);
+              setCurrentNetwork(originalNetwork as NetworkType);
+              instance.initializeWithNetwork();
+            }
+          }
 
           return res.status(200).json({
             status: 'success',
@@ -3738,6 +3757,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             requireRelogin: error instanceof ZkLoginError ? error.requireRelogin : false
           });
         }
+      }
 
       case 'setRotationPosition': {
         // Extract parameters properly
