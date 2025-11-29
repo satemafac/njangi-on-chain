@@ -68,6 +68,7 @@ export class CircleLinkListenerService {
         await this.checkForContributionEvents();
         await this.checkForMemberRemovedEvents();
         await this.checkForRotationOrderChangedEvents();
+        await this.checkForCircleActivatedEvents();
         await new Promise((resolve) => setTimeout(resolve, this.checkInterval));
       } catch (error) {
         appLogger.error('Error in listen loop', {
@@ -1276,6 +1277,151 @@ The updated rotation determines the order in which members receive payouts. Chec
       }
     } catch (error) {
       appLogger.error('Error sending rotation order notification', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Check for CircleActivated events (when admin activates the circle)
+   */
+  private async checkForCircleActivatedEvents(): Promise<void> {
+    try {
+      const events = await this.suiClient.queryEvents({
+        query: {
+          MoveEventType: '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc::njangi_circles::CircleActivated',
+        },
+        limit: 50,
+        order: 'descending',
+      });
+
+      if (!events.data || events.data.length === 0) {
+        return;
+      }
+
+      for (const event of events.data) {
+        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+        // Skip events that occurred before listener started
+        if (eventTimestampMs < this.startTime) {
+          continue;
+        }
+
+        // Skip if already processed in this session
+        if (this.processedEvents.has(eventId)) {
+          continue;
+        }
+
+        this.processedEvents.add(eventId);
+
+        await this.handleCircleActivatedEvent(event);
+      }
+    } catch (error) {
+      appLogger.error('Error checking for CircleActivated events', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Handle a CircleActivated event - notify admin when circle is activated
+   */
+  private async handleCircleActivatedEvent(event: any): Promise<void> {
+    try {
+      const parsedJson = event.parsedJson as any;
+
+      if (!parsedJson) {
+        appLogger.warn('CircleActivated event has no parsedJson');
+        return;
+      }
+
+      const {
+        circle_id,
+        activated_by,
+      } = parsedJson;
+
+      appLogger.info('CircleActivated event detected', {
+        circleId: circle_id?.slice(0, 10),
+        activatedBy: activated_by?.slice(0, 10),
+      });
+
+      // Look up the phone number for this circle
+      const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
+
+      if (!phoneNumber) {
+        appLogger.debug('Circle not linked to WhatsApp, skipping activation notification', {
+          circleId: circle_id?.slice(0, 10),
+        });
+        return;
+      }
+
+      // Check if we recently sent a message for this activation (within last 2 minutes)
+      const messageKey = `activated:${circle_id}`;
+      const lastSentTime = this.sentMessages.get(messageKey);
+      const now = Date.now();
+      const twoMinutesAgo = now - (2 * 60 * 1000);
+
+      if (lastSentTime && lastSentTime > twoMinutesAgo) {
+        appLogger.info('Skipping duplicate activation notification - recently sent', {
+          circleId: circle_id?.slice(0, 10),
+          lastSent: new Date(lastSentTime).toISOString(),
+        });
+        return;
+      }
+
+      // Send activation notification
+      await this.sendCircleActivatedNotification(phoneNumber, circle_id);
+
+      // Track message send time for deduplication
+      this.sentMessages.set(messageKey, Date.now());
+    } catch (error) {
+      appLogger.error('Error handling CircleActivated event', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Send notification when circle is activated
+   */
+  private async sendCircleActivatedNotification(
+    phoneNumber: string,
+    circleId: string
+  ): Promise<void> {
+    try {
+      const activationMessage = `🎉 *Circle Activated!*
+
+Your circle has been activated and is now live!
+
+✅ Members can now start making contributions
+🔄 The rotation cycle has officially begun
+💰 Payouts will be distributed according to the rotation order
+
+All members should ensure they make their contributions on time to keep the circle running smoothly.
+
+🔗 View circle: https://njangionchain.com/circle/${circleId}`;
+
+      const result = await whatsappSender.sendMessage({
+        to: phoneNumber,
+        type: 'text',
+        text: activationMessage,
+      });
+
+      if (result.success) {
+        appLogger.info('✅ Circle activation notification sent', {
+          phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
+          circleId: circleId.slice(0, 10) + '...',
+          messageId: result.messageId,
+        });
+      } else {
+        appLogger.warn('Failed to send activation notification', {
+          to: phoneNumber,
+          error: result.error,
+        });
+      }
+    } catch (error) {
+      appLogger.error('Error sending activation notification', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
