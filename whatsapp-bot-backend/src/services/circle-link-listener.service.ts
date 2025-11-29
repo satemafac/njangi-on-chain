@@ -63,6 +63,7 @@ export class CircleLinkListenerService {
       try {
         await this.checkForCircleLinkedEvents();
         await this.checkForCircleUnlinkedEvents();
+        await this.checkForMemberJoinedEvents();
         await new Promise((resolve) => setTimeout(resolve, this.checkInterval));
       } catch (error) {
         appLogger.error('Error in listen loop', {
@@ -351,6 +352,168 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
       }
     } catch (error) {
       appLogger.error('Error sending unlink confirmation', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Check for MemberJoined events (when admin approves a new member)
+   */
+  private async checkForMemberJoinedEvents(): Promise<void> {
+    try {
+      const events = await this.suiClient.queryEvents({
+        query: {
+          MoveEventType: '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc::njangi_circles::MemberJoined',
+        },
+        limit: 50,
+        order: 'descending',
+      });
+
+      if (!events.data || events.data.length === 0) {
+        return;
+      }
+
+      for (const event of events.data) {
+        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+        // Skip events that occurred before listener started
+        if (eventTimestampMs < this.startTime) {
+          continue;
+        }
+
+        // Skip if already processed in this session
+        if (this.processedEvents.has(eventId)) {
+          continue;
+        }
+
+        this.processedEvents.add(eventId);
+
+        await this.handleMemberJoinedEvent(event);
+      }
+    } catch (error) {
+      appLogger.error('Error checking for MemberJoined events', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Handle a MemberJoined event - notify admin when a new member is approved
+   */
+  private async handleMemberJoinedEvent(event: any): Promise<void> {
+    try {
+      const parsedJson = event.parsedJson as any;
+
+      if (!parsedJson) {
+        appLogger.warn('MemberJoined event has no parsedJson');
+        return;
+      }
+
+      const {
+        circle_id,
+        member,
+        contribution_amount_local,
+        currency_type,
+        joined_at,
+      } = parsedJson;
+
+      appLogger.info('MemberJoined event detected', {
+        circleId: circle_id?.slice(0, 10),
+        member: member?.slice(0, 10),
+        currencyType: currency_type,
+        joinedAt: joined_at,
+      });
+
+      // Look up the phone number for this circle
+      const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
+
+      if (!phoneNumber) {
+        appLogger.debug('Circle not linked to WhatsApp, skipping member notification', {
+          circleId: circle_id?.slice(0, 10),
+        });
+        return;
+      }
+
+      // Check if we recently sent a message for this member (within last 2 minutes)
+      const messageKey = `member:${circle_id}:${member}`;
+      const lastSentTime = this.sentMessages.get(messageKey);
+      const now = Date.now();
+      const twoMinutesAgo = now - (2 * 60 * 1000);
+
+      if (lastSentTime && lastSentTime > twoMinutesAgo) {
+        appLogger.info('Skipping duplicate member notification - recently sent', {
+          circleId: circle_id?.slice(0, 10),
+          member: member?.slice(0, 10),
+          lastSent: new Date(lastSentTime).toISOString(),
+        });
+        return;
+      }
+
+      // Format contribution amount
+      const contributionFormatted = contribution_amount_local 
+        ? (Number(contribution_amount_local) / 100).toFixed(2)
+        : 'N/A';
+
+      // Send member joined notification
+      await this.sendMemberJoinedNotification(phoneNumber, circle_id, member, contributionFormatted, currency_type);
+
+      // Track message send time for deduplication
+      this.sentMessages.set(messageKey, Date.now());
+    } catch (error) {
+      appLogger.error('Error handling MemberJoined event', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Send notification when a new member joins the circle
+   */
+  private async sendMemberJoinedNotification(
+    phoneNumber: string,
+    circleId: string,
+    memberAddress: string,
+    contribution: string,
+    currency: string
+  ): Promise<void> {
+    try {
+      const shortMember = `${memberAddress.slice(0, 6)}...${memberAddress.slice(-4)}`;
+      const currencySymbol = currency === 'USD' ? '$' : currency;
+      
+      const memberJoinedMessage = `👋 *New Member Approved!*
+
+A new member has joined your circle:
+
+👤 *Member:* ${shortMember}
+💰 *Contribution:* ${currencySymbol}${contribution}
+
+They can now participate in the circle activities. Make sure they pay their security deposit to complete onboarding!
+
+🔗 View circle: https://njangionchain.com/circle/${circleId}`;
+
+      const result = await whatsappSender.sendMessage({
+        to: phoneNumber,
+        type: 'text',
+        text: memberJoinedMessage,
+      });
+
+      if (result.success) {
+        appLogger.info('✅ Member joined notification sent', {
+          phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
+          circleId: circleId.slice(0, 10) + '...',
+          member: memberAddress.slice(0, 10) + '...',
+          messageId: result.messageId,
+        });
+      } else {
+        appLogger.warn('Failed to send member joined notification', {
+          to: phoneNumber,
+          error: result.error,
+        });
+      }
+    } catch (error) {
+      appLogger.error('Error sending member joined notification', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
