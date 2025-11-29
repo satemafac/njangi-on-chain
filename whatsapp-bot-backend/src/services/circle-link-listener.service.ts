@@ -64,6 +64,8 @@ export class CircleLinkListenerService {
         await this.checkForCircleLinkedEvents();
         await this.checkForCircleUnlinkedEvents();
         await this.checkForMemberJoinedEvents();
+        await this.checkForDepositEvents();
+        await this.checkForContributionEvents();
         await new Promise((resolve) => setTimeout(resolve, this.checkInterval));
       } catch (error) {
         appLogger.error('Error in listen loop', {
@@ -587,6 +589,365 @@ They can now participate in the circle activities. Make sure they pay their secu
       }
     } catch (error) {
       appLogger.error('Error sending member joined notification', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Check for CustodyDeposited events (security deposits)
+   */
+  private async checkForDepositEvents(): Promise<void> {
+    try {
+      const events = await this.suiClient.queryEvents({
+        query: {
+          MoveEventType: '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc::njangi_custody::CustodyDeposited',
+        },
+        limit: 50,
+        order: 'descending',
+      });
+
+      if (!events.data || events.data.length === 0) {
+        return;
+      }
+
+      for (const event of events.data) {
+        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+        // Skip events that occurred before listener started
+        if (eventTimestampMs < this.startTime) {
+          continue;
+        }
+
+        // Skip if already processed in this session
+        if (this.processedEvents.has(eventId)) {
+          continue;
+        }
+
+        this.processedEvents.add(eventId);
+
+        await this.handleDepositEvent(event);
+      }
+    } catch (error) {
+      appLogger.error('Error checking for CustodyDeposited events', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Handle a CustodyDeposited event - notify admin when member makes a deposit
+   */
+  private async handleDepositEvent(event: any): Promise<void> {
+    try {
+      const parsedJson = event.parsedJson as any;
+
+      if (!parsedJson) {
+        appLogger.warn('CustodyDeposited event has no parsedJson');
+        return;
+      }
+
+      const {
+        circle_id,
+        member,
+        amount,
+        operation_type,
+      } = parsedJson;
+
+      // operation_type: 3 = security deposit, 0 = contribution (but contributions use different event)
+      const isSecurityDeposit = operation_type === 3;
+
+      appLogger.info('CustodyDeposited event detected', {
+        circleId: circle_id?.slice(0, 10),
+        member: member?.slice(0, 10),
+        amount,
+        operationType: operation_type,
+        isSecurityDeposit,
+      });
+
+      // Look up the phone number for this circle
+      const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
+
+      if (!phoneNumber) {
+        appLogger.debug('Circle not linked to WhatsApp, skipping deposit notification', {
+          circleId: circle_id?.slice(0, 10),
+        });
+        return;
+      }
+
+      // Check if we recently sent a message for this deposit (within last 2 minutes)
+      const messageKey = `deposit:${circle_id}:${member}:${amount}`;
+      const lastSentTime = this.sentMessages.get(messageKey);
+      const now = Date.now();
+      const twoMinutesAgo = now - (2 * 60 * 1000);
+
+      if (lastSentTime && lastSentTime > twoMinutesAgo) {
+        appLogger.info('Skipping duplicate deposit notification - recently sent', {
+          circleId: circle_id?.slice(0, 10),
+          member: member?.slice(0, 10),
+          lastSent: new Date(lastSentTime).toISOString(),
+        });
+        return;
+      }
+
+      // Format amount (assuming it's in smallest units, need to divide by 1e9 for SUI)
+      const amountFormatted = (Number(amount) / 1e9).toFixed(4);
+
+      // Look up the member's name from the join requests database
+      const memberInfo = await this.lookupMemberName(circle_id, member);
+      const memberName = memberInfo?.userName || null;
+
+      // Send deposit notification
+      await this.sendDepositNotification(
+        phoneNumber,
+        circle_id,
+        member,
+        amountFormatted,
+        memberName,
+        isSecurityDeposit
+      );
+
+      // Track message send time for deduplication
+      this.sentMessages.set(messageKey, Date.now());
+    } catch (error) {
+      appLogger.error('Error handling CustodyDeposited event', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Send notification when a member makes a deposit
+   */
+  private async sendDepositNotification(
+    phoneNumber: string,
+    circleId: string,
+    memberAddress: string,
+    amount: string,
+    memberName?: string | null,
+    isSecurityDeposit?: boolean
+  ): Promise<void> {
+    try {
+      const shortMember = `${memberAddress.slice(0, 6)}...${memberAddress.slice(-4)}`;
+      const memberDisplay = memberName 
+        ? `${memberName} (${shortMember})`
+        : shortMember;
+
+      const depositType = isSecurityDeposit ? 'Security Deposit' : 'Deposit';
+      const emoji = isSecurityDeposit ? '🔒' : '💰';
+      
+      const depositMessage = `${emoji} *${depositType} Received!*
+
+A member has made a deposit:
+
+👤 *Member:* ${memberDisplay}
+💎 *Amount:* ${amount} SUI
+
+The funds are now safely held in the circle's custody wallet.
+
+🔗 View circle: https://njangionchain.com/circle/${circleId}`;
+
+      const result = await whatsappSender.sendMessage({
+        to: phoneNumber,
+        type: 'text',
+        text: depositMessage,
+      });
+
+      if (result.success) {
+        appLogger.info('✅ Deposit notification sent', {
+          phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
+          circleId: circleId.slice(0, 10) + '...',
+          member: memberAddress.slice(0, 10) + '...',
+          amount,
+          depositType,
+          messageId: result.messageId,
+        });
+      } else {
+        appLogger.warn('Failed to send deposit notification', {
+          to: phoneNumber,
+          error: result.error,
+        });
+      }
+    } catch (error) {
+      appLogger.error('Error sending deposit notification', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Check for ContributionMade events (cycle contributions)
+   */
+  private async checkForContributionEvents(): Promise<void> {
+    try {
+      const events = await this.suiClient.queryEvents({
+        query: {
+          MoveEventType: '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc::njangi_payments::ContributionMade',
+        },
+        limit: 50,
+        order: 'descending',
+      });
+
+      if (!events.data || events.data.length === 0) {
+        return;
+      }
+
+      for (const event of events.data) {
+        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+        // Skip events that occurred before listener started
+        if (eventTimestampMs < this.startTime) {
+          continue;
+        }
+
+        // Skip if already processed in this session
+        if (this.processedEvents.has(eventId)) {
+          continue;
+        }
+
+        this.processedEvents.add(eventId);
+
+        await this.handleContributionEvent(event);
+      }
+    } catch (error) {
+      appLogger.error('Error checking for ContributionMade events', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Handle a ContributionMade event - notify admin when member makes a cycle contribution
+   */
+  private async handleContributionEvent(event: any): Promise<void> {
+    try {
+      const parsedJson = event.parsedJson as any;
+
+      if (!parsedJson) {
+        appLogger.warn('ContributionMade event has no parsedJson');
+        return;
+      }
+
+      const {
+        circle_id,
+        member,
+        amount,
+        cycle,
+      } = parsedJson;
+
+      appLogger.info('ContributionMade event detected', {
+        circleId: circle_id?.slice(0, 10),
+        member: member?.slice(0, 10),
+        amount,
+        cycle,
+      });
+
+      // Look up the phone number for this circle
+      const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
+
+      if (!phoneNumber) {
+        appLogger.debug('Circle not linked to WhatsApp, skipping contribution notification', {
+          circleId: circle_id?.slice(0, 10),
+        });
+        return;
+      }
+
+      // Check if we recently sent a message for this contribution (within last 2 minutes)
+      const messageKey = `contribution:${circle_id}:${member}:${cycle}`;
+      const lastSentTime = this.sentMessages.get(messageKey);
+      const now = Date.now();
+      const twoMinutesAgo = now - (2 * 60 * 1000);
+
+      if (lastSentTime && lastSentTime > twoMinutesAgo) {
+        appLogger.info('Skipping duplicate contribution notification - recently sent', {
+          circleId: circle_id?.slice(0, 10),
+          member: member?.slice(0, 10),
+          cycle,
+          lastSent: new Date(lastSentTime).toISOString(),
+        });
+        return;
+      }
+
+      // Format amount (assuming it's in smallest units, need to divide by 1e9 for SUI)
+      const amountFormatted = (Number(amount) / 1e9).toFixed(4);
+
+      // Look up the member's name from the join requests database
+      const memberInfo = await this.lookupMemberName(circle_id, member);
+      const memberName = memberInfo?.userName || null;
+
+      // Send contribution notification
+      await this.sendContributionNotification(
+        phoneNumber,
+        circle_id,
+        member,
+        amountFormatted,
+        cycle,
+        memberName
+      );
+
+      // Track message send time for deduplication
+      this.sentMessages.set(messageKey, Date.now());
+    } catch (error) {
+      appLogger.error('Error handling ContributionMade event', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Send notification when a member makes a cycle contribution
+   */
+  private async sendContributionNotification(
+    phoneNumber: string,
+    circleId: string,
+    memberAddress: string,
+    amount: string,
+    cycle: string,
+    memberName?: string | null
+  ): Promise<void> {
+    try {
+      const shortMember = `${memberAddress.slice(0, 6)}...${memberAddress.slice(-4)}`;
+      const memberDisplay = memberName 
+        ? `${memberName} (${shortMember})`
+        : shortMember;
+      
+      const contributionMessage = `🎯 *Cycle Contribution Made!*
+
+A member has made their contribution for the current cycle:
+
+👤 *Member:* ${memberDisplay}
+💰 *Amount:* ${amount} SUI
+🔄 *Cycle:* #${cycle}
+
+The contribution has been recorded and added to the circle's funds.
+
+🔗 View circle: https://njangionchain.com/circle/${circleId}`;
+
+      const result = await whatsappSender.sendMessage({
+        to: phoneNumber,
+        type: 'text',
+        text: contributionMessage,
+      });
+
+      if (result.success) {
+        appLogger.info('✅ Contribution notification sent', {
+          phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
+          circleId: circleId.slice(0, 10) + '...',
+          member: memberAddress.slice(0, 10) + '...',
+          amount,
+          cycle,
+          messageId: result.messageId,
+        });
+      } else {
+        appLogger.warn('Failed to send contribution notification', {
+          to: phoneNumber,
+          error: result.error,
+        });
+      }
+    } catch (error) {
+      appLogger.error('Error sending contribution notification', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
