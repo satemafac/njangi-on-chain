@@ -324,9 +324,10 @@ export async function formatCircleStatusForWhatsAppWithNames(status: CircleStatu
     return n + (s[(v - 20) % 10] || s[v] || s[0]);
   };
   
-  // Build member list with positions and names
+  // Build member list with positions and names - SHOW ALL MEMBERS
+  console.log('[WhatsApp] Building member list, total members:', status.members.length);
+  
   const memberList = status.members
-    .slice(0, 10) // Limit to 10 members for readability
     .map((m, i) => {
       const positionNum = m.position !== undefined ? m.position + 1 : i + 1;
       const isBeneficiary = m.address === status.currentBeneficiary;
@@ -342,11 +343,14 @@ export async function formatCircleStatusForWhatsAppWithNames(status: CircleStatu
       
       if (isBeneficiary) label += ' 🎯';
       if (isAdmin) label += ' 👑';
+      
+      console.log('[WhatsApp] Member line:', label);
       return label;
     })
     .join('\n');
   
-  const moreMembers = status.members.length > 10 ? `\n   _...and ${status.members.length - 10} more_` : '';
+  console.log('[WhatsApp] Final member list:', memberList);
+  const moreMembers = '';
   
   // Status emoji
   const statusEmoji = status.isActive ? '🟢' : '🟡';
@@ -422,9 +426,8 @@ export function formatCircleStatusForWhatsApp(status: CircleStatusData, circleId
     return n + (s[(v - 20) % 10] || s[v] || s[0]);
   };
   
-  // Build member list with positions (addresses only)
+  // Build member list with positions (addresses only) - SHOW ALL MEMBERS
   const memberList = status.members
-    .slice(0, 10)
     .map((m, i) => {
       const positionNum = m.position !== undefined ? m.position + 1 : i + 1;
       const isBeneficiary = m.address === status.currentBeneficiary;
@@ -436,7 +439,7 @@ export function formatCircleStatusForWhatsApp(status: CircleStatusData, circleId
     })
     .join('\n');
   
-  const moreMembers = status.members.length > 10 ? `\n   _...and ${status.members.length - 10} more_` : '';
+  const moreMembers = '';
   
   // Status emoji
   const statusEmoji = status.isActive ? '🟢' : '🟡';
