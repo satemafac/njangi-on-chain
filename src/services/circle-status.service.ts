@@ -71,10 +71,22 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
       hasRotationOrder: !!fields.rotation_order 
     });
     
-    // Get package ID for this circle
-    console.log('[CircleStatus] Getting package ID...');
-    const packageId = await getCirclePackageId(circleId, fields.admin);
-    console.log('[CircleStatus] Package ID:', packageId?.slice(0, 15));
+    // Get package ID for this circle using the correct network client
+    console.log('[CircleStatus] Getting package ID for network:', targetNetwork);
+    
+    // Instead of using getCirclePackageId which queries wrong network,
+    // extract package ID directly from the circle object type
+    let packageId = '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc'; // Default testnet
+    
+    if (objectData.data?.type) {
+      const match = objectData.data.type.match(/^(0x[a-f0-9]+)::/);
+      if (match && match[1]) {
+        packageId = match[1];
+        console.log('[CircleStatus] Extracted package ID from object type:', packageId?.slice(0, 15));
+      }
+    }
+    
+    console.log('[CircleStatus] Using package ID:', packageId?.slice(0, 15));
     
     // Get dynamic fields for config
     const dynamicFieldsResult = await client.getDynamicFields({ parentId: circleId });
@@ -180,11 +192,19 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
     
     // Get rotation order
     const rotationOrder: string[] = [];
+    console.log('[CircleStatus] Raw rotation_order from blockchain:', fields.rotation_order);
     if (fields.rotation_order && Array.isArray(fields.rotation_order)) {
       (fields.rotation_order as string[]).forEach((addr: string) => {
-        if (addr !== '0x0') rotationOrder.push(addr);
+        console.log('[CircleStatus] Processing rotation address:', addr);
+        if (addr && addr !== '0x0' && addr !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
+          rotationOrder.push(addr);
+          // Also add to memberAddresses if not already there
+          memberAddresses.add(addr);
+        }
       });
     }
+    console.log('[CircleStatus] Final rotation order:', rotationOrder);
+    console.log('[CircleStatus] Total member addresses:', Array.from(memberAddresses));
     
     // Build members list with positions
     const members = Array.from(memberAddresses).map(address => {
