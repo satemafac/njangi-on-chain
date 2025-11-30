@@ -10,7 +10,7 @@ import crypto from 'crypto';
 import { SuiClient } from '@mysten/sui/client';
 import { appLogger } from '../../../utils/logger';
 import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry-service';
-import { getCircleStatus, formatCircleStatusForWhatsApp } from '../../../services/circle-status.service';
+import { getCircleStatus, formatCircleStatusForWhatsAppWithNames } from '../../../services/circle-status.service';
 
 interface WebhookResponse {
   success?: boolean;
@@ -29,15 +29,15 @@ function getWhatsAppNetwork(): 'testnet' | 'mainnet' {
 }
 
 /**
- * Query the WhatsApp Link Registry on-chain to find linked circle for a phone number
+ * Query the WhatsApp Link Registry on-chain to find ALL linked circles for a phone number
  */
-async function getLinkedCircleFromRegistry(phoneNumber: string): Promise<string | null> {
+async function getAllLinkedCirclesFromRegistry(phoneNumber: string): Promise<string[]> {
   try {
     const network = getWhatsAppNetwork();
     const registries = getActiveWhatsAppRegistries(network);
     if (!registries || registries.length === 0) {
       appLogger.warn('No active WhatsApp registries configured', { network });
-      return null;
+      return [];
     }
 
     const registry = registries[0];
@@ -46,17 +46,8 @@ async function getLinkedCircleFromRegistry(phoneNumber: string): Promise<string 
       : (process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://fullnode.mainnet.sui.io:443');
     const suiClient = new SuiClient({ url: rpcUrl });
     
-    appLogger.debug('Using network for WhatsApp registry', { network, rpcUrl: rpcUrl.slice(0, 30) });
-
-    // Normalize phone number (remove + prefix)
     const normalizedPhone = phoneNumber.replace(/^\+/, '');
 
-    appLogger.debug('Querying WhatsApp registry for linked circle', {
-      phoneNumber: normalizedPhone,
-      registryId: registry.registryObjectId?.slice(0, 10),
-    });
-
-    // Query the registry object to get current linked circles
     const registryObject = await suiClient.getObject({
       id: registry.registryObjectId,
       options: {
@@ -65,25 +56,12 @@ async function getLinkedCircleFromRegistry(phoneNumber: string): Promise<string 
     });
 
     if (!registryObject.data?.content || registryObject.data.content.dataType !== 'moveObject') {
-      appLogger.warn('Registry object not found or invalid', {
-        registryId: registry.registryObjectId,
-      });
-      return null;
+      return [];
     }
 
     const registryFields = (registryObject.data.content as { fields: { links?: unknown[] } }).fields;
     const links = registryFields?.links || [];
 
-    appLogger.info('Searching registry links', {
-      phoneNumber: normalizedPhone,
-      phoneWithPlus: `+${normalizedPhone}`,
-      totalLinks: links.length,
-      sampleLink: links[0] ? JSON.stringify(links[0]).slice(0, 200) : 'no links',
-    });
-
-    // Search for a matching link in the registry
-    // The structure is: link.fields.admin_phone_number (nested under fields)
-    // Phone number is stored WITH the + prefix
     type LinkFields = {
       admin_phone_number?: string;
       circle_id?: string;
@@ -93,45 +71,35 @@ async function getLinkedCircleFromRegistry(phoneNumber: string): Promise<string 
       fields?: LinkFields;
     } & LinkFields;
 
+    const linkedCircles: string[] = [];
+
     for (const linkItem of links) {
-      // Get the phone number - it's nested under link.fields
       const link = linkItem as LinkEntry;
       const fields = link.fields || link;
       const linkPhone = fields.admin_phone_number;
       const circleId = fields.circle_id;
-      const isEnabled = fields.enabled === true; // Must be explicitly true
+      const isEnabled = fields.enabled === true;
       
-      // Compare with both formats (with and without +)
-      if (linkPhone && isEnabled) {
+      if (linkPhone && isEnabled && circleId) {
         const linkPhoneNormalized = linkPhone.replace(/^\+/, '');
         if (linkPhoneNormalized === normalizedPhone || linkPhone === `+${normalizedPhone}`) {
-          appLogger.info('✅ Found linked circle in registry', {
-            phoneNumber: normalizedPhone,
-            linkPhone,
-            circleId: circleId?.slice?.(0, 10),
-            isEnabled,
-          });
-          return circleId || null;
+          linkedCircles.push(circleId);
         }
       }
     }
 
-    appLogger.info('No linked circle found in registry', {
+    appLogger.info('Found linked circles', {
       phoneNumber: normalizedPhone,
-      phoneWithPlus: `+${normalizedPhone}`,
-      linksChecked: links.length,
-      enabledLinks: links.filter((l: unknown) => {
-        const link = l as { fields?: { enabled?: boolean }; enabled?: boolean };
-        return (link.fields || link).enabled === true;
-      }).length,
+      count: linkedCircles.length,
     });
-    return null;
+
+    return linkedCircles;
   } catch (error) {
-    appLogger.error('Error querying WhatsApp registry', {
+    appLogger.error('Error querying WhatsApp registry for all circles', {
       error: error instanceof Error ? error.message : String(error),
       phoneNumber,
     });
-    return null;
+    return [];
   }
 }
 
@@ -331,80 +299,25 @@ async function handler(
                     }
                   } else if (lowerText.includes('status') || lowerText === '/status') {
                     // Handle /status command - get circle status from blockchain
-                    // First, query the registry to find circle linked to this phone number
-                    let circleId = null;
+                    const parts = messageText.split(' ');
+                    const specificCircleId = parts.length > 1 ? parts[1].trim() : null;
 
-                    // Query on-chain registry for linked circle
-                    circleId = await getLinkedCircleFromRegistry(sender);
-
-                    // If no linked circle, check if user provided one
-                    if (!circleId) {
-                      const parts = messageText.split(' ');
-                      if (parts.length > 1) {
-                        circleId = parts[1].trim();
-                      }
-                    }
-
-                    if (!circleId) {
-                      const noCircleMessage = `❌ No circle linked to your number. Please link a circle via the Njangi app first. Or use:\n/status <circle-id>`;
-
-                      try {
-                        const whatsappResponse = await fetch(
-                          `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
-                          {
-                            method: 'POST',
-                            headers: {
-                              'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
-                              'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify({
-                              messaging_product: 'whatsapp',
-                              to: sender,
-                              type: 'text',
-                              text: {
-                                body: noCircleMessage,
-                              },
-                            }),
-                          }
-                        );
-
-                        if (!whatsappResponse.ok) {
-                          const errorText = await whatsappResponse.text();
-                          appLogger.error('Failed to send no circle message', {
-                            status: whatsappResponse.status,
-                            error: errorText,
-                          });
-                        }
-                      } catch (sendError) {
-                        appLogger.error('Error sending no circle message', {
-                          error: sendError instanceof Error ? sendError.message : String(sendError),
-                        });
-                      }
-                    } else {
-                      // Fetch full circle status from blockchain and send formatted message
+                    if (specificCircleId) {
+                      // User provided specific circle ID - show that one
                       try {
                         const network = getWhatsAppNetwork();
-                        appLogger.info('Fetching circle status from blockchain', { circleId, network });
+                        appLogger.info('Fetching specific circle status', { circleId: specificCircleId, network });
                         
-                        const circleStatus = await getCircleStatus(circleId, network);
+                        const circleStatus = await getCircleStatus(specificCircleId, network);
                         
                         let statusMessage: string;
                         if (circleStatus) {
-                          // Format full status for WhatsApp
-                          statusMessage = formatCircleStatusForWhatsApp(circleStatus, circleId);
-                          appLogger.info('Circle status fetched successfully', {
-                            circleName: circleStatus.name,
-                            members: circleStatus.currentMembers,
-                            cycle: circleStatus.currentCycle,
-                          });
+                          statusMessage = await formatCircleStatusForWhatsAppWithNames(circleStatus, specificCircleId);
                         } else {
-                          // Fallback to simple link if status fetch fails
-                          const circleLink = `https://njangionchain.com/circle/${circleId}`;
-                          statusMessage = `📊 View your circle status here:\n${circleLink}`;
-                          appLogger.warn('Could not fetch circle status, sending link only', { circleId });
+                          const circleLink = `https://njangionchain.com/circle/${specificCircleId}`;
+                          statusMessage = `📊 View circle status here:\n${circleLink}`;
                         }
 
-                        // Send status message
                         const whatsappResponse = await fetch(
                           `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
                           {
@@ -419,7 +332,7 @@ async function handler(
                               type: 'text',
                               text: {
                                 body: statusMessage,
-                                preview_url: true, // Enable link preview
+                                preview_url: true,
                               },
                             }),
                           }
@@ -432,13 +345,93 @@ async function handler(
                             error: errorText,
                           });
                         } else {
-                          appLogger.info('✅ Status message sent', { to: sender, circleId });
+                          appLogger.info('✅ Status message sent', { to: sender, circleId: specificCircleId });
                         }
                       } catch (statusError) {
                         appLogger.error('Error sending status message', {
                           error: statusError instanceof Error ? statusError.message : String(statusError),
                           sender,
                         });
+                      }
+                    } else {
+                      // No specific circle ID - show all linked circles
+                      const linkedCircles = await getAllLinkedCirclesFromRegistry(sender);
+
+                      if (linkedCircles.length === 0) {
+                        const noCircleMessage = `❌ No circles linked to your number.\n\nPlease link a circle via the Njangi app first.\n\nOr use: /status <circle-id>`;
+
+                        try {
+                          await fetch(
+                            `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                            {
+                              method: 'POST',
+                              headers: {
+                                'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+                                'Content-Type': 'application/json',
+                              },
+                              body: JSON.stringify({
+                                messaging_product: 'whatsapp',
+                                to: sender,
+                                type: 'text',
+                                text: {
+                                  body: noCircleMessage,
+                                },
+                              }),
+                            }
+                          );
+                        } catch (sendError) {
+                          appLogger.error('Error sending no circle message', {
+                            error: sendError instanceof Error ? sendError.message : String(sendError),
+                          });
+                        }
+                      } else {
+                        // Send status for all linked circles
+                        const network = getWhatsAppNetwork();
+                        appLogger.info('Fetching status for multiple circles', { count: linkedCircles.length });
+
+                        for (const circleId of linkedCircles) {
+                          try {
+                            const circleStatus = await getCircleStatus(circleId, network);
+                            
+                            let statusMessage: string;
+                            if (circleStatus) {
+                              statusMessage = await formatCircleStatusForWhatsAppWithNames(circleStatus, circleId);
+                            } else {
+                              const circleLink = `https://njangionchain.com/circle/${circleId}`;
+                              statusMessage = `📊 View circle status here:\n${circleLink}`;
+                            }
+
+                            await fetch(
+                              `https://graph.facebook.com/v23.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+                              {
+                                method: 'POST',
+                                headers: {
+                                  'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+                                  'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({
+                                  messaging_product: 'whatsapp',
+                                  to: sender,
+                                  type: 'text',
+                                  text: {
+                                    body: statusMessage,
+                                    preview_url: true,
+                                  },
+                                }),
+                              }
+                            );
+
+                            // Small delay between messages to avoid rate limits
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                          } catch (circleError) {
+                            appLogger.error('Error sending circle status', {
+                              error: circleError instanceof Error ? circleError.message : String(circleError),
+                              circleId,
+                            });
+                          }
+                        }
+
+                        appLogger.info('✅ Status messages sent for all circles', { to: sender, count: linkedCircles.length });
                       }
                     }
                   } else {

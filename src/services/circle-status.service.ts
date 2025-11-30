@@ -259,7 +259,135 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
 }
 
 /**
- * Format circle status for WhatsApp message
+ * Format circle status for WhatsApp message with member names
+ */
+export async function formatCircleStatusForWhatsAppWithNames(status: CircleStatusData, circleId: string): Promise<string> {
+  const shortenAddress = (addr: string) => `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+  
+  // Look up member names from join requests database
+  const memberNames = new Map<string, string>();
+  
+  try {
+    // Fetch names for all members
+    for (const member of status.members.slice(0, 10)) {
+      try {
+        const baseUrl = process.env.VERCEL_URL 
+          ? `https://${process.env.VERCEL_URL}` 
+          : (process.env.NODE_ENV === 'production' ? 'https://njangionchain.com' : 'http://localhost:3000');
+        
+        const response = await fetch(
+          `${baseUrl}/api/join-requests/lookup-user?circleId=${encodeURIComponent(circleId)}&userAddress=${encodeURIComponent(member.address)}`
+        );
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.data?.userName) {
+            memberNames.set(member.address, data.data.userName);
+          }
+        }
+      } catch (err) {
+        // Silently fail for individual lookups
+        console.error('Error looking up member name:', err);
+      }
+    }
+  } catch (error) {
+    console.error('Error fetching member names:', error);
+  }
+  
+  // Format currency
+  const formatCurrency = (amount: number, currency: string = 'USD') => {
+    if (currency === 'USD') return `$${amount.toFixed(2)}`;
+    if (currency === 'XAF') return `${amount.toLocaleString()} XAF`;
+    if (currency === 'NGN') return `₦${amount.toLocaleString()}`;
+    if (currency === 'KES') return `KSh ${amount.toLocaleString()}`;
+    if (currency === 'GHS') return `GH₵${amount.toFixed(2)}`;
+    if (currency === 'ZAR') return `R${amount.toFixed(2)}`;
+    return `${amount.toFixed(2)} ${currency}`;
+  };
+  
+  // Format date
+  const formatDate = (timestamp: number) => {
+    if (!timestamp || timestamp === 0) return 'Not set';
+    const date = new Date(timestamp);
+    return date.toLocaleDateString('en-US', { 
+      weekday: 'short', 
+      month: 'short', 
+      day: 'numeric',
+      year: 'numeric'
+    });
+  };
+  
+  // Get cycle day suffix
+  const getOrdinal = (n: number) => {
+    const s = ['th', 'st', 'nd', 'rd'];
+    const v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  };
+  
+  // Build member list with positions and names
+  const memberList = status.members
+    .slice(0, 10) // Limit to 10 members for readability
+    .map((m, i) => {
+      const positionNum = m.position !== undefined ? m.position + 1 : i + 1;
+      const isBeneficiary = m.address === status.currentBeneficiary;
+      const isAdmin = m.isAdmin;
+      const name = memberNames.get(m.address);
+      
+      let label = `${positionNum}. `;
+      if (name) {
+        label += `${name} (${shortenAddress(m.address)})`;
+      } else {
+        label += shortenAddress(m.address);
+      }
+      
+      if (isBeneficiary) label += ' 🎯';
+      if (isAdmin) label += ' 👑';
+      return label;
+    })
+    .join('\n');
+  
+  const moreMembers = status.members.length > 10 ? `\n   _...and ${status.members.length - 10} more_` : '';
+  
+  // Status emoji
+  const statusEmoji = status.isActive ? '🟢' : '🟡';
+  const statusText = status.isActive ? 'Active' : 'Pending Activation';
+  
+  // Build the message
+  const message = `📊 *${status.name}* ${statusEmoji}
+
+*Status:* ${statusText}
+*Cycle:* ${status.currentCycle > 0 ? `Round ${status.currentCycle}` : 'Not started'}
+
+━━━━━━━━━━━━━━━━━━
+👥 *Members* (${status.currentMembers}/${status.maxMembers})
+━━━━━━━━━━━━━━━━━━
+${memberList}${moreMembers}
+
+${status.currentBeneficiary ? `🎯 *Current Beneficiary:*\n   ${shortenAddress(status.currentBeneficiary)}` : ''}
+
+━━━━━━━━━━━━━━━━━━
+💰 *Financials*
+━━━━━━━━━━━━━━━━━━
+• Contribution: ${formatCurrency(status.contributionAmountUsd, status.currencyType)}
+• Security Deposit: ${formatCurrency(status.securityDepositUsd, status.currencyType)}
+${status.totalCollected && status.totalCollected > 0 ? `• Total Collected: ~${formatCurrency(status.totalCollected, status.currencyType)}` : ''}
+
+━━━━━━━━━━━━━━━━━━
+📅 *Schedule*
+━━━━━━━━━━━━━━━━━━
+• Cycle Length: ${status.cycleLength} days
+• Payout Day: ${getOrdinal(status.cycleDay)} of each month
+• Next Payout: ${formatDate(status.nextPayoutTime)}
+
+🔗 *View Full Details:*
+https://njangionchain.com/circle/${circleId}`;
+
+  return message;
+}
+
+/**
+ * Format circle status for WhatsApp message (synchronous version without member names)
+ * Use this when you need a synchronous response or can't await
  */
 export function formatCircleStatusForWhatsApp(status: CircleStatusData, circleId: string): string {
   const shortenAddress = (addr: string) => `${addr.slice(0, 6)}...${addr.slice(-4)}`;
@@ -294,9 +422,9 @@ export function formatCircleStatusForWhatsApp(status: CircleStatusData, circleId
     return n + (s[(v - 20) % 10] || s[v] || s[0]);
   };
   
-  // Build member list with positions
+  // Build member list with positions (addresses only)
   const memberList = status.members
-    .slice(0, 10) // Limit to 10 members for readability
+    .slice(0, 10)
     .map((m, i) => {
       const positionNum = m.position !== undefined ? m.position + 1 : i + 1;
       const isBeneficiary = m.address === status.currentBeneficiary;
