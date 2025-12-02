@@ -3014,7 +3014,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      case 'contributeFromCustody':
+      case 'contributeFromCustody': {
+        // Handle network parameter if provided by frontend
+        const requestedNetwork = req.body.network;
+        if (requestedNetwork && (requestedNetwork === 'testnet' || requestedNetwork === 'mainnet')) {
+          console.log(`[contributeFromCustody] Frontend requested network: ${requestedNetwork}, current server network: ${getCurrentNetwork()}`);
+        }
+
         try {
           // Extract parameters from request body
           const { circleId, walletId, account } = req.body;
@@ -3047,20 +3053,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           console.log(`Creating custody contribution transaction for circle ${circleId}, wallet ${walletId}`);
           
-          // Get the correct package ID for this circle
-          let packageIdToUse = PACKAGE_ID;
+          // Handle network switching like other endpoints
+          const originalNetwork = getCurrentNetwork();
+          let txResult;
+          
           try {
-            const dynamicPackageId = await getCirclePackageId(circleId, session.account.userAddr);
-            if (dynamicPackageId) {
-              packageIdToUse = dynamicPackageId;
-              console.log(`Using dynamic package ID ${packageIdToUse} for circle ${circleId}`);
-            } else {
-              console.log(`No dynamic package ID found, using default ${PACKAGE_ID}`);
+            // Temporarily set the network to match the frontend request
+            if (requestedNetwork && requestedNetwork !== originalNetwork) {
+              console.log(`[contributeFromCustody] Temporarily switching server network from ${originalNetwork} to ${requestedNetwork}`);
+              setCurrentNetwork(requestedNetwork as NetworkType);
+              // Reinitialize the EnokiZkLoginService with the new network configuration
+              instance.initializeWithNetwork();
             }
-          } catch (error) {
-            console.warn(`Failed to get dynamic package ID for circle ${circleId}, using default:`, error);
-            packageIdToUse = PACKAGE_ID;
-          }
+            
+            // Get the correct package ID for this circle using the current network context
+            const circlePackageId = await getCirclePackageId(circleId, session.account.userAddr);
+            const packageIdToUse = circlePackageId || getCurrentPackageId();
+            console.log(`[contributeFromCustody] Using package ID: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
           
           // Get contribution amount from circle object - improved version
           let contributionAmount = 0;
@@ -3175,7 +3184,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           console.log(`Final contribution amount: ${contributionAmount} MIST (${contributionAmount / 1e9} SUI)`);
           
           // Execute the transaction
-          const txResult = await instance.sendTransaction(
+          txResult = await instance.sendTransaction(
             session.account,
             (txb: Transaction) => {
               txb.setSender(session.account!.userAddr);
@@ -3196,6 +3205,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             },
             { gasBudget: 50000000 }
           );
+          } finally {
+            // Always restore the original network and reinitialize the service
+            if (requestedNetwork && requestedNetwork !== originalNetwork) {
+              console.log(`[contributeFromCustody] Restoring server network back to ${originalNetwork}`);
+              setCurrentNetwork(originalNetwork as NetworkType);
+              instance.initializeWithNetwork();
+            }
+          }
           
           console.log('Contribution transaction successful:', txResult);
           return res.status(200).json({ 
@@ -3223,6 +3240,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             error: err instanceof Error ? err.message : 'Failed to process contribution'
           });
         }
+      }
 
       case 'executeSwapOnly':
         if (!account) {
