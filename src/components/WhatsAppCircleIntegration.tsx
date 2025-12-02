@@ -14,7 +14,7 @@ import { toast } from 'react-hot-toast';
 import { AccountData } from '@/services/zkLoginService';
 import { getCurrentNetwork } from '@/services/network-config';
 import ConfirmationModal from './ConfirmationModal';
-import PhoneInput, { isValidPhoneNumber, getCountryCallingCode } from 'react-phone-number-input';
+import PhoneInput, { isValidPhoneNumber } from 'react-phone-number-input';
 import 'react-phone-number-input/style.css';
 
 interface WhatsAppIntegrationProps {
@@ -123,6 +123,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   // Fetch current link status
   useEffect(() => {
     checkLinkStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [circleId]);
 
   const checkLinkStatus = async () => {

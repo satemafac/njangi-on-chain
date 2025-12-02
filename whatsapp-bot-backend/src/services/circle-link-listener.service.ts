@@ -278,7 +278,7 @@ export class CircleLinkListenerService {
    */
   private async getPhoneNumberForCircle(circleId: string): Promise<string | null> {
     try {
-      const registryId = '0x9e203f7dd2d56b058d82fb4f1fafe135133245fef347d8de4967e2c1c78b9459';
+      const registryId = process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID || '0x9e203f7dd2d56b058d82fb4f1fafe135133245fef347d8de4967e2c1c78b9459';
 
       const registryObject = await this.suiClient.getObject({
         id: registryId,
