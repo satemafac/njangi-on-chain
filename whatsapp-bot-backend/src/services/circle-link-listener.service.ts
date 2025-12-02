@@ -7,12 +7,15 @@ import { whatsappSender } from './whatsapp-sender.service';
 // CIRCLE LINK LISTENER SERVICE
 // ============================================================================
 
+// Get package ID from environment variable with fallback to default testnet package
+const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID || '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc';
+
 export class CircleLinkListenerService {
   private isRunning = false;
   private suiClient: SuiClient;
   private checkInterval = 5000; // Check every 5 seconds
   private processedEvents: Set<string> = new Set(); // Track events in current session only
-  private sentMessages: Map<string, any> = new Map(); // Track recently sent messages for deduplication
+  private sentMessages: Map<string, number> = new Map(); // Track recently sent messages for deduplication (stores timestamps)
   private startTime: number = 0; // Track when listener started
 
   constructor() {
@@ -22,6 +25,7 @@ export class CircleLinkListenerService {
 
     appLogger.info('CircleLinkListenerService initialized', {
       rpcUrl,
+      packageId: PACKAGE_ID.slice(0, 15) + '...',
       note: 'Will only process events from startup onwards (skipping old events)',
     });
   }
@@ -88,7 +92,7 @@ export class CircleLinkListenerService {
     try {
       const events = await this.suiClient.queryEvents({
         query: {
-          MoveEventType: '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc::whatsapp_integration::CircleLinked',
+          MoveEventType: `${PACKAGE_ID}::whatsapp_integration::CircleLinked`,
         },
         limit: 50,
         order: 'descending',
@@ -161,7 +165,7 @@ export class CircleLinkListenerService {
     try {
       const events = await this.suiClient.queryEvents({
         query: {
-          MoveEventType: '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc::whatsapp_integration::CircleUnlinked',
+          MoveEventType: `${PACKAGE_ID}::whatsapp_integration::CircleUnlinked`,
         },
         limit: 50,
         order: 'descending',
@@ -369,7 +373,7 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
     try {
       const events = await this.suiClient.queryEvents({
         query: {
-          MoveEventType: '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc::njangi_circles::MemberJoined',
+          MoveEventType: `${PACKAGE_ID}::njangi_circles::MemberJoined`,
         },
         limit: 50,
         order: 'descending',
@@ -604,7 +608,7 @@ They can now participate in the circle activities. Make sure they pay their secu
     try {
       const events = await this.suiClient.queryEvents({
         query: {
-          MoveEventType: '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc::njangi_custody::CustodyDeposited',
+          MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited`,
         },
         limit: 50,
         order: 'descending',
@@ -786,7 +790,7 @@ The funds are now safely held in the circle's custody wallet.
     try {
       const events = await this.suiClient.queryEvents({
         query: {
-          MoveEventType: '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc::njangi_payments::ContributionMade',
+          MoveEventType: `${PACKAGE_ID}::njangi_payments::ContributionMade`,
         },
         limit: 50,
         order: 'descending',
@@ -963,7 +967,7 @@ The contribution has been recorded and added to the circle's funds.
     try {
       const events = await this.suiClient.queryEvents({
         query: {
-          MoveEventType: '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc::njangi_circles::MemberRemoved',
+          MoveEventType: `${PACKAGE_ID}::njangi_circles::MemberRemoved`,
         },
         limit: 50,
         order: 'descending',
@@ -1138,7 +1142,7 @@ The member no longer has access to the circle.
     try {
       const events = await this.suiClient.queryEvents({
         query: {
-          MoveEventType: '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc::njangi_circles::RotationOrderChanged',
+          MoveEventType: `${PACKAGE_ID}::njangi_circles::RotationOrderChanged`,
         },
         limit: 50,
         order: 'descending',
@@ -1289,7 +1293,7 @@ The updated rotation determines the order in which members receive payouts. Chec
     try {
       const events = await this.suiClient.queryEvents({
         query: {
-          MoveEventType: '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc::njangi_circles::CircleActivated',
+          MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleActivated`,
         },
         limit: 50,
         order: 'descending',

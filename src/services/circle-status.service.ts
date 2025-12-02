@@ -5,8 +5,6 @@
  */
 
 import { SuiClient } from '@mysten/sui/client';
-import { getCurrentRpcUrl } from './network-config';
-import { getCirclePackageId } from './circle-service';
 
 export interface CircleStatusData {
   name: string;
@@ -64,10 +62,11 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
       return null;
     }
     
-    const fields = objectData.data.content.fields as Record<string, any>;
+    const fields = objectData.data.content.fields as Record<string, unknown>;
+    const adminStr = typeof fields.admin === 'string' ? fields.admin : '';
     console.log('[CircleStatus] Circle fields:', { 
       name: fields.name, 
-      admin: fields.admin?.slice(0, 10), 
+      admin: adminStr.slice(0, 10), 
       hasRotationOrder: !!fields.rotation_order 
     });
     
@@ -76,7 +75,9 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
     
     // Instead of using getCirclePackageId which queries wrong network,
     // extract package ID directly from the circle object type
-    let packageId = '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc'; // Default testnet
+    // Fall back to env variable if extraction fails
+    const defaultPackageId = process.env.NEXT_PUBLIC_PACKAGE_ID || '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc';
+    let packageId = defaultPackageId;
     
     if (objectData.data?.type) {
       const match = objectData.data.type.match(/^(0x[a-f0-9]+)::/);
@@ -113,9 +114,9 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
             });
             
             if (configData.data?.content && 'fields' in configData.data.content) {
-              const outerFields = configData.data.content.fields as any;
+              const outerFields = configData.data.content.fields as { value?: { fields?: Record<string, unknown> } };
               if (outerFields?.value?.fields) {
-                const configFields = outerFields.value.fields;
+                const configFields = outerFields.value.fields as Record<string, unknown>;
                 if (configFields.contribution_amount) contributionAmount = Number(configFields.contribution_amount) / 1e9;
                 if (configFields.contribution_amount_usd) contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
                 if (configFields.security_deposit) securityDeposit = Number(configFields.security_deposit) / 1e9;
@@ -150,28 +151,16 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
       );
       
       if (createEvent?.parsedJson) {
-        const eventData = createEvent.parsedJson as any;
+        const eventData = createEvent.parsedJson as { currency_type?: string };
         if (eventData.currency_type) currencyType = eventData.currency_type;
       }
-    } catch (error) {
-      console.error('Error fetching creation event:', error);
+    } catch {
+      // Ignore errors fetching creation event
     }
     
     // Get members from blockchain
     const memberAddresses = new Set<string>();
     if (typeof fields.admin === 'string') memberAddresses.add(fields.admin);
-    
-    // Try to get members from the members table
-    let membersTableId: string | undefined;
-    for (const field of dynamicFieldsResult.data) {
-      if (field.name && typeof field.name === 'object' && 'value' in field.name) {
-        const nameValue = (field.name as any).value;
-        if (nameValue === 'members' || nameValue === 'member_list') {
-          membersTableId = field.objectId;
-          break;
-        }
-      }
-    }
     
     // Fetch member events as fallback
     try {
@@ -243,7 +232,7 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
       isActive = activationEvents.data.some(event => 
         (event.parsedJson as { circle_id?: string })?.circle_id === circleId
       );
-    } catch (error) {
+    } catch {
       // Default to checking fields
       isActive = fields.is_active === true;
     }
