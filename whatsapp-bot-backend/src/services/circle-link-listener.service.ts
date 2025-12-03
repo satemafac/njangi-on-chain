@@ -1225,11 +1225,34 @@ The member no longer has access to the circle.
         return;
       }
 
+      // Fetch the rotation order from the circle object
+      const rotationOrder = await this.getCircleRotationOrder(circle_id);
+      
+      // Look up names for each member in the rotation order
+      const memberList: Array<{ address: string; name: string | null; position: number }> = [];
+      
+      if (rotationOrder && rotationOrder.length > 0) {
+        for (let i = 0; i < rotationOrder.length; i++) {
+          const address = rotationOrder[i];
+          // Skip zero addresses
+          if (address === '0x0000000000000000000000000000000000000000000000000000000000000000') {
+            continue;
+          }
+          const memberInfo = await this.lookupMemberName(circle_id, address);
+          memberList.push({
+            address,
+            name: memberInfo?.userName || null,
+            position: i + 1,
+          });
+        }
+      }
+
       // Send rotation order changed notification
       await this.sendRotationOrderChangedNotification(
         phoneNumber,
         circle_id,
-        member_count
+        member_count,
+        memberList
       );
 
       // Track message send time for deduplication
@@ -1242,21 +1265,68 @@ The member no longer has access to the circle.
   }
 
   /**
+   * Fetch the rotation order from a circle object
+   */
+  private async getCircleRotationOrder(circleId: string): Promise<string[] | null> {
+    try {
+      const circleObject = await this.suiClient.getObject({
+        id: circleId,
+        options: { showContent: true },
+      });
+
+      if (!circleObject.data?.content || circleObject.data.content.dataType !== 'moveObject') {
+        appLogger.warn('Circle object not found or invalid', { circleId: circleId.slice(0, 10) });
+        return null;
+      }
+
+      const fields = (circleObject.data.content as any).fields;
+      const rotationOrder = fields?.rotation_order || [];
+
+      appLogger.info('Fetched rotation order', {
+        circleId: circleId.slice(0, 10),
+        memberCount: rotationOrder.length,
+      });
+
+      return rotationOrder;
+    } catch (error) {
+      appLogger.error('Error fetching circle rotation order', {
+        error: error instanceof Error ? error.message : String(error),
+        circleId: circleId.slice(0, 10),
+      });
+      return null;
+    }
+  }
+
+  /**
    * Send notification when rotation order is changed
    */
   private async sendRotationOrderChangedNotification(
     phoneNumber: string,
     circleId: string,
-    memberCount: string
+    memberCount: string,
+    memberList?: Array<{ address: string; name: string | null; position: number }>
   ): Promise<void> {
     try {
+      // Format the member list with positions and names
+      let memberListText = '';
+      if (memberList && memberList.length > 0) {
+        memberListText = '\n\n📋 *New Rotation Order:*\n' + memberList.map(m => {
+          const shortAddr = `${m.address.slice(0, 6)}...${m.address.slice(-4)}`;
+          const displayName = m.name ? `${m.name} (${shortAddr})` : shortAddr;
+          return `${m.position}. ${displayName}`;
+        }).join('\n');
+      }
+
+      const shortCircleId = `${circleId.slice(0, 6)}...${circleId.slice(-4)}`;
+      
       const reorderMessage = `🔄 *Rotation Order Updated*
 
 The member rotation order has been changed by the admin.
 
-👥 *Members in new order:* ${memberCount}
+🆔 *Circle:* ${shortCircleId}
+👥 *Total Members:* ${memberCount}${memberListText}
 
-The updated rotation determines the order in which members receive payouts. Check the circle details to see the new arrangement.
+The rotation order determines who receives payouts and when.
 
 🔗 View circle: https://njangionchain.com/circle/${circleId}`;
 
@@ -1271,6 +1341,7 @@ The updated rotation determines the order in which members receive payouts. Chec
           phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
           circleId: circleId.slice(0, 10) + '...',
           memberCount,
+          memberListLength: memberList?.length || 0,
           messageId: result.messageId,
         });
       } else {
