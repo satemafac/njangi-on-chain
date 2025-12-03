@@ -140,9 +140,26 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
       }
     }
     
-    // Get custody wallet ID from circle fields
-    if (fields.custody_wallet_id) {
-      custodyWalletId = typeof fields.custody_wallet_id === 'string' ? fields.custody_wallet_id : undefined;
+    // Get custody wallet ID from CustodyWalletCreated event
+    try {
+      const custodyEvents = await client.queryEvents({
+        query: { MoveEventType: `${packageId}::njangi_custody::CustodyWalletCreated` },
+        limit: 100
+      });
+      
+      const custodyEvent = custodyEvents.data.find(event => 
+        (event.parsedJson as { circle_id?: string })?.circle_id === circleId
+      );
+      
+      if (custodyEvent?.parsedJson) {
+        const walletId = (custodyEvent.parsedJson as { wallet_id?: string })?.wallet_id;
+        if (walletId) {
+          custodyWalletId = walletId;
+          console.log('[CircleStatus] Found custody wallet ID:', custodyWalletId?.slice(0, 15));
+        }
+      }
+    } catch (error) {
+      console.error('[CircleStatus] Error finding custody wallet event:', error);
     }
     
     // Fetch custody wallet balance if we have the wallet ID
@@ -153,17 +170,27 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
           options: { showContent: true }
         });
         
+        console.log('[CircleStatus] Custody wallet object:', JSON.stringify(custodyData.data?.content, null, 2)?.slice(0, 500));
+        
         if (custodyData.data?.content && 'fields' in custodyData.data.content) {
           const custodyFields = custodyData.data.content.fields as Record<string, unknown>;
-          // The balance might be stored in a nested balance field
+          
+          // Balance<SUI> is stored as a nested object with 'value' field
           if (custodyFields.balance !== undefined) {
-            custodyBalance = Number(custodyFields.balance) / 1e9;
+            const balanceField = custodyFields.balance as { value?: string } | string | number;
+            if (typeof balanceField === 'object' && balanceField !== null && 'value' in balanceField) {
+              custodyBalance = Number(balanceField.value) / 1e9;
+            } else {
+              custodyBalance = Number(balanceField) / 1e9;
+            }
           }
           console.log('[CircleStatus] Custody wallet balance:', custodyBalance, 'SUI');
         }
       } catch (error) {
-        console.error('Error fetching custody wallet:', error);
+        console.error('[CircleStatus] Error fetching custody wallet:', error);
       }
+    } else {
+      console.log('[CircleStatus] No custody wallet ID found for circle:', circleId?.slice(0, 15));
     }
     
     // Fallback to direct fields
