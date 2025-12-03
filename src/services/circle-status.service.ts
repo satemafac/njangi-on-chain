@@ -165,6 +165,10 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
     // Fetch custody wallet balance if we have the wallet ID
     if (custodyWalletId) {
       try {
+        let mainSuiBalance = 0;
+        let dynamicFieldSuiBalance = 0;
+        
+        // 1. Fetch the CustodyWallet object itself
         const custodyData = await client.getObject({
           id: custodyWalletId,
           options: { showContent: true }
@@ -173,19 +177,42 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
         console.log('[CircleStatus] Custody wallet object:', JSON.stringify(custodyData.data?.content, null, 2)?.slice(0, 500));
         
         if (custodyData.data?.content && 'fields' in custodyData.data.content) {
-          const custodyFields = custodyData.data.content.fields as Record<string, unknown>;
+          const wf = custodyData.data.content.fields as Record<string, unknown>;
           
-          // Balance<SUI> is stored as a nested object with 'value' field
-          if (custodyFields.balance !== undefined) {
-            const balanceField = custodyFields.balance as { value?: string } | string | number;
-            if (typeof balanceField === 'object' && balanceField !== null && 'value' in balanceField) {
-              custodyBalance = Number(balanceField.value) / 1e9;
-            } else {
-              custodyBalance = Number(balanceField) / 1e9;
+          // Extract the main balance (contributions) - Balance<SUI> is stored as balance.fields.value
+          if (wf.balance && typeof wf.balance === 'object' && 'fields' in wf.balance) {
+            mainSuiBalance = Number((wf.balance.fields as Record<string, unknown>)?.value || 0) / 1e9;
+          } else if (wf.balance) {
+            // Handle case where balance might be a direct value
+            mainSuiBalance = Number(wf.balance) / 1e9;
+          }
+          console.log('[CircleStatus] Main balance (contributions):', mainSuiBalance, 'SUI');
+        }
+        
+        // 2. Fetch dynamic fields to find the SUI Coin object (security deposits)
+        const dynamicFieldsResult = await client.getDynamicFields({ parentId: custodyWalletId });
+        
+        for (const field of dynamicFieldsResult.data) {
+          if (field.objectType && field.objectType.includes('::coin::Coin<0x2::sui::SUI>')) {
+            console.log('[CircleStatus] Found SUI Coin dynamic field:', field.objectId);
+            const coinData = await client.getObject({
+              id: field.objectId,
+              options: { showContent: true }
+            });
+            if (coinData.data?.content && 'fields' in coinData.data.content) {
+              const coinFields = coinData.data.content.fields as Record<string, unknown>;
+              if (coinFields.balance) {
+                dynamicFieldSuiBalance = Number(coinFields.balance) / 1e9;
+                console.log('[CircleStatus] Dynamic field balance (security deposits):', dynamicFieldSuiBalance, 'SUI');
+                break; // Assuming only one SUI coin dynamic field for security deposits
+              }
             }
           }
-          console.log('[CircleStatus] Custody wallet balance:', custodyBalance, 'SUI');
         }
+        
+        // Calculate total balance
+        custodyBalance = mainSuiBalance + dynamicFieldSuiBalance;
+        console.log('[CircleStatus] Total custody balance:', custodyBalance, 'SUI');
       } catch (error) {
         console.error('[CircleStatus] Error fetching custody wallet:', error);
       }
