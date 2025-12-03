@@ -927,8 +927,18 @@ const cachedApiCall = async (
       circuitBreakers.set(circuitKey, circuitState);
     }
     
-    // Cache successful result
-    setCacheItem(cacheKey, result);
+    // DON'T cache empty results for circle queries - they may indicate timing issues on first login
+    // This prevents the "no circles until refresh" bug
+    const isEmptyCircleResult = result && 
+      (Array.isArray(result.circles) && result.circles.length === 0) &&
+      cacheKey.includes('Circles');
+    
+    if (isEmptyCircleResult) {
+      console.log(`⚠️ Not caching empty circles result for ${cacheKey} - may be timing issue`);
+    } else {
+      // Cache successful result
+      setCacheItem(cacheKey, result);
+    }
     return result;
   } catch (error) {
     // Enhanced error categorization
@@ -3356,6 +3366,30 @@ export default function Dashboard() {
   useEffect(() => {
     setDisplayedCirclesCount(3); // Reset to initial value
   }, [circles.length]);
+
+  // Track if we've already done a retry for first-time login
+  const [hasRetried, setHasRetried] = useState(false);
+  
+  // Auto-retry effect: If circles are empty after initial load, retry once after delay
+  // This fixes the "no circles until refresh" bug on first login
+  useEffect(() => {
+    // Only retry if: loading is done, no circles found, not already retried, and user is logged in
+    if (!loading && circles.length === 0 && !hasRetried && userAddress && !error) {
+      console.log('🔄 First load returned empty circles, scheduling auto-retry in 3 seconds...');
+      const retryTimeout = setTimeout(() => {
+        console.log('🔄 Auto-retrying circle fetch after empty initial load...');
+        setHasRetried(true);
+        fetchUserCircles(true); // Force refresh to bypass any cached empty results
+      }, 3000);
+      
+      return () => clearTimeout(retryTimeout);
+    }
+  }, [loading, circles.length, hasRetried, userAddress, error, fetchUserCircles]);
+  
+  // Reset retry flag when user changes (new login)
+  useEffect(() => {
+    setHasRetried(false);
+  }, [userAddress]);
 
   // Enhanced useEffect to handle initial load and cache validation
   useEffect(() => {
