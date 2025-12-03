@@ -18,8 +18,9 @@ export interface CircleStatusData {
   securityDeposit: number; // in SUI
   securityDepositUsd: number;
   currencyType: string;
-  cycleLength: number; // days
-  cycleDay: number; // day of month
+  cycleLength: number; // days (0 = weekly)
+  cycleDay: number; // day of week (0-6) for weekly, day of month (1-31) for monthly
+  payoutDayType: number; // 0 = day of week, 1 = day of month
   nextPayoutTime: number; // timestamp
   members: {
     address: string;
@@ -30,6 +31,8 @@ export interface CircleStatusData {
   rotationOrder: string[];
   currentBeneficiary?: string;
   totalCollected?: number; // Estimated based on contributions
+  custodyBalance?: number; // Actual custody wallet balance in SUI
+  custodyWalletId?: string;
 }
 
 /**
@@ -100,8 +103,11 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
     let securityDepositUsd = 0;
     let cycleLength = 30;
     let cycleDay = 1;
+    let payoutDayType = 1; // 0 = day of week (weekly), 1 = day of month (monthly)
     let maxMembers = 10;
     let currencyType = 'USD';
+    let custodyWalletId: string | undefined;
+    let custodyBalance = 0;
     
     // Try to get config from dynamic fields
     for (const field of dynamicFieldsResult.data) {
@@ -123,6 +129,7 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
                 if (configFields.security_deposit_usd) securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
                 if (configFields.cycle_length !== undefined) cycleLength = Number(configFields.cycle_length);
                 if (configFields.cycle_day !== undefined) cycleDay = Number(configFields.cycle_day);
+                if (configFields.payout_day_type !== undefined) payoutDayType = Number(configFields.payout_day_type);
                 if (configFields.max_members !== undefined) maxMembers = Number(configFields.max_members);
               }
             }
@@ -130,6 +137,32 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
             console.error('Error fetching config object:', error);
           }
         }
+      }
+    }
+    
+    // Get custody wallet ID from circle fields
+    if (fields.custody_wallet_id) {
+      custodyWalletId = typeof fields.custody_wallet_id === 'string' ? fields.custody_wallet_id : undefined;
+    }
+    
+    // Fetch custody wallet balance if we have the wallet ID
+    if (custodyWalletId) {
+      try {
+        const custodyData = await client.getObject({
+          id: custodyWalletId,
+          options: { showContent: true }
+        });
+        
+        if (custodyData.data?.content && 'fields' in custodyData.data.content) {
+          const custodyFields = custodyData.data.content.fields as Record<string, unknown>;
+          // The balance might be stored in a nested balance field
+          if (custodyFields.balance !== undefined) {
+            custodyBalance = Number(custodyFields.balance) / 1e9;
+          }
+          console.log('[CircleStatus] Custody wallet balance:', custodyBalance, 'SUI');
+        }
+      } catch (error) {
+        console.error('Error fetching custody wallet:', error);
       }
     }
     
@@ -251,11 +284,14 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
       currencyType,
       cycleLength,
       cycleDay,
+      payoutDayType,
       nextPayoutTime: Number(fields.next_payout_time || 0),
       members,
       rotationOrder,
       currentBeneficiary,
-      totalCollected
+      totalCollected,
+      custodyBalance: custodyBalance > 0 ? custodyBalance : undefined,
+      custodyWalletId
     };
   } catch (error) {
     console.error('[CircleStatus] Error fetching circle status:', {
@@ -333,6 +369,24 @@ export async function formatCircleStatusForWhatsAppWithNames(status: CircleStatu
     return n + (s[(v - 20) % 10] || s[v] || s[0]);
   };
   
+  // Get day of week name
+  const getDayOfWeek = (day: number) => {
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    return days[day % 7] || 'Unknown';
+  };
+  
+  // Format payout schedule based on type
+  const formatPayoutSchedule = () => {
+    // If cycle length is 0 or 7, it's weekly payout
+    const isWeekly = status.cycleLength === 0 || status.cycleLength === 7;
+    
+    if (isWeekly || status.payoutDayType === 0) {
+      return `Every ${getDayOfWeek(status.cycleDay)}`;
+    } else {
+      return `${getOrdinal(status.cycleDay)} of each month`;
+    }
+  };
+  
   // Build member list with positions and names - SHOW ALL MEMBERS
   console.log('[WhatsApp] Building member list, total members:', status.members.length);
   
@@ -383,13 +437,14 @@ ${status.currentBeneficiary ? `🎯 *Current Beneficiary:*\n   ${shortenAddress(
 ━━━━━━━━━━━━━━━━━━
 • Contribution: ${formatCurrency(status.contributionAmountUsd, status.currencyType)}
 • Security Deposit: ${formatCurrency(status.securityDepositUsd, status.currencyType)}
-${status.totalCollected && status.totalCollected > 0 ? `• Total Collected: ~${formatCurrency(status.totalCollected, status.currencyType)}` : ''}
+${status.custodyBalance !== undefined ? `• Custody Balance: ${status.custodyBalance.toFixed(4)} SUI` : ''}
+${status.totalCollected && status.totalCollected > 0 ? `• Est. Total Collected: ~${formatCurrency(status.totalCollected, status.currencyType)}` : ''}
 
 ━━━━━━━━━━━━━━━━━━
 📅 *Schedule*
 ━━━━━━━━━━━━━━━━━━
-• Cycle Length: ${status.cycleLength} days
-• Payout Day: ${getOrdinal(status.cycleDay)} of each month
+• Cycle Length: ${status.cycleLength === 0 ? 'Weekly' : `${status.cycleLength} days`}
+• Payout Day: ${formatPayoutSchedule()}
 • Next Payout: ${formatDate(status.nextPayoutTime)}
 
 🔗 *View Full Details:*
@@ -435,6 +490,24 @@ export function formatCircleStatusForWhatsApp(status: CircleStatusData, circleId
     return n + (s[(v - 20) % 10] || s[v] || s[0]);
   };
   
+  // Get day of week name
+  const getDayOfWeek = (day: number) => {
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    return days[day % 7] || 'Unknown';
+  };
+  
+  // Format payout schedule based on type
+  const formatPayoutSchedule = () => {
+    // If cycle length is 0 or 7, it's weekly payout
+    const isWeekly = status.cycleLength === 0 || status.cycleLength === 7;
+    
+    if (isWeekly || status.payoutDayType === 0) {
+      return `Every ${getDayOfWeek(status.cycleDay)}`;
+    } else {
+      return `${getOrdinal(status.cycleDay)} of each month`;
+    }
+  };
+  
   // Build member list with positions (addresses only) - SHOW ALL MEMBERS
   const memberList = status.members
     .map((m, i) => {
@@ -472,13 +545,14 @@ ${status.currentBeneficiary ? `🎯 *Current Beneficiary:*\n   ${shortenAddress(
 ━━━━━━━━━━━━━━━━━━
 • Contribution: ${formatCurrency(status.contributionAmountUsd, status.currencyType)}
 • Security Deposit: ${formatCurrency(status.securityDepositUsd, status.currencyType)}
-${status.totalCollected && status.totalCollected > 0 ? `• Total Collected: ~${formatCurrency(status.totalCollected, status.currencyType)}` : ''}
+${status.custodyBalance !== undefined ? `• Custody Balance: ${status.custodyBalance.toFixed(4)} SUI` : ''}
+${status.totalCollected && status.totalCollected > 0 ? `• Est. Total Collected: ~${formatCurrency(status.totalCollected, status.currencyType)}` : ''}
 
 ━━━━━━━━━━━━━━━━━━
 📅 *Schedule*
 ━━━━━━━━━━━━━━━━━━
-• Cycle Length: ${status.cycleLength} days
-• Payout Day: ${getOrdinal(status.cycleDay)} of each month
+• Cycle Length: ${status.cycleLength === 0 ? 'Weekly' : `${status.cycleLength} days`}
+• Payout Day: ${formatPayoutSchedule()}
 • Next Payout: ${formatDate(status.nextPayoutTime)}
 
 🔗 *View Full Details:*
