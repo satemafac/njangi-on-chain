@@ -369,22 +369,32 @@ export async function formatCircleStatusForWhatsAppWithNames(status: CircleStatu
     return n + (s[(v - 20) % 10] || s[v] || s[0]);
   };
   
-  // Get day of week name
+  // Get day of week name (contract uses Monday=0, Tuesday=1, etc.)
   const getDayOfWeek = (day: number) => {
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     return days[day % 7] || 'Unknown';
   };
   
   // Format payout schedule based on type
   const formatPayoutSchedule = () => {
-    // If cycle length is 0 or 7, it's weekly payout
-    const isWeekly = status.cycleLength === 0 || status.cycleLength === 7;
+    // cycle_length: 0 = weekly, 1 = monthly, >1 = custom days
+    const isWeekly = status.cycleLength === 0;
+    const isMonthly = status.cycleLength === 1;
     
     if (isWeekly || status.payoutDayType === 0) {
       return `Every ${getDayOfWeek(status.cycleDay)}`;
-    } else {
+    } else if (isMonthly || status.payoutDayType === 1) {
       return `${getOrdinal(status.cycleDay)} of each month`;
+    } else {
+      return `Every ${status.cycleLength} days`;
     }
+  };
+  
+  // Format cycle length display
+  const formatCycleLength = () => {
+    if (status.cycleLength === 0) return 'Weekly';
+    if (status.cycleLength === 1) return 'Monthly';
+    return `${status.cycleLength} days`;
   };
   
   // Build member list with positions and names - SHOW ALL MEMBERS
@@ -443,7 +453,7 @@ ${status.totalCollected && status.totalCollected > 0 ? `• Est. Total Collected
 ━━━━━━━━━━━━━━━━━━
 📅 *Schedule*
 ━━━━━━━━━━━━━━━━━━
-• Cycle Length: ${status.cycleLength === 0 ? 'Weekly' : `${status.cycleLength} days`}
+• Cycle Length: ${formatCycleLength()}
 • Payout Day: ${formatPayoutSchedule()}
 • Next Payout: ${formatDate(status.nextPayoutTime)}
 
@@ -490,22 +500,32 @@ export function formatCircleStatusForWhatsApp(status: CircleStatusData, circleId
     return n + (s[(v - 20) % 10] || s[v] || s[0]);
   };
   
-  // Get day of week name
+  // Get day of week name (contract uses Monday=0, Tuesday=1, etc.)
   const getDayOfWeek = (day: number) => {
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     return days[day % 7] || 'Unknown';
   };
   
   // Format payout schedule based on type
   const formatPayoutSchedule = () => {
-    // If cycle length is 0 or 7, it's weekly payout
-    const isWeekly = status.cycleLength === 0 || status.cycleLength === 7;
+    // cycle_length: 0 = weekly, 1 = monthly, >1 = custom days
+    const isWeekly = status.cycleLength === 0;
+    const isMonthly = status.cycleLength === 1;
     
     if (isWeekly || status.payoutDayType === 0) {
       return `Every ${getDayOfWeek(status.cycleDay)}`;
-    } else {
+    } else if (isMonthly || status.payoutDayType === 1) {
       return `${getOrdinal(status.cycleDay)} of each month`;
+    } else {
+      return `Every ${status.cycleLength} days`;
     }
+  };
+  
+  // Format cycle length display
+  const formatCycleLength = () => {
+    if (status.cycleLength === 0) return 'Weekly';
+    if (status.cycleLength === 1) return 'Monthly';
+    return `${status.cycleLength} days`;
   };
   
   // Build member list with positions (addresses only) - SHOW ALL MEMBERS
@@ -551,7 +571,7 @@ ${status.totalCollected && status.totalCollected > 0 ? `• Est. Total Collected
 ━━━━━━━━━━━━━━━━━━
 📅 *Schedule*
 ━━━━━━━━━━━━━━━━━━
-• Cycle Length: ${status.cycleLength === 0 ? 'Weekly' : `${status.cycleLength} days`}
+• Cycle Length: ${formatCycleLength()}
 • Payout Day: ${formatPayoutSchedule()}
 • Next Payout: ${formatDate(status.nextPayoutTime)}
 
