@@ -1534,6 +1534,83 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           try {
             console.log(`Building moveCall for removing member: ${req.body.memberAddress} from circle: ${req.body.circleId}`);
             
+            // Get the correct RPC URL for the requested network
+            const networkToUse = requestedNetwork || getCurrentNetwork();
+            const rpcUrl = networkToUse === 'testnet' 
+              ? (process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://fullnode.testnet.sui.io:443')
+              : (process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://fullnode.mainnet.sui.io:443');
+            
+            // Create SuiClient for the correct network to validate objects exist
+            const suiClient = new SuiClient({ url: rpcUrl });
+            console.log(`[adminRemoveMember] Using ${networkToUse} network with RPC: ${rpcUrl}`);
+            
+            // Verify the circle exists on the requested network
+            let circleObj;
+            try {
+              circleObj = await suiClient.getObject({
+                id: req.body.circleId,
+                options: { showType: true, showContent: true }
+              });
+              
+              if (!circleObj.data) {
+                return res.status(400).json({ 
+                  error: `Circle not found on ${networkToUse} network. Please ensure you're on the correct network.`,
+                  requireRelogin: false
+                });
+              }
+            } catch (error) {
+              console.error('Error fetching circle object:', error);
+              return res.status(400).json({ 
+                error: `Failed to fetch circle on ${networkToUse} network: ${error instanceof Error ? error.message : String(error)}`,
+                requireRelogin: false
+              });
+            }
+            
+            // Verify the wallet exists on the requested network
+            try {
+              const walletObj = await suiClient.getObject({
+                id: req.body.walletId,
+                options: { showContent: true }
+              });
+              
+              if (!walletObj.data) {
+                return res.status(400).json({ 
+                  error: `Wallet not found on ${networkToUse} network. Please ensure you're on the correct network.`,
+                  requireRelogin: false
+                });
+              }
+            } catch (error) {
+              console.error('Error fetching wallet object:', error);
+              return res.status(400).json({ 
+                error: `Failed to fetch wallet on ${networkToUse} network: ${error instanceof Error ? error.message : String(error)}`,
+                requireRelogin: false
+              });
+            }
+            
+            // Extract the actual package ID from the circle object type
+            const objectType = circleObj.data.type;
+            if (!objectType || !objectType.includes('njangi_circles::Circle')) {
+              return res.status(400).json({ 
+                error: `Object ${req.body.circleId} is not a Circle object. Found type: ${objectType || 'undefined'}`,
+                requireRelogin: false
+              });
+            }
+            
+            const actualPackageId = objectType.split('::')[0];
+            console.log(`[adminRemoveMember] Extracted package ID from circle object: ${actualPackageId}`);
+            
+            // Check if circle is inactive (required for member removal)
+            if (circleObj.data?.content && 'fields' in circleObj.data.content) {
+              const fields = circleObj.data.content.fields as Record<string, unknown>;
+              if (fields.is_active === true) {
+                return res.status(400).json({ 
+                  error: 'Cannot remove member: Circle is still active. Please deactivate the circle first.',
+                  requireRelogin: false
+                });
+              }
+              console.log(`[adminRemoveMember] Circle is inactive (is_active: ${fields.is_active}), proceeding with member removal`);
+            }
+            
             try {
               // Temporarily set the network to match the frontend request
               const originalNetwork = getCurrentNetwork();
@@ -1546,12 +1623,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   // Reinitialize the EnokiZkLoginService with the new network configuration
                   instance.initializeWithNetwork();
                 }
-                
-                // Get the correct package ID for this circle using the current network context
-                const circlePackageId = await getCirclePackageId(req.body.circleId, account.userAddr);
-                console.log(`Using package ID for circle ${req.body.circleId}: ${circlePackageId} (network: ${getCurrentNetwork()})`);
               
-                // Send transaction using zkLogin service
+                // Send transaction using zkLogin service with the extracted package ID
                 txResult = await instance.sendTransaction(
                   account,
                   (txb: Transaction) => {
@@ -1559,7 +1632,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     
                     // Call the admin_remove_member function
                     txb.moveCall({
-                      target: `${circlePackageId}::njangi_circles::admin_remove_member`,
+                      target: `${actualPackageId}::njangi_circles::admin_remove_member`,
                       arguments: [
                         txb.object(req.body.circleId),
                         txb.pure.address(req.body.memberAddress),
@@ -1579,7 +1652,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 }
               }
               
-              console.log('Admin remove member transaction successful:', txResult);
+              console.log('Admin remove member transaction result:', txResult);
+              
+              // Check if transaction actually succeeded
+              if (txResult.status === 'failure') {
+                console.error('Admin remove member transaction failed:', txResult.error);
+                
+                // Parse the Move error to provide a meaningful message
+                let errorMessage = 'Transaction failed';
+                const errorStr = txResult.error || '';
+                
+                // Check for specific error codes
+                if (errorStr.includes('njangi_custody') && errorStr.includes(', 12)')) {
+                  errorMessage = 'Insufficient balance in custody wallet to return security deposit. Please ensure the custody wallet has enough funds.';
+                } else if (errorStr.includes('ENotAdmin') || errorStr.includes(', 1)')) {
+                  errorMessage = 'Only the circle admin can remove members';
+                } else if (errorStr.includes('EMemberNotFound') || errorStr.includes(', 5)')) {
+                  errorMessage = 'Member not found in this circle';
+                } else if (errorStr.includes('ECircleIsActive') || errorStr.includes(', 2)')) {
+                  errorMessage = 'Members can only be removed from inactive circles';
+                } else if (errorStr.includes('MoveAbort')) {
+                  // Extract error details from MoveAbort
+                  const match = errorStr.match(/MoveAbort\([^,]+,\s*(\d+)\)/);
+                  if (match) {
+                    errorMessage = `Smart contract error (code ${match[1]}): ${errorStr}`;
+                  } else {
+                    errorMessage = `Smart contract error: ${errorStr}`;
+                  }
+                }
+                
+                return res.status(400).json({
+                  error: errorMessage,
+                  digest: txResult.digest,
+                  status: txResult.status,
+                  details: txResult.error,
+                  requireRelogin: false
+                });
+              }
+              
               return res.status(200).json({
                 digest: txResult.digest,
                 status: txResult.status,
@@ -4724,29 +4834,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             
             console.log(`Detected ${isSuiBased ? 'SUI' : 'stablecoin'} based circle for security deposit return`);
             
-            // Check if the circle is properly inactive for process_security_deposit_return
+            // Check if the circle is properly paused for admin_payout_security_deposit_sui
+            // This function requires the circle to be paused after completing a cycle
             if (circleObj.data?.content && 'fields' in circleObj.data.content) {
               const fields = circleObj.data.content.fields as Record<string, unknown>;
-              if (fields.is_active === true) {
+              const isPausedAfterCycle = fields.paused_after_cycle === true;
+              
+              if (!isPausedAfterCycle) {
                 return res.status(400).json({ 
-                  error: `Circle is still active. The process_security_deposit_return function requires the circle to be inactive. Current is_active: ${fields.is_active}`
+                  error: `Circle must be paused after a cycle to return security deposits. Current state: is_active=${fields.is_active}, paused_after_cycle=${fields.paused_after_cycle}. Please pause the circle first.`
                 });
               }
-              console.log(`[returnSecurityDeposit] Circle is inactive (is_active: ${fields.is_active}), proceeding with deposit return`);
+              console.log(`[returnSecurityDeposit] Circle is paused after cycle (paused_after_cycle: ${fields.paused_after_cycle}), proceeding with deposit return`);
             }
             
-            // Use the proper Move contract function to return security deposit
+            // Use admin_payout_security_deposit_sui which properly handles custody wallet dynamic fields
+            // The old process_security_deposit_return tried to withdraw from circle.deposits which is never populated
             txResult = await instance.sendTransaction(
               session.account!,
               (txb: Transaction) => {
                 txb.setSender(session.account!.userAddr);
                 
-                // Use process_security_deposit_return since the circle is inactive
-                // This function handles deposit returns from the treasury with reputation/warning checks
+                // Use admin_payout_security_deposit_sui which:
+                // 1. Checks dynamic fields first (where security deposits are actually stored)
+                // 2. Falls back to main balance if needed
+                // 3. Properly handles the custody wallet
                 txb.moveCall({
-                  target: `${actualPackageId}::njangi_payments::process_security_deposit_return`,
+                  target: `${actualPackageId}::njangi_payments::admin_payout_security_deposit_sui`,
                   arguments: [
                     txb.object(circleId),     // circle: &mut Circle
+                    txb.object(walletId),     // wallet: &mut CustodyWallet
                     txb.pure.address(memberAddress) // member_addr: address
                   ]
                 });
@@ -4762,7 +4879,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
           }
           
-          console.log('Security deposit return successful:', JSON.stringify(txResult, null, 2));
+          console.log('Security deposit return result:', JSON.stringify(txResult, null, 2));
+          
+          // Check if transaction actually succeeded
+          if (txResult.status === 'failure') {
+            console.error('Security deposit return transaction failed:', txResult.error);
+            
+            // Parse the Move error to provide a meaningful message
+            let errorMessage = 'Transaction failed';
+            const errorStr = txResult.error || '';
+            
+            // Check for specific error codes
+            if (errorStr.includes(', 12)')) {
+              errorMessage = 'Insufficient balance in custody wallet to return security deposit. Please ensure the custody wallet has enough funds.';
+            } else if (errorStr.includes(', 7)')) {
+              errorMessage = 'Only the circle admin can return security deposits';
+            } else if (errorStr.includes(', 58)')) {
+              errorMessage = 'Circle must be paused after a cycle before security deposits can be returned';
+            } else if (errorStr.includes(', 8)')) {
+              errorMessage = 'The specified address is not a member of this circle';
+            } else if (errorStr.includes(', 59)')) {
+              errorMessage = 'No security deposit to return for this member';
+            } else if (errorStr.includes(', 60)')) {
+              errorMessage = 'Security deposit has already been returned';
+            } else if (errorStr.includes('MoveAbort')) {
+              const match = errorStr.match(/MoveAbort\([^,]+,\s*(\d+)\)/);
+              if (match) {
+                errorMessage = `Smart contract error (code ${match[1]}): ${errorStr}`;
+              } else {
+                errorMessage = `Smart contract error: ${errorStr}`;
+              }
+            }
+            
+            return res.status(400).json({
+              error: errorMessage,
+              digest: txResult.digest,
+              status: txResult.status,
+              details: txResult.error,
+              requireRelogin: false
+            });
+          }
+          
           return res.status(200).json({ 
             digest: txResult.digest,
             status: txResult.status,
@@ -4773,24 +4930,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           console.error('Error returning security deposit:', error);
           
           // Check if this is a MoveAbort error and provide specific guidance
+          // Error codes for admin_payout_security_deposit_sui function
           const errorStr = error instanceof Error ? error.message : String(error);
-          if (errorStr.includes('MoveAbort') && errorStr.includes('22')) {
+          if (errorStr.includes('MoveAbort') && errorStr.includes(', 7)')) {
             return res.status(400).json({ 
-              error: 'Cannot return security deposit: Invalid payout amount', 
-              details: 'This error occurs when the member has no deposit balance, has already received their deposit, or has a low reputation score (< 80). Check that the member actually paid a security deposit and has a good standing in the circle.',
-              errorCode: 22
+              error: 'Cannot return security deposit: Not authorized', 
+              details: 'Only the circle admin can return security deposits.',
+              errorCode: 7
             });
-          } else if (errorStr.includes('MoveAbort') && errorStr.includes('54')) {
+          } else if (errorStr.includes('MoveAbort') && errorStr.includes(', 58)')) {
             return res.status(400).json({ 
-              error: 'Cannot return security deposit: Circle is still active', 
-              details: 'The process_security_deposit_return function requires the circle to be inactive. Please ensure the circle has been properly closed.',
-              errorCode: 54
+              error: 'Cannot return security deposit: Circle must be paused', 
+              details: 'The circle must be paused after completing a cycle before security deposits can be returned. Please pause the circle first.',
+              errorCode: 58
             });
-          } else if (errorStr.includes('MoveAbort') && errorStr.includes('18')) {
+          } else if (errorStr.includes('MoveAbort') && errorStr.includes(', 8)')) {
             return res.status(400).json({ 
-              error: 'Cannot return security deposit: Member has unfulfilled obligations', 
-              details: 'The member has not met their contribution requirements. They must complete all required contributions before their deposit can be returned.',
-              errorCode: 18
+              error: 'Cannot return security deposit: Not a member', 
+              details: 'The specified address is not a member of this circle.',
+              errorCode: 8
+            });
+          } else if (errorStr.includes('MoveAbort') && errorStr.includes(', 46)')) {
+            return res.status(400).json({ 
+              error: 'Cannot return security deposit: Wallet mismatch', 
+              details: 'The custody wallet does not belong to this circle.',
+              errorCode: 46
+            });
+          } else if (errorStr.includes('MoveAbort') && errorStr.includes(', 43)')) {
+            return res.status(400).json({ 
+              error: 'Cannot return security deposit: Wallet not active', 
+              details: 'The custody wallet is not active.',
+              errorCode: 43
+            });
+          } else if (errorStr.includes('MoveAbort') && errorStr.includes(', 59)')) {
+            return res.status(400).json({ 
+              error: 'Cannot return security deposit: No deposit to return', 
+              details: 'The member has no security deposit balance to return.',
+              errorCode: 59
+            });
+          } else if (errorStr.includes('MoveAbort') && errorStr.includes(', 60)')) {
+            return res.status(400).json({ 
+              error: 'Cannot return security deposit: Already returned', 
+              details: 'The member\'s security deposit has already been returned.',
+              errorCode: 60
+            });
+          } else if (errorStr.includes('MoveAbort') && errorStr.includes(', 12)')) {
+            return res.status(400).json({ 
+              error: 'Cannot return security deposit: Insufficient balance', 
+              details: 'The custody wallet does not have sufficient funds to return the security deposit. Please ensure the wallet has enough balance.',
+              errorCode: 12
             });
           }
           

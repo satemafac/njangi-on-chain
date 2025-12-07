@@ -728,39 +728,56 @@ export default function ContributeToCircle() {
         }
       }
       
+      // Check if user ever joined this circle and get their join events
+      const joinEvents = await client.queryEvents({
+        query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
+        limit: 100
+      });
+      
+      // Find the user's join events for this circle and get the latest timestamp
+      const userJoinEvents = joinEvents.data.filter(event => {
+        const parsed = event.parsedJson as { circle_id?: string; member?: string };
+        return parsed?.circle_id === id && parsed?.member === userAddress;
+      });
+      
+      if (userJoinEvents.length === 0) {
+        console.log('[Membership] User never joined this circle');
+        return false;
+      }
+      
+      // Get the latest join timestamp
+      const latestJoinTimestamp = Math.max(...userJoinEvents.map(e => Number(e.timestampMs || 0)));
+      console.log(`[Membership] User's latest join timestamp: ${new Date(latestJoinTimestamp).toISOString()}`);
+      
       // Check for MemberRemoved events to see if user was removed
       const removedEvents = await client.queryEvents({
         query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberRemoved` },
         limit: 100
       });
       
-      const wasRemoved = removedEvents.data.some(event => {
+      // Find the user's removal events for this circle and get the latest timestamp
+      const userRemovalEvents = removedEvents.data.filter(event => {
         const parsed = event.parsedJson as { circle_id?: string; member?: string };
         return parsed?.circle_id === id && parsed?.member === userAddress;
       });
       
-      if (wasRemoved) {
-        console.log('[Membership] User was removed from this circle');
+      if (userRemovalEvents.length > 0) {
+        const latestRemovalTimestamp = Math.max(...userRemovalEvents.map(e => Number(e.timestampMs || 0)));
+        console.log(`[Membership] User's latest removal timestamp: ${new Date(latestRemovalTimestamp).toISOString()}`);
+        
+        // If the user joined AFTER they were last removed, they have rejoined - allow access
+        if (latestJoinTimestamp > latestRemovalTimestamp) {
+          console.log('[Membership] User rejoined after removal, access granted');
+          return true;
+        }
+        
+        // User was removed after their last join - deny access
+        console.log('[Membership] User was removed after their last join, access denied');
         return false;
       }
       
-      // Check if user ever joined this circle
-      const joinEvents = await client.queryEvents({
-        query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
-        limit: 100
-      });
-      
-      const didJoin = joinEvents.data.some(event => {
-        const parsed = event.parsedJson as { circle_id?: string; member?: string };
-        return parsed?.circle_id === id && parsed?.member === userAddress;
-      });
-      
-      if (!didJoin) {
-        console.log('[Membership] User never joined this circle');
-        return false;
-      }
-      
-      // User joined but wasn't removed - they should have access
+      // User joined and was never removed - they should have access
+      console.log('[Membership] User joined and was never removed, access granted');
       return true;
       
     } catch (error) {

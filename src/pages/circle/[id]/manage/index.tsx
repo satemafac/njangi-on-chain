@@ -1310,8 +1310,15 @@ export default function ManageCircle() {
 
       const result = await response.json();
 
+      // Check HTTP response status
       if (!response.ok) {
         throw new Error(result.error || 'Failed to remove member');
+      }
+
+      // Also check transaction status in response body
+      if (result.status === 'failure') {
+        console.error('Transaction failed:', result);
+        throw new Error(result.error || result.details || 'Transaction failed on blockchain');
       }
 
       console.log('Member removed successfully:', result);
@@ -1416,8 +1423,15 @@ export default function ManageCircle() {
           
           const responseData = await response.json();
           
+          // Check HTTP response status
           if (!response.ok) {
             throw new Error(responseData.error || 'Failed to return security deposit');
+          }
+          
+          // Also check transaction status in response body
+          if (responseData.status === 'failure') {
+            console.error('Transaction failed:', responseData);
+            throw new Error(responseData.error || responseData.details || 'Transaction failed on blockchain');
           }
           
           toast.success(`Security deposit returned to ${shortenAddress(memberAddress)}`, { id: toastId });

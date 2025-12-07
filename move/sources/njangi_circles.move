@@ -1281,16 +1281,30 @@ module njangi::njangi_circles {
         
         // If member had paid a security deposit, return it from custody wallet
         if (has_deposit && deposit_amount > 0) {
-            // Withdraw the security deposit from custody wallet and transfer to member
-            let deposit_coin = custody::withdraw(
-                wallet,
-                deposit_amount,
-                ctx
-            );
+            // Security deposits are stored in dynamic fields (via internal_store_security_deposit_without_validation)
+            // so we need to withdraw from dynamic fields, not the main balance field.
+            // First try dynamic fields (where security deposits are stored), then fall back to main balance
+            let has_sui_in_dynamic_fields = custody::has_stablecoin_balance<sui::sui::SUI>(wallet);
+            let dynamic_balance = custody::get_stablecoin_balance<sui::sui::SUI>(wallet);
+            
+            let deposit_coin = if (has_sui_in_dynamic_fields && dynamic_balance >= deposit_amount) {
+                // Withdraw from dynamic fields where security deposits are stored
+                custody::withdraw_from_dynamic_fields(
+                    wallet,
+                    deposit_amount,
+                    ctx
+                )
+            } else {
+                // Fall back to main balance if no dynamic field balance or insufficient
+                custody::withdraw(
+                    wallet,
+                    deposit_amount,
+                    ctx
+                )
+            };
             transfer::public_transfer(deposit_coin, member_addr);
             
             // Note: SecurityDepositReturned event will be emitted by the custody module
-            // when we implement the proper return function there
         };
         
         // Clean up the removed member object (automatic in Move)
