@@ -1770,28 +1770,75 @@ export default function ContributeToCircle() {
         // Add more event checks here if needed
       }
 
-      // New Step: Check SecurityDepositReturned Event to override depositPaid to false if applicable
-      // This check should come *after* all checks that might set depositPaid to true,
-      // as a returned deposit means it's no longer considered paid.
-      if (depositPaid) { // Only check if we currently think it's paid
-        try {
-          console.log(`[ContributePage] Checking SecurityDepositReturned events for ${userAddress} in circle ${circle.id}...`);
-          const securityReturnedEvents = await client.queryEvents({
-            query: { MoveEventType: `${circlePackageId}::njangi_payments::SecurityDepositReturned` }, 
-            limit: 50 // Adjust limit as needed
-          });
-          const hasReturnedEvent = securityReturnedEvents.data.some(event => {
-            const parsed = event.parsedJson as { circle_id?: string; member?: string; };
-            return parsed?.circle_id === circle.id && parsed?.member?.toLowerCase() === userAddress.toLowerCase();
-          });
+      // New Step: Check SecurityDepositReturned Event and compare timestamps with deposit events
+      // This handles the case where a user was removed (deposit returned), then re-added.
+      // We need to compare the MOST RECENT return event with the MOST RECENT deposit event.
+      try {
+        console.log(`[ContributePage] Checking SecurityDepositReturned events for ${userAddress} in circle ${circle.id}...`);
+        const securityReturnedEvents = await client.queryEvents({
+          query: { MoveEventType: `${circlePackageId}::njangi_payments::SecurityDepositReturned` }, 
+          limit: 50
+        });
+        
+        // Find all return events for this user/circle
+        const relevantReturnEvents = securityReturnedEvents.data.filter(event => {
+          const parsed = event.parsedJson as { circle_id?: string; member?: string };
+          return parsed?.circle_id === circle.id && 
+                 parsed?.member?.toLowerCase() === userAddress.toLowerCase();
+        });
 
-          if (hasReturnedEvent) {
-            depositPaid = false; // Override: if a deposit was returned, it's no longer considered paid
-            console.log(`[ContributePage] User ${userAddress} deposit status set to NOT PAID due to SecurityDepositReturned event.`);
+        if (relevantReturnEvents.length > 0) {
+          // Get the most recent return event timestamp
+          const mostRecentReturnTimestamp = Math.max(
+            ...relevantReturnEvents.map(e => Number(e.timestampMs || 0))
+          );
+          console.log(`[ContributePage] Most recent SecurityDepositReturned at: ${new Date(mostRecentReturnTimestamp).toISOString()}`);
+          
+          // Now find the most recent deposit event (CustodyDeposited with operation_type 3)
+          let mostRecentDepositTimestamp = 0;
+          
+          const custodyDepositEvents = await client.queryEvents({
+            query: { MoveEventType: `${circlePackageId}::njangi_custody::CustodyDeposited` }, 
+            limit: 100
+          });
+          
+          for (const event of custodyDepositEvents.data) {
+            const parsed = event.parsedJson as { 
+              circle_id?: string; 
+              member?: string; 
+              operation_type?: number | string;
+            };
+            const opType = typeof parsed?.operation_type === 'string' 
+              ? parseInt(parsed.operation_type) 
+              : parsed?.operation_type;
+            
+            if (parsed?.circle_id === circle.id && 
+                parsed?.member?.toLowerCase() === userAddress.toLowerCase() && 
+                opType === 3) {
+              const eventTimestamp = Number(event.timestampMs || 0);
+              if (eventTimestamp > mostRecentDepositTimestamp) {
+                mostRecentDepositTimestamp = eventTimestamp;
+              }
+            }
           }
-        } catch (eventError) {
-          console.warn(`[ContributePage] Error fetching SecurityDepositReturned events:`, eventError);
+          
+          console.log(`[ContributePage] Most recent CustodyDeposited (type 3) at: ${
+            mostRecentDepositTimestamp > 0 ? new Date(mostRecentDepositTimestamp).toISOString() : 'none found'
+          }`);
+          
+          // If the most recent return is AFTER the most recent deposit (or no deposit found),
+          // then the deposit is NOT paid
+          if (mostRecentReturnTimestamp > mostRecentDepositTimestamp) {
+            depositPaid = false;
+            console.log(`[ContributePage] User ${userAddress} deposit status set to NOT PAID - return event (${new Date(mostRecentReturnTimestamp).toISOString()}) is more recent than any deposit event`);
+          } else if (mostRecentDepositTimestamp > mostRecentReturnTimestamp) {
+            // User made a new deposit AFTER the return - deposit IS paid
+            depositPaid = true;
+            console.log(`[ContributePage] User ${userAddress} deposit status confirmed PAID - deposit (${new Date(mostRecentDepositTimestamp).toISOString()}) is more recent than return (${new Date(mostRecentReturnTimestamp).toISOString()})`);
+          }
         }
+      } catch (eventError) {
+        console.warn(`[ContributePage] Error checking SecurityDepositReturned events:`, eventError);
       }
       
       setUserDepositPaid(depositPaid);
