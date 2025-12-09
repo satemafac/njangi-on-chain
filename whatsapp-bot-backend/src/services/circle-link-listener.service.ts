@@ -2,6 +2,7 @@ import { SuiClient } from '@mysten/sui/client';
 import { getConfig } from '../config';
 import { appLogger } from '../utils/logger';
 import { whatsappSender } from './whatsapp-sender.service';
+import { cycleReminderService } from './cycle-reminder.service';
 
 // ============================================================================
 // CIRCLE LINK LISTENER SERVICE
@@ -73,6 +74,10 @@ export class CircleLinkListenerService {
         await this.checkForMemberRemovedEvents();
         await this.checkForRotationOrderChangedEvents();
         await this.checkForCircleActivatedEvents();
+        
+        // Check for cycle reminders (runs hourly, controlled internally)
+        await cycleReminderService.checkAndSendReminders();
+        
         await new Promise((resolve) => setTimeout(resolve, this.checkInterval));
       } catch (error) {
         appLogger.error('Error in listen loop', {
