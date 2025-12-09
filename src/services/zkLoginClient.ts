@@ -825,10 +825,11 @@ export class ZkLoginClient {
   async adminTriggerPayout(
     account: AccountData,
     circleId: string,
-    walletId: string
+    walletId: string,
+    network?: string
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
     try {
-      console.log(`ZkLoginClient: Triggering payout for circle ${circleId} with wallet ${walletId}`);
+      console.log(`ZkLoginClient: Triggering payout for circle ${circleId} with wallet ${walletId} on network ${network || 'default'}`);
       
       // First try with the regular SUI payout method
       try {
@@ -839,7 +840,8 @@ export class ZkLoginClient {
             action: 'adminTriggerPayout',
             account,
             circleId,
-            walletId
+            walletId,
+            network
           }),
         });
         
@@ -870,7 +872,7 @@ export class ZkLoginClient {
           
           console.log('Detected code 100 or other stablecoin indicator. Trying USDC payout method...');
           
-          // Try the USDC payout method instead
+          // Try the USDC payout method instead - pass network for correct package ID
           const usdcResponse = await fetch('/api/zkLogin', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -878,7 +880,8 @@ export class ZkLoginClient {
               action: 'adminTriggerUsdcPayout',
               account,
               circleId,
-              walletId
+              walletId,
+              network
             }),
           });
           

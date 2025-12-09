@@ -5231,11 +5231,12 @@ export default function ManageCircle() {
                                       const zkLoginClient = new ZkLoginClient();
                                       
                                       try {
-                                        // First try regular SUI payout
+                                        // First try regular SUI payout - pass network for correct package ID
                                         const result = await zkLoginClient.adminTriggerPayout(
                                           account,
                                           circle.id,
-                                          circle.custody?.walletId || ''
+                                          circle.custody?.walletId || '',
+                                          getCurrentNetwork()
                                         );
                                         
                                         toast.success('Payout processed successfully!', { id: toastId });
