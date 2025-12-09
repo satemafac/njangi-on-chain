@@ -662,16 +662,23 @@ They can now participate in the circle activities. Make sure they pay their secu
         operation_type,
       } = parsedJson;
 
-      // operation_type: 3 = security deposit, 0 = contribution (but contributions use different event)
-      const isSecurityDeposit = operation_type === 3;
-
+      // operation_type: 3 = security deposit, 0 = contribution
+      // Only send notifications for security deposits here - contributions are handled by ContributionMade event
       appLogger.info('CustodyDeposited event detected', {
         circleId: circle_id?.slice(0, 10),
         member: member?.slice(0, 10),
         amount,
         operationType: operation_type,
-        isSecurityDeposit,
       });
+
+      // Skip non-security-deposit events - contributions are handled by the ContributionMade event handler
+      if (operation_type !== 3) {
+        appLogger.debug('Skipping non-security-deposit CustodyDeposited event (handled by ContributionMade)', {
+          circleId: circle_id?.slice(0, 10),
+          operationType: operation_type,
+        });
+        return;
+      }
 
       // Look up the phone number for this circle
       const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
@@ -705,14 +712,13 @@ They can now participate in the circle activities. Make sure they pay their secu
       const memberInfo = await this.lookupMemberName(circle_id, member);
       const memberName = memberInfo?.userName || null;
 
-      // Send deposit notification
+      // Send security deposit notification
       await this.sendDepositNotification(
         phoneNumber,
         circle_id,
         member,
         amountFormatted,
-        memberName,
-        isSecurityDeposit
+        memberName
       );
 
       // Track message send time for deduplication
@@ -725,15 +731,14 @@ They can now participate in the circle activities. Make sure they pay their secu
   }
 
   /**
-   * Send notification when a member makes a deposit
+   * Send notification when a member makes a security deposit
    */
   private async sendDepositNotification(
     phoneNumber: string,
     circleId: string,
     memberAddress: string,
     amount: string,
-    memberName?: string | null,
-    isSecurityDeposit?: boolean
+    memberName?: string | null
   ): Promise<void> {
     try {
       const shortMember = `${memberAddress.slice(0, 6)}...${memberAddress.slice(-4)}`;
@@ -741,17 +746,15 @@ They can now participate in the circle activities. Make sure they pay their secu
         ? `${memberName} (${shortMember})`
         : shortMember;
 
-      const depositType = isSecurityDeposit ? 'Security Deposit' : 'Deposit';
-      const emoji = isSecurityDeposit ? '🔒' : '💰';
-      
-      const depositMessage = `${emoji} *${depositType} Received!*
+      // Since we now only handle security deposits here, simplify the message
+      const depositMessage = `🔒 *Security Deposit Received!*
 
-A member has made a deposit:
+A member has paid their security deposit:
 
 👤 *Member:* ${memberDisplay}
 💎 *Amount:* ${amount} SUI
 
-The funds are now safely held in the circle's custody wallet.
+The security deposit is now safely held in the circle's custody wallet. This member is ready to participate in the circle.
 
 🔗 View circle: https://njangionchain.com/circle/${circleId}`;
 
@@ -762,22 +765,21 @@ The funds are now safely held in the circle's custody wallet.
       });
 
       if (result.success) {
-        appLogger.info('✅ Deposit notification sent', {
+        appLogger.info('✅ Security deposit notification sent', {
           phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
           circleId: circleId.slice(0, 10) + '...',
           member: memberAddress.slice(0, 10) + '...',
           amount,
-          depositType,
           messageId: result.messageId,
         });
       } else {
-        appLogger.warn('Failed to send deposit notification', {
+        appLogger.warn('Failed to send security deposit notification', {
           to: phoneNumber,
           error: result.error,
         });
       }
     } catch (error) {
-      appLogger.error('Error sending deposit notification', {
+      appLogger.error('Error sending security deposit notification', {
         error: error instanceof Error ? error.message : String(error),
       });
     }

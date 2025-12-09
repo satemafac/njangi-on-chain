@@ -31,7 +31,9 @@ export interface CircleStatusData {
   rotationOrder: string[];
   currentBeneficiary?: string;
   totalCollected?: number; // Estimated based on contributions
-  custodyBalance?: number; // Actual custody wallet balance in SUI
+  custodyBalance?: number; // Total custody wallet balance in SUI
+  securityDepositBalance?: number; // Security deposits held in SUI
+  contributionBalance?: number; // Cycle contributions held in SUI
   custodyWalletId?: string;
 }
 
@@ -108,6 +110,8 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
     let currencyType = 'USD';
     let custodyWalletId: string | undefined;
     let custodyBalance = 0;
+    let securityDepositBalance = 0;
+    let contributionBalance = 0;
     
     // Try to get config from dynamic fields
     for (const field of dynamicFieldsResult.data) {
@@ -210,9 +214,11 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
           }
         }
         
-        // Calculate total balance
+        // Store separate balances
+        contributionBalance = mainSuiBalance;
+        securityDepositBalance = dynamicFieldSuiBalance;
         custodyBalance = mainSuiBalance + dynamicFieldSuiBalance;
-        console.log('[CircleStatus] Total custody balance:', custodyBalance, 'SUI');
+        console.log('[CircleStatus] Custody balances - Total:', custodyBalance, 'SUI, Contributions:', contributionBalance, 'SUI, Security Deposits:', securityDepositBalance, 'SUI');
       } catch (error) {
         console.error('[CircleStatus] Error fetching custody wallet:', error);
       }
@@ -345,6 +351,8 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
       currentBeneficiary,
       totalCollected,
       custodyBalance: custodyBalance > 0 ? custodyBalance : undefined,
+      securityDepositBalance: securityDepositBalance > 0 ? securityDepositBalance : undefined,
+      contributionBalance: contributionBalance > 0 ? contributionBalance : undefined,
       custodyWalletId
     };
   } catch (error) {
@@ -501,7 +509,11 @@ ${status.currentBeneficiary ? `🎯 *Current Beneficiary:*\n   ${shortenAddress(
 ━━━━━━━━━━━━━━━━━━
 • Contribution: ${formatCurrency(status.contributionAmountUsd, status.currencyType)}
 • Security Deposit: ${formatCurrency(status.securityDepositUsd, status.currencyType)}
-${status.custodyBalance !== undefined ? `• Custody Balance: ${status.custodyBalance.toFixed(4)} SUI` : ''}
+${status.custodyBalance !== undefined ? `
+📦 *Custody Wallet:*
+• Security Deposits: ${status.securityDepositBalance !== undefined ? status.securityDepositBalance.toFixed(4) : '0'} SUI
+• Contributions: ${status.contributionBalance !== undefined ? status.contributionBalance.toFixed(4) : '0'} SUI
+• Total: ${status.custodyBalance.toFixed(4)} SUI` : ''}
 ${status.totalCollected && status.totalCollected > 0 ? `• Est. Total Collected: ~${formatCurrency(status.totalCollected, status.currencyType)}` : ''}
 
 ━━━━━━━━━━━━━━━━━━
@@ -619,7 +631,11 @@ ${status.currentBeneficiary ? `🎯 *Current Beneficiary:*\n   ${shortenAddress(
 ━━━━━━━━━━━━━━━━━━
 • Contribution: ${formatCurrency(status.contributionAmountUsd, status.currencyType)}
 • Security Deposit: ${formatCurrency(status.securityDepositUsd, status.currencyType)}
-${status.custodyBalance !== undefined ? `• Custody Balance: ${status.custodyBalance.toFixed(4)} SUI` : ''}
+${status.custodyBalance !== undefined ? `
+📦 *Custody Wallet:*
+• Security Deposits: ${status.securityDepositBalance !== undefined ? status.securityDepositBalance.toFixed(4) : '0'} SUI
+• Contributions: ${status.contributionBalance !== undefined ? status.contributionBalance.toFixed(4) : '0'} SUI
+• Total: ${status.custodyBalance.toFixed(4)} SUI` : ''}
 ${status.totalCollected && status.totalCollected > 0 ? `• Est. Total Collected: ~${formatCurrency(status.totalCollected, status.currencyType)}` : ''}
 
 ━━━━━━━━━━━━━━━━━━
