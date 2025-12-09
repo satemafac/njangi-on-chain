@@ -5115,7 +5115,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } // End case 'adminSetMaxMembers'
 
       case 'adminTriggerPayout': {
+        // Handle network switching for correct package ID
+        const { network: requestedNetwork } = req.body;
+        const originalNetwork = getCurrentNetwork();
+        
         try {
+          // Switch to requested network if specified
+          if (requestedNetwork && requestedNetwork !== originalNetwork) {
+            console.log(`🌍 adminTriggerPayout: Switching network from ${originalNetwork} to ${requestedNetwork}`);
+            setCurrentNetwork(requestedNetwork as 'testnet' | 'mainnet');
+          }
+          
           // Validate required parameters
           if (!account) {
             return res.status(400).json({ error: 'Account data is required' });
@@ -5141,12 +5151,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
-          console.log(`Admin triggering automatic payout for circle ${circleId} with wallet ${req.body.walletId}`);
+          console.log(`Admin triggering automatic payout for circle ${circleId} with wallet ${req.body.walletId} on network ${getCurrentNetwork()}`);
 
-          // Get the dynamic package ID for this circle
+          // Get the dynamic package ID for this circle on the current network
           const dynamicPackageId = await getCirclePackageId(circleId, session.account.userAddr);
           const packageIdToUse = dynamicPackageId || PACKAGE_ID;
-          console.log(`Using package ID ${packageIdToUse} for circle ${circleId}`);
+          console.log(`Using package ID ${packageIdToUse} for circle ${circleId} on ${getCurrentNetwork()}`);
 
           // Send the transaction
           const txResult = await instance.sendTransaction(
@@ -5166,6 +5176,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           );
 
           console.log('Admin trigger payout transaction successful:', txResult);
+          
+          // Restore original network
+          if (requestedNetwork && requestedNetwork !== originalNetwork) {
+            setCurrentNetwork(originalNetwork as 'testnet' | 'mainnet');
+          }
+          
           return res.status(200).json({
             digest: txResult.digest,
             status: txResult.status,
@@ -5173,6 +5189,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
 
         } catch (error) {
+          // Restore original network on error
+          if (requestedNetwork && requestedNetwork !== originalNetwork) {
+            setCurrentNetwork(originalNetwork as 'testnet' | 'mainnet');
+          }
           console.error('Error triggering payout:', error);
 
           // Handle authentication errors
@@ -5217,7 +5237,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } // End case 'adminTriggerPayout'
 
       case 'adminTriggerUsdcPayout': {
+        // Handle network switching for correct package ID
+        const { network: usdcRequestedNetwork } = req.body;
+        const usdcOriginalNetwork = getCurrentNetwork();
+        
         try {
+          // Switch to requested network if specified
+          if (usdcRequestedNetwork && usdcRequestedNetwork !== usdcOriginalNetwork) {
+            console.log(`🌍 adminTriggerUsdcPayout: Switching network from ${usdcOriginalNetwork} to ${usdcRequestedNetwork}`);
+            setCurrentNetwork(usdcRequestedNetwork as 'testnet' | 'mainnet');
+          }
+          
           // Validate required parameters
           if (!account) {
             return res.status(400).json({ error: 'Account data is required' });
@@ -5243,12 +5273,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
-          console.log(`Admin triggering USDC payout for circle ${circleId} with wallet ${req.body.walletId}`);
+          console.log(`Admin triggering USDC payout for circle ${circleId} with wallet ${req.body.walletId} on network ${getCurrentNetwork()}`);
 
-          // Get the dynamic package ID for this circle
+          // Get the dynamic package ID for this circle on the current network
           const dynamicPackageId = await getCirclePackageId(circleId, session.account.userAddr);
           const packageIdToUse = dynamicPackageId || PACKAGE_ID;
-          console.log(`Using package ID ${packageIdToUse} for circle ${circleId}`);
+          console.log(`Using package ID ${packageIdToUse} for circle ${circleId} on ${getCurrentNetwork()}`);
 
           // Define the USDC coin type using network config
           const USDC_TYPE = getCurrentCoinTypes().USDC;
@@ -5272,6 +5302,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           );
 
           console.log('Admin trigger USDC payout transaction successful:', txResult);
+          
+          // Restore original network
+          if (usdcRequestedNetwork && usdcRequestedNetwork !== usdcOriginalNetwork) {
+            setCurrentNetwork(usdcOriginalNetwork as 'testnet' | 'mainnet');
+          }
+          
           return res.status(200).json({
             digest: txResult.digest,
             status: txResult.status,
@@ -5279,6 +5315,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
 
         } catch (error) {
+          // Restore original network on error
+          if (usdcRequestedNetwork && usdcRequestedNetwork !== usdcOriginalNetwork) {
+            setCurrentNetwork(usdcOriginalNetwork as 'testnet' | 'mainnet');
+          }
+          
           console.error('Error triggering USDC payout:', error);
 
           // Handle authentication errors
