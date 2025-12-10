@@ -5124,6 +5124,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (requestedNetwork && requestedNetwork !== originalNetwork) {
             console.log(`🌍 adminTriggerPayout: Switching network from ${originalNetwork} to ${requestedNetwork}`);
             setCurrentNetwork(requestedNetwork as 'testnet' | 'mainnet');
+            // CRITICAL: Reinitialize the service with the new network's RPC URL
+            instance.initializeWithNetwork();
           }
           
           // Validate required parameters
@@ -5180,6 +5182,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Restore original network
           if (requestedNetwork && requestedNetwork !== originalNetwork) {
             setCurrentNetwork(originalNetwork as 'testnet' | 'mainnet');
+            instance.initializeWithNetwork();
           }
           
           return res.status(200).json({
@@ -5192,6 +5195,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Restore original network on error
           if (requestedNetwork && requestedNetwork !== originalNetwork) {
             setCurrentNetwork(originalNetwork as 'testnet' | 'mainnet');
+            instance.initializeWithNetwork();
           }
           console.error('Error triggering payout:', error);
 
@@ -5246,6 +5250,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (usdcRequestedNetwork && usdcRequestedNetwork !== usdcOriginalNetwork) {
             console.log(`🌍 adminTriggerUsdcPayout: Switching network from ${usdcOriginalNetwork} to ${usdcRequestedNetwork}`);
             setCurrentNetwork(usdcRequestedNetwork as 'testnet' | 'mainnet');
+            // CRITICAL: Reinitialize the service with the new network's RPC URL
+            instance.initializeWithNetwork();
           }
           
           // Validate required parameters
@@ -5306,6 +5312,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Restore original network
           if (usdcRequestedNetwork && usdcRequestedNetwork !== usdcOriginalNetwork) {
             setCurrentNetwork(usdcOriginalNetwork as 'testnet' | 'mainnet');
+            instance.initializeWithNetwork();
           }
           
           return res.status(200).json({
@@ -5318,6 +5325,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Restore original network on error
           if (usdcRequestedNetwork && usdcRequestedNetwork !== usdcOriginalNetwork) {
             setCurrentNetwork(usdcOriginalNetwork as 'testnet' | 'mainnet');
+            instance.initializeWithNetwork();
           }
           
           console.error('Error triggering USDC payout:', error);
