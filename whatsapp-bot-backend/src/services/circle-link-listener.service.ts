@@ -74,6 +74,7 @@ export class CircleLinkListenerService {
         await this.checkForMemberRemovedEvents();
         await this.checkForRotationOrderChangedEvents();
         await this.checkForCircleActivatedEvents();
+        await this.checkForPayoutProcessedEvents();
         
         // Check for cycle reminders (runs hourly, controlled internally)
         await cycleReminderService.checkAndSendReminders();
@@ -1504,6 +1505,192 @@ All members should ensure they make their contributions on time to keep the circ
       }
     } catch (error) {
       appLogger.error('Error sending activation notification', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Check for PayoutProcessed events (when admin triggers a payout)
+   */
+  private async checkForPayoutProcessedEvents(): Promise<void> {
+    try {
+      const events = await this.suiClient.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_payments::PayoutProcessed`,
+        },
+        limit: 50,
+        order: 'descending',
+      });
+
+      if (!events.data || events.data.length === 0) {
+        return;
+      }
+
+      for (const event of events.data) {
+        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+        // Skip events that occurred before listener started
+        if (eventTimestampMs < this.startTime) {
+          continue;
+        }
+
+        // Skip if already processed in this session
+        if (this.processedEvents.has(eventId)) {
+          continue;
+        }
+
+        this.processedEvents.add(eventId);
+
+        await this.handlePayoutProcessedEvent(event);
+      }
+    } catch (error) {
+      appLogger.error('Error checking for PayoutProcessed events', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Handle a PayoutProcessed event - notify all linked members when a payout is made
+   */
+  private async handlePayoutProcessedEvent(event: any): Promise<void> {
+    try {
+      const parsedJson = event.parsedJson as any;
+
+      if (!parsedJson) {
+        appLogger.warn('PayoutProcessed event has no parsedJson');
+        return;
+      }
+
+      const {
+        circle_id,
+        recipient,
+        amount,
+        cycle,
+        timestamp,
+      } = parsedJson;
+
+      appLogger.info('PayoutProcessed event detected', {
+        circleId: circle_id?.slice(0, 10),
+        recipient: recipient?.slice(0, 10),
+        amount,
+        cycle,
+      });
+
+      // Look up the phone number for this circle
+      const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
+
+      if (!phoneNumber) {
+        appLogger.debug('Circle not linked to WhatsApp, skipping payout notification', {
+          circleId: circle_id?.slice(0, 10),
+        });
+        return;
+      }
+
+      // Check if we recently sent a message for this payout (within last 5 minutes)
+      const messageKey = `payout:${circle_id}:${recipient}:${cycle}`;
+      const lastSentTime = this.sentMessages.get(messageKey);
+      const now = Date.now();
+      const fiveMinutesAgo = now - (5 * 60 * 1000);
+
+      if (lastSentTime && lastSentTime > fiveMinutesAgo) {
+        appLogger.info('Skipping duplicate payout notification - recently sent', {
+          circleId: circle_id?.slice(0, 10),
+          recipient: recipient?.slice(0, 10),
+          cycle,
+          lastSent: new Date(lastSentTime).toISOString(),
+        });
+        return;
+      }
+
+      // Format amount (assuming it's in smallest units, need to divide by 1e9 for SUI)
+      const amountFormatted = (Number(amount) / 1e9).toFixed(4);
+
+      // Look up the recipient's name from the join requests database
+      const recipientInfo = await this.lookupMemberName(circle_id, recipient);
+      const recipientName = recipientInfo?.userName || null;
+
+      // Send payout notification
+      await this.sendPayoutProcessedNotification(
+        phoneNumber,
+        circle_id,
+        recipient,
+        amountFormatted,
+        cycle,
+        recipientName
+      );
+
+      // Track message send time for deduplication
+      this.sentMessages.set(messageKey, Date.now());
+    } catch (error) {
+      appLogger.error('Error handling PayoutProcessed event', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Send notification when a payout is processed
+   */
+  private async sendPayoutProcessedNotification(
+    phoneNumber: string,
+    circleId: string,
+    recipientAddress: string,
+    amount: string,
+    cycle: string,
+    recipientName?: string | null
+  ): Promise<void> {
+    try {
+      const shortRecipient = `${recipientAddress.slice(0, 6)}...${recipientAddress.slice(-4)}`;
+      const recipientDisplay = recipientName 
+        ? `${recipientName} (${shortRecipient})`
+        : shortRecipient;
+
+      const payoutDate = new Date().toLocaleDateString('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+      
+      const payoutMessage = `💸 *Payout Processed!*
+
+A payout has been distributed from your circle:
+
+👤 *Recipient:* ${recipientDisplay}
+💰 *Amount:* ${amount} SUI
+🔄 *Cycle:* #${cycle}
+📅 *Date:* ${payoutDate}
+
+The payout has been successfully sent to the recipient's wallet.
+
+🔗 View circle: https://njangionchain.com/circle/${circleId}`;
+
+      const result = await whatsappSender.sendMessage({
+        to: phoneNumber,
+        type: 'text',
+        text: payoutMessage,
+      });
+
+      if (result.success) {
+        appLogger.info('✅ Payout notification sent', {
+          phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
+          circleId: circleId.slice(0, 10) + '...',
+          recipient: recipientAddress.slice(0, 10) + '...',
+          amount,
+          cycle,
+          messageId: result.messageId,
+        });
+      } else {
+        appLogger.warn('Failed to send payout notification', {
+          to: phoneNumber,
+          error: result.error,
+        });
+      }
+    } catch (error) {
+      appLogger.error('Error sending payout notification', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
