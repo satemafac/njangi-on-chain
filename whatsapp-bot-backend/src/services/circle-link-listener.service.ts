@@ -1569,7 +1569,6 @@ All members should ensure they make their contributions on time to keep the circ
         recipient,
         amount,
         cycle,
-        timestamp,
       } = parsedJson;
 
       appLogger.info('PayoutProcessed event detected', {
