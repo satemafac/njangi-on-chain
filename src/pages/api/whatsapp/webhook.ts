@@ -81,8 +81,10 @@ async function getAllLinkedCirclesFromRegistry(phoneNumber: string): Promise<str
       const isEnabled = fields.enabled === true;
       
       if (linkPhone && isEnabled && circleId) {
+        // Normalize both phone numbers by removing leading '+' for consistent comparison
+        // This handles all formats: +1234567890, 1234567890
         const linkPhoneNormalized = linkPhone.replace(/^\+/, '');
-        if (linkPhoneNormalized === normalizedPhone || linkPhone === `+${normalizedPhone}`) {
+        if (linkPhoneNormalized === normalizedPhone) {
           linkedCircles.push(circleId);
         }
       }
