@@ -307,10 +307,15 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
       return a.position - b.position;
     });
     
-    // Determine current beneficiary (position = current_cycle - 1)
+    // Determine current beneficiary using current_position from contract
+    // current_position tracks the actual position in rotation (0-indexed)
     const currentCycle = Number(fields.current_cycle || 0);
-    const currentBeneficiaryIndex = currentCycle > 0 ? currentCycle - 1 : 0;
-    const currentBeneficiary = rotationOrder[currentBeneficiaryIndex] || members[currentBeneficiaryIndex]?.address;
+    const currentPosition = Number(fields.current_position || 0);
+    console.log('[CircleStatus] Current cycle:', currentCycle, 'Current position:', currentPosition);
+    
+    // Use current_position directly to get the beneficiary
+    const currentBeneficiary = rotationOrder[currentPosition] || members[currentPosition]?.address;
+    console.log('[CircleStatus] Current beneficiary at position', currentPosition, ':', currentBeneficiary?.slice(0, 15));
     
     // Calculate estimated total collected (simplified)
     const totalCollected = contributionAmountUsd * members.length * currentCycle;
