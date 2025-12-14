@@ -215,16 +215,26 @@ export class CycleReminderService {
       payoutGraceHours: this.payoutGraceHours,
     });
 
-    // Check 1: Contribution reminder (within 48 hours before payout OR up to 4 hours after)
-    // Extended window to catch more cases where members need reminding
+    // Check 1: Contribution reminder
+    // - Before payout: within 48 hours of scheduled time
+    // - After payout: continue sending late reminders for up to 72 hours (3 days)
+    //   This ensures members who missed the deadline still get reminded to contribute
+    const LATE_REMINDER_WINDOW_HOURS = 72; // 3 days of late reminders
+    
     const shouldSendContributionReminder = 
       (hoursUntilPayout > 0 && hoursUntilPayout <= this.reminderWindowHours) || // Before payout
-      (hoursSincePayout > 0 && hoursSincePayout <= 4); // Up to 4 hours after if still pending
+      (hoursSincePayout > 0 && hoursSincePayout <= LATE_REMINDER_WINDOW_HOURS); // Late reminder window
     
     if (shouldSendContributionReminder) {
+      const reminderType = hoursUntilPayout > 0 
+        ? 'before_payout' 
+        : hoursSincePayout <= 4 
+          ? 'grace_period' 
+          : 'late_reminder';
       appLogger.info('📨 Will attempt contribution reminder', {
         circleId: circleId.slice(0, 10),
-        reason: hoursUntilPayout > 0 ? 'before_payout' : 'after_payout_pending',
+        reason: reminderType,
+        hoursOverdue: hoursSincePayout > 0 ? hoursSincePayout.toFixed(1) : 'N/A',
       });
       await this.sendContributionReminders(circleId, phoneNumber, circleData);
     } else {
@@ -232,8 +242,8 @@ export class CycleReminderService {
         circleId: circleId.slice(0, 10),
         reason: hoursUntilPayout > this.reminderWindowHours 
           ? 'too_early' 
-          : hoursSincePayout > 4 
-            ? 'too_late' 
+          : hoursSincePayout > LATE_REMINDER_WINDOW_HOURS 
+            ? `too_late_${Math.round(hoursSincePayout)}h_overdue` 
             : 'unknown',
       });
     }
@@ -359,7 +369,11 @@ export class CycleReminderService {
         return;
       }
 
-      const hoursLeft = Math.round((circleData.nextPayoutTime - Date.now()) / (1000 * 60 * 60));
+      const now = Date.now();
+      const hoursLeft = Math.round((circleData.nextPayoutTime - now) / (1000 * 60 * 60));
+      const hoursOverdue = Math.round((now - circleData.nextPayoutTime) / (1000 * 60 * 60));
+      const isLate = hoursLeft < 0;
+      
       const payoutDate = new Date(circleData.nextPayoutTime).toLocaleDateString('en-US', {
         weekday: 'short',
         month: 'short',
@@ -376,7 +390,27 @@ export class CycleReminderService {
         })
         .join('\n');
 
-      const reminderMessage = `⏰ *Contribution Reminder*
+      // Different message for late vs on-time reminders
+      const reminderMessage = isLate 
+        ? `🚨 *OVERDUE Contribution Reminder*
+
+*${circleData.name}* - Cycle ${circleData.currentCycle}
+
+📅 Payout was scheduled: ${payoutDate}
+⚠️ *${hoursOverdue} hours overdue!*
+
+The following members STILL haven't contributed:
+
+${pendingList}
+
+⚠️ The payout is being delayed because contributions are missing!
+
+Please contribute immediately to allow the payout to proceed.
+
+💡 _Members can contribute via the Njangi app._
+
+🔗 View circle: https://njangionchain.com/circle/${circleId}`
+        : `⏰ *Contribution Reminder*
 
 *${circleData.name}* - Cycle ${circleData.currentCycle}
 
@@ -432,24 +466,36 @@ Please ensure all contributions are made before the payout time to keep the circ
     // Check cooldown for this reminder type
     const reminderKey = `payout:${circleId}:cycle${circleData.currentCycle}`;
     if (this.isInCooldown(reminderKey)) {
-      appLogger.debug('Payout trigger reminder in cooldown', {
+      appLogger.info('⏰ Payout trigger reminder in cooldown', {
         circleId: circleId.slice(0, 10),
         cycle: circleData.currentCycle,
+        cooldownHours: this.reminderCooldownHours,
       });
       return;
     }
 
     try {
       // Check if payout has already been processed for this cycle
+      appLogger.info('🔍 Checking if payout already processed...', {
+        circleId: circleId.slice(0, 10),
+        cycle: circleData.currentCycle,
+      });
+      
       const payoutProcessed = await this.checkIfPayoutProcessed(circleId, circleData.currentCycle);
 
       if (payoutProcessed) {
-        appLogger.debug('Payout already processed, no reminder needed', {
+        appLogger.info('✅ Payout already processed, no reminder needed', {
           circleId: circleId.slice(0, 10),
           cycle: circleData.currentCycle,
         });
         return;
       }
+      
+      appLogger.info('📨 Payout not yet processed, sending reminder...', {
+        circleId: circleId.slice(0, 10),
+        cycle: circleData.currentCycle,
+        adminPhone: adminPhone?.slice(0, 6) + '***',
+      });
 
       const hoursSincePayout = Math.round((Date.now() - circleData.nextPayoutTime) / (1000 * 60 * 60));
       const scheduledDate = new Date(circleData.nextPayoutTime).toLocaleDateString('en-US', {
@@ -522,10 +568,31 @@ Please trigger the payout to distribute funds to the beneficiary.
     const nonContributors: MemberContributionStatus[] = [];
 
     try {
+      // Derive package ID from circle object type
+      let packageId = PACKAGE_ID;
+      try {
+        const circleObj = await this.suiClient.getObject({ id: circleId, options: { showType: true } });
+        if (circleObj.data?.type) {
+          const match = circleObj.data.type.match(/^(0x[a-fA-F0-9]+)::/);
+          if (match) packageId = match[1];
+        }
+      } catch { /* use default */ }
+      
+      appLogger.info('🔍 Checking ContributionMade events', {
+        circleId: circleId.slice(0, 10),
+        cycle: circleData.currentCycle,
+        packageId: packageId.slice(0, 12),
+      });
+      
       // Get contribution events for current cycle
       const contributionEvents = await this.suiClient.queryEvents({
-        query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::ContributionMade` },
+        query: { MoveEventType: `${packageId}::njangi_payments::ContributionMade` },
         limit: 200,
+      });
+      
+      appLogger.info('📊 Contribution events query result', {
+        circleId: circleId.slice(0, 10),
+        eventsFound: contributionEvents.data.length,
       });
 
       // Find who contributed for this circle and cycle
@@ -548,6 +615,12 @@ Please trigger the payout to distribute funds to the beneficiary.
           }
         }
       }
+      
+      appLogger.info('📊 Members who contributed this cycle', {
+        circleId: circleId.slice(0, 10),
+        contributedCount: contributedAddresses.size,
+        totalMembers: circleData.members.length,
+      });
 
       // Check each member
       for (const memberAddress of circleData.members) {
@@ -576,9 +649,30 @@ Please trigger the payout to distribute funds to the beneficiary.
    */
   private async checkIfPayoutProcessed(circleId: string, cycle: number): Promise<boolean> {
     try {
+      // Derive package ID from the circle object type
+      let packageId = PACKAGE_ID;
+      try {
+        const circleObj = await this.suiClient.getObject({ id: circleId, options: { showType: true } });
+        if (circleObj.data?.type) {
+          const match = circleObj.data.type.match(/^(0x[a-fA-F0-9]+)::/);
+          if (match) packageId = match[1];
+        }
+      } catch { /* use default */ }
+      
+      appLogger.info('🔍 Checking PayoutProcessed events', {
+        circleId: circleId.slice(0, 10),
+        cycle,
+        packageId: packageId.slice(0, 12),
+      });
+      
       const payoutEvents = await this.suiClient.queryEvents({
-        query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::PayoutProcessed` },
+        query: { MoveEventType: `${packageId}::njangi_payments::PayoutProcessed` },
         limit: 100,
+      });
+      
+      appLogger.info('📊 Payout events query result', {
+        circleId: circleId.slice(0, 10),
+        eventsFound: payoutEvents.data.length,
       });
 
       for (const event of payoutEvents.data) {
@@ -593,11 +687,19 @@ Please trigger the payout to distribute funds to the beneficiary.
             : parsed.cycle;
 
           if (eventCycle === cycle) {
+            appLogger.info('✅ Payout already processed for this cycle', {
+              circleId: circleId.slice(0, 10),
+              cycle,
+            });
             return true;
           }
         }
       }
 
+      appLogger.info('❌ No payout found for cycle', {
+        circleId: circleId.slice(0, 10),
+        cycle,
+      });
       return false;
     } catch (error) {
       appLogger.error('Error checking payout status', {
