@@ -41,9 +41,9 @@ export class CycleReminderService {
   private suiClient: SuiClient;
   private sentReminders: Map<string, number> = new Map(); // Track sent reminders with timestamps
   private checkIntervalMs = 60 * 60 * 1000; // Check every hour
-  private reminderWindowHours = 24; // Send contribution reminder 24 hours before payout
-  private payoutGraceHours = 2; // Send admin reminder 2 hours after payout time
-  private reminderCooldownHours = 12; // Don't send same reminder type within 12 hours
+  private reminderWindowHours = 48; // Send contribution reminder 48 hours before payout
+  private payoutGraceHours = 1; // Send admin reminder 1 hour after payout time
+  private reminderCooldownHours = 6; // Don't send same reminder type within 6 hours
   private lastCheckTime = 0;
 
   constructor() {
@@ -194,28 +194,63 @@ export class CycleReminderService {
 
     // Skip if no payout time set
     if (!payoutTime || payoutTime === 0) {
+      appLogger.info('Skipping circle - no payout time set', {
+        circleId: circleId.slice(0, 10),
+        circleName: circleData.name,
+      });
       return;
     }
 
     const hoursUntilPayout = (payoutTime - now) / (1000 * 60 * 60);
     const hoursSincePayout = (now - payoutTime) / (1000 * 60 * 60);
 
-    appLogger.debug('Checking reminders for circle', {
+    // Log at INFO level so we can see what's happening
+    appLogger.info('🔍 Checking reminders for circle', {
       circleId: circleId.slice(0, 10),
       circleName: circleData.name,
       nextPayoutTime: new Date(payoutTime).toISOString(),
       hoursUntilPayout: hoursUntilPayout.toFixed(1),
       hoursSincePayout: hoursSincePayout.toFixed(1),
+      reminderWindowHours: this.reminderWindowHours,
+      payoutGraceHours: this.payoutGraceHours,
     });
 
-    // Check 1: Contribution reminder (24 hours before payout)
-    if (hoursUntilPayout > 0 && hoursUntilPayout <= this.reminderWindowHours) {
+    // Check 1: Contribution reminder (within 48 hours before payout OR up to 4 hours after)
+    // Extended window to catch more cases where members need reminding
+    const shouldSendContributionReminder = 
+      (hoursUntilPayout > 0 && hoursUntilPayout <= this.reminderWindowHours) || // Before payout
+      (hoursSincePayout > 0 && hoursSincePayout <= 4); // Up to 4 hours after if still pending
+    
+    if (shouldSendContributionReminder) {
+      appLogger.info('📨 Will attempt contribution reminder', {
+        circleId: circleId.slice(0, 10),
+        reason: hoursUntilPayout > 0 ? 'before_payout' : 'after_payout_pending',
+      });
       await this.sendContributionReminders(circleId, phoneNumber, circleData);
+    } else {
+      appLogger.info('⏭️ Skipping contribution reminder', {
+        circleId: circleId.slice(0, 10),
+        reason: hoursUntilPayout > this.reminderWindowHours 
+          ? 'too_early' 
+          : hoursSincePayout > 4 
+            ? 'too_late' 
+            : 'unknown',
+      });
     }
 
-    // Check 2: Admin payout trigger reminder (after payout time)
+    // Check 2: Admin payout trigger reminder (after payout time passes)
     if (hoursSincePayout > this.payoutGraceHours) {
+      appLogger.info('📨 Will attempt payout trigger reminder', {
+        circleId: circleId.slice(0, 10),
+        hoursSincePayout: hoursSincePayout.toFixed(1),
+      });
       await this.sendPayoutTriggerReminder(circleId, phoneNumber, circleData);
+    } else if (hoursSincePayout > 0) {
+      appLogger.info('⏭️ Payout time passed but within grace period', {
+        circleId: circleId.slice(0, 10),
+        hoursSincePayout: hoursSincePayout.toFixed(1),
+        graceHoursRemaining: (this.payoutGraceHours - hoursSincePayout).toFixed(1),
+      });
     }
   }
 
@@ -276,20 +311,33 @@ export class CycleReminderService {
     // Check cooldown for this reminder type
     const reminderKey = `contribution:${circleId}:cycle${circleData.currentCycle}`;
     if (this.isInCooldown(reminderKey)) {
-      appLogger.debug('Contribution reminder in cooldown', {
+      appLogger.info('⏰ Contribution reminder in cooldown', {
         circleId: circleId.slice(0, 10),
         cycle: circleData.currentCycle,
+        cooldownHours: this.reminderCooldownHours,
       });
       return;
     }
 
     try {
       // Get members who haven't contributed
+      appLogger.info('📊 Checking contribution status for members', {
+        circleId: circleId.slice(0, 10),
+        totalMembers: circleData.members.length,
+        currentCycle: circleData.currentCycle,
+      });
+      
       const nonContributors = await this.getMembersWhoHaventContributed(circleId, circleData);
 
+      appLogger.info('📊 Non-contributors found', {
+        circleId: circleId.slice(0, 10),
+        nonContributorCount: nonContributors.length,
+      });
+
       if (nonContributors.length === 0) {
-        appLogger.debug('All members have contributed, no reminder needed', {
+        appLogger.info('✅ All members have contributed, no reminder needed', {
           circleId: circleId.slice(0, 10),
+          cycle: circleData.currentCycle,
         });
         return;
       }
@@ -298,7 +346,16 @@ export class CycleReminderService {
       const currentRecipient = circleData.rotationOrder[circleData.currentPosition];
       const membersNeedingReminder = nonContributors.filter(m => m.address !== currentRecipient);
 
+      appLogger.info('📊 Members needing reminder (excluding recipient)', {
+        circleId: circleId.slice(0, 10),
+        membersNeedingReminder: membersNeedingReminder.length,
+        currentRecipient: currentRecipient?.slice(0, 10),
+      });
+
       if (membersNeedingReminder.length === 0) {
+        appLogger.info('✅ Only non-contributor is the current recipient, no reminder needed', {
+          circleId: circleId.slice(0, 10),
+        });
         return;
       }
 
