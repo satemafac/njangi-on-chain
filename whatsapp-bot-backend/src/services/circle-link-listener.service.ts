@@ -545,24 +545,13 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
     phoneNumber: string,
     circleId: string,
     memberAddress: string,
-    contribution: string,
-    currency: string,
+    _contribution: string,  // Prefixed with _ to indicate intentionally unused
+    _currency: string,      // Prefixed with _ to indicate intentionally unused
     memberName?: string | null,
     circleName?: string | null
   ): Promise<void> {
     try {
       const shortMember = `${memberAddress.slice(0, 6)}...${memberAddress.slice(-4)}`;
-      const currencySymbol = currency === 'USD' ? '$' : currency;
-      
-      // Build member display: name if available, otherwise just address
-      const memberDisplay = memberName 
-        ? `${memberName} (${shortMember})`
-        : shortMember;
-
-      // Build circle display: name if available
-      const circleDisplay = circleName 
-        ? `*${circleName}*`
-        : 'your circle';
       
       // Use WhatsApp template for sending outside 24-hour window
       const circleUrl = `https://njangionchain.com/circle/${circleId}`;
@@ -1134,18 +1123,11 @@ The funds are now safely held in the circle's custody wallet.
     circleId: string,
     memberAddress: string,
     memberName?: string | null,
-    depositReturned?: boolean,
-    depositAmount?: string
+    _depositReturned?: boolean,  // Prefixed with _ to indicate intentionally unused in template
+    _depositAmount?: string      // Prefixed with _ to indicate intentionally unused in template
   ): Promise<void> {
     try {
       const shortMember = `${memberAddress.slice(0, 6)}...${memberAddress.slice(-4)}`;
-      const memberDisplay = memberName 
-        ? `${memberName} (${shortMember})`
-        : shortMember;
-
-      const depositInfo = depositReturned && depositAmount && Number(depositAmount) > 0
-        ? `\n💰 *Deposit returned:* ${(Number(depositAmount) / 1e9).toFixed(4)} SUI`
-        : '';
       
       // Use WhatsApp template for sending outside 24-hour window
       const circleUrl = `https://njangionchain.com/circle/${circleId}`;

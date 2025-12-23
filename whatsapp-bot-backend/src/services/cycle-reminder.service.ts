@@ -29,6 +29,8 @@ interface CircleData {
   members: string[];
   rotationOrder: string[];
   currentPosition: number;
+  contributionAmount?: number;
+  memberCount?: number;
 }
 
 interface MemberContributionStatus {
@@ -397,19 +399,19 @@ export class CycleReminderService {
       const templateName = isLate ? 'contribution_overdue' : 'contribution_reminder_before_payout';
       const templateParams = isLate 
         ? [
-            { type: 'text', text: circleData.name },                    // {{circle_name}}
-            { type: 'text', text: String(circleData.currentCycle) },    // {{cycle_number}}
-            { type: 'text', text: String(hoursOverdue) },               // {{hours_overdue}}
-            { type: 'text', text: pendingList },                        // {{pending_members}}
-            { type: 'text', text: circleUrl },                          // {{circle_url}}
+            { type: 'text' as const, text: circleData.name },                    // {{circle_name}}
+            { type: 'text' as const, text: String(circleData.currentCycle) },    // {{cycle_number}}
+            { type: 'text' as const, text: String(hoursOverdue) },               // {{hours_overdue}}
+            { type: 'text' as const, text: pendingList },                        // {{pending_members}}
+            { type: 'text' as const, text: circleUrl },                          // {{circle_url}}
           ]
         : [
-            { type: 'text', text: circleData.name },                    // {{circle_name}}
-            { type: 'text', text: String(circleData.currentCycle) },    // {{cycle_number}}
-            { type: 'text', text: payoutDate },                         // {{payout_date}}
-            { type: 'text', text: String(hoursLeft) },                  // {{hours_remaining}}
-            { type: 'text', text: pendingList },                        // {{pending_members}}
-            { type: 'text', text: circleUrl },                          // {{circle_url}}
+            { type: 'text' as const, text: circleData.name },                    // {{circle_name}}
+            { type: 'text' as const, text: String(circleData.currentCycle) },    // {{cycle_number}}
+            { type: 'text' as const, text: payoutDate },                         // {{payout_date}}
+            { type: 'text' as const, text: String(hoursLeft) },                  // {{hours_remaining}}
+            { type: 'text' as const, text: pendingList },                        // {{pending_members}}
+            { type: 'text' as const, text: circleUrl },                          // {{circle_url}}
           ];
 
       const result = await whatsappSender.sendMessage({
@@ -492,13 +494,6 @@ export class CycleReminderService {
       });
 
       const hoursSincePayout = Math.round((Date.now() - circleData.nextPayoutTime) / (1000 * 60 * 60));
-      const scheduledDate = new Date(circleData.nextPayoutTime).toLocaleDateString('en-US', {
-        weekday: 'short',
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-      });
 
       // Get current beneficiary
       const beneficiary = circleData.rotationOrder[circleData.currentPosition];
@@ -510,8 +505,9 @@ export class CycleReminderService {
       const circleUrl = `https://njangionchain.com/circle/${circleId}/manage`;
       
       // Calculate payout amount (contribution × member count)
+      const memberCount = circleData.memberCount || circleData.rotationOrder.length || 1;
       const payoutAmount = circleData.contributionAmount 
-        ? `${(Number(circleData.contributionAmount) * circleData.memberCount / 1e9).toFixed(4)} SUI`
+        ? `${(Number(circleData.contributionAmount) * memberCount / 1e9).toFixed(4)} SUI`
         : 'N/A';
 
       const result = await whatsappSender.sendMessage({
