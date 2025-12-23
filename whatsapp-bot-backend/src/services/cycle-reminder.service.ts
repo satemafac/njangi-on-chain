@@ -390,47 +390,41 @@ export class CycleReminderService {
         })
         .join('\n');
 
-      // Different message for late vs on-time reminders
-      const reminderMessage = isLate 
-        ? `🚨 *OVERDUE Contribution Reminder*
-
-*${circleData.name}* - Cycle ${circleData.currentCycle}
-
-📅 Payout was scheduled: ${payoutDate}
-⚠️ *${hoursOverdue} hours overdue!*
-
-The following members STILL haven't contributed:
-
-${pendingList}
-
-⚠️ The payout is being delayed because contributions are missing!
-
-Please contribute immediately to allow the payout to proceed.
-
-💡 _Members can contribute via the Njangi app._
-
-🔗 View circle: https://njangionchain.com/circle/${circleId}`
-        : `⏰ *Contribution Reminder*
-
-*${circleData.name}* - Cycle ${circleData.currentCycle}
-
-📅 Payout scheduled: ${payoutDate}
-⏳ Time remaining: ~${hoursLeft} hours
-
-The following members haven't contributed yet:
-
-${pendingList}
-
-Please ensure all contributions are made before the payout time to keep the circle running smoothly!
-
-💡 _Members can contribute via the Njangi app._
-
-🔗 View circle: https://njangionchain.com/circle/${circleId}`;
+      // Use WhatsApp templates for sending outside 24-hour window
+      // Template names: contribution_overdue (late) or contribution_reminder (on-time)
+      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
+      
+      const templateName = isLate ? 'contribution_overdue' : 'contribution_reminder_before_payout';
+      const templateParams = isLate 
+        ? [
+            { type: 'text', text: circleData.name },                    // {{circle_name}}
+            { type: 'text', text: String(circleData.currentCycle) },    // {{cycle_number}}
+            { type: 'text', text: String(hoursOverdue) },               // {{hours_overdue}}
+            { type: 'text', text: pendingList },                        // {{pending_members}}
+            { type: 'text', text: circleUrl },                          // {{circle_url}}
+          ]
+        : [
+            { type: 'text', text: circleData.name },                    // {{circle_name}}
+            { type: 'text', text: String(circleData.currentCycle) },    // {{cycle_number}}
+            { type: 'text', text: payoutDate },                         // {{payout_date}}
+            { type: 'text', text: String(hoursLeft) },                  // {{hours_remaining}}
+            { type: 'text', text: pendingList },                        // {{pending_members}}
+            { type: 'text', text: circleUrl },                          // {{circle_url}}
+          ];
 
       const result = await whatsappSender.sendMessage({
         to: adminPhone,
-        type: 'text',
-        text: reminderMessage,
+        type: 'template',
+        template: {
+          name: templateName,
+          language: { code: 'en' },
+          components: [
+            {
+              type: 'body',
+              parameters: templateParams,
+            },
+          ],
+        },
       });
 
       if (result.success) {
@@ -512,28 +506,34 @@ Please ensure all contributions are made before the payout time to keep the circ
         ? `${beneficiary.slice(0, 6)}...${beneficiary.slice(-4)}`
         : 'Unknown';
 
-      const reminderMessage = `🚨 *Payout Action Required*
-
-*${circleData.name}* - Cycle ${circleData.currentCycle}
-
-The scheduled payout time has passed!
-
-📅 Scheduled: ${scheduledDate}
-⏰ Overdue by: ~${hoursSincePayout} hours
-
-🎯 *Current Beneficiary:*
-${shortBeneficiary}
-
-Please trigger the payout to distribute funds to the beneficiary.
-
-⚠️ Delaying payouts affects member trust and circle health.
-
-🔗 Manage circle: https://njangionchain.com/circle/${circleId}/manage`;
+      // Use WhatsApp template for sending outside 24-hour window
+      const circleUrl = `https://njangionchain.com/circle/${circleId}/manage`;
+      
+      // Calculate payout amount (contribution × member count)
+      const payoutAmount = circleData.contributionAmount 
+        ? `${(Number(circleData.contributionAmount) * circleData.memberCount / 1e9).toFixed(4)} SUI`
+        : 'N/A';
 
       const result = await whatsappSender.sendMessage({
         to: adminPhone,
-        type: 'text',
-        text: reminderMessage,
+        type: 'template',
+        template: {
+          name: 'payout_trigger_reminder',
+          language: { code: 'en' },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', text: circleData.name },                    // {{circle_name}}
+                { type: 'text', text: String(circleData.currentCycle) },    // {{cycle_number}}
+                { type: 'text', text: String(hoursSincePayout) },           // {{hours_overdue}}
+                { type: 'text', text: shortBeneficiary },                   // {{beneficiary_name}}
+                { type: 'text', text: payoutAmount },                       // {{payout_amount}}
+                { type: 'text', text: circleUrl },                          // {{circle_url}}
+              ],
+            },
+          ],
+        },
       });
 
       if (result.success) {

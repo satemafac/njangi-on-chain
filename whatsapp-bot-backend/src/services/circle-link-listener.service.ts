@@ -2,7 +2,6 @@ import { SuiClient } from '@mysten/sui/client';
 import { getConfig } from '../config';
 import { appLogger } from '../utils/logger';
 import { whatsappSender } from './whatsapp-sender.service';
-import { cycleReminderService } from './cycle-reminder.service';
 
 // ============================================================================
 // CIRCLE LINK LISTENER SERVICE
@@ -75,10 +74,6 @@ export class CircleLinkListenerService {
         await this.checkForRotationOrderChangedEvents();
         await this.checkForCircleActivatedEvents();
         await this.checkForPayoutProcessedEvents();
-        
-        // Check for cycle reminders (runs hourly, controlled internally)
-        await cycleReminderService.checkAndSendReminders();
-        
         await new Promise((resolve) => setTimeout(resolve, this.checkInterval));
       } catch (error) {
         appLogger.error('Error in listen loop', {
@@ -569,21 +564,33 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
         ? `*${circleName}*`
         : 'your circle';
       
-      const memberJoinedMessage = `👋 *New Member Approved!*
-
-A new member has joined ${circleDisplay}:
-
-👤 *Member:* ${memberDisplay}
-💰 *Contribution:* ${currencySymbol}${contribution}
-
-They can now participate in the circle activities. Make sure they pay their security deposit to complete onboarding!
-
-🔗 View circle: https://njangionchain.com/circle/${circleId}`;
+      // Use WhatsApp template for sending outside 24-hour window
+      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
+      const joinDate = new Date().toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
 
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
-        type: 'text',
-        text: memberJoinedMessage,
+        type: 'template',
+        template: {
+          name: 'member_joined',
+          language: { code: 'en' },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', text: circleName || 'Your Circle' },       // {{circle_name}}
+                { type: 'text', text: memberName || 'New Member' },        // {{member_name}}
+                { type: 'text', text: shortMember },                       // {{member_address}}
+                { type: 'text', text: joinDate },                          // {{join_date}}
+                { type: 'text', text: circleUrl },                         // {{circle_url}}
+              ],
+            },
+          ],
+        },
       });
 
       if (result.success) {
@@ -668,23 +675,16 @@ They can now participate in the circle activities. Make sure they pay their secu
         operation_type,
       } = parsedJson;
 
-      // operation_type: 3 = security deposit, 0 = contribution
-      // Only send notifications for security deposits here - contributions are handled by ContributionMade event
+      // operation_type: 3 = security deposit, 0 = contribution (but contributions use different event)
+      const isSecurityDeposit = operation_type === 3;
+
       appLogger.info('CustodyDeposited event detected', {
         circleId: circle_id?.slice(0, 10),
         member: member?.slice(0, 10),
         amount,
         operationType: operation_type,
+        isSecurityDeposit,
       });
-
-      // Skip non-security-deposit events - contributions are handled by the ContributionMade event handler
-      if (operation_type !== 3) {
-        appLogger.debug('Skipping non-security-deposit CustodyDeposited event (handled by ContributionMade)', {
-          circleId: circle_id?.slice(0, 10),
-          operationType: operation_type,
-        });
-        return;
-      }
 
       // Look up the phone number for this circle
       const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
@@ -718,13 +718,14 @@ They can now participate in the circle activities. Make sure they pay their secu
       const memberInfo = await this.lookupMemberName(circle_id, member);
       const memberName = memberInfo?.userName || null;
 
-      // Send security deposit notification
+      // Send deposit notification
       await this.sendDepositNotification(
         phoneNumber,
         circle_id,
         member,
         amountFormatted,
-        memberName
+        memberName,
+        isSecurityDeposit
       );
 
       // Track message send time for deduplication
@@ -737,14 +738,15 @@ They can now participate in the circle activities. Make sure they pay their secu
   }
 
   /**
-   * Send notification when a member makes a security deposit
+   * Send notification when a member makes a deposit
    */
   private async sendDepositNotification(
     phoneNumber: string,
     circleId: string,
     memberAddress: string,
     amount: string,
-    memberName?: string | null
+    memberName?: string | null,
+    isSecurityDeposit?: boolean
   ): Promise<void> {
     try {
       const shortMember = `${memberAddress.slice(0, 6)}...${memberAddress.slice(-4)}`;
@@ -752,15 +754,17 @@ They can now participate in the circle activities. Make sure they pay their secu
         ? `${memberName} (${shortMember})`
         : shortMember;
 
-      // Since we now only handle security deposits here, simplify the message
-      const depositMessage = `🔒 *Security Deposit Received!*
+      const depositType = isSecurityDeposit ? 'Security Deposit' : 'Deposit';
+      const emoji = isSecurityDeposit ? '🔒' : '💰';
+      
+      const depositMessage = `${emoji} *${depositType} Received!*
 
-A member has paid their security deposit:
+A member has made a deposit:
 
 👤 *Member:* ${memberDisplay}
 💎 *Amount:* ${amount} SUI
 
-The security deposit is now safely held in the circle's custody wallet. This member is ready to participate in the circle.
+The funds are now safely held in the circle's custody wallet.
 
 🔗 View circle: https://njangionchain.com/circle/${circleId}`;
 
@@ -771,21 +775,22 @@ The security deposit is now safely held in the circle's custody wallet. This mem
       });
 
       if (result.success) {
-        appLogger.info('✅ Security deposit notification sent', {
+        appLogger.info('✅ Deposit notification sent', {
           phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
           circleId: circleId.slice(0, 10) + '...',
           member: memberAddress.slice(0, 10) + '...',
           amount,
+          depositType,
           messageId: result.messageId,
         });
       } else {
-        appLogger.warn('Failed to send security deposit notification', {
+        appLogger.warn('Failed to send deposit notification', {
           to: phoneNumber,
           error: result.error,
         });
       }
     } catch (error) {
-      appLogger.error('Error sending security deposit notification', {
+      appLogger.error('Error sending deposit notification', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -928,22 +933,58 @@ The security deposit is now safely held in the circle's custody wallet. This mem
         ? `${memberName} (${shortMember})`
         : shortMember;
       
-      const contributionMessage = `🎯 *Cycle Contribution Made!*
+      // Use WhatsApp template for sending outside 24-hour window
+      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
+      const contribDate = new Date().toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
 
-A member has made their contribution for the current cycle:
-
-👤 *Member:* ${memberDisplay}
-💰 *Amount:* ${amount} SUI
-🔄 *Cycle:* #${cycle}
-
-The contribution has been recorded and added to the circle's funds.
-
-🔗 View circle: https://njangionchain.com/circle/${circleId}`;
+      // Fetch circle data for template parameters
+      let circleName = 'Your Circle';
+      let paidCount = '1';
+      let totalMembers = '1';
+      
+      try {
+        const circleObj = await this.suiClient.getObject({ 
+          id: circleId, 
+          options: { showContent: true } 
+        });
+        
+        if (circleObj.data?.content?.dataType === 'moveObject') {
+          const fields = (circleObj.data.content as any).fields;
+          circleName = fields.name || 'Your Circle';
+          totalMembers = String(fields.member_count || fields.rotation_order?.length || 1);
+          // We don't have exact paid count here, use a placeholder
+          paidCount = '1+';
+        }
+      } catch (e) {
+        appLogger.warn('Could not fetch circle data for contribution notification', { circleId });
+      }
 
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
-        type: 'text',
-        text: contributionMessage,
+        type: 'template',
+        template: {
+          name: 'contribution_received',
+          language: { code: 'en' },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', text: circleName },                        // {{circle_name}}
+                { type: 'text', text: cycle },                             // {{cycle_number}}
+                { type: 'text', text: memberName || memberDisplay },       // {{contributor_name}}
+                { type: 'text', text: `${amount} SUI` },                   // {{contrib_amount}}
+                { type: 'text', text: contribDate },                       // {{contrib_date}}
+                { type: 'text', text: paidCount },                         // {{paid_count}}
+                { type: 'text', text: totalMembers },                      // {{total_members}}
+                { type: 'text', text: circleUrl },                         // {{circle_url}}
+              ],
+            },
+          ],
+        },
       });
 
       if (result.success) {
@@ -1106,20 +1147,36 @@ The contribution has been recorded and added to the circle's funds.
         ? `\n💰 *Deposit returned:* ${(Number(depositAmount) / 1e9).toFixed(4)} SUI`
         : '';
       
-      const removalMessage = `🚫 *Member Removed*
+      // Use WhatsApp template for sending outside 24-hour window
+      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
+      const removalDate = new Date().toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
 
-A member has been removed from your circle:
-
-👤 *Member:* ${memberDisplay}${depositInfo}
-
-The member no longer has access to the circle.
-
-🔗 View circle: https://njangionchain.com/circle/${circleId}`;
+      // Get circle name from cache or use default
+      const circleName = 'Your Circle'; // We don't have circle name in this context
 
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
-        type: 'text',
-        text: removalMessage,
+        type: 'template',
+        template: {
+          name: 'member_removed',
+          language: { code: 'en' },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', text: circleName },                        // {{circle_name}}
+                { type: 'text', text: memberName || 'Member' },            // {{member_name}}
+                { type: 'text', text: shortMember },                       // {{member_address}}
+                { type: 'text', text: removalDate },                       // {{removal_date}}
+                { type: 'text', text: circleUrl },                         // {{circle_url}}
+              ],
+            },
+          ],
+        },
       });
 
       if (result.success) {
@@ -1473,22 +1530,62 @@ The rotation order determines who receives payouts and when.
     circleId: string
   ): Promise<void> {
     try {
-      const activationMessage = `🎉 *Circle Activated!*
+      // Fetch circle data for template parameters
+      let circleName = 'Your Circle';
+      let memberCount = '0';
+      let contributionAmount = 'N/A';
+      let firstPayoutDate = 'TBD';
+      
+      try {
+        const circleObj = await this.suiClient.getObject({ 
+          id: circleId, 
+          options: { showContent: true } 
+        });
+        
+        if (circleObj.data?.content?.dataType === 'moveObject') {
+          const fields = (circleObj.data.content as any).fields;
+          circleName = fields.name || 'Your Circle';
+          memberCount = String(fields.member_count || fields.rotation_order?.length || 0);
+          
+          if (fields.contribution_amount) {
+            contributionAmount = `${(Number(fields.contribution_amount) / 1e9).toFixed(4)} SUI`;
+          }
+          
+          if (fields.next_payout_time && Number(fields.next_payout_time) > 0) {
+            firstPayoutDate = new Date(Number(fields.next_payout_time)).toLocaleDateString('en-US', {
+              weekday: 'short',
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+            });
+          }
+        }
+      } catch (e) {
+        appLogger.warn('Could not fetch circle data for activation notification', { circleId });
+      }
 
-Your circle has been activated and is now live!
+      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
 
-✅ Members can now start making contributions
-🔄 The rotation cycle has officially begun
-💰 Payouts will be distributed according to the rotation order
-
-All members should ensure they make their contributions on time to keep the circle running smoothly.
-
-🔗 View circle: https://njangionchain.com/circle/${circleId}`;
-
+      // Use WhatsApp template for sending outside 24-hour window
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
-        type: 'text',
-        text: activationMessage,
+        type: 'template',
+        template: {
+          name: 'circle_activated',
+          language: { code: 'en' },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', text: circleName },              // {{circle_name}}
+                { type: 'text', text: memberCount },             // {{member_count}}
+                { type: 'text', text: contributionAmount },      // {{contribution_amount}}
+                { type: 'text', text: firstPayoutDate },         // {{first_payout_date}}
+                { type: 'text', text: circleUrl },               // {{circle_url}}
+              ],
+            },
+          ],
+        },
       });
 
       if (result.success) {
@@ -1511,7 +1608,7 @@ All members should ensure they make their contributions on time to keep the circ
   }
 
   /**
-   * Check for PayoutProcessed events (when admin triggers a payout)
+   * Check for PayoutProcessed events
    */
   private async checkForPayoutProcessedEvents(): Promise<void> {
     try {
@@ -1523,25 +1620,11 @@ All members should ensure they make their contributions on time to keep the circ
         order: 'descending',
       });
 
-      if (!events.data || events.data.length === 0) {
-        return;
-      }
-
       for (const event of events.data) {
-        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
-        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
-
-        // Skip events that occurred before listener started
-        if (eventTimestampMs < this.startTime) {
+        // Skip events that occurred before the listener started
+        if (Number(event.timestampMs) < this.startTime) {
           continue;
         }
-
-        // Skip if already processed in this session
-        if (this.processedEvents.has(eventId)) {
-          continue;
-        }
-
-        this.processedEvents.add(eventId);
 
         await this.handlePayoutProcessedEvent(event);
       }
@@ -1553,7 +1636,7 @@ All members should ensure they make their contributions on time to keep the circ
   }
 
   /**
-   * Handle a PayoutProcessed event - notify all linked members when a payout is made
+   * Handle a PayoutProcessed event
    */
   private async handlePayoutProcessedEvent(event: any): Promise<void> {
     try {
@@ -1589,7 +1672,7 @@ All members should ensure they make their contributions on time to keep the circ
       }
 
       // Check if we recently sent a message for this payout (within last 5 minutes)
-      const messageKey = `payout:${circle_id}:${recipient}:${cycle}`;
+      const messageKey = `payout:${circle_id}:${cycle}:${recipient}`;
       const lastSentTime = this.sentMessages.get(messageKey);
       const now = Date.now();
       const fiveMinutesAgo = now - (5 * 60 * 1000);
@@ -1597,26 +1680,21 @@ All members should ensure they make their contributions on time to keep the circ
       if (lastSentTime && lastSentTime > fiveMinutesAgo) {
         appLogger.info('Skipping duplicate payout notification - recently sent', {
           circleId: circle_id?.slice(0, 10),
-          recipient: recipient?.slice(0, 10),
-          cycle,
           lastSent: new Date(lastSentTime).toISOString(),
         });
         return;
       }
 
-      // Format amount (assuming it's in smallest units, need to divide by 1e9 for SUI)
-      const amountFormatted = (Number(amount) / 1e9).toFixed(4);
-
       // Look up the recipient's name from the join requests database
-      const recipientInfo = await this.lookupMemberName(circle_id, recipient);
-      const recipientName = recipientInfo?.userName || null;
+      const memberInfo = await this.lookupMemberName(circle_id, recipient);
+      const recipientName = memberInfo?.userName || null;
 
       // Send payout notification
       await this.sendPayoutProcessedNotification(
         phoneNumber,
         circle_id,
         recipient,
-        amountFormatted,
+        amount,
         cycle,
         recipientName
       );
@@ -1643,53 +1721,71 @@ All members should ensure they make their contributions on time to keep the circ
   ): Promise<void> {
     try {
       const shortRecipient = `${recipientAddress.slice(0, 6)}...${recipientAddress.slice(-4)}`;
-      const recipientDisplay = recipientName 
-        ? `${recipientName} (${shortRecipient})`
-        : shortRecipient;
-
+      const amountFormatted = `${(Number(amount) / 1e9).toFixed(4)} SUI`;
       const payoutDate = new Date().toLocaleDateString('en-US', {
         weekday: 'short',
         month: 'short',
         day: 'numeric',
         year: 'numeric',
       });
-      
-      const payoutMessage = `💸 *Payout Processed!*
+      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
 
-A payout has been distributed from your circle:
+      // Fetch circle name
+      let circleName = 'Your Circle';
+      try {
+        const circleObj = await this.suiClient.getObject({ 
+          id: circleId, 
+          options: { showContent: true } 
+        });
+        
+        if (circleObj.data?.content?.dataType === 'moveObject') {
+          const fields = (circleObj.data.content as any).fields;
+          circleName = fields.name || 'Your Circle';
+        }
+      } catch (e) {
+        appLogger.warn('Could not fetch circle name for payout notification', { circleId });
+      }
 
-👤 *Recipient:* ${recipientDisplay}
-💰 *Amount:* ${amount} SUI
-🔄 *Cycle:* #${cycle}
-📅 *Date:* ${payoutDate}
-
-The payout has been successfully sent to the recipient's wallet.
-
-🔗 View circle: https://njangionchain.com/circle/${circleId}`;
-
+      // Use WhatsApp template for sending outside 24-hour window
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
-        type: 'text',
-        text: payoutMessage,
+        type: 'template',
+        template: {
+          name: 'payout_processed',
+          language: { code: 'en' },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', text: circleName },                              // {{circle_name}}
+                { type: 'text', text: recipientName || shortRecipient },         // {{recipient_name}}
+                { type: 'text', text: amountFormatted },                         // {{payout_amount}}
+                { type: 'text', text: cycle },                                   // {{cycle_number}}
+                { type: 'text', text: payoutDate },                              // {{payout_date}}
+                { type: 'text', text: circleUrl },                               // {{circle_url}}
+              ],
+            },
+          ],
+        },
       });
 
       if (result.success) {
-        appLogger.info('✅ Payout notification sent', {
+        appLogger.info('✅ Payout processed notification sent', {
           phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
           circleId: circleId.slice(0, 10) + '...',
           recipient: recipientAddress.slice(0, 10) + '...',
-          amount,
+          amount: amountFormatted,
           cycle,
           messageId: result.messageId,
         });
       } else {
-        appLogger.warn('Failed to send payout notification', {
+        appLogger.warn('Failed to send payout processed notification', {
           to: phoneNumber,
           error: result.error,
         });
       }
     } catch (error) {
-      appLogger.error('Error sending payout notification', {
+      appLogger.error('Error sending payout processed notification', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
