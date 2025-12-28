@@ -399,19 +399,19 @@ export class CycleReminderService {
       const templateName = isLate ? 'contribution_overdue' : 'contribution_reminder_before_payout';
       const templateParams = isLate 
         ? [
-            { type: 'text' as const, text: circleData.name },                    // {{circle_name}}
-            { type: 'text' as const, text: String(circleData.currentCycle) },    // {{cycle_number}}
-            { type: 'text' as const, text: String(hoursOverdue) },               // {{hours_overdue}}
-            { type: 'text' as const, text: pendingList },                        // {{pending_members}}
-            { type: 'text' as const, text: circleUrl },                          // {{circle_url}}
+            { type: 'text' as const, parameter_name: 'circle_name', text: circleData.name },
+            { type: 'text' as const, parameter_name: 'cycle_number', text: String(circleData.currentCycle) },
+            { type: 'text' as const, parameter_name: 'hours_overdue', text: String(hoursOverdue) },
+            { type: 'text' as const, parameter_name: 'pending_members', text: pendingList },
+            { type: 'text' as const, parameter_name: 'circle_url', text: circleUrl },
           ]
         : [
-            { type: 'text' as const, text: circleData.name },                    // {{circle_name}}
-            { type: 'text' as const, text: String(circleData.currentCycle) },    // {{cycle_number}}
-            { type: 'text' as const, text: payoutDate },                         // {{payout_date}}
-            { type: 'text' as const, text: String(hoursLeft) },                  // {{hours_remaining}}
-            { type: 'text' as const, text: pendingList },                        // {{pending_members}}
-            { type: 'text' as const, text: circleUrl },                          // {{circle_url}}
+            { type: 'text' as const, parameter_name: 'circle_name', text: circleData.name },
+            { type: 'text' as const, parameter_name: 'cycle_number', text: String(circleData.currentCycle) },
+            { type: 'text' as const, parameter_name: 'payout_date', text: payoutDate },
+            { type: 'text' as const, parameter_name: 'hours_remaining', text: String(hoursLeft) },
+            { type: 'text' as const, parameter_name: 'pending_members', text: pendingList },
+            { type: 'text' as const, parameter_name: 'circle_url', text: circleUrl },
           ];
 
       const result = await whatsappSender.sendMessage({
@@ -520,12 +520,12 @@ export class CycleReminderService {
             {
               type: 'body',
               parameters: [
-                { type: 'text', text: circleData.name },                    // {{circle_name}}
-                { type: 'text', text: String(circleData.currentCycle) },    // {{cycle_number}}
-                { type: 'text', text: String(hoursSincePayout) },           // {{hours_overdue}}
-                { type: 'text', text: shortBeneficiary },                   // {{beneficiary_name}}
-                { type: 'text', text: payoutAmount },                       // {{payout_amount}}
-                { type: 'text', text: circleUrl },                          // {{circle_url}}
+                { type: 'text', parameter_name: 'circle_name', text: circleData.name },
+                { type: 'text', parameter_name: 'cycle_number', text: String(circleData.currentCycle) },
+                { type: 'text', parameter_name: 'hours_overdue', text: String(hoursSincePayout) },
+                { type: 'text', parameter_name: 'beneficiary_name', text: shortBeneficiary },
+                { type: 'text', parameter_name: 'payout_amount', text: payoutAmount },
+                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
               ],
             },
           ],

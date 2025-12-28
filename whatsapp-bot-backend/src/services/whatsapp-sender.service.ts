@@ -21,6 +21,7 @@ export interface WhatsAppTemplate {
     type: 'body' | 'header' | 'footer';
     parameters?: Array<{
       type: 'text' | 'image' | 'document' | 'video';
+      parameter_name?: string;  // Required for named template variables
       text?: string;
       image?: { link: string };
       document?: { link: string };

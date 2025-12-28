@@ -571,11 +571,11 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
             {
               type: 'body',
               parameters: [
-                { type: 'text', text: circleName || 'Your Circle' },       // {{circle_name}}
-                { type: 'text', text: memberName || 'New Member' },        // {{member_name}}
-                { type: 'text', text: shortMember },                       // {{member_address}}
-                { type: 'text', text: joinDate },                          // {{join_date}}
-                { type: 'text', text: circleUrl },                         // {{circle_url}}
+                { type: 'text', parameter_name: 'circle_name', text: circleName || 'Your Circle' },
+                { type: 'text', parameter_name: 'member_name', text: memberName || 'New Member' },
+                { type: 'text', parameter_name: 'member_address', text: shortMember },
+                { type: 'text', parameter_name: 'join_date', text: joinDate },
+                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
               ],
             },
           ],
@@ -977,14 +977,14 @@ The funds are now safely held in the circle's custody wallet.
             {
               type: 'body',
               parameters: [
-                { type: 'text', text: params.circle_name },
-                { type: 'text', text: params.cycle_number },
-                { type: 'text', text: params.contributor_name },
-                { type: 'text', text: params.contrib_amount },
-                { type: 'text', text: params.contrib_date },
-                { type: 'text', text: params.paid_count },
-                { type: 'text', text: params.total_members },
-                { type: 'text', text: params.circle_url },
+                { type: 'text', parameter_name: 'circle_name', text: params.circle_name },
+                { type: 'text', parameter_name: 'cycle_number', text: params.cycle_number },
+                { type: 'text', parameter_name: 'contributor_name', text: params.contributor_name },
+                { type: 'text', parameter_name: 'contrib_amount', text: params.contrib_amount },
+                { type: 'text', parameter_name: 'contrib_date', text: params.contrib_date },
+                { type: 'text', parameter_name: 'paid_count', text: params.paid_count },
+                { type: 'text', parameter_name: 'total_members', text: params.total_members },
+                { type: 'text', parameter_name: 'circle_url', text: params.circle_url },
               ],
             },
           ],
@@ -1165,11 +1165,11 @@ The funds are now safely held in the circle's custody wallet.
             {
               type: 'body',
               parameters: [
-                { type: 'text', text: circleName },                        // {{circle_name}}
-                { type: 'text', text: memberName || 'Member' },            // {{member_name}}
-                { type: 'text', text: shortMember },                       // {{member_address}}
-                { type: 'text', text: removalDate },                       // {{removal_date}}
-                { type: 'text', text: circleUrl },                         // {{circle_url}}
+                { type: 'text', parameter_name: 'circle_name', text: circleName },
+                { type: 'text', parameter_name: 'member_name', text: memberName || 'Member' },
+                { type: 'text', parameter_name: 'member_address', text: shortMember },
+                { type: 'text', parameter_name: 'removal_date', text: removalDate },
+                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
               ],
             },
           ],
@@ -1574,11 +1574,11 @@ The rotation order determines who receives payouts and when.
             {
               type: 'body',
               parameters: [
-                { type: 'text', text: circleName },              // {{circle_name}}
-                { type: 'text', text: memberCount },             // {{member_count}}
-                { type: 'text', text: contributionAmount },      // {{contribution_amount}}
-                { type: 'text', text: firstPayoutDate },         // {{first_payout_date}}
-                { type: 'text', text: circleUrl },               // {{circle_url}}
+                { type: 'text', parameter_name: 'circle_name', text: circleName },
+                { type: 'text', parameter_name: 'member_count', text: memberCount },
+                { type: 'text', parameter_name: 'contribution_amount', text: contributionAmount },
+                { type: 'text', parameter_name: 'first_payout_date', text: firstPayoutDate },
+                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
               ],
             },
           ],
@@ -1754,12 +1754,12 @@ The rotation order determines who receives payouts and when.
             {
               type: 'body',
               parameters: [
-                { type: 'text', text: circleName },                              // {{circle_name}}
-                { type: 'text', text: recipientName || shortRecipient },         // {{recipient_name}}
-                { type: 'text', text: amountFormatted },                         // {{payout_amount}}
-                { type: 'text', text: cycle },                                   // {{cycle_number}}
-                { type: 'text', text: payoutDate },                              // {{payout_date}}
-                { type: 'text', text: circleUrl },                               // {{circle_url}}
+                { type: 'text', parameter_name: 'circle_name', text: circleName },
+                { type: 'text', parameter_name: 'recipient_name', text: recipientName || shortRecipient },
+                { type: 'text', parameter_name: 'payout_amount', text: amountFormatted },
+                { type: 'text', parameter_name: 'cycle_number', text: cycle },
+                { type: 'text', parameter_name: 'payout_date', text: payoutDate },
+                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
               ],
             },
           ],
@@ -1868,7 +1868,8 @@ The rotation order determines who receives payouts and when.
               parameters: [
                 {
                   type: 'text',
-                  text: circleUrl,  // {{circle_url}}
+                  parameter_name: 'circle_url',
+                  text: circleUrl,
                 },
               ],
             },
