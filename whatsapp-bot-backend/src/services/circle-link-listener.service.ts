@@ -952,6 +952,21 @@ The funds are now safely held in the circle's custody wallet.
         appLogger.warn('Could not fetch circle data for contribution notification', { circleId });
       }
 
+      // Ensure all parameters are non-null strings
+      const params = {
+        circle_name: circleName || 'Circle',
+        cycle_number: String(cycle || '1'),
+        contributor_name: memberName || memberDisplay || 'Member',
+        contrib_amount: `${amount} SUI`,
+        contrib_date: contribDate,
+        paid_count: paidCount || '1',
+        total_members: totalMembers || '1',
+        circle_url: circleUrl,
+      };
+
+      // Log the parameters we're sending for debugging
+      appLogger.info('📤 Sending contribution_received template', params);
+
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
         type: 'template',
@@ -962,14 +977,14 @@ The funds are now safely held in the circle's custody wallet.
             {
               type: 'body',
               parameters: [
-                { type: 'text', text: circleName },                        // {{circle_name}}
-                { type: 'text', text: cycle },                             // {{cycle_number}}
-                { type: 'text', text: memberName || memberDisplay },       // {{contributor_name}}
-                { type: 'text', text: `${amount} SUI` },                   // {{contrib_amount}}
-                { type: 'text', text: contribDate },                       // {{contrib_date}}
-                { type: 'text', text: paidCount },                         // {{paid_count}}
-                { type: 'text', text: totalMembers },                      // {{total_members}}
-                { type: 'text', text: circleUrl },                         // {{circle_url}}
+                { type: 'text', text: params.circle_name },
+                { type: 'text', text: params.cycle_number },
+                { type: 'text', text: params.contributor_name },
+                { type: 'text', text: params.contrib_amount },
+                { type: 'text', text: params.contrib_date },
+                { type: 'text', text: params.paid_count },
+                { type: 'text', text: params.total_members },
+                { type: 'text', text: params.circle_url },
               ],
             },
           ],
@@ -1835,8 +1850,10 @@ The rotation order determines who receives payouts and when.
     circleId: string
   ): Promise<void> {
     try {
-      // Send the "circle_linked" template with circle ID as parameter
-      // Template now includes: {{1}} = circle ID with link
+      // Build the circle URL to pass to the template
+      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
+      
+      // Send the "circle_linked" template with circle URL as parameter
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
         type: 'template',
@@ -1851,7 +1868,7 @@ The rotation order determines who receives payouts and when.
               parameters: [
                 {
                   type: 'text',
-                  text: circleId, // Pass circle ID for the link in the template
+                  text: circleUrl,  // {{circle_url}}
                 },
               ],
             },

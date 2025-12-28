@@ -183,12 +183,24 @@ export class WhatsAppSenderService {
 
       const errorMessage = this.parseError(error);
 
-      appLogger.error('Failed to send WhatsApp message', {
-        to: request.to,
-        type: request.type,
-        error: errorMessage,
-        duration,
-      });
+      // Log detailed info for template errors
+      if (request.type === 'template' && request.template) {
+        appLogger.error('Failed to send WhatsApp template message', {
+          to: request.to,
+          templateName: request.template.name,
+          language: request.template.language,
+          parameterCount: request.template.components?.[0]?.parameters?.length || 0,
+          error: errorMessage,
+          duration,
+        });
+      } else {
+        appLogger.error('Failed to send WhatsApp message', {
+          to: request.to,
+          type: request.type,
+          error: errorMessage,
+          duration,
+        });
+      }
 
       return {
         success: false,
