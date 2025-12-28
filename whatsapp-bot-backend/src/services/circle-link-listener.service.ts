@@ -566,7 +566,7 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
         type: 'template',
         template: {
           name: 'member_joined',
-          language: { code: 'en_US' },
+          language: { code: 'en' },
           components: [
             {
               type: 'body',
@@ -972,7 +972,7 @@ The funds are now safely held in the circle's custody wallet.
         type: 'template',
         template: {
           name: 'contribution_received',
-          language: { code: 'en_US' },
+          language: { code: 'en' },
           components: [
             {
               type: 'body',
@@ -1160,7 +1160,7 @@ The funds are now safely held in the circle's custody wallet.
         type: 'template',
         template: {
           name: 'member_removed',
-          language: { code: 'en_US' },
+          language: { code: 'en' },
           components: [
             {
               type: 'body',
@@ -1569,7 +1569,7 @@ The rotation order determines who receives payouts and when.
         type: 'template',
         template: {
           name: 'circle_activated',
-          language: { code: 'en_US' },
+          language: { code: 'en' },
           components: [
             {
               type: 'body',
@@ -1749,7 +1749,7 @@ The rotation order determines who receives payouts and when.
         type: 'template',
         template: {
           name: 'payout_processed',
-          language: { code: 'en_US' },
+          language: { code: 'en' },
           components: [
             {
               type: 'body',

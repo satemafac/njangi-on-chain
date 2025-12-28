@@ -419,7 +419,7 @@ export class CycleReminderService {
         type: 'template',
         template: {
           name: templateName,
-          language: { code: 'en_US' },
+          language: { code: 'en' },
           components: [
             {
               type: 'body',
@@ -515,7 +515,7 @@ export class CycleReminderService {
         type: 'template',
         template: {
           name: 'payout_trigger_reminder',
-          language: { code: 'en_US' },
+          language: { code: 'en' },
           components: [
             {
               type: 'body',
