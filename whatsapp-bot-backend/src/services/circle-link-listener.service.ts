@@ -68,7 +68,7 @@ export class CircleLinkListenerService {
         await this.checkForCircleLinkedEvents();
         await this.checkForCircleUnlinkedEvents();
         await this.checkForMemberJoinedEvents();
-        await this.checkForDepositEvents();
+        // NOTE: checkForDepositEvents() removed - use checkForContributionEvents() with templates instead
         await this.checkForContributionEvents();
         await this.checkForMemberRemovedEvents();
         await this.checkForRotationOrderChangedEvents();
@@ -246,13 +246,13 @@ export class CircleLinkListenerService {
         return;
       }
 
-      // Check if we recently sent a message for this circle (within last 2 minutes)
+      // Check if we recently sent a message for this circle (within last 24 hours)
       const messageKey = `unlink:${circle_id}:${phoneNumber}`;
       const lastSentTime = this.sentMessages.get(messageKey);
       const now = Date.now();
-      const twoMinutesAgo = now - (2 * 60 * 1000);
+      const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000);
 
-      if (lastSentTime && lastSentTime > twoMinutesAgo) {
+      if (lastSentTime && lastSentTime > twentyFourHoursAgo) {
         appLogger.info('Skipping duplicate unlink message - recently sent', {
           circleId: circle_id?.slice(0, 10),
           phoneNumber: phoneNumber?.slice(0, 5) + '...',
@@ -414,6 +414,13 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
    */
   private async handleMemberJoinedEvent(event: any): Promise<void> {
     try {
+      // Use transaction digest as unique event identifier to prevent duplicate processing
+      const txDigest = event.id?.txDigest;
+      if (txDigest && this.processedEvents.has(`member:${txDigest}`)) {
+        // Already processed this exact event, skip silently
+        return;
+      }
+
       const parsedJson = event.parsedJson as any;
 
       if (!parsedJson) {
@@ -434,7 +441,13 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
         member: member?.slice(0, 10),
         currencyType: currency_type,
         joinedAt: joined_at,
+        txDigest: txDigest?.slice(0, 10),
       });
+
+      // Mark this event as processed IMMEDIATELY to prevent race conditions
+      if (txDigest) {
+        this.processedEvents.add(`member:${txDigest}`);
+      }
 
       // Look up the phone number for this circle
       const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
@@ -442,21 +455,6 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
       if (!phoneNumber) {
         appLogger.debug('Circle not linked to WhatsApp, skipping member notification', {
           circleId: circle_id?.slice(0, 10),
-        });
-        return;
-      }
-
-      // Check if we recently sent a message for this member (within last 2 minutes)
-      const messageKey = `member:${circle_id}:${member}`;
-      const lastSentTime = this.sentMessages.get(messageKey);
-      const now = Date.now();
-      const twoMinutesAgo = now - (2 * 60 * 1000);
-
-      if (lastSentTime && lastSentTime > twoMinutesAgo) {
-        appLogger.info('Skipping duplicate member notification - recently sent', {
-          circleId: circle_id?.slice(0, 10),
-          member: member?.slice(0, 10),
-          lastSent: new Date(lastSentTime).toISOString(),
         });
         return;
       }
@@ -487,9 +485,6 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
         memberName,
         circleName
       );
-
-      // Track message send time for deduplication
-      this.sentMessages.set(messageKey, Date.now());
     } catch (error) {
       appLogger.error('Error handling MemberJoined event', {
         error: error instanceof Error ? error.message : String(error),
@@ -685,13 +680,13 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
         return;
       }
 
-      // Check if we recently sent a message for this deposit (within last 2 minutes)
+      // Check if we recently sent a message for this deposit (within last 24 hours)
       const messageKey = `deposit:${circle_id}:${member}:${amount}`;
       const lastSentTime = this.sentMessages.get(messageKey);
       const now = Date.now();
-      const twoMinutesAgo = now - (2 * 60 * 1000);
+      const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000);
 
-      if (lastSentTime && lastSentTime > twoMinutesAgo) {
+      if (lastSentTime && lastSentTime > twentyFourHoursAgo) {
         appLogger.info('Skipping duplicate deposit notification - recently sent', {
           circleId: circle_id?.slice(0, 10),
           member: member?.slice(0, 10),
@@ -832,6 +827,13 @@ The funds are now safely held in the circle's custody wallet.
    */
   private async handleContributionEvent(event: any): Promise<void> {
     try {
+      // Use transaction digest as unique event identifier to prevent duplicate processing
+      const txDigest = event.id?.txDigest;
+      if (txDigest && this.processedEvents.has(`contribution:${txDigest}`)) {
+        // Already processed this exact event, skip silently
+        return;
+      }
+
       const parsedJson = event.parsedJson as any;
 
       if (!parsedJson) {
@@ -851,7 +853,13 @@ The funds are now safely held in the circle's custody wallet.
         member: member?.slice(0, 10),
         amount,
         cycle,
+        txDigest: txDigest?.slice(0, 10),
       });
+
+      // Mark this event as processed IMMEDIATELY to prevent race conditions
+      if (txDigest) {
+        this.processedEvents.add(`contribution:${txDigest}`);
+      }
 
       // Look up the phone number for this circle
       const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
@@ -859,22 +867,6 @@ The funds are now safely held in the circle's custody wallet.
       if (!phoneNumber) {
         appLogger.debug('Circle not linked to WhatsApp, skipping contribution notification', {
           circleId: circle_id?.slice(0, 10),
-        });
-        return;
-      }
-
-      // Check if we recently sent a message for this contribution (within last 2 minutes)
-      const messageKey = `contribution:${circle_id}:${member}:${cycle}`;
-      const lastSentTime = this.sentMessages.get(messageKey);
-      const now = Date.now();
-      const twoMinutesAgo = now - (2 * 60 * 1000);
-
-      if (lastSentTime && lastSentTime > twoMinutesAgo) {
-        appLogger.info('Skipping duplicate contribution notification - recently sent', {
-          circleId: circle_id?.slice(0, 10),
-          member: member?.slice(0, 10),
-          cycle,
-          lastSent: new Date(lastSentTime).toISOString(),
         });
         return;
       }
@@ -895,9 +887,6 @@ The funds are now safely held in the circle's custody wallet.
         cycle,
         memberName
       );
-
-      // Track message send time for deduplication
-      this.sentMessages.set(messageKey, Date.now());
     } catch (error) {
       appLogger.error('Error handling ContributionMade event', {
         error: error instanceof Error ? error.message : String(error),
@@ -1060,6 +1049,13 @@ The funds are now safely held in the circle's custody wallet.
    */
   private async handleMemberRemovedEvent(event: any): Promise<void> {
     try {
+      // Use transaction digest as unique event identifier to prevent duplicate processing
+      const txDigest = event.id?.txDigest;
+      if (txDigest && this.processedEvents.has(`removed:${txDigest}`)) {
+        // Already processed this exact event, skip silently
+        return;
+      }
+
       const parsedJson = event.parsedJson as any;
 
       if (!parsedJson) {
@@ -1080,7 +1076,13 @@ The funds are now safely held in the circle's custody wallet.
         member: member?.slice(0, 10),
         removedBy: removed_by?.slice(0, 10),
         depositReturned: deposit_returned,
+        txDigest: txDigest?.slice(0, 10),
       });
+
+      // Mark this event as processed IMMEDIATELY to prevent race conditions
+      if (txDigest) {
+        this.processedEvents.add(`removed:${txDigest}`);
+      }
 
       // Look up the phone number for this circle
       const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
@@ -1088,21 +1090,6 @@ The funds are now safely held in the circle's custody wallet.
       if (!phoneNumber) {
         appLogger.debug('Circle not linked to WhatsApp, skipping removal notification', {
           circleId: circle_id?.slice(0, 10),
-        });
-        return;
-      }
-
-      // Check if we recently sent a message for this removal (within last 2 minutes)
-      const messageKey = `removed:${circle_id}:${member}`;
-      const lastSentTime = this.sentMessages.get(messageKey);
-      const now = Date.now();
-      const twoMinutesAgo = now - (2 * 60 * 1000);
-
-      if (lastSentTime && lastSentTime > twoMinutesAgo) {
-        appLogger.info('Skipping duplicate removal notification - recently sent', {
-          circleId: circle_id?.slice(0, 10),
-          member: member?.slice(0, 10),
-          lastSent: new Date(lastSentTime).toISOString(),
         });
         return;
       }
@@ -1120,9 +1107,6 @@ The funds are now safely held in the circle's custody wallet.
         deposit_returned,
         deposit_amount
       );
-
-      // Track message send time for deduplication
-      this.sentMessages.set(messageKey, Date.now());
     } catch (error) {
       appLogger.error('Error handling MemberRemoved event', {
         error: error instanceof Error ? error.message : String(error),
@@ -1244,6 +1228,13 @@ The funds are now safely held in the circle's custody wallet.
    */
   private async handleRotationOrderChangedEvent(event: any): Promise<void> {
     try {
+      // Use transaction digest as unique event identifier to prevent duplicate processing
+      const txDigest = event.id?.txDigest;
+      if (txDigest && this.processedEvents.has(`reorder:${txDigest}`)) {
+        // Already processed this exact event, skip silently
+        return;
+      }
+
       const parsedJson = event.parsedJson as any;
 
       if (!parsedJson) {
@@ -1261,7 +1252,13 @@ The funds are now safely held in the circle's custody wallet.
         circleId: circle_id?.slice(0, 10),
         admin: admin?.slice(0, 10),
         memberCount: member_count,
+        txDigest: txDigest?.slice(0, 10),
       });
+
+      // Mark this event as processed IMMEDIATELY to prevent race conditions
+      if (txDigest) {
+        this.processedEvents.add(`reorder:${txDigest}`);
+      }
 
       // Look up the phone number for this circle
       const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
@@ -1269,20 +1266,6 @@ The funds are now safely held in the circle's custody wallet.
       if (!phoneNumber) {
         appLogger.debug('Circle not linked to WhatsApp, skipping rotation order notification', {
           circleId: circle_id?.slice(0, 10),
-        });
-        return;
-      }
-
-      // Check if we recently sent a message for this reorder (within last 2 minutes)
-      const messageKey = `reorder:${circle_id}:${member_count}`;
-      const lastSentTime = this.sentMessages.get(messageKey);
-      const now = Date.now();
-      const twoMinutesAgo = now - (2 * 60 * 1000);
-
-      if (lastSentTime && lastSentTime > twoMinutesAgo) {
-        appLogger.info('Skipping duplicate rotation order notification - recently sent', {
-          circleId: circle_id?.slice(0, 10),
-          lastSent: new Date(lastSentTime).toISOString(),
         });
         return;
       }
@@ -1316,9 +1299,6 @@ The funds are now safely held in the circle's custody wallet.
         member_count,
         memberList
       );
-
-      // Track message send time for deduplication
-      this.sentMessages.set(messageKey, Date.now());
     } catch (error) {
       appLogger.error('Error handling RotationOrderChanged event', {
         error: error instanceof Error ? error.message : String(error),
@@ -1466,6 +1446,13 @@ The rotation order determines who receives payouts and when.
    */
   private async handleCircleActivatedEvent(event: any): Promise<void> {
     try {
+      // Use transaction digest as unique event identifier to prevent duplicate processing
+      const txDigest = event.id?.txDigest;
+      if (txDigest && this.processedEvents.has(`activated:${txDigest}`)) {
+        // Already processed this exact event, skip silently
+        return;
+      }
+
       const parsedJson = event.parsedJson as any;
 
       if (!parsedJson) {
@@ -1481,7 +1468,13 @@ The rotation order determines who receives payouts and when.
       appLogger.info('CircleActivated event detected', {
         circleId: circle_id?.slice(0, 10),
         activatedBy: activated_by?.slice(0, 10),
+        txDigest: txDigest?.slice(0, 10),
       });
+
+      // Mark this event as processed IMMEDIATELY to prevent race conditions
+      if (txDigest) {
+        this.processedEvents.add(`activated:${txDigest}`);
+      }
 
       // Look up the phone number for this circle
       const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
@@ -1493,25 +1486,8 @@ The rotation order determines who receives payouts and when.
         return;
       }
 
-      // Check if we recently sent a message for this activation (within last 2 minutes)
-      const messageKey = `activated:${circle_id}`;
-      const lastSentTime = this.sentMessages.get(messageKey);
-      const now = Date.now();
-      const twoMinutesAgo = now - (2 * 60 * 1000);
-
-      if (lastSentTime && lastSentTime > twoMinutesAgo) {
-        appLogger.info('Skipping duplicate activation notification - recently sent', {
-          circleId: circle_id?.slice(0, 10),
-          lastSent: new Date(lastSentTime).toISOString(),
-        });
-        return;
-      }
-
       // Send activation notification
       await this.sendCircleActivatedNotification(phoneNumber, circle_id);
-
-      // Track message send time for deduplication
-      this.sentMessages.set(messageKey, Date.now());
     } catch (error) {
       appLogger.error('Error handling CircleActivated event', {
         error: error instanceof Error ? error.message : String(error),
@@ -1637,6 +1613,13 @@ The rotation order determines who receives payouts and when.
    */
   private async handlePayoutProcessedEvent(event: any): Promise<void> {
     try {
+      // Use transaction digest as unique event identifier to prevent duplicate processing
+      const txDigest = event.id?.txDigest;
+      if (txDigest && this.processedEvents.has(`payout:${txDigest}`)) {
+        // Already processed this exact event, skip silently
+        return;
+      }
+
       const parsedJson = event.parsedJson as any;
 
       if (!parsedJson) {
@@ -1656,7 +1639,13 @@ The rotation order determines who receives payouts and when.
         recipient: recipient?.slice(0, 10),
         amount,
         cycle,
+        txDigest: txDigest?.slice(0, 10),
       });
+
+      // Mark this event as processed IMMEDIATELY to prevent race conditions
+      if (txDigest) {
+        this.processedEvents.add(`payout:${txDigest}`);
+      }
 
       // Look up the phone number for this circle
       const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
@@ -1664,20 +1653,6 @@ The rotation order determines who receives payouts and when.
       if (!phoneNumber) {
         appLogger.debug('Circle not linked to WhatsApp, skipping payout notification', {
           circleId: circle_id?.slice(0, 10),
-        });
-        return;
-      }
-
-      // Check if we recently sent a message for this payout (within last 5 minutes)
-      const messageKey = `payout:${circle_id}:${cycle}:${recipient}`;
-      const lastSentTime = this.sentMessages.get(messageKey);
-      const now = Date.now();
-      const fiveMinutesAgo = now - (5 * 60 * 1000);
-
-      if (lastSentTime && lastSentTime > fiveMinutesAgo) {
-        appLogger.info('Skipping duplicate payout notification - recently sent', {
-          circleId: circle_id?.slice(0, 10),
-          lastSent: new Date(lastSentTime).toISOString(),
         });
         return;
       }
@@ -1695,9 +1670,6 @@ The rotation order determines who receives payouts and when.
         cycle,
         recipientName
       );
-
-      // Track message send time for deduplication
-      this.sentMessages.set(messageKey, Date.now());
     } catch (error) {
       appLogger.error('Error handling PayoutProcessed event', {
         error: error instanceof Error ? error.message : String(error),

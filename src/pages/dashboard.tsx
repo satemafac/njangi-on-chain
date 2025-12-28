@@ -927,18 +927,8 @@ const cachedApiCall = async (
       circuitBreakers.set(circuitKey, circuitState);
     }
     
-    // DON'T cache empty results for circle queries - they may indicate timing issues on first login
-    // This prevents the "no circles until refresh" bug
-    const isEmptyCircleResult = result && 
-      (Array.isArray(result.circles) && result.circles.length === 0) &&
-      cacheKey.includes('Circles');
-    
-    if (isEmptyCircleResult) {
-      console.log(`⚠️ Not caching empty circles result for ${cacheKey} - may be timing issue`);
-    } else {
-      // Cache successful result
-      setCacheItem(cacheKey, result);
-    }
+    // Cache successful result
+    setCacheItem(cacheKey, result);
     return result;
   } catch (error) {
     // Enhanced error categorization
@@ -1840,7 +1830,6 @@ export default function Dashboard() {
       console.log(`✅ Found ${userMemberEvents.length} member circles across all packages`);
       
       // 🔴 CRITICAL FIX: Query MemberRemoved events to filter out circles where user was removed
-      // BUT allow circles where user REJOINED after being removed (compare timestamps)
       console.log('🔍 Checking for MemberRemoved events to filter out removed members...');
       const memberRemovedEventsData = await batchQueryEvents(
         userPackageIds,
@@ -1859,42 +1848,24 @@ export default function Dashboard() {
         return parsedEvent?.member === userAddress;
       });
       
-      // Create a map of circle IDs to their LATEST removal timestamp
-      // This allows us to check if user rejoined AFTER being removed
-      const latestRemovalByCircle = new Map<string, number>();
+      // Create a set of circle IDs where user has been removed
+      const removedFromCircles = new Set<string>();
       for (const event of userRemovedEvents) {
         const parsedEvent = event.parsedJson as MemberRemovedEvent;
-        const circleId = parsedEvent?.circle_id;
-        const removalTimestamp = Number(event.timestampMs || 0);
-        
-        if (circleId) {
-          const existingTimestamp = latestRemovalByCircle.get(circleId) || 0;
-          if (removalTimestamp > existingTimestamp) {
-            latestRemovalByCircle.set(circleId, removalTimestamp);
-            console.log(`⛔ User was removed from circle: ${circleId} at ${new Date(removalTimestamp).toISOString()}`);
-          }
+        if (parsedEvent?.circle_id) {
+          removedFromCircles.add(parsedEvent.circle_id);
+          console.log(`⛔ User was removed from circle: ${parsedEvent.circle_id}`);
         }
       }
-      console.log(`⛔ User has been removed from ${latestRemovalByCircle.size} circles`);
+      console.log(`⛔ User has been removed from ${removedFromCircles.size} circles`);
       
-      // Filter out circles where user was removed BUT allow if they rejoined after removal
+      // Filter out circles where user was removed from member events
       // Note: We DON'T filter admin events - admins can remove themselves from the rotation but still own the circle
       const filteredMemberEvents = userMemberEvents.filter((event: any) => {
         const parsedEvent = event.parsedJson as MemberJoinedEvent;
         const circleId = parsedEvent?.circle_id;
-        const joinTimestamp = Number(event.timestampMs || 0);
-        
-        if (circleId && latestRemovalByCircle.has(circleId)) {
-          const latestRemovalTimestamp = latestRemovalByCircle.get(circleId)!;
-          
-          // If the user joined AFTER they were last removed, they have rejoined - keep this event
-          if (joinTimestamp > latestRemovalTimestamp) {
-            console.log(`✅ User rejoined circle ${circleId} after removal - keeping (joined: ${new Date(joinTimestamp).toISOString()}, removed: ${new Date(latestRemovalTimestamp).toISOString()})`);
-            return true;
-          }
-          
-          // User was removed after this join event - filter it out
-          console.log(`🚫 Filtering out circle ${circleId} - user was removed after this join event`);
+        if (circleId && removedFromCircles.has(circleId)) {
+          console.log(`🚫 Filtering out circle ${circleId} - user was removed`);
           return false;
         }
         return true;
@@ -3366,30 +3337,6 @@ export default function Dashboard() {
   useEffect(() => {
     setDisplayedCirclesCount(3); // Reset to initial value
   }, [circles.length]);
-
-  // Track if we've already done a retry for first-time login
-  const [hasRetried, setHasRetried] = useState(false);
-  
-  // Auto-retry effect: If circles are empty after initial load, retry once after delay
-  // This fixes the "no circles until refresh" bug on first login
-  useEffect(() => {
-    // Only retry if: loading is done, no circles found, not already retried, and user is logged in
-    if (!loading && circles.length === 0 && !hasRetried && userAddress && !error) {
-      console.log('🔄 First load returned empty circles, scheduling auto-retry in 3 seconds...');
-      const retryTimeout = setTimeout(() => {
-        console.log('🔄 Auto-retrying circle fetch after empty initial load...');
-        setHasRetried(true);
-        fetchUserCircles(true); // Force refresh to bypass any cached empty results
-      }, 3000);
-      
-      return () => clearTimeout(retryTimeout);
-    }
-  }, [loading, circles.length, hasRetried, userAddress, error, fetchUserCircles]);
-  
-  // Reset retry flag when user changes (new login)
-  useEffect(() => {
-    setHasRetried(false);
-  }, [userAddress]);
 
   // Enhanced useEffect to handle initial load and cache validation
   useEffect(() => {
