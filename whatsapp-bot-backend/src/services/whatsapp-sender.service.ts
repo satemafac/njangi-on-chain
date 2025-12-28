@@ -154,6 +154,11 @@ export class WhatsAppSenderService {
       // Build message payload
       const payload = this.buildMessagePayload(request);
 
+      // Log the full payload for debugging template issues
+      if (request.type === 'template') {
+        console.log('📤 WhatsApp Template Payload:', JSON.stringify(payload, null, 2));
+      }
+
       // Send via API
       const response = await this.apiClient.post<WhatsAppResponse>('/messages', payload);
 
@@ -384,12 +389,22 @@ export class WhatsAppSenderService {
           message: string;
           type: string;
           code: number;
+          error_subcode?: number;
+          error_data?: {
+            details: string;
+          };
         };
       }>;
 
+      // Log the FULL error response for debugging
+      console.log('❌ Meta API Error Response:', JSON.stringify(axiosError.response?.data, null, 2));
+
       if (axiosError.response?.data?.error) {
         const apiError = axiosError.response.data.error;
-        return `${apiError.code}: ${apiError.message}`;
+        // Include subcode and details if available
+        const subcode = apiError.error_subcode ? ` (subcode: ${apiError.error_subcode})` : '';
+        const details = apiError.error_data?.details ? ` - ${apiError.error_data.details}` : '';
+        return `${apiError.code}: ${apiError.message}${subcode}${details}`;
       }
 
       if (axiosError.response?.status === 401) {
