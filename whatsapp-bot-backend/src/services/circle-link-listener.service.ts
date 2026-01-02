@@ -560,7 +560,7 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
         to: phoneNumber,
         type: 'template',
         template: {
-          name: 'member_joined',
+          name: 'member_join',
           language: { code: 'en' },
           components: [
             {
@@ -783,7 +783,7 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
         to: phoneNumber,
         type: 'template',
         template: {
-          name: 'contribution_received',
+          name: 'recieved_contribution',
           language: { code: 'en' },
           components: [
             {
@@ -1367,7 +1367,7 @@ The rotation order determines who receives payouts and when.
         to: phoneNumber,
         type: 'template',
         template: {
-          name: 'circle_activated',
+          name: 'activated_circle',
           language: { code: 'en' },
           components: [
             {
@@ -1653,7 +1653,7 @@ The rotation order determines who receives payouts and when.
         to: phoneNumber,
         type: 'template',
         template: {
-          name: 'circle_linked',
+          name: 'linked_circle',
           language: {
             code: 'en_US',
           },
