@@ -757,8 +757,10 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
           const fields = (circleObj.data.content as any).fields;
           circleName = fields.name || 'Your Circle';
           totalMembers = String(fields.member_count || fields.rotation_order?.length || 1);
-          // We don't have exact paid count here, use a placeholder
-          paidCount = '1+';
+          
+          // Get actual paid count from contributions dynamic field or events
+          const currentCycle = parseInt(cycle) || 1;
+          paidCount = await this.getContributionCount(circleId, currentCycle);
         }
       } catch (e) {
         appLogger.warn('Could not fetch circle data for contribution notification', { circleId });
@@ -822,6 +824,47 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
       appLogger.error('Error sending contribution notification', {
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  /**
+   * Get the count of contributions made for a specific circle and cycle
+   */
+  private async getContributionCount(circleId: string, cycle: number): Promise<string> {
+    try {
+      // Query ContributionMade events for this circle
+      const events = await this.suiClient.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_circles::ContributionMade`,
+        },
+        limit: 100,
+        order: 'descending',
+      });
+
+      if (!events.data || events.data.length === 0) {
+        return '1'; // At least this contribution
+      }
+
+      // Count contributions for this circle and cycle
+      let count = 0;
+      for (const event of events.data) {
+        const parsedJson = event.parsedJson as any;
+        if (parsedJson?.circle_id === circleId) {
+          const eventCycle = parseInt(parsedJson.cycle || '1', 10);
+          if (eventCycle === cycle) {
+            count++;
+          }
+        }
+      }
+
+      return String(count || 1);
+    } catch (error) {
+      appLogger.warn('Could not get contribution count', {
+        circleId: circleId.slice(0, 10),
+        cycle,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return '1'; // Default fallback
     }
   }
 
