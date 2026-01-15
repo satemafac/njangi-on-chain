@@ -560,7 +560,7 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
         to: phoneNumber,
         type: 'template',
         template: {
-          name: 'member_join',
+          name: 'member_joins',
           language: { code: 'en' },
           components: [
             {
@@ -783,7 +783,7 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
         to: phoneNumber,
         type: 'template',
         template: {
-          name: 'recieved_contribution',
+          name: 'recieve_contribution',
           language: { code: 'en' },
           components: [
             {
@@ -1367,7 +1367,7 @@ The rotation order determines who receives payouts and when.
         to: phoneNumber,
         type: 'template',
         template: {
-          name: 'activated_circle',
+          name: 'live_circle',
           language: { code: 'en' },
           components: [
             {
@@ -1648,19 +1648,40 @@ The rotation order determines who receives payouts and when.
       // Build the circle URL to pass to the template
       const circleUrl = `https://njangionchain.com/circle/${circleId}`;
       
-      // Send the "circle_linked" template with circle URL as parameter
+      // Fetch circle name from blockchain
+      let circleName = 'Your Circle';
+      try {
+        const circleObj = await this.suiClient.getObject({ 
+          id: circleId, 
+          options: { showContent: true } 
+        });
+        
+        if (circleObj.data?.content?.dataType === 'moveObject') {
+          const fields = (circleObj.data.content as any).fields;
+          circleName = fields.name || 'Your Circle';
+        }
+      } catch (e) {
+        appLogger.warn('Could not fetch circle name for link confirmation', { circleId });
+      }
+      
+      // Send the "circle_link" template with circle_name and circle_url parameters
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
         type: 'template',
         template: {
-          name: 'linked_circle',
+          name: 'circle_link',
           language: {
-            code: 'en_US',
+            code: 'en',
           },
           components: [
             {
               type: 'body',
               parameters: [
+                {
+                  type: 'text',
+                  parameter_name: 'circle_name',
+                  text: circleName,
+                },
                 {
                   type: 'text',
                   parameter_name: 'circle_url',

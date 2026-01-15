@@ -396,7 +396,7 @@ export class CycleReminderService {
       // Template names: contribution_overdue (late) or contribution_reminder (on-time)
       const circleUrl = `https://njangionchain.com/circle/${circleId}`;
       
-      const templateName = isLate ? 'contribution_overdue' : 'contribution_reminder_before_payout';
+      const templateName = isLate ? 'contribution_overdue' : 'contribution_reminder_payout';
       const templateParams = isLate 
         ? [
             { type: 'text' as const, parameter_name: 'circle_name', text: circleData.name },
