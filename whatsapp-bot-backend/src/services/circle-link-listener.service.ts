@@ -68,7 +68,7 @@ export class CircleLinkListenerService {
         await this.checkForCircleLinkedEvents();
         await this.checkForCircleUnlinkedEvents();
         await this.checkForMemberJoinedEvents();
-        // NOTE: checkForDepositEvents() removed - use checkForContributionEvents() with templates instead
+        await this.checkForSecurityDepositEvents();
         await this.checkForContributionEvents();
         await this.checkForMemberRemovedEvents();
         await this.checkForRotationOrderChangedEvents();
@@ -598,10 +598,252 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
     }
   }
 
-  // NOTE: checkForDepositEvents, handleDepositEvent, and sendDepositNotification
-  // were removed because they sent TEXT messages (not templates) which caused
-  // duplicate notifications alongside checkForContributionEvents which uses templates.
-  // Contributions are now handled exclusively by checkForContributionEvents.
+  /**
+   * Check for CustodyDeposited events (security deposits - operation_type 3)
+   */
+  private async checkForSecurityDepositEvents(): Promise<void> {
+    try {
+      const events = await this.suiClient.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited`,
+        },
+        limit: 50,
+        order: 'descending',
+      });
+
+      if (!events.data || events.data.length === 0) {
+        return;
+      }
+
+      for (const event of events.data) {
+        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+        // Skip events that occurred before listener started
+        if (eventTimestampMs < this.startTime) {
+          continue;
+        }
+
+        // Skip if already processed in this session
+        if (this.processedEvents.has(eventId)) {
+          continue;
+        }
+
+        // Only process security deposits (operation_type 3)
+        const parsedJson = event.parsedJson as any;
+        if (parsedJson?.operation_type !== 3) {
+          continue; // Skip contributions (type 1) and other operations
+        }
+
+        this.processedEvents.add(eventId);
+
+        await this.handleSecurityDepositEvent(event);
+      }
+    } catch (error) {
+      appLogger.error('Error checking for CustodyDeposited (security deposit) events', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Handle a CustodyDeposited event for security deposits
+   */
+  private async handleSecurityDepositEvent(event: any): Promise<void> {
+    try {
+      const parsedJson = event.parsedJson as any;
+
+      if (!parsedJson) {
+        appLogger.warn('CustodyDeposited event has no parsedJson');
+        return;
+      }
+
+      const {
+        circle_id,
+        depositor,
+        amount,
+      } = parsedJson;
+
+      appLogger.info('Security deposit event detected', {
+        circleId: circle_id?.slice(0, 10),
+        depositor: depositor?.slice(0, 10),
+        amount,
+      });
+
+      // Get phone number for the linked circle
+      const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
+
+      if (!phoneNumber) {
+        appLogger.debug('No WhatsApp link found for security deposit notification', {
+          circleId: circle_id?.slice(0, 10),
+        });
+        return;
+      }
+
+      // Format amount (convert from MIST to SUI)
+      const amountSui = Number(amount) / 1e9;
+      const amountFormatted = amountSui.toFixed(4);
+
+      // Look up member name
+      const memberInfo = await this.lookupMemberName(circle_id, depositor);
+      const memberName = memberInfo?.userName || null;
+
+      // Send security deposit notification
+      await this.sendSecurityDepositNotification(
+        phoneNumber,
+        circle_id,
+        depositor,
+        amountFormatted,
+        memberName
+      );
+    } catch (error) {
+      appLogger.error('Error handling security deposit event', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Send notification when a member pays their security deposit
+   */
+  private async sendSecurityDepositNotification(
+    phoneNumber: string,
+    circleId: string,
+    memberAddress: string,
+    amount: string,
+    memberName?: string | null
+  ): Promise<void> {
+    try {
+      const shortMember = `${memberAddress.slice(0, 6)}...${memberAddress.slice(-4)}`;
+      const memberDisplay = memberName 
+        ? `${memberName} (${shortMember})`
+        : shortMember;
+      
+      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
+      const depositDate = new Date().toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+
+      // Fetch circle data for template parameters
+      let circleName = 'Your Circle';
+      let depositCount = '1';
+      let totalMembers = '1';
+      
+      try {
+        const circleObj = await this.suiClient.getObject({ 
+          id: circleId, 
+          options: { showContent: true } 
+        });
+        
+        if (circleObj.data?.content?.dataType === 'moveObject') {
+          const fields = (circleObj.data.content as any).fields;
+          circleName = fields.name || 'Your Circle';
+          totalMembers = String(fields.member_count || fields.rotation_order?.length || 1);
+          
+          // Get deposit count from events
+          depositCount = await this.getSecurityDepositCount(circleId);
+        }
+      } catch (e) {
+        appLogger.warn('Could not fetch circle data for deposit notification', { circleId });
+      }
+
+      const params = {
+        circle_name: circleName || 'Circle',
+        member_name: memberName || memberDisplay || 'Member',
+        deposit_amount: `${amount} SUI`,
+        deposit_date: depositDate,
+        deposit_count: depositCount,
+        total_members: totalMembers,
+        circle_url: circleUrl,
+      };
+
+      appLogger.info('📤 Sending deposit_received template', params);
+
+      const result = await whatsappSender.sendMessage({
+        to: phoneNumber,
+        type: 'template',
+        template: {
+          name: 'deposit_received',
+          language: { code: 'en' },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', parameter_name: 'circle_name', text: params.circle_name },
+                { type: 'text', parameter_name: 'member_name', text: params.member_name },
+                { type: 'text', parameter_name: 'deposit_amount', text: params.deposit_amount },
+                { type: 'text', parameter_name: 'deposit_date', text: params.deposit_date },
+                { type: 'text', parameter_name: 'deposit_count', text: params.deposit_count },
+                { type: 'text', parameter_name: 'total_members', text: params.total_members },
+                { type: 'text', parameter_name: 'circle_url', text: params.circle_url },
+              ],
+            },
+          ],
+        },
+      });
+
+      if (result.success) {
+        appLogger.info('✅ Security deposit notification sent', {
+          phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
+          circleId: circleId.slice(0, 10) + '...',
+          member: memberAddress.slice(0, 10) + '...',
+          amount,
+          messageId: result.messageId,
+        });
+      } else {
+        appLogger.warn('Failed to send security deposit notification', {
+          to: phoneNumber,
+          error: result.error,
+        });
+      }
+    } catch (error) {
+      appLogger.error('Error sending security deposit notification', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Get the count of security deposits made for a specific circle
+   */
+  private async getSecurityDepositCount(circleId: string): Promise<string> {
+    try {
+      const events = await this.suiClient.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited`,
+        },
+        limit: 100,
+        order: 'descending',
+      });
+
+      if (!events.data || events.data.length === 0) {
+        return '1';
+      }
+
+      // Count security deposits (operation_type 3) for this circle
+      let count = 0;
+      for (const event of events.data) {
+        const parsedJson = event.parsedJson as any;
+        if (parsedJson?.circle_id === circleId && parsedJson?.operation_type === 3) {
+          count++;
+        }
+      }
+
+      return String(count || 1);
+    } catch (error) {
+      appLogger.warn('Could not get security deposit count', {
+        circleId: circleId.slice(0, 10),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return '1';
+    }
+  }
+
+  // NOTE: The old checkForDepositEvents was removed because it sent TEXT messages
+  // which caused issues outside the 24-hour window. Security deposits are now
+  // handled by checkForSecurityDepositEvents using the deposit_received template.
 
   /**
    * Check for ContributionMade events (cycle contributions)
@@ -1212,36 +1454,50 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
     phoneNumber: string,
     circleId: string,
     memberCount: string,
-    memberList?: Array<{ address: string; name: string | null; position: number }>
+    _memberList?: Array<{ address: string; name: string | null; position: number }>
   ): Promise<void> {
     try {
-      // Format the member list with positions and names
-      let memberListText = '';
-      if (memberList && memberList.length > 0) {
-        memberListText = '\n\n📋 *New Rotation Order:*\n' + memberList.map(m => {
-          const shortAddr = `${m.address.slice(0, 6)}...${m.address.slice(-4)}`;
-          const displayName = m.name ? `${m.name} (${shortAddr})` : shortAddr;
-          return `${m.position}. ${displayName}`;
-        }).join('\n');
+      // Fetch circle name
+      let circleName = 'Your Circle';
+      try {
+        const circleObj = await this.suiClient.getObject({ 
+          id: circleId, 
+          options: { showContent: true } 
+        });
+        if (circleObj.data?.content?.dataType === 'moveObject') {
+          const fields = (circleObj.data.content as any).fields;
+          circleName = fields.name || 'Your Circle';
+        }
+      } catch (e) {
+        appLogger.warn('Could not fetch circle name for order change notification', { circleId });
       }
 
-      const shortCircleId = `${circleId.slice(0, 6)}...${circleId.slice(-4)}`;
-      
-      const reorderMessage = `🔄 *Rotation Order Updated*
+      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
+      const updateDate = new Date().toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
 
-The member rotation order has been changed by the admin.
-
-🆔 *Circle:* ${shortCircleId}
-👥 *Total Members:* ${memberCount}${memberListText}
-
-The rotation order determines who receives payouts and when.
-
-🔗 View circle: https://njangionchain.com/circle/${circleId}`;
-
+      // Use WhatsApp template
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
-        type: 'text',
-        text: reorderMessage,
+        type: 'template',
+        template: {
+          name: 'order_changed',
+          language: { code: 'en' },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', parameter_name: 'circle_name', text: circleName },
+                { type: 'text', parameter_name: 'member_count', text: memberCount },
+                { type: 'text', parameter_name: 'update_date', text: updateDate },
+                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
+              ],
+            },
+          ],
+        },
       });
 
       if (result.success) {
@@ -1249,7 +1505,6 @@ The rotation order determines who receives payouts and when.
           phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
           circleId: circleId.slice(0, 10) + '...',
           memberCount,
-          memberListLength: memberList?.length || 0,
           messageId: result.messageId,
         });
       } else {
