@@ -69,6 +69,7 @@ export class CircleLinkListenerService {
         await this.checkForCircleUnlinkedEvents();
         await this.checkForMemberJoinedEvents();
         await this.checkForSecurityDepositEvents();
+        await this.checkForSecurityDepositReturnedEvents();
         await this.checkForContributionEvents();
         await this.checkForMemberRemovedEvents();
         await this.checkForRotationOrderChangedEvents();
@@ -332,26 +333,47 @@ export class CircleLinkListenerService {
     circleId: string
   ): Promise<void> {
     try {
-      const unlinkMessage = `🔓 *Circle Unlinked*
+      // Fetch circle name
+      let circleName = 'Your Circle';
+      try {
+        const circleObj = await this.suiClient.getObject({ 
+          id: circleId, 
+          options: { showContent: true } 
+        });
+        if (circleObj.data?.content?.dataType === 'moveObject') {
+          const fields = (circleObj.data.content as any).fields;
+          circleName = fields.name || 'Your Circle';
+        }
+      } catch (e) {
+        appLogger.warn('Could not fetch circle name for unlink notification', { circleId });
+      }
 
-Your WhatsApp has been disconnected from the circle.
+      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
 
-You will no longer receive notifications for this circle.
-
-If you'd like to reconnect, visit the circle management page in the Njangi app and link your WhatsApp again.
-
-📱 Circle ID: ${circleId.slice(0, 10)}...${circleId.slice(-6)}`;
-
+      // Use WhatsApp template for sending outside 24-hour window
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
-        type: 'text',
-        text: unlinkMessage,
+        type: 'template',
+        template: {
+          name: 'circle_unlink',
+          language: { code: 'en' },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', parameter_name: 'circle_name', text: circleName },
+                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
+              ],
+            },
+          ],
+        },
       });
 
       if (result.success) {
         appLogger.info('✅ Unlink confirmation message sent', {
           phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
           circleId: circleId.slice(0, 10) + '...',
+          circleName,
           messageId: result.messageId,
         });
       } else {
@@ -556,6 +578,33 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
         year: 'numeric',
       });
 
+      // Fetch circle data for member count and position
+      let memberCount = '1';
+      let maxMembers = '10';
+      let positionNumber = '1';
+      let fetchedCircleName = circleName || 'Your Circle';
+
+      try {
+        const circleObj = await this.suiClient.getObject({ 
+          id: circleId, 
+          options: { showContent: true } 
+        });
+        
+        if (circleObj.data?.content?.dataType === 'moveObject') {
+          const fields = (circleObj.data.content as any).fields;
+          fetchedCircleName = fields.name || circleName || 'Your Circle';
+          memberCount = String(fields.member_count || fields.rotation_order?.length || 1);
+          maxMembers = String(fields.max_members || fields.member_count || 10);
+          
+          // Find member's position in rotation order
+          const rotationOrder = fields.rotation_order || [];
+          const memberIndex = rotationOrder.findIndex((addr: string) => addr === memberAddress);
+          positionNumber = memberIndex >= 0 ? String(memberIndex + 1) : memberCount;
+        }
+      } catch (e) {
+        appLogger.warn('Could not fetch circle data for member joined notification', { circleId });
+      }
+
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
         type: 'template',
@@ -566,10 +615,13 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
             {
               type: 'body',
               parameters: [
-                { type: 'text', parameter_name: 'circle_name', text: circleName || 'Your Circle' },
+                { type: 'text', parameter_name: 'circle_name', text: fetchedCircleName },
                 { type: 'text', parameter_name: 'member_name', text: memberName || 'New Member' },
                 { type: 'text', parameter_name: 'member_address', text: shortMember },
+                { type: 'text', parameter_name: 'position_number', text: positionNumber },
                 { type: 'text', parameter_name: 'join_date', text: joinDate },
+                { type: 'text', parameter_name: 'member_count', text: memberCount },
+                { type: 'text', parameter_name: 'max_members', text: maxMembers },
                 { type: 'text', parameter_name: 'circle_url', text: circleUrl },
               ],
             },
@@ -583,6 +635,8 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
           circleId: circleId.slice(0, 10) + '...',
           member: memberAddress.slice(0, 10) + '...',
           memberName: memberName || 'N/A',
+          position: positionNumber,
+          memberCount,
           messageId: result.messageId,
         });
       } else {
@@ -844,6 +898,183 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
   // NOTE: The old checkForDepositEvents was removed because it sent TEXT messages
   // which caused issues outside the 24-hour window. Security deposits are now
   // handled by checkForSecurityDepositEvents using the deposit_received template.
+
+  /**
+   * Check for SecurityDepositReturned events (when deposits are returned)
+   */
+  private async checkForSecurityDepositReturnedEvents(): Promise<void> {
+    try {
+      const events = await this.suiClient.queryEvents({
+        query: {
+          MoveEventType: `${PACKAGE_ID}::njangi_payments::SecurityDepositReturned`,
+        },
+        limit: 50,
+        order: 'descending',
+      });
+
+      if (!events.data || events.data.length === 0) {
+        return;
+      }
+
+      for (const event of events.data) {
+        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+        // Skip events that occurred before listener started
+        if (eventTimestampMs < this.startTime) {
+          continue;
+        }
+
+        // Skip if already processed in this session
+        if (this.processedEvents.has(eventId)) {
+          continue;
+        }
+
+        this.processedEvents.add(eventId);
+
+        await this.handleSecurityDepositReturnedEvent(event);
+      }
+    } catch (error) {
+      appLogger.error('Error checking for SecurityDepositReturned events', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Handle a SecurityDepositReturned event
+   */
+  private async handleSecurityDepositReturnedEvent(event: any): Promise<void> {
+    try {
+      const parsedJson = event.parsedJson as any;
+
+      if (!parsedJson) {
+        appLogger.warn('SecurityDepositReturned event has no parsedJson');
+        return;
+      }
+
+      const {
+        circle_id,
+        member,
+        amount,
+      } = parsedJson;
+
+      appLogger.info('Security deposit returned event detected', {
+        circleId: circle_id?.slice(0, 10),
+        member: member?.slice(0, 10),
+        amount,
+      });
+
+      // Get phone number for the linked circle
+      const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
+
+      if (!phoneNumber) {
+        appLogger.debug('No WhatsApp link found for deposit return notification', {
+          circleId: circle_id?.slice(0, 10),
+        });
+        return;
+      }
+
+      // Look up member name
+      const memberInfo = await this.lookupMemberName(circle_id, member);
+      const memberName = memberInfo?.userName || null;
+
+      // Format amount (convert from MIST to SUI)
+      const amountSui = Number(amount) / 1e9;
+      const depositAmount = `${amountSui.toFixed(4)} SUI`;
+
+      await this.sendSecurityDepositReturnedNotification(
+        phoneNumber,
+        circle_id,
+        member,
+        depositAmount,
+        memberName
+      );
+    } catch (error) {
+      appLogger.error('Error handling SecurityDepositReturned event', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Send notification when a security deposit is returned
+   */
+  private async sendSecurityDepositReturnedNotification(
+    phoneNumber: string,
+    circleId: string,
+    memberAddress: string,
+    depositAmount: string,
+    memberName?: string | null
+  ): Promise<void> {
+    try {
+      const shortMember = `${memberAddress.slice(0, 6)}...${memberAddress.slice(-4)}`;
+      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
+      const returnDate = new Date().toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+
+      // Fetch circle name
+      let circleName = 'Your Circle';
+      try {
+        const circleObj = await this.suiClient.getObject({ 
+          id: circleId, 
+          options: { showContent: true } 
+        });
+        
+        if (circleObj.data?.content?.dataType === 'moveObject') {
+          const fields = (circleObj.data.content as any).fields;
+          circleName = fields.name || 'Your Circle';
+        }
+      } catch (e) {
+        appLogger.warn('Could not fetch circle name for deposit return notification', { circleId });
+      }
+
+      // Use WhatsApp template for sending outside 24-hour window
+      const result = await whatsappSender.sendMessage({
+        to: phoneNumber,
+        type: 'template',
+        template: {
+          name: 'deposit_returned',
+          language: { code: 'en' },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', parameter_name: 'circle_name', text: circleName },
+                { type: 'text', parameter_name: 'deposit_amount', text: depositAmount },
+                { type: 'text', parameter_name: 'return_date', text: returnDate },
+                { type: 'text', parameter_name: 'member_name', text: memberName || shortMember },
+                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
+              ],
+            },
+          ],
+        },
+      });
+
+      if (result.success) {
+        appLogger.info('✅ Security deposit returned notification sent', {
+          phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
+          circleId: circleId.slice(0, 10) + '...',
+          member: memberAddress.slice(0, 10) + '...',
+          memberName: memberName || 'N/A',
+          depositAmount,
+          messageId: result.messageId,
+        });
+      } else {
+        appLogger.warn('Failed to send deposit returned notification', {
+          to: phoneNumber,
+          error: result.error,
+        });
+      }
+    } catch (error) {
+      appLogger.error('Error sending deposit returned notification', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   /**
    * Check for ContributionMade events (cycle contributions)
@@ -1791,6 +2022,45 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
         cycle,
         recipientName
       );
+
+      // Check if this is the last payout in the rotation (full cycle complete)
+      // Cycle complete = all members have received their payout, starting new round
+      try {
+        const circleObj = await this.suiClient.getObject({ 
+          id: circle_id, 
+          options: { showContent: true } 
+        });
+        
+        if (circleObj.data?.content?.dataType === 'moveObject') {
+          const fields = (circleObj.data.content as any).fields;
+          const memberCount = Number(fields.member_count || fields.rotation_order?.length || 0);
+          const currentCycle = Number(cycle);
+          
+          // If cycle number equals member count, the full rotation is complete
+          // (each member has received exactly one payout)
+          if (memberCount > 0 && currentCycle > 0 && (currentCycle % memberCount === 0)) {
+            appLogger.info('🎉 Full rotation complete, sending cycle_complete notification', {
+              circleId: circle_id?.slice(0, 10),
+              cycle: currentCycle,
+              memberCount,
+            });
+            
+            await this.sendCycleCompleteNotification(
+              phoneNumber,
+              circle_id,
+              recipient,
+              amount,
+              cycle,
+              recipientName
+            );
+          }
+        }
+      } catch (e) {
+        appLogger.warn('Could not check if rotation is complete', {
+          circleId: circle_id?.slice(0, 10),
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
     } catch (error) {
       appLogger.error('Error handling PayoutProcessed event', {
         error: error instanceof Error ? error.message : String(error),
@@ -1876,6 +2146,97 @@ If you'd like to reconnect, visit the circle management page in the Njangi app a
       }
     } catch (error) {
       appLogger.error('Error sending payout processed notification', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Send cycle complete notification when a payout cycle finishes
+   */
+  private async sendCycleCompleteNotification(
+    phoneNumber: string,
+    circleId: string,
+    recipientAddress: string,
+    amount: string,
+    cycle: string,
+    recipientName?: string | null
+  ): Promise<void> {
+    try {
+      const shortRecipient = `${recipientAddress.slice(0, 6)}...${recipientAddress.slice(-4)}`;
+      const amountFormatted = `${(Number(amount) / 1e9).toFixed(4)} SUI`;
+      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
+
+      // Fetch circle name and payout frequency to calculate next cycle date
+      let circleName = 'Your Circle';
+      let nextCycleDate = 'TBD';
+      
+      try {
+        const circleObj = await this.suiClient.getObject({ 
+          id: circleId, 
+          options: { showContent: true } 
+        });
+        
+        if (circleObj.data?.content?.dataType === 'moveObject') {
+          const fields = (circleObj.data.content as any).fields;
+          circleName = fields.name || 'Your Circle';
+          
+          // Calculate next cycle date based on payout frequency
+          const payoutFrequencyMs = Number(fields.payout_frequency || 0);
+          if (payoutFrequencyMs > 0) {
+            const nextDate = new Date(Date.now() + payoutFrequencyMs);
+            nextCycleDate = nextDate.toLocaleDateString('en-US', {
+              weekday: 'short',
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+            });
+          }
+        }
+      } catch (e) {
+        appLogger.warn('Could not fetch circle data for cycle complete notification', { circleId });
+      }
+
+      // Use WhatsApp template for sending outside 24-hour window
+      const result = await whatsappSender.sendMessage({
+        to: phoneNumber,
+        type: 'template',
+        template: {
+          name: 'cycle_complete',
+          language: { code: 'en' },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', parameter_name: 'circle_name', text: circleName },
+                { type: 'text', parameter_name: 'cycle_number', text: cycle },
+                { type: 'text', parameter_name: 'recipient_name', text: recipientName || shortRecipient },
+                { type: 'text', parameter_name: 'payout_amount', text: amountFormatted },
+                { type: 'text', parameter_name: 'next_cycle_date', text: nextCycleDate },
+                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
+              ],
+            },
+          ],
+        },
+      });
+
+      if (result.success) {
+        appLogger.info('✅ Cycle complete notification sent', {
+          phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
+          circleId: circleId.slice(0, 10) + '...',
+          cycle,
+          recipient: recipientName || shortRecipient,
+          nextCycleDate,
+          messageId: result.messageId,
+        });
+      } else {
+        appLogger.warn('Failed to send cycle complete notification', {
+          to: phoneNumber,
+          error: result.error,
+        });
+      }
+    } catch (error) {
+      appLogger.error('Error sending cycle complete notification', {
         error: error instanceof Error ? error.message : String(error),
       });
     }

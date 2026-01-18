@@ -250,7 +250,18 @@ export class CycleReminderService {
       });
     }
 
-    // Check 2: Admin payout trigger reminder (after payout time passes)
+    // Check 2: Payout upcoming notification (24 hours before payout)
+    // This notifies the group who's scheduled to receive the next payout
+    const PAYOUT_UPCOMING_WINDOW_HOURS = 24;
+    if (hoursUntilPayout > 0 && hoursUntilPayout <= PAYOUT_UPCOMING_WINDOW_HOURS) {
+      appLogger.info('📨 Will attempt payout upcoming notification', {
+        circleId: circleId.slice(0, 10),
+        hoursUntilPayout: hoursUntilPayout.toFixed(1),
+      });
+      await this.sendPayoutUpcomingReminder(circleId, phoneNumber, circleData);
+    }
+
+    // Check 3: Admin payout trigger reminder (after payout time passes)
     if (hoursSincePayout > this.payoutGraceHours) {
       appLogger.info('📨 Will attempt payout trigger reminder', {
         circleId: circleId.slice(0, 10),
@@ -548,6 +559,121 @@ export class CycleReminderService {
       }
     } catch (error) {
       appLogger.error('Error sending payout trigger reminder', {
+        circleId: circleId.slice(0, 10),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Send payout upcoming notification to group
+   * Notifies who is scheduled to receive the next payout
+   */
+  private async sendPayoutUpcomingReminder(
+    circleId: string,
+    adminPhone: string,
+    circleData: CircleData
+  ): Promise<void> {
+    // Check cooldown for this reminder type
+    const reminderKey = `payout_upcoming:${circleId}:cycle${circleData.currentCycle}`;
+    if (this.isInCooldown(reminderKey)) {
+      appLogger.info('⏰ Payout upcoming reminder in cooldown', {
+        circleId: circleId.slice(0, 10),
+        cycle: circleData.currentCycle,
+        cooldownHours: this.reminderCooldownHours,
+      });
+      return;
+    }
+
+    try {
+      // Get current beneficiary (who will receive the payout)
+      const beneficiaryAddress = circleData.rotationOrder[circleData.currentPosition];
+      if (!beneficiaryAddress) {
+        appLogger.warn('No beneficiary found for payout upcoming notification', {
+          circleId: circleId.slice(0, 10),
+          currentPosition: circleData.currentPosition,
+        });
+        return;
+      }
+
+      const shortBeneficiary = `${beneficiaryAddress.slice(0, 6)}...${beneficiaryAddress.slice(-4)}`;
+
+      // Look up beneficiary name from join requests
+      let beneficiaryName = shortBeneficiary;
+      try {
+        const apiUrl = process.env.FRONTEND_URL || 'https://njangionchain.com';
+        const response = await fetch(
+          `${apiUrl}/api/join-requests/lookup-user?circleId=${encodeURIComponent(circleId)}&userAddress=${encodeURIComponent(beneficiaryAddress)}`
+        );
+        if (response.ok) {
+          const data = await response.json() as { success: boolean; data?: { userName: string | null } };
+          if (data.success && data.data?.userName) {
+            beneficiaryName = data.data.userName;
+          }
+        }
+      } catch (e) {
+        // Use short address if lookup fails
+      }
+
+      // Calculate payout amount (contribution × member count)
+      const memberCount = circleData.memberCount || circleData.rotationOrder.length || 1;
+      const payoutAmount = circleData.contributionAmount 
+        ? `${(Number(circleData.contributionAmount) * memberCount / 1e9).toFixed(4)} SUI`
+        : 'N/A';
+
+      // Format payout date
+      const payoutDate = new Date(circleData.nextPayoutTime).toLocaleDateString('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
+
+      // Use WhatsApp template for sending outside 24-hour window
+      const result = await whatsappSender.sendMessage({
+        to: adminPhone,
+        type: 'template',
+        template: {
+          name: 'payout_upcoming',
+          language: { code: 'en' },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', parameter_name: 'circle_name', text: circleData.name },
+                { type: 'text', parameter_name: 'member_name', text: beneficiaryName },
+                { type: 'text', parameter_name: 'wallet_id', text: shortBeneficiary },
+                { type: 'text', parameter_name: 'cycle_number', text: String(circleData.currentCycle) },
+                { type: 'text', parameter_name: 'payout_amount', text: payoutAmount },
+                { type: 'text', parameter_name: 'payout_date', text: payoutDate },
+                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
+              ],
+            },
+          ],
+        },
+      });
+
+      if (result.success) {
+        appLogger.info('✅ Payout upcoming notification sent', {
+          circleId: circleId.slice(0, 10),
+          cycle: circleData.currentCycle,
+          beneficiaryName,
+          payoutDate,
+          messageId: result.messageId,
+        });
+        this.markReminderSent(reminderKey);
+      } else {
+        appLogger.warn('Failed to send payout upcoming notification', {
+          circleId: circleId.slice(0, 10),
+          error: result.error,
+        });
+      }
+    } catch (error) {
+      appLogger.error('Error sending payout upcoming notification', {
         circleId: circleId.slice(0, 10),
         error: error instanceof Error ? error.message : String(error),
       });
