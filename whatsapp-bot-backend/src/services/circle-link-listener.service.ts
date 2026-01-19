@@ -724,16 +724,72 @@ export class CircleLinkListenerService {
         if (circleObj.data?.content?.dataType === 'moveObject') {
           const fields = (circleObj.data.content as any).fields;
           fetchedCircleName = fields.name || circleName || 'Your Circle';
-          memberCount = String(fields.member_count || fields.rotation_order?.length || 1);
-          maxMembers = String(fields.max_members || fields.member_count || 10);
           
-          // Find member's position in rotation order
-          const rotationOrder = fields.rotation_order || [];
+          // Get current member count from the circle object
+          const currentMembers = Number(fields.current_members || 0);
+          memberCount = String(currentMembers);
+          
+          // Get rotation order - extract addresses from the array
+          const rotationOrderRaw = fields.rotation_order || [];
+          const rotationOrder: string[] = rotationOrderRaw.map((item: any) => {
+            // Handle both direct address strings and nested objects
+            if (typeof item === 'string') return item;
+            if (item?.fields?.value) return item.fields.value;
+            return item;
+          });
+          
+          // Find member's position in rotation order (1-indexed for display)
           const memberIndex = rotationOrder.findIndex((addr: string) => addr === memberAddress);
-          positionNumber = memberIndex >= 0 ? String(memberIndex + 1) : memberCount;
+          if (memberIndex >= 0) {
+            positionNumber = String(memberIndex + 1); // 1-indexed position
+          } else {
+            // Member not in rotation order yet, they're the newest member
+            positionNumber = String(rotationOrder.length > 0 ? rotationOrder.length + 1 : currentMembers);
+          }
+          
+          appLogger.debug('Member position calculated', {
+            memberAddress: memberAddress.slice(0, 10),
+            memberIndex,
+            rotationOrderLength: rotationOrder.length,
+            positionNumber,
+            currentMembers,
+          });
+        }
+        
+        // Try to get max_members from dynamic fields (CircleConfig)
+        try {
+          const dynamicFields = await this.suiClient.getDynamicFields({
+            parentId: circleId,
+          });
+          
+          for (const field of dynamicFields.data) {
+            if (field.name?.value === 'CircleConfig' || 
+                (typeof field.name?.value === 'object' && (field.name.value as any)?.name === 'CircleConfig')) {
+              const configObj = await this.suiClient.getObject({
+                id: field.objectId,
+                options: { showContent: true },
+              });
+              
+              if (configObj.data?.content?.dataType === 'moveObject') {
+                const configFields = (configObj.data.content as any).fields;
+                if (configFields?.max_members) {
+                  maxMembers = String(configFields.max_members);
+                }
+              }
+              break;
+            }
+          }
+        } catch (configError) {
+          appLogger.debug('Could not fetch CircleConfig for max_members', { 
+            circleId: circleId.slice(0, 10),
+            error: configError instanceof Error ? configError.message : String(configError),
+          });
         }
       } catch (e) {
-        appLogger.warn('Could not fetch circle data for member joined notification', { circleId });
+        appLogger.warn('Could not fetch circle data for member joined notification', { 
+          circleId,
+          error: e instanceof Error ? e.message : String(e),
+        });
       }
 
       const result = await whatsappSender.sendMessage({
