@@ -7,9 +7,6 @@ import { whatsappSender } from './whatsapp-sender.service';
 // CIRCLE LINK LISTENER SERVICE
 // ============================================================================
 
-// Get package ID from environment variable with fallback to default testnet package
-const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID || '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc';
-
 export class CircleLinkListenerService {
   private isRunning = false;
   private suiClient: SuiClient;
@@ -17,6 +14,10 @@ export class CircleLinkListenerService {
   private processedEvents: Set<string> = new Set(); // Track events in current session only
   private sentMessages: Map<string, number> = new Map(); // Track recently sent messages for deduplication (stores timestamps)
   private startTime: number = 0; // Track when listener started
+  private discoveredPackageIds: Set<string> = new Set(); // Dynamically discovered package IDs from linked circles
+  private whatsappIntegrationPackageId: string | null = null; // Package ID for WhatsApp integration module
+  private lastPackageDiscovery: number = 0; // Last time we discovered package IDs
+  private packageDiscoveryInterval = 60000; // Rediscover every 60 seconds
 
   constructor() {
     const config = getConfig();
@@ -25,9 +26,115 @@ export class CircleLinkListenerService {
 
     appLogger.info('CircleLinkListenerService initialized', {
       rpcUrl,
-      packageId: PACKAGE_ID.slice(0, 15) + '...',
-      note: 'Will only process events from startup onwards (skipping old events)',
+      note: 'Will dynamically discover package IDs from linked circles and registry',
     });
+  }
+
+  /**
+   * Discover package IDs from the registry and linked circles
+   * This ensures we query events from the correct packages regardless of deployments
+   */
+  private async discoverPackageIds(): Promise<void> {
+    const now = Date.now();
+    // Only rediscover if enough time has passed
+    if (now - this.lastPackageDiscovery < this.packageDiscoveryInterval && 
+        this.discoveredPackageIds.size > 0 && 
+        this.whatsappIntegrationPackageId) {
+      return;
+    }
+
+    try {
+      const registryId = process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID || '0x9e203f7dd2d56b058d82fb4f1fafe135133245fef347d8de4967e2c1c78b9459';
+      
+      const registryObject = await this.suiClient.getObject({
+        id: registryId,
+        options: { showContent: true, showType: true },
+      });
+
+      if (!registryObject.data?.content || registryObject.data.content.dataType !== 'moveObject') {
+        appLogger.warn('Could not fetch registry for package discovery');
+        return;
+      }
+
+      // Get WhatsApp integration package ID from registry object type
+      if (registryObject.data.type) {
+        const whatsappPackageId = registryObject.data.type.split('::')[0];
+        if (whatsappPackageId && whatsappPackageId.startsWith('0x')) {
+          this.whatsappIntegrationPackageId = whatsappPackageId;
+          appLogger.info('Discovered WhatsApp integration package ID', {
+            packageId: whatsappPackageId.slice(0, 15) + '...',
+          });
+        }
+      }
+
+      const registryFields = (registryObject.data.content as any).fields;
+      const links = registryFields?.links || [];
+
+      // Get unique circle IDs from enabled links
+      const circleIds: string[] = [];
+      for (const link of links) {
+        const fields = link.fields || link;
+        if (fields.enabled && fields.circle_id) {
+          circleIds.push(fields.circle_id);
+        }
+      }
+
+      // Fetch each circle to discover its package ID
+      const newPackageIds = new Set<string>();
+      for (const circleId of circleIds.slice(0, 20)) { // Limit to first 20 to avoid rate limits
+        try {
+          const circleObj = await this.suiClient.getObject({
+            id: circleId,
+            options: { showType: true },
+          });
+
+          if (circleObj.data?.type) {
+            // Type format: "packageId::module::Type"
+            const packageId = circleObj.data.type.split('::')[0];
+            if (packageId && packageId.startsWith('0x')) {
+              newPackageIds.add(packageId);
+            }
+          }
+        } catch (e) {
+          // Skip circles that can't be fetched
+        }
+      }
+
+      if (newPackageIds.size > 0) {
+        this.discoveredPackageIds = newPackageIds;
+        this.lastPackageDiscovery = now;
+        appLogger.info('Discovered package IDs from linked circles', {
+          count: newPackageIds.size,
+          packageIds: Array.from(newPackageIds).map(id => id.slice(0, 15) + '...'),
+        });
+      }
+    } catch (error) {
+      appLogger.error('Error discovering package IDs', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Get the WhatsApp integration package ID (derived from registry)
+   */
+  private getWhatsappIntegrationPackageId(): string | null {
+    return this.whatsappIntegrationPackageId;
+  }
+
+  /**
+   * Get all discovered package IDs, or fallback to env variable
+   */
+  private getPackageIds(): string[] {
+    if (this.discoveredPackageIds.size > 0) {
+      return Array.from(this.discoveredPackageIds);
+    }
+    // Fallback to environment variable
+    const envPackageId = process.env.NEXT_PUBLIC_PACKAGE_ID || process.env.NEXT_PUBLIC_TESTNET_PACKAGE_ID;
+    if (envPackageId) {
+      return [envPackageId];
+    }
+    return [];
   }
 
   /**
@@ -65,8 +172,14 @@ export class CircleLinkListenerService {
   private async listen(): Promise<void> {
     while (this.isRunning) {
       try {
+        // Discover package IDs from linked circles (runs periodically)
+        await this.discoverPackageIds();
+        
+        // WhatsApp integration events use the dedicated package
         await this.checkForCircleLinkedEvents();
         await this.checkForCircleUnlinkedEvents();
+        
+        // Circle/payment events use dynamically discovered package IDs
         await this.checkForMemberJoinedEvents();
         await this.checkForSecurityDepositEvents();
         await this.checkForSecurityDepositReturnedEvents();
@@ -91,10 +204,15 @@ export class CircleLinkListenerService {
    * Only processes events that occurred after the listener started
    */
   private async checkForCircleLinkedEvents(): Promise<void> {
+    const whatsappPackageId = this.getWhatsappIntegrationPackageId();
+    if (!whatsappPackageId) {
+      return; // Package ID not yet discovered
+    }
+
     try {
       const events = await this.suiClient.queryEvents({
         query: {
-          MoveEventType: `${PACKAGE_ID}::whatsapp_integration::CircleLinked`,
+          MoveEventType: `${whatsappPackageId}::whatsapp_integration::CircleLinked`,
         },
         limit: 50,
         order: 'descending',
@@ -164,10 +282,15 @@ export class CircleLinkListenerService {
    * Only processes events that occurred after the listener started
    */
   private async checkForCircleUnlinkedEvents(): Promise<void> {
+    const whatsappPackageId = this.getWhatsappIntegrationPackageId();
+    if (!whatsappPackageId) {
+      return; // Package ID not yet discovered
+    }
+
     try {
       const events = await this.suiClient.queryEvents({
         query: {
-          MoveEventType: `${PACKAGE_ID}::whatsapp_integration::CircleUnlinked`,
+          MoveEventType: `${whatsappPackageId}::whatsapp_integration::CircleUnlinked`,
         },
         limit: 50,
         order: 'descending',
@@ -393,41 +516,49 @@ export class CircleLinkListenerService {
    * Check for MemberJoined events (when admin approves a new member)
    */
   private async checkForMemberJoinedEvents(): Promise<void> {
-    try {
-      const events = await this.suiClient.queryEvents({
-        query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circles::MemberJoined`,
-        },
-        limit: 50,
-        order: 'descending',
-      });
+    const packageIds = this.getPackageIds();
+    if (packageIds.length === 0) {
+      return;
+    }
 
-      if (!events.data || events.data.length === 0) {
-        return;
-      }
+    for (const packageId of packageIds) {
+      try {
+        const events = await this.suiClient.queryEvents({
+          query: {
+            MoveEventType: `${packageId}::njangi_circles::MemberJoined`,
+          },
+          limit: 50,
+          order: 'descending',
+        });
 
-      for (const event of events.data) {
-        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
-        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
-
-        // Skip events that occurred before listener started
-        if (eventTimestampMs < this.startTime) {
+        if (!events.data || events.data.length === 0) {
           continue;
         }
 
-        // Skip if already processed in this session
-        if (this.processedEvents.has(eventId)) {
-          continue;
+        for (const event of events.data) {
+          const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+          const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+          // Skip events that occurred before listener started
+          if (eventTimestampMs < this.startTime) {
+            continue;
+          }
+
+          // Skip if already processed in this session
+          if (this.processedEvents.has(eventId)) {
+            continue;
+          }
+
+          this.processedEvents.add(eventId);
+
+          await this.handleMemberJoinedEvent(event);
         }
-
-        this.processedEvents.add(eventId);
-
-        await this.handleMemberJoinedEvent(event);
+      } catch (error) {
+        appLogger.error('Error checking for MemberJoined events', {
+          error: error instanceof Error ? error.message : String(error),
+          packageId: packageId.slice(0, 15) + '...',
+        });
       }
-    } catch (error) {
-      appLogger.error('Error checking for MemberJoined events', {
-        error: error instanceof Error ? error.message : String(error),
-      });
     }
   }
 
@@ -656,47 +787,55 @@ export class CircleLinkListenerService {
    * Check for CustodyDeposited events (security deposits - operation_type 3)
    */
   private async checkForSecurityDepositEvents(): Promise<void> {
-    try {
-      const events = await this.suiClient.queryEvents({
-        query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited`,
-        },
-        limit: 50,
-        order: 'descending',
-      });
+    const packageIds = this.getPackageIds();
+    if (packageIds.length === 0) {
+      return;
+    }
 
-      if (!events.data || events.data.length === 0) {
-        return;
-      }
+    for (const packageId of packageIds) {
+      try {
+        const events = await this.suiClient.queryEvents({
+          query: {
+            MoveEventType: `${packageId}::njangi_custody::CustodyDeposited`,
+          },
+          limit: 50,
+          order: 'descending',
+        });
 
-      for (const event of events.data) {
-        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
-        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
-
-        // Skip events that occurred before listener started
-        if (eventTimestampMs < this.startTime) {
+        if (!events.data || events.data.length === 0) {
           continue;
         }
 
-        // Skip if already processed in this session
-        if (this.processedEvents.has(eventId)) {
-          continue;
+        for (const event of events.data) {
+          const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+          const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+          // Skip events that occurred before listener started
+          if (eventTimestampMs < this.startTime) {
+            continue;
+          }
+
+          // Skip if already processed in this session
+          if (this.processedEvents.has(eventId)) {
+            continue;
+          }
+
+          // Only process security deposits (operation_type 3)
+          const parsedJson = event.parsedJson as any;
+          if (parsedJson?.operation_type !== 3) {
+            continue; // Skip contributions (type 1) and other operations
+          }
+
+          this.processedEvents.add(eventId);
+
+          await this.handleSecurityDepositEvent(event);
         }
-
-        // Only process security deposits (operation_type 3)
-        const parsedJson = event.parsedJson as any;
-        if (parsedJson?.operation_type !== 3) {
-          continue; // Skip contributions (type 1) and other operations
-        }
-
-        this.processedEvents.add(eventId);
-
-        await this.handleSecurityDepositEvent(event);
+      } catch (error) {
+        appLogger.error('Error checking for CustodyDeposited (security deposit) events', {
+          error: error instanceof Error ? error.message : String(error),
+          packageId: packageId.slice(0, 15) + '...',
+        });
       }
-    } catch (error) {
-      appLogger.error('Error checking for CustodyDeposited (security deposit) events', {
-        error: error instanceof Error ? error.message : String(error),
-      });
     }
   }
 
@@ -864,9 +1003,21 @@ export class CircleLinkListenerService {
    */
   private async getSecurityDepositCount(circleId: string): Promise<string> {
     try {
+      // Get package ID from circle object type
+      const circleObj = await this.suiClient.getObject({
+        id: circleId,
+        options: { showType: true },
+      });
+      
+      if (!circleObj.data?.type) {
+        return '1';
+      }
+      
+      const packageId = circleObj.data.type.split('::')[0];
+      
       const events = await this.suiClient.queryEvents({
         query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited`,
+          MoveEventType: `${packageId}::njangi_custody::CustodyDeposited`,
         },
         limit: 100,
         order: 'descending',
@@ -903,41 +1054,49 @@ export class CircleLinkListenerService {
    * Check for SecurityDepositReturned events (when deposits are returned)
    */
   private async checkForSecurityDepositReturnedEvents(): Promise<void> {
-    try {
-      const events = await this.suiClient.queryEvents({
-        query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_payments::SecurityDepositReturned`,
-        },
-        limit: 50,
-        order: 'descending',
-      });
+    const packageIds = this.getPackageIds();
+    if (packageIds.length === 0) {
+      return;
+    }
 
-      if (!events.data || events.data.length === 0) {
-        return;
-      }
+    for (const packageId of packageIds) {
+      try {
+        const events = await this.suiClient.queryEvents({
+          query: {
+            MoveEventType: `${packageId}::njangi_payments::SecurityDepositReturned`,
+          },
+          limit: 50,
+          order: 'descending',
+        });
 
-      for (const event of events.data) {
-        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
-        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
-
-        // Skip events that occurred before listener started
-        if (eventTimestampMs < this.startTime) {
+        if (!events.data || events.data.length === 0) {
           continue;
         }
 
-        // Skip if already processed in this session
-        if (this.processedEvents.has(eventId)) {
-          continue;
+        for (const event of events.data) {
+          const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+          const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+          // Skip events that occurred before listener started
+          if (eventTimestampMs < this.startTime) {
+            continue;
+          }
+
+          // Skip if already processed in this session
+          if (this.processedEvents.has(eventId)) {
+            continue;
+          }
+
+          this.processedEvents.add(eventId);
+
+          await this.handleSecurityDepositReturnedEvent(event);
         }
-
-        this.processedEvents.add(eventId);
-
-        await this.handleSecurityDepositReturnedEvent(event);
+      } catch (error) {
+        appLogger.error('Error checking for SecurityDepositReturned events', {
+          error: error instanceof Error ? error.message : String(error),
+          packageId: packageId.slice(0, 15) + '...',
+        });
       }
-    } catch (error) {
-      appLogger.error('Error checking for SecurityDepositReturned events', {
-        error: error instanceof Error ? error.message : String(error),
-      });
     }
   }
 
@@ -1080,41 +1239,49 @@ export class CircleLinkListenerService {
    * Check for ContributionMade events (cycle contributions)
    */
   private async checkForContributionEvents(): Promise<void> {
-    try {
-      const events = await this.suiClient.queryEvents({
-        query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_payments::ContributionMade`,
-        },
-        limit: 50,
-        order: 'descending',
-      });
+    const packageIds = this.getPackageIds();
+    if (packageIds.length === 0) {
+      return;
+    }
 
-      if (!events.data || events.data.length === 0) {
-        return;
-      }
+    for (const packageId of packageIds) {
+      try {
+        const events = await this.suiClient.queryEvents({
+          query: {
+            MoveEventType: `${packageId}::njangi_payments::ContributionMade`,
+          },
+          limit: 50,
+          order: 'descending',
+        });
 
-      for (const event of events.data) {
-        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
-        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
-
-        // Skip events that occurred before listener started
-        if (eventTimestampMs < this.startTime) {
+        if (!events.data || events.data.length === 0) {
           continue;
         }
 
-        // Skip if already processed in this session
-        if (this.processedEvents.has(eventId)) {
-          continue;
+        for (const event of events.data) {
+          const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+          const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+          // Skip events that occurred before listener started
+          if (eventTimestampMs < this.startTime) {
+            continue;
+          }
+
+          // Skip if already processed in this session
+          if (this.processedEvents.has(eventId)) {
+            continue;
+          }
+
+          this.processedEvents.add(eventId);
+
+          await this.handleContributionEvent(event);
         }
-
-        this.processedEvents.add(eventId);
-
-        await this.handleContributionEvent(event);
+      } catch (error) {
+        appLogger.error('Error checking for ContributionMade events', {
+          error: error instanceof Error ? error.message : String(error),
+          packageId: packageId.slice(0, 15) + '...',
+        });
       }
-    } catch (error) {
-      appLogger.error('Error checking for ContributionMade events', {
-        error: error instanceof Error ? error.message : String(error),
-      });
     }
   }
 
@@ -1305,10 +1472,22 @@ export class CircleLinkListenerService {
    */
   private async getContributionCount(circleId: string, cycle: number): Promise<string> {
     try {
+      // Get package ID from circle object type
+      const circleObj = await this.suiClient.getObject({
+        id: circleId,
+        options: { showType: true },
+      });
+      
+      if (!circleObj.data?.type) {
+        return '1';
+      }
+      
+      const packageId = circleObj.data.type.split('::')[0];
+      
       // Query ContributionMade events for this circle
       const events = await this.suiClient.queryEvents({
         query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circles::ContributionMade`,
+          MoveEventType: `${packageId}::njangi_circles::ContributionMade`,
         },
         limit: 100,
         order: 'descending',
@@ -1345,41 +1524,49 @@ export class CircleLinkListenerService {
    * Check for MemberRemoved events (when admin removes a member)
    */
   private async checkForMemberRemovedEvents(): Promise<void> {
-    try {
-      const events = await this.suiClient.queryEvents({
-        query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circles::MemberRemoved`,
-        },
-        limit: 50,
-        order: 'descending',
-      });
+    const packageIds = this.getPackageIds();
+    if (packageIds.length === 0) {
+      return;
+    }
 
-      if (!events.data || events.data.length === 0) {
-        return;
-      }
+    for (const packageId of packageIds) {
+      try {
+        const events = await this.suiClient.queryEvents({
+          query: {
+            MoveEventType: `${packageId}::njangi_circles::MemberRemoved`,
+          },
+          limit: 50,
+          order: 'descending',
+        });
 
-      for (const event of events.data) {
-        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
-        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
-
-        // Skip events that occurred before listener started
-        if (eventTimestampMs < this.startTime) {
+        if (!events.data || events.data.length === 0) {
           continue;
         }
 
-        // Skip if already processed in this session
-        if (this.processedEvents.has(eventId)) {
-          continue;
+        for (const event of events.data) {
+          const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+          const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+          // Skip events that occurred before listener started
+          if (eventTimestampMs < this.startTime) {
+            continue;
+          }
+
+          // Skip if already processed in this session
+          if (this.processedEvents.has(eventId)) {
+            continue;
+          }
+
+          this.processedEvents.add(eventId);
+
+          await this.handleMemberRemovedEvent(event);
         }
-
-        this.processedEvents.add(eventId);
-
-        await this.handleMemberRemovedEvent(event);
+      } catch (error) {
+        appLogger.error('Error checking for MemberRemoved events', {
+          error: error instanceof Error ? error.message : String(error),
+          packageId: packageId.slice(0, 15) + '...',
+        });
       }
-    } catch (error) {
-      appLogger.error('Error checking for MemberRemoved events', {
-        error: error instanceof Error ? error.message : String(error),
-      });
     }
   }
 
@@ -1524,41 +1711,49 @@ export class CircleLinkListenerService {
    * Check for RotationOrderChanged events (when admin reorders members)
    */
   private async checkForRotationOrderChangedEvents(): Promise<void> {
-    try {
-      const events = await this.suiClient.queryEvents({
-        query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circles::RotationOrderChanged`,
-        },
-        limit: 50,
-        order: 'descending',
-      });
+    const packageIds = this.getPackageIds();
+    if (packageIds.length === 0) {
+      return;
+    }
 
-      if (!events.data || events.data.length === 0) {
-        return;
-      }
+    for (const packageId of packageIds) {
+      try {
+        const events = await this.suiClient.queryEvents({
+          query: {
+            MoveEventType: `${packageId}::njangi_circles::RotationOrderChanged`,
+          },
+          limit: 50,
+          order: 'descending',
+        });
 
-      for (const event of events.data) {
-        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
-        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
-
-        // Skip events that occurred before listener started
-        if (eventTimestampMs < this.startTime) {
+        if (!events.data || events.data.length === 0) {
           continue;
         }
 
-        // Skip if already processed in this session
-        if (this.processedEvents.has(eventId)) {
-          continue;
+        for (const event of events.data) {
+          const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+          const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+          // Skip events that occurred before listener started
+          if (eventTimestampMs < this.startTime) {
+            continue;
+          }
+
+          // Skip if already processed in this session
+          if (this.processedEvents.has(eventId)) {
+            continue;
+          }
+
+          this.processedEvents.add(eventId);
+
+          await this.handleRotationOrderChangedEvent(event);
         }
-
-        this.processedEvents.add(eventId);
-
-        await this.handleRotationOrderChangedEvent(event);
+      } catch (error) {
+        appLogger.error('Error checking for RotationOrderChanged events', {
+          error: error instanceof Error ? error.message : String(error),
+          packageId: packageId.slice(0, 15) + '...',
+        });
       }
-    } catch (error) {
-      appLogger.error('Error checking for RotationOrderChanged events', {
-        error: error instanceof Error ? error.message : String(error),
-      });
     }
   }
 
@@ -1755,41 +1950,49 @@ export class CircleLinkListenerService {
    * Check for CircleActivated events (when admin activates the circle)
    */
   private async checkForCircleActivatedEvents(): Promise<void> {
-    try {
-      const events = await this.suiClient.queryEvents({
-        query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleActivated`,
-        },
-        limit: 50,
-        order: 'descending',
-      });
+    const packageIds = this.getPackageIds();
+    if (packageIds.length === 0) {
+      return;
+    }
 
-      if (!events.data || events.data.length === 0) {
-        return;
-      }
+    for (const packageId of packageIds) {
+      try {
+        const events = await this.suiClient.queryEvents({
+          query: {
+            MoveEventType: `${packageId}::njangi_circles::CircleActivated`,
+          },
+          limit: 50,
+          order: 'descending',
+        });
 
-      for (const event of events.data) {
-        const eventId = event.id.txDigest + ':' + event.id.eventSeq;
-        const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
-
-        // Skip events that occurred before listener started
-        if (eventTimestampMs < this.startTime) {
+        if (!events.data || events.data.length === 0) {
           continue;
         }
 
-        // Skip if already processed in this session
-        if (this.processedEvents.has(eventId)) {
-          continue;
+        for (const event of events.data) {
+          const eventId = event.id.txDigest + ':' + event.id.eventSeq;
+          const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
+
+          // Skip events that occurred before listener started
+          if (eventTimestampMs < this.startTime) {
+            continue;
+          }
+
+          // Skip if already processed in this session
+          if (this.processedEvents.has(eventId)) {
+            continue;
+          }
+
+          this.processedEvents.add(eventId);
+
+          await this.handleCircleActivatedEvent(event);
         }
-
-        this.processedEvents.add(eventId);
-
-        await this.handleCircleActivatedEvent(event);
+      } catch (error) {
+        appLogger.error('Error checking for CircleActivated events', {
+          error: error instanceof Error ? error.message : String(error),
+          packageId: packageId.slice(0, 15) + '...',
+        });
       }
-    } catch (error) {
-      appLogger.error('Error checking for CircleActivated events', {
-        error: error instanceof Error ? error.message : String(error),
-      });
     }
   }
 
@@ -1936,27 +2139,35 @@ export class CircleLinkListenerService {
    * Check for PayoutProcessed events
    */
   private async checkForPayoutProcessedEvents(): Promise<void> {
-    try {
-      const events = await this.suiClient.queryEvents({
-        query: {
-          MoveEventType: `${PACKAGE_ID}::njangi_payments::PayoutProcessed`,
-        },
-        limit: 50,
-        order: 'descending',
-      });
+    const packageIds = this.getPackageIds();
+    if (packageIds.length === 0) {
+      return;
+    }
 
-      for (const event of events.data) {
-        // Skip events that occurred before the listener started
-        if (Number(event.timestampMs) < this.startTime) {
-          continue;
+    for (const packageId of packageIds) {
+      try {
+        const events = await this.suiClient.queryEvents({
+          query: {
+            MoveEventType: `${packageId}::njangi_payments::PayoutProcessed`,
+          },
+          limit: 50,
+          order: 'descending',
+        });
+
+        for (const event of events.data) {
+          // Skip events that occurred before the listener started
+          if (Number(event.timestampMs) < this.startTime) {
+            continue;
+          }
+
+          await this.handlePayoutProcessedEvent(event);
         }
-
-        await this.handlePayoutProcessedEvent(event);
+      } catch (error) {
+        appLogger.error('Error checking for PayoutProcessed events', {
+          error: error instanceof Error ? error.message : String(error),
+          packageId: packageId.slice(0, 15) + '...',
+        });
       }
-    } catch (error) {
-      appLogger.error('Error checking for PayoutProcessed events', {
-        error: error instanceof Error ? error.message : String(error),
-      });
     }
   }
 
