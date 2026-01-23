@@ -1848,24 +1848,51 @@ export default function Dashboard() {
         return parsedEvent?.member === userAddress;
       });
       
-      // Create a set of circle IDs where user has been removed
-      const removedFromCircles = new Set<string>();
+      // Create a map of circle IDs to their LATEST removal timestamp
+      // This allows us to check if user was re-added AFTER being removed
+      const removedFromCircles = new Map<string, number>();
       for (const event of userRemovedEvents) {
         const parsedEvent = event.parsedJson as MemberRemovedEvent;
+        const timestamp = Number(event.timestampMs || 0);
         if (parsedEvent?.circle_id) {
-          removedFromCircles.add(parsedEvent.circle_id);
-          console.log(`⛔ User was removed from circle: ${parsedEvent.circle_id}`);
+          const existingTimestamp = removedFromCircles.get(parsedEvent.circle_id) || 0;
+          if (timestamp > existingTimestamp) {
+            removedFromCircles.set(parsedEvent.circle_id, timestamp);
+            console.log(`⛔ User was removed from circle: ${parsedEvent.circle_id} at ${new Date(timestamp).toISOString()}`);
+          }
         }
       }
-      console.log(`⛔ User has been removed from ${removedFromCircles.size} circles`);
+      console.log(`⛔ User has removal records from ${removedFromCircles.size} circles`);
       
-      // Filter out circles where user was removed from member events
+      // Find the LATEST MemberJoined event for each circle (for re-add detection)
+      const latestJoinTimestamp = new Map<string, number>();
+      for (const event of userMemberEvents) {
+        const parsedEvent = event.parsedJson as MemberJoinedEvent;
+        const timestamp = Number(event.timestampMs || 0);
+        if (parsedEvent?.circle_id) {
+          const existingTimestamp = latestJoinTimestamp.get(parsedEvent.circle_id) || 0;
+          if (timestamp > existingTimestamp) {
+            latestJoinTimestamp.set(parsedEvent.circle_id, timestamp);
+          }
+        }
+      }
+      
+      // Filter out circles where user was removed AND NOT re-added after
       // Note: We DON'T filter admin events - admins can remove themselves from the rotation but still own the circle
       const filteredMemberEvents = userMemberEvents.filter((event: any) => {
         const parsedEvent = event.parsedJson as MemberJoinedEvent;
         const circleId = parsedEvent?.circle_id;
         if (circleId && removedFromCircles.has(circleId)) {
-          console.log(`🚫 Filtering out circle ${circleId} - user was removed`);
+          const removalTime = removedFromCircles.get(circleId) || 0;
+          const latestJoinTime = latestJoinTimestamp.get(circleId) || 0;
+          
+          // If the most recent join is AFTER the most recent removal, user was re-added
+          if (latestJoinTime > removalTime) {
+            console.log(`✅ User was re-added to circle ${circleId} (joined: ${new Date(latestJoinTime).toISOString()}, removed: ${new Date(removalTime).toISOString()})`);
+            return true; // Keep this circle - user was re-added
+          }
+          
+          console.log(`🚫 Filtering out circle ${circleId} - user was removed and not re-added`);
           return false;
         }
         return true;
