@@ -756,15 +756,23 @@ export class CircleLinkListenerService {
           });
         }
         
-        // Try to get max_members from dynamic fields (CircleConfig)
+        // Try to get max_members from dynamic field (CircleConfig stored with key b"circle_config")
         try {
           const dynamicFields = await this.suiClient.getDynamicFields({
             parentId: circleId,
           });
           
           for (const field of dynamicFields.data) {
-            if (field.name?.value === 'CircleConfig' || 
-                (typeof field.name?.value === 'object' && (field.name.value as any)?.name === 'CircleConfig')) {
+            // The key is stored as vector<u8> for b"circle_config"
+            // It may appear as an array of bytes or as a string
+            const fieldValue = field.name?.value;
+            const isCircleConfig = 
+              fieldValue === 'circle_config' ||
+              (Array.isArray(fieldValue) && 
+               String.fromCharCode(...fieldValue) === 'circle_config') ||
+              (typeof fieldValue === 'string' && fieldValue.includes('circle_config'));
+            
+            if (isCircleConfig) {
               const configObj = await this.suiClient.getObject({
                 id: field.objectId,
                 options: { showContent: true },
@@ -772,9 +780,17 @@ export class CircleLinkListenerService {
               
               if (configObj.data?.content?.dataType === 'moveObject') {
                 const configFields = (configObj.data.content as any).fields;
-                if (configFields?.max_members) {
+                if (configFields?.value?.fields?.max_members !== undefined) {
+                  // For wrapped dynamic field value
+                  maxMembers = String(configFields.value.fields.max_members);
+                } else if (configFields?.max_members !== undefined) {
+                  // Direct field access
                   maxMembers = String(configFields.max_members);
                 }
+                appLogger.debug('Found CircleConfig max_members', { 
+                  circleId: circleId.slice(0, 10),
+                  maxMembers,
+                });
               }
               break;
             }
