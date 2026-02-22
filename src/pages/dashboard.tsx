@@ -11,6 +11,19 @@ import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
 import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink } from 'lucide-react';
 import MoonPayWrapper from '@/components/MoonPayWrapper';
+import CoinbaseOnrampLauncher from '@/components/CoinbaseOnrampLauncher';
+import {
+  mapCurrencyCodeToIntent,
+  mapIntentToMoonPayCurrency,
+  normalizeOnrampProviderFlag,
+  shouldUseCoinbaseProvider,
+} from '@/lib/onramp-provider';
+import { clearWalletBalanceCache, refreshWalletBalances } from '@/lib/wallet';
+import type { CoinbaseSessionClientError } from '@/hooks/useCoinbaseSession';
+import type {
+  CoinbaseApiErrorPayload,
+  CoinbaseAssetIntent,
+} from '@/types/coinbase-onramp';
 import { getPackageId, getUserPackageIds } from '../services/circle-service';
 // Use alias path for the modal import
 import ConfirmationModal from '@/components/ConfirmationModal';
@@ -1043,6 +1056,137 @@ const validateCirclesOnNetwork = async (circleIds: string[], client: SuiClient):
   return validCircleIds;
 };
 
+type DashboardOnrampStatus =
+  | 'idle'
+  | 'success'
+  | 'pending'
+  | 'failed'
+  | 'cancelled';
+
+interface ParsedOnrampResult {
+  hasOnrampParams: boolean;
+  provider: string;
+  status: DashboardOnrampStatus;
+  rawStatus?: string;
+  transactionId?: string;
+  assetIntent?: CoinbaseAssetIntent;
+}
+
+function readQueryValue(
+  value: string | string[] | undefined,
+): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
+}
+
+function normalizeOnrampStatus(
+  value: string | undefined,
+): DashboardOnrampStatus {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return 'pending';
+  }
+  if (
+    normalized === 'success' ||
+    normalized === 'completed' ||
+    normalized === 'complete'
+  ) {
+    return 'success';
+  }
+  if (normalized === 'failed' || normalized === 'error') {
+    return 'failed';
+  }
+  if (normalized === 'cancelled' || normalized === 'canceled') {
+    return 'cancelled';
+  }
+  if (normalized === 'pending' || normalized === 'processing') {
+    return 'pending';
+  }
+  return 'pending';
+}
+
+function normalizeOnrampAssetIntent(
+  value: string | undefined,
+): CoinbaseAssetIntent | undefined {
+  const normalized = value?.trim().toUpperCase();
+  if (normalized === 'SUI') {
+    return 'SUI';
+  }
+  if (normalized === 'USDC' || normalized === 'USDC_ON_SUI') {
+    return 'USDC_ON_SUI';
+  }
+  return undefined;
+}
+
+function parseOnrampResultFromQuery(
+  query: Record<string, string | string[] | undefined>,
+): ParsedOnrampResult {
+  const provider = readQueryValue(
+    query.onrampProvider ?? query.provider,
+  )?.trim().toLowerCase();
+  const statusValue = readQueryValue(
+    query.onrampStatus ?? query.status ?? query.result,
+  );
+  const transactionId = readQueryValue(
+    query.onrampTxId ?? query.transactionId ?? query.transaction_id ?? query.txId,
+  );
+  const assetIntentValue = readQueryValue(
+    query.onrampAssetIntent ?? query.assetIntent ?? query.asset,
+  );
+
+  const hasOnrampParams = Boolean(
+    provider === 'coinbase' ||
+      query.onrampProvider !== undefined ||
+      query.onrampStatus !== undefined ||
+      query.onrampTxId !== undefined ||
+      query.assetIntent !== undefined ||
+      query.transactionId !== undefined ||
+      query.transaction_id !== undefined,
+  );
+
+  return {
+    hasOnrampParams,
+    provider: provider || 'coinbase',
+    status: normalizeOnrampStatus(statusValue),
+    rawStatus: statusValue,
+    transactionId,
+    assetIntent: normalizeOnrampAssetIntent(assetIntentValue),
+  };
+}
+
+function stripOnrampQueryParams(
+  query: Record<string, string | string[] | undefined>,
+): Record<string, string | string[] | undefined> {
+  const nextQuery = { ...query };
+  const keysToRemove = [
+    'onrampProvider',
+    'onrampStatus',
+    'onrampTxId',
+    'onrampAssetIntent',
+    'provider',
+    'status',
+    'result',
+    'transactionId',
+    'transaction_id',
+    'txId',
+    'assetIntent',
+    'asset',
+  ];
+  for (const key of keysToRemove) {
+    delete nextQuery[key];
+  }
+  return nextQuery;
+}
+
+const onrampProviderFlag = normalizeOnrampProviderFlag(
+  process.env.NEXT_PUBLIC_ONRAMP_PROVIDER,
+);
+const isCoinbaseOnrampEnabled =
+  (process.env.NEXT_PUBLIC_COINBASE_ONRAMP_ENABLED ?? 'false').toLowerCase() ===
+  'true';
+
 export default function Dashboard() {
   console.log('🚨 DASHBOARD COMPONENT RENDERING');
   const router = useRouter();
@@ -1158,6 +1302,17 @@ export default function Dashboard() {
   // Add MoonPay state for the React widget
   const [isMoonPayVisible, setIsMoonPayVisible] = useState(false);
   const [moonPayCurrency, setMoonPayCurrency] = useState('usdc');
+  const [isCoinbaseLauncherOpen, setIsCoinbaseLauncherOpen] = useState(false);
+  const [coinbaseAssetIntent, setCoinbaseAssetIntent] =
+    useState<CoinbaseAssetIntent>('USDC_ON_SUI');
+  const [coinbaseFallbackCurrency, setCoinbaseFallbackCurrency] =
+    useState<'sui' | 'usdc'>('usdc');
+  const [onrampResultStatus, setOnrampResultStatus] =
+    useState<DashboardOnrampStatus>('idle');
+  const [onrampResultMessage, setOnrampResultMessage] = useState<string | null>(
+    null,
+  );
+  const [isOnrampResultRefreshing, setIsOnrampResultRefreshing] = useState(false);
 
   // Keep the confirmation modal state
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
@@ -1250,7 +1405,7 @@ export default function Dashboard() {
   // MoonPay React components handle SDK loading automatically
 
   // Open MoonPay widget using React components
-  const openMoonPayWidget = (currencyCode: string = 'usdc') => {
+  const openMoonPayWidget = (currencyCode: 'sui' | 'usdc' = 'usdc') => {
     console.log("Buy button clicked", { currencyCode });
     setMoonPayCurrency(currencyCode);
     setIsMoonPayVisible(true);
@@ -1260,6 +1415,101 @@ export default function Dashboard() {
   // Close MoonPay widget
   const closeMoonPayWidget = () => {
     setIsMoonPayVisible(false);
+  };
+
+  const closeCoinbaseLauncher = () => {
+    setIsCoinbaseLauncherOpen(false);
+  };
+
+  const getCoinbaseErrorDetails = (
+    rawError: CoinbaseSessionClientError | CoinbaseApiErrorPayload | Error,
+  ): {
+    code: string;
+    message: string;
+    fallbackProvider: 'moonpay' | null;
+  } => {
+    const code =
+      'code' in rawError && typeof rawError.code === 'string'
+        ? rawError.code
+        : 'error' in rawError && typeof rawError.error === 'string'
+          ? rawError.error
+          : 'COINBASE_UNAVAILABLE';
+
+    const message =
+      'message' in rawError && typeof rawError.message === 'string'
+        ? rawError.message
+        : 'Coinbase checkout is temporarily unavailable.';
+
+    const fallbackProvider =
+      'fallbackProvider' in rawError &&
+      (rawError.fallbackProvider === 'moonpay' ||
+        rawError.fallbackProvider === null)
+        ? rawError.fallbackProvider
+        : 'moonpay';
+
+    return {
+      code,
+      message,
+      fallbackProvider,
+    };
+  };
+
+  const openBuyFlow = (currencyCode: string = 'usdc') => {
+    const assetIntent = mapCurrencyCodeToIntent(currencyCode);
+    const fallbackCurrency = mapIntentToMoonPayCurrency(assetIntent);
+    const useCoinbase = shouldUseCoinbaseProvider(
+      onrampProviderFlag,
+      isCoinbaseOnrampEnabled,
+    );
+
+    if (!useCoinbase) {
+      openMoonPayWidget(fallbackCurrency);
+      return;
+    }
+
+    if (!userAddress) {
+      toast.error('Wallet address is unavailable. Please sign in and retry.');
+      return;
+    }
+
+    console.log('Buy button clicked', {
+      currencyCode,
+      provider: 'coinbase',
+      assetIntent,
+    });
+    setCoinbaseAssetIntent(assetIntent);
+    setCoinbaseFallbackCurrency(fallbackCurrency);
+    setIsCoinbaseLauncherOpen(true);
+  };
+
+  const handleCoinbaseLaunchSuccess = () => {
+    toast.success('Opening Coinbase checkout...');
+    closeCoinbaseLauncher();
+  };
+
+  const handleCoinbaseLaunchError = (
+    rawError: CoinbaseSessionClientError | CoinbaseApiErrorPayload | Error,
+  ) => {
+    const details = getCoinbaseErrorDetails(rawError);
+    console.warn('[onramp][coinbase][dashboard] launch failed', details);
+
+    if (details.fallbackProvider === 'moonpay') {
+      toast.error(`${details.message} Switching to MoonPay.`);
+      closeCoinbaseLauncher();
+      openMoonPayWidget(coinbaseFallbackCurrency);
+      return;
+    }
+
+    toast.error(details.message);
+  };
+
+  const handleCoinbaseCancel = () => {
+    closeCoinbaseLauncher();
+  };
+
+  const handleMoonPayFallbackClick = () => {
+    closeCoinbaseLauncher();
+    openMoonPayWidget(coinbaseFallbackCurrency);
   };
 
   useEffect(() => {
@@ -3426,6 +3676,91 @@ export default function Dashboard() {
     fetchUserCircles(false);
   }, [userAddress, router, rpcUrl, packageId]); // Added network config dependencies
 
+  useEffect(() => {
+    if (!router.isReady || !userAddress) {
+      return;
+    }
+
+    const parsedResult = parseOnrampResultFromQuery(
+      router.query as Record<string, string | string[] | undefined>,
+    );
+    if (!parsedResult.hasOnrampParams || parsedResult.provider !== 'coinbase') {
+      return;
+    }
+
+    const updateFromOnrampResult = async () => {
+      setOnrampResultStatus(parsedResult.status);
+
+      if (parsedResult.status === 'success') {
+        toast.success('Coinbase purchase confirmed. Refreshing wallet balances...');
+      } else if (parsedResult.status === 'pending') {
+        toast('Coinbase purchase is pending. Checking your balances...', {
+          icon: '⏳',
+        });
+      } else if (parsedResult.status === 'cancelled') {
+        toast.error('Coinbase purchase was cancelled.');
+      } else if (parsedResult.status === 'failed') {
+        toast.error('Coinbase purchase failed.');
+      }
+
+      const shouldRefreshBalances =
+        parsedResult.status === 'success' || parsedResult.status === 'pending';
+      const txSuffix = parsedResult.transactionId
+        ? ` Transaction: ${parsedResult.transactionId}.`
+        : '';
+
+      if (shouldRefreshBalances) {
+        setIsOnrampResultRefreshing(true);
+        try {
+          clearWalletBalanceCache(userAddress);
+          await refreshWalletBalances(userAddress, {
+            forceRefresh: true,
+            network: getCurrentNetwork(),
+          });
+          await fetchBalance();
+
+          if (parsedResult.status === 'success') {
+            setOnrampResultMessage(
+              `Coinbase purchase completed and balances refreshed.${txSuffix}`,
+            );
+          } else {
+            setOnrampResultMessage(
+              `Coinbase purchase is pending. Latest balances loaded.${txSuffix}`,
+            );
+          }
+        } catch (error) {
+          console.error('Failed to refresh balances after Coinbase callback:', error);
+          setOnrampResultMessage(
+            `Coinbase update received, but balance refresh failed.${txSuffix}`,
+          );
+          toast.error('Could not refresh balances automatically. Try manual refresh.');
+        } finally {
+          setIsOnrampResultRefreshing(false);
+        }
+      } else if (parsedResult.status === 'cancelled') {
+        setOnrampResultMessage('Coinbase purchase was cancelled before completion.');
+      } else if (parsedResult.status === 'failed') {
+        setOnrampResultMessage('Coinbase purchase failed. Please retry.');
+      } else {
+        setOnrampResultMessage('Coinbase update received.');
+      }
+
+      const nextQuery = stripOnrampQueryParams(
+        router.query as Record<string, string | string[] | undefined>,
+      );
+      router.replace(
+        {
+          pathname: router.pathname,
+          query: nextQuery,
+        },
+        undefined,
+        { shallow: true },
+      );
+    };
+
+    updateFromOnrampResult();
+  }, [router.isReady, router.query, router.pathname, userAddress, fetchBalance]);
+
   // Add manual refresh function
   const handleManualRefresh = useCallback(() => {
     if (userAddress) {
@@ -4886,7 +5221,7 @@ export default function Dashboard() {
                       Send
                     </button>
                     <button
-                      onClick={() => openMoonPayWidget('usdc')}
+                      onClick={() => openBuyFlow('usdc')}
                       className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 transition-all duration-200"
                     >
                       <CreditCard className="w-4 h-4 mr-2" />
@@ -4904,6 +5239,25 @@ export default function Dashboard() {
                       </a>
                     )}
                   </div>
+
+                  {onrampResultStatus !== 'idle' && onrampResultMessage && (
+                    <div
+                      className={`mt-4 rounded-lg border p-3 text-sm ${
+                        onrampResultStatus === 'success'
+                          ? 'border-green-200 bg-green-50 text-green-800'
+                          : onrampResultStatus === 'pending'
+                            ? 'border-yellow-200 bg-yellow-50 text-yellow-800'
+                            : 'border-red-200 bg-red-50 text-red-800'
+                      }`}
+                    >
+                      <p>{onrampResultMessage}</p>
+                      {isOnrampResultRefreshing && (
+                        <p className="mt-1 text-xs opacity-80">
+                          Updating on-chain balances...
+                        </p>
+                      )}
+                    </div>
+                  )}
                   
                   {/* Display all coins */}
                   {allCoins.length > 0 && ( // Changed from > 1 to > 0 to always show if any coins exist
@@ -4942,10 +5296,10 @@ export default function Dashboard() {
                                   <button
                                     onClick={() => {
                                       console.log(`Buy ${coin.symbol} button clicked`);
-                                      openMoonPayWidget(coin.symbol.toLowerCase());
+                                      openBuyFlow(coin.symbol);
                                     }}
                                     className="text-xs bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white px-3 py-1.5 rounded-lg font-medium shadow-sm hover:shadow-md transition-all duration-200 flex items-center space-x-1"
-                                    title={`Buy ${coin.symbol} with MoonPay`}
+                                    title={`Buy ${coin.symbol}`}
                                   >
                                     <CreditCard className="w-3 h-3" />
                                     <span>Buy</span>
@@ -6542,6 +6896,60 @@ export default function Dashboard() {
                 </div>
               )}
             </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root
+        open={isCoinbaseLauncherOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeCoinbaseLauncher();
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black bg-opacity-50 z-40" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[92vw] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-5 shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <Dialog.Title className="text-base font-semibold text-gray-900">
+                  Buy {coinbaseAssetIntent === 'SUI' ? 'SUI' : 'USDC on Sui'}
+                </Dialog.Title>
+                <Dialog.Description className="mt-1 text-sm text-gray-500">
+                  Continue with Coinbase or switch to MoonPay.
+                </Dialog.Description>
+              </div>
+              <Dialog.Close
+                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus:outline-none"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </Dialog.Close>
+            </div>
+
+            <CoinbaseOnrampLauncher
+              className="mt-4"
+              walletAddress={userAddress || ''}
+              preferredAssetIntent={coinbaseAssetIntent}
+              amount={50}
+              fiatCurrency="USD"
+              country="US"
+              providerFlag={onrampProviderFlag}
+              disabled={!userAddress}
+              buttonLabel="Continue with Coinbase"
+              onSuccess={handleCoinbaseLaunchSuccess}
+              onError={handleCoinbaseLaunchError}
+              onCancel={handleCoinbaseCancel}
+            />
+
+            <button
+              type="button"
+              onClick={handleMoonPayFallbackClick}
+              className="mt-4 inline-flex w-full items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+            >
+              Use MoonPay Instead
+            </button>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

@@ -99,6 +99,8 @@ cd move
 - **📦 [Deployment Guide](docs/deployment-guide.md)** - Complete deployment documentation
 - **⚡ [Quick Reference](move/DEPLOYMENT.md)** - Essential commands for deployment
 - **🏗️ [Move Contracts](move/README.md)** - Smart contract documentation
+- **💳 [Coinbase Onramp Setup and Operations](docs/coinbase-onramp-setup-operations.md)** - Env setup, API route reference, troubleshooting
+- **✅ [Coinbase Onramp Staging and Rollout Checklist](docs/coinbase-onramp-staging-rollout-checklist.md)** - UAT scenarios, production checklist, rollback runbook
 
 ## Security Deposits & Upcoming Yield
 Security deposits protect the circle against missed contributions.  
@@ -120,5 +122,4 @@ Front-end, API and automated scripts live under `web/` and `scripts/` directorie
 - 📱 zkLogin authentication for seamless Web3 onboarding  
 - 🌐 Multicurrency support & automatic stablecoin swaps  
 - 🛡️ Formal verification of critical contract invariants
-
 
