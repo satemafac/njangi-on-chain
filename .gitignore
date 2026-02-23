@@ -48,6 +48,11 @@ polymedia-zklogin-demo/
 
 # large files
 *.zkey
+*.zip
+
+# backup files
+*.bak
+*.orig
 
 # database files
 *.db
