@@ -1186,6 +1186,9 @@ const onrampProviderFlag = normalizeOnrampProviderFlag(
 const isCoinbaseOnrampEnabled =
   (process.env.NEXT_PUBLIC_COINBASE_ONRAMP_ENABLED ?? 'false').toLowerCase() ===
   'true';
+const shouldAutoOpenMoonPayFallback =
+  (process.env.NEXT_PUBLIC_ONRAMP_AUTO_MOONPAY_FALLBACK ?? 'false').toLowerCase() ===
+  'true';
 
 export default function Dashboard() {
   console.log('🚨 DASHBOARD COMPONENT RENDERING');
@@ -1472,6 +1475,8 @@ export default function Dashboard() {
       return;
     }
 
+    // Ensure stale fallback overlays are closed before launching Coinbase.
+    closeMoonPayWidget();
     console.log('Buy button clicked', {
       currencyCode,
       provider: 'coinbase',
@@ -1483,6 +1488,7 @@ export default function Dashboard() {
   };
 
   const handleCoinbaseLaunchSuccess = () => {
+    closeMoonPayWidget();
     toast.success('Opening Coinbase checkout...');
     closeCoinbaseLauncher();
   };
@@ -1494,9 +1500,16 @@ export default function Dashboard() {
     console.warn('[onramp][coinbase][dashboard] launch failed', details);
 
     if (details.fallbackProvider === 'moonpay') {
-      toast.error(`${details.message} Switching to MoonPay.`);
-      closeCoinbaseLauncher();
-      openMoonPayWidget(coinbaseFallbackCurrency);
+      if (shouldAutoOpenMoonPayFallback) {
+        toast.error(`${details.message} Switching to MoonPay.`);
+        closeCoinbaseLauncher();
+        openMoonPayWidget(coinbaseFallbackCurrency);
+        return;
+      }
+
+      toast.error(
+        `${details.message} You can switch using "Use MoonPay Instead".`,
+      );
       return;
     }
 
@@ -6909,47 +6922,63 @@ export default function Dashboard() {
         }}
       >
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black bg-opacity-50 z-40" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[92vw] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-5 shadow-xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <Dialog.Title className="text-base font-semibold text-gray-900">
-                  Buy {coinbaseAssetIntent === 'SUI' ? 'SUI' : 'USDC on Sui'}
-                </Dialog.Title>
-                <Dialog.Description className="mt-1 text-sm text-gray-500">
-                  Continue with Coinbase or switch to MoonPay.
-                </Dialog.Description>
+          <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-[2px]" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[94vw] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+            <div className="bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 px-6 py-5 text-white">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-blue-100">
+                    Instant Onramp
+                  </p>
+                  <Dialog.Title className="mt-1 text-2xl font-semibold leading-tight">
+                    Buy {coinbaseAssetIntent === 'SUI' ? 'SUI' : 'USDC on Sui'}
+                  </Dialog.Title>
+                  <Dialog.Description className="mt-1 text-sm text-blue-100">
+                    Secure checkout with Coinbase. MoonPay stays available as backup.
+                  </Dialog.Description>
+                </div>
+                <Dialog.Close
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/30 bg-white/10 text-white transition-colors hover:bg-white/20 focus:outline-none"
+                  aria-label="Close"
+                >
+                  <X className="h-4 w-4" />
+                </Dialog.Close>
               </div>
-              <Dialog.Close
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus:outline-none"
-                aria-label="Close"
-              >
-                <X className="h-4 w-4" />
-              </Dialog.Close>
             </div>
 
-            <CoinbaseOnrampLauncher
-              className="mt-4"
-              walletAddress={userAddress || ''}
-              preferredAssetIntent={coinbaseAssetIntent}
-              amount={50}
-              fiatCurrency="USD"
-              country="US"
-              providerFlag={onrampProviderFlag}
-              disabled={!userAddress}
-              buttonLabel="Continue with Coinbase"
-              onSuccess={handleCoinbaseLaunchSuccess}
-              onError={handleCoinbaseLaunchError}
-              onCancel={handleCoinbaseCancel}
-            />
+            <div className="space-y-4 bg-slate-50/70 px-6 py-5">
+              <div className="rounded-2xl border border-white bg-white p-4 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                  Preferred Provider
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Coinbase checkout opens in a secure browser tab.
+                </p>
 
-            <button
-              type="button"
-              onClick={handleMoonPayFallbackClick}
-              className="mt-4 inline-flex w-full items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
-            >
-              Use MoonPay Instead
-            </button>
+                <CoinbaseOnrampLauncher
+                  className="mt-4"
+                  walletAddress={userAddress || ''}
+                  preferredAssetIntent={coinbaseAssetIntent}
+                  amount={50}
+                  fiatCurrency="USD"
+                  country="US"
+                  providerFlag={onrampProviderFlag}
+                  disabled={!userAddress}
+                  buttonLabel="Continue with Coinbase"
+                  onSuccess={handleCoinbaseLaunchSuccess}
+                  onError={handleCoinbaseLaunchError}
+                  onCancel={handleCoinbaseCancel}
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={handleMoonPayFallbackClick}
+                className="inline-flex w-full items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+              >
+                Use MoonPay Instead
+              </button>
+            </div>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

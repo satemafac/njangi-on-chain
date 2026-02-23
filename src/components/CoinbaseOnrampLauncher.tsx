@@ -386,22 +386,29 @@ export default function CoinbaseOnrampLauncher({
   };
 
   return (
-    <div className={className}>
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+    <div className={`space-y-3 ${className ?? ''}`}>
+      <div className="rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-cyan-50 p-3 shadow-sm">
         <button
           type="button"
           onClick={handleLaunch}
           disabled={isButtonDisabled}
-          className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-400"
+          className="inline-flex w-full items-center justify-center rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:from-blue-500 hover:to-indigo-500 hover:shadow-md disabled:cursor-not-allowed disabled:from-slate-300 disabled:to-slate-400"
         >
           {loading ? 'Setting up...' : buttonLabel}
         </button>
 
+        {statusText && (
+          <p className="mt-2 text-xs font-medium text-blue-700" role="status">
+            {statusText}
+          </p>
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
         <button
           type="button"
           onClick={handleCancel}
-          disabled={!loading && !effectiveError}
-          className="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
         >
           Cancel
         </button>
@@ -411,33 +418,27 @@ export default function CoinbaseOnrampLauncher({
             type="button"
             onClick={handleRetry}
             disabled={loading}
-            className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
           >
             Retry
           </button>
         )}
       </div>
 
-      {statusText && (
-        <p className="mt-2 text-sm text-gray-600" role="status">
-          {statusText}
-        </p>
-      )}
-
       {effectiveError && (
-        <p className="mt-2 text-sm text-red-600" role="alert">
+        <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
           {mapErrorMessage(effectiveError)}
         </p>
       )}
 
       {!isProviderEnabled && (
-        <p className="mt-2 text-sm text-gray-500">
+        <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
           Coinbase is disabled by provider flag.
         </p>
       )}
 
       {data?.channelId && (
-        <p className="mt-1 text-xs text-gray-500">Session channel: {data.channelId}</p>
+        <p className="text-xs text-slate-500">Session channel: {data.channelId}</p>
       )}
     </div>
   );
