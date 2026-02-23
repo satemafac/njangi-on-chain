@@ -218,6 +218,38 @@ function mapErrorMessage(
   return message || 'Payment setup temporarily unavailable. Retry?';
 }
 
+type CoinbaseLaunchMode = 'auto' | 'new_tab' | 'same_tab';
+
+function isStandaloneDisplayMode(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  const navigatorWithStandalone = window.navigator as Navigator & {
+    standalone?: boolean;
+  };
+  return (
+    window.matchMedia?.('(display-mode: standalone)').matches === true ||
+    navigatorWithStandalone.standalone === true
+  );
+}
+
+function resolveLaunchMode(): CoinbaseLaunchMode {
+  const rawMode = (
+    process.env.NEXT_PUBLIC_COINBASE_ONRAMP_OPEN_MODE ?? 'auto'
+  )
+    .trim()
+    .toLowerCase();
+
+  if (rawMode === 'same_tab') {
+    return 'same_tab';
+  }
+  if (rawMode === 'new_tab') {
+    return 'new_tab';
+  }
+  return 'auto';
+}
+
 /**
  * Reusable Coinbase hosted onramp launcher.
  *
@@ -287,12 +319,36 @@ export default function CoinbaseOnrampLauncher({
       return;
     }
 
+    const launchMode = resolveLaunchMode();
+    const shouldUseSameTab =
+      launchMode === 'same_tab' ||
+      (launchMode === 'auto' && isStandaloneDisplayMode());
+    let pendingWindow: Window | null = null;
+    const closePendingWindow = () => {
+      if (pendingWindow && !pendingWindow.closed) {
+        pendingWindow.close();
+      }
+      pendingWindow = null;
+    };
+
+    if (!shouldUseSameTab && typeof window !== 'undefined') {
+      pendingWindow = window.open('', '_blank');
+      if (pendingWindow) {
+        try {
+          pendingWindow.opener = null;
+        } catch {
+          // Ignore if browser blocks modifying opener.
+        }
+      }
+    }
+
     const optionsResult = await fetchOptionsPayload({
       walletAddress: normalizedWalletAddress,
       country,
       subdivision,
     });
     if (optionsResult.error) {
+      closePendingWindow();
       const clientError = toClientError(optionsResult.error, optionsResult.status);
       setLocalError(clientError);
       onError?.(optionsResult.error);
@@ -301,6 +357,7 @@ export default function CoinbaseOnrampLauncher({
 
     const options = optionsResult.options;
     if (!options) {
+      closePendingWindow();
       const malformedOptionsError = toFallbackApiError(
         'COINBASE_OPTIONS_ERROR',
         'Coinbase eligibility response could not be parsed.',
@@ -313,6 +370,7 @@ export default function CoinbaseOnrampLauncher({
 
     const supportsIntent = options.supportedIntents.includes(preferredAssetIntent);
     if (!options.eligible || !supportsIntent) {
+      closePendingWindow();
       const ineligibleError = toFallbackApiError(
         options.reasonCode ?? (!supportsIntent ? 'UNSUPPORTED_INTENT' : 'COINBASE_INELIGIBLE'),
         options.message ??
@@ -329,6 +387,7 @@ export default function CoinbaseOnrampLauncher({
 
     const session = await refetch();
     if (!session) {
+      closePendingWindow();
       const sessionError =
         error ??
         ({
@@ -350,15 +409,34 @@ export default function CoinbaseOnrampLauncher({
       fiatCurrency,
     });
 
-    const openedWindow =
-      typeof window !== 'undefined'
-        ? window.open(url, '_blank', 'noopener,noreferrer')
-        : null;
-
-    if (!openedWindow) {
+    if (typeof window === 'undefined') {
+      closePendingWindow();
       const popupError: CoinbaseSessionClientError = {
         code: 'POPUP_BLOCKED',
-        message: 'Popup blocked by browser.',
+        message: 'Window is unavailable in this environment.',
+        status: 400,
+        fallbackProvider: 'moonpay',
+        isRetryable: true,
+      };
+      setLocalError(popupError);
+      onError?.(popupError);
+      return;
+    }
+
+    try {
+      if (shouldUseSameTab) {
+        window.location.assign(url);
+      } else if (pendingWindow && !pendingWindow.closed) {
+        pendingWindow.location.assign(url);
+      } else {
+        // Popup may be blocked by browser policy. Fallback to same-tab navigation.
+        window.location.assign(url);
+      }
+    } catch {
+      closePendingWindow();
+      const popupError: CoinbaseSessionClientError = {
+        code: 'POPUP_BLOCKED',
+        message: 'Unable to open Coinbase checkout in this browser mode.',
         status: 400,
         fallbackProvider: 'moonpay',
         isRetryable: true,

@@ -1186,6 +1186,9 @@ const onrampProviderFlag = normalizeOnrampProviderFlag(
 const isCoinbaseOnrampEnabled =
   (process.env.NEXT_PUBLIC_COINBASE_ONRAMP_ENABLED ?? 'false').toLowerCase() ===
   'true';
+const isMoonPayEnabled =
+  (process.env.NEXT_PUBLIC_MOONPAY_ENABLED ?? 'false').toLowerCase() ===
+  'true';
 const shouldAutoOpenMoonPayFallback =
   (process.env.NEXT_PUBLIC_ONRAMP_AUTO_MOONPAY_FALLBACK ?? 'false').toLowerCase() ===
   'true';
@@ -1409,6 +1412,11 @@ export default function Dashboard() {
 
   // Open MoonPay widget using React components
   const openMoonPayWidget = (currencyCode: 'sui' | 'usdc' = 'usdc') => {
+    if (!isMoonPayEnabled) {
+      toast('MoonPay integration is coming soon.');
+      return;
+    }
+
     console.log("Buy button clicked", { currencyCode });
     setMoonPayCurrency(currencyCode);
     setIsMoonPayVisible(true);
@@ -1466,7 +1474,13 @@ export default function Dashboard() {
     );
 
     if (!useCoinbase) {
-      openMoonPayWidget(fallbackCurrency);
+      if (isMoonPayEnabled) {
+        openMoonPayWidget(fallbackCurrency);
+      } else {
+        toast.error(
+          'Coinbase onramp is currently unavailable. MoonPay integration is coming soon.',
+        );
+      }
       return;
     }
 
@@ -1500,16 +1514,20 @@ export default function Dashboard() {
     console.warn('[onramp][coinbase][dashboard] launch failed', details);
 
     if (details.fallbackProvider === 'moonpay') {
-      if (shouldAutoOpenMoonPayFallback) {
+      if (shouldAutoOpenMoonPayFallback && isMoonPayEnabled) {
         toast.error(`${details.message} Switching to MoonPay.`);
         closeCoinbaseLauncher();
         openMoonPayWidget(coinbaseFallbackCurrency);
         return;
       }
 
-      toast.error(
-        `${details.message} You can switch using "Use MoonPay Instead".`,
-      );
+      if (isMoonPayEnabled) {
+        toast.error(
+          `${details.message} You can switch using "Use MoonPay Instead".`,
+        );
+      } else {
+        toast.error(`${details.message} MoonPay fallback is coming soon.`);
+      }
       return;
     }
 
@@ -1521,6 +1539,10 @@ export default function Dashboard() {
   };
 
   const handleMoonPayFallbackClick = () => {
+    if (!isMoonPayEnabled) {
+      toast('MoonPay integration is coming soon.');
+      return;
+    }
     closeCoinbaseLauncher();
     openMoonPayWidget(coinbaseFallbackCurrency);
   };
@@ -6934,7 +6956,7 @@ export default function Dashboard() {
                     Buy {coinbaseAssetIntent === 'SUI' ? 'SUI' : 'USDC on Sui'}
                   </Dialog.Title>
                   <Dialog.Description className="mt-1 text-sm text-blue-100">
-                    Secure checkout with Coinbase. MoonPay stays available as backup.
+                    Secure checkout with Coinbase. MoonPay fallback is coming soon.
                   </Dialog.Description>
                 </div>
                 <Dialog.Close
@@ -6971,28 +6993,40 @@ export default function Dashboard() {
                 />
               </div>
 
-              <button
-                type="button"
-                onClick={handleMoonPayFallbackClick}
-                className="inline-flex w-full items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100"
-              >
-                Use MoonPay Instead
-              </button>
+              {isMoonPayEnabled ? (
+                <button
+                  type="button"
+                  onClick={handleMoonPayFallbackClick}
+                  className="inline-flex w-full items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+                >
+                  Use MoonPay Instead
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleMoonPayFallbackClick}
+                  className="inline-flex w-full items-center justify-center rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800 transition-colors hover:bg-amber-100"
+                >
+                  MoonPay Coming Soon
+                </button>
+              )}
             </div>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
 
       {/* MoonPay Buy Widget */}
-      <MoonPayWrapper
-        variant="overlay"
-        baseCurrencyCode="usd"
-        baseCurrencyAmount="50"
-        defaultCurrencyCode={moonPayCurrency}
-        walletAddress={userAddress || undefined}
-        visible={isMoonPayVisible}
-        onClose={async () => closeMoonPayWidget()}
-      />
+      {isMoonPayEnabled && (
+        <MoonPayWrapper
+          variant="overlay"
+          baseCurrencyCode="usd"
+          baseCurrencyAmount="50"
+          defaultCurrencyCode={moonPayCurrency}
+          walletAddress={userAddress || undefined}
+          visible={isMoonPayVisible}
+          onClose={async () => closeMoonPayWidget()}
+        />
+      )}
     </div>
   );
 } 
