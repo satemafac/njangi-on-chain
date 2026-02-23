@@ -11,29 +11,21 @@ export function mapIntentToCoinbaseAsset(
 
 export interface BuildCoinbaseOnrampUrlParams {
   sessionToken: string;
-  walletAddress: string;
   preferredAssetIntent: CoinbaseAssetIntent;
   fiatAmount?: number;
   fiatCurrency?: string;
+  redirectUrl?: string;
 }
 
 export function buildCoinbaseOnrampUrl(
   params: BuildCoinbaseOnrampUrlParams,
 ): string {
   const url = new URL(COINBASE_HOSTED_ONRAMP_BASE_URL);
-  const addresses = [
-    {
-      address: params.walletAddress,
-      blockchains: ['sui'],
-    },
-  ];
 
   url.searchParams.set('sessionToken', params.sessionToken);
-  url.searchParams.set(
-    'assets',
-    mapIntentToCoinbaseAsset(params.preferredAssetIntent),
-  );
-  url.searchParams.set('addresses', JSON.stringify(addresses));
+  url.searchParams.set('defaultAsset', mapIntentToCoinbaseAsset(params.preferredAssetIntent));
+  url.searchParams.set('defaultNetwork', 'sui');
+  url.searchParams.set('defaultExperience', 'buy');
 
   if (params.fiatAmount && Number.isFinite(params.fiatAmount)) {
     url.searchParams.set('presetFiatAmount', String(params.fiatAmount));
@@ -41,6 +33,10 @@ export function buildCoinbaseOnrampUrl(
 
   if (params.fiatCurrency) {
     url.searchParams.set('fiatCurrency', params.fiatCurrency.toUpperCase());
+  }
+
+  if (params.redirectUrl) {
+    url.searchParams.set('redirectUrl', params.redirectUrl);
   }
 
   return url.toString();

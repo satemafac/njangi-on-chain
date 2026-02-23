@@ -9,11 +9,9 @@ describe('coinbase onramp helpers', () => {
     expect(mapIntentToCoinbaseAsset('USDC_ON_SUI')).toBe('USDC');
   });
 
-  it('builds hosted onramp URL with session token and encoded addresses', () => {
+  it('builds hosted onramp URL using secure init session parameters', () => {
     const url = buildCoinbaseOnrampUrl({
       sessionToken: 'session-token-123',
-      walletAddress:
-        '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd',
       preferredAssetIntent: 'USDC_ON_SUI',
       fiatAmount: 75,
       fiatCurrency: 'usd',
@@ -25,23 +23,12 @@ describe('coinbase onramp helpers', () => {
       'https://pay.coinbase.com/buy/select-asset',
     );
     expect(parsed.searchParams.get('sessionToken')).toBe('session-token-123');
-    expect(parsed.searchParams.get('assets')).toBe('USDC');
+    expect(parsed.searchParams.get('defaultAsset')).toBe('USDC');
+    expect(parsed.searchParams.get('defaultNetwork')).toBe('sui');
+    expect(parsed.searchParams.get('defaultExperience')).toBe('buy');
     expect(parsed.searchParams.get('presetFiatAmount')).toBe('75');
     expect(parsed.searchParams.get('fiatCurrency')).toBe('USD');
-
-    const addressesRaw = parsed.searchParams.get('addresses');
-    expect(addressesRaw).toBeTruthy();
-    const addresses = JSON.parse(addressesRaw ?? '[]') as Array<{
-      address: string;
-      blockchains: string[];
-    }>;
-
-    expect(addresses).toEqual([
-      {
-        address:
-          '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd',
-        blockchains: ['sui'],
-      },
-    ]);
+    expect(parsed.searchParams.get('addresses')).toBeNull();
+    expect(parsed.searchParams.get('assets')).toBeNull();
   });
 });

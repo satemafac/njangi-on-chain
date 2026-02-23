@@ -345,7 +345,6 @@ export default function CoinbaseOnrampLauncher({
 
     const url = buildCoinbaseOnrampUrl({
       sessionToken: session.token,
-      walletAddress: normalizedWalletAddress,
       preferredAssetIntent,
       fiatAmount: amount,
       fiatCurrency,
