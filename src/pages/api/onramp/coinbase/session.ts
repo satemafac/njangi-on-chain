@@ -1,4 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { isIP } from 'node:net';
 import { z } from 'zod';
 import {
   CoinbaseOnrampError,
@@ -74,20 +75,149 @@ function normalizeIp(rawIp: string | undefined): string | null {
     return null;
   }
 
-  if (rawIp === '::1') {
+  const trimmed = rawIp.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (trimmed === '::1') {
     return '127.0.0.1';
   }
 
-  if (rawIp.startsWith('::ffff:')) {
-    return rawIp.replace('::ffff:', '');
+  if (trimmed.startsWith('::ffff:')) {
+    return trimmed.replace('::ffff:', '');
   }
 
-  return rawIp;
+  return trimmed;
+}
+
+function parseIpCandidate(rawValue: string): string | null {
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const bracketedIpv6 = trimmed.match(/^\[(.+)](?::\d+)?$/);
+  if (bracketedIpv6?.[1]) {
+    return normalizeIp(bracketedIpv6[1]);
+  }
+
+  const ipv4WithPort = trimmed.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/);
+  if (ipv4WithPort?.[1]) {
+    return normalizeIp(ipv4WithPort[1]);
+  }
+
+  return normalizeIp(trimmed);
+}
+
+function isPrivateIpv4(ip: string): boolean {
+  const segments = ip.split('.').map((segment) => Number(segment));
+  if (
+    segments.length !== 4 ||
+    segments.some((segment) => !Number.isInteger(segment) || segment < 0 || segment > 255)
+  ) {
+    return false;
+  }
+
+  const [first, second] = segments;
+  if (first === 10 || first === 127 || first === 0) {
+    return true;
+  }
+  if (first === 169 && second === 254) {
+    return true;
+  }
+  if (first === 172 && second >= 16 && second <= 31) {
+    return true;
+  }
+  if (first === 192 && second === 168) {
+    return true;
+  }
+  if (first === 100 && second >= 64 && second <= 127) {
+    return true;
+  }
+
+  return false;
+}
+
+function isPrivateIpv6(ip: string): boolean {
+  const normalized = ip.toLowerCase();
+  if (normalized === '::1' || normalized === '::') {
+    return true;
+  }
+  if (normalized.startsWith('fc') || normalized.startsWith('fd')) {
+    return true;
+  }
+  if (
+    normalized.startsWith('fe8') ||
+    normalized.startsWith('fe9') ||
+    normalized.startsWith('fea') ||
+    normalized.startsWith('feb')
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function isPrivateIp(ip: string): boolean {
+  const version = isIP(ip);
+  if (version === 4) {
+    return isPrivateIpv4(ip);
+  }
+  if (version === 6) {
+    return isPrivateIpv6(ip);
+  }
+  return false;
+}
+
+function getHeaderValue(req: NextApiRequest, headerName: string): string | undefined {
+  const value = req.headers[headerName];
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
+}
+
+function readForwardedClientIp(req: NextApiRequest): string | null {
+  const headerCandidates = [
+    getHeaderValue(req, 'x-forwarded-for'),
+    getHeaderValue(req, 'x-real-ip'),
+    getHeaderValue(req, 'cf-connecting-ip'),
+    getHeaderValue(req, 'fly-client-ip'),
+    getHeaderValue(req, 'x-client-ip'),
+  ];
+
+  for (const candidate of headerCandidates) {
+    if (!candidate) {
+      continue;
+    }
+
+    const parts = candidate.split(',').map((part) => part.trim()).filter(Boolean);
+    for (const part of parts) {
+      const parsed = parseIpCandidate(part);
+      if (parsed && isIP(parsed) !== 0 && !isPrivateIp(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  return null;
 }
 
 function getTrustedClientIp(req: NextApiRequest): string | null {
-  // Do not trust X-Forwarded-For in this handler.
-  return normalizeIp(req.socket?.remoteAddress);
+  const socketIp = parseIpCandidate(req.socket?.remoteAddress ?? '');
+  if (socketIp && isIP(socketIp) !== 0 && !isPrivateIp(socketIp)) {
+    return socketIp;
+  }
+
+  // In proxy environments (e.g., Heroku), the socket IP is often private.
+  // Prefer a forwarded public client IP in that case.
+  const forwardedIp = readForwardedClientIp(req);
+  if (forwardedIp) {
+    return forwardedIp;
+  }
+
+  return socketIp && isIP(socketIp) !== 0 ? socketIp : null;
 }
 
 function checkRateLimit(
@@ -378,9 +508,26 @@ export default async function handler(
     });
   } catch (error) {
     if (error instanceof CoinbaseOnrampError) {
+      const upstreamCause =
+        (error as Error & { cause?: unknown }).cause &&
+        typeof (error as Error & { cause?: unknown }).cause === 'object'
+          ? ((error as Error & { cause?: unknown }).cause as {
+              status?: unknown;
+              body?: unknown;
+            })
+          : undefined;
+      const upstreamStatus =
+        typeof upstreamCause?.status === 'number' ? upstreamCause.status : undefined;
+      const upstreamBodyPreview =
+        typeof upstreamCause?.body === 'string'
+          ? upstreamCause.body.slice(0, 300)
+          : undefined;
+
       logger.error('session_failed', {
         code: error.code,
         statusCode: error.statusCode,
+        upstreamStatus,
+        upstreamBodyPreview,
         ipHash: hashForLogs(clientIp),
         walletAddress: maskWalletAddress(parsedBody.data.walletAddress),
         assetIntent: parsedBody.data.preferredAssetIntent,

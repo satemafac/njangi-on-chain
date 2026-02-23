@@ -220,4 +220,35 @@ describe('POST /api/onramp/coinbase/session', () => {
       }),
     );
   });
+
+  it('uses forwarded client IP when socket address is private', async () => {
+    mockCreateSessionToken.mockResolvedValue({
+      token: 'session-token-forwarded',
+      channelId: 'channel-forwarded',
+      assetIntent: 'USDC_ON_SUI',
+    });
+
+    const req = createMockRequest({
+      ip: '10.0.24.9',
+      headers: {
+        'x-forwarded-for': '198.51.100.77, 10.0.24.9',
+      },
+      body: {
+        walletAddress:
+          '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+        preferredAssetIntent: 'USDC_ON_SUI',
+        country: 'US',
+      },
+    });
+    const res = createMockResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(mockCreateSessionToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientIp: '198.51.100.77',
+      }),
+    );
+  });
 });
