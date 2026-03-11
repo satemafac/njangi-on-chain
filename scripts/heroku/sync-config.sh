@@ -9,6 +9,20 @@ FRONTEND_APP=""
 BOT_APP=""
 DRY_RUN="false"
 BASE_URL=""
+DEPRECATED_KEYS=(
+  NEXT_PUBLIC_PACKAGE_ID
+  NEXT_PUBLIC_WHATSAPP_PACKAGE_ID
+  NEXT_PUBLIC_WHATSAPP_REGISTRY_ID
+  SUI_WHATSAPP_LINKS_REGISTRY_ID
+  SUI_WHATSAPP_PACKAGE_ID
+  NEXT_PUBLIC_ENOKI
+  NEXT_PUBLIC_SUI_RPC_URL
+  SUI_RPC_URL
+  NEXT_PUBLIC_SUI_GRAPHQL_URL
+  SUI_GRAPHQL_URL
+  TESTNET_GRAPHQL_URL
+  MAINNET_GRAPHQL_URL
+)
 
 usage() {
   cat <<'EOF'
@@ -106,6 +120,10 @@ sync_app() {
         value="${BASE_URL%/}/auth/callback"
       fi
 
+      if [[ "$key" == "LOG_FILE" ]]; then
+        value="/tmp/${app_name}.log"
+      fi
+
       if [[ -z "$value" ]]; then
         echo "Skipping ${key}: empty value"
         continue
@@ -113,6 +131,11 @@ sync_app() {
 
       if [[ "$value" == *"<"* || "$value" == *"["* || "$value" == *"placeholder"* ]]; then
         echo "Skipping ${key}: placeholder value"
+        continue
+      fi
+
+      if [[ "$value" == *"localhost"* && "$key" != "COINBASE_ONRAMP_ALLOWED_ORIGINS" ]]; then
+        echo "Skipping ${key}: localhost value"
         continue
       fi
 
@@ -129,10 +152,12 @@ sync_app() {
 
   if [[ "$DRY_RUN" == "true" ]]; then
     printf '  %s\n' "${kv_pairs[@]}"
+    echo "Would unset deprecated keys: ${DEPRECATED_KEYS[*]}"
     return
   fi
 
   heroku config:set --app "$app_name" "${kv_pairs[@]}"
+  heroku config:unset --app "$app_name" "${DEPRECATED_KEYS[@]}"
 }
 
 if [[ -n "$APP" ]]; then
