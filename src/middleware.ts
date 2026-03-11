@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getCanonicalBaseOrigin, isHerokuHostname } from '@/lib/canonical-host';
+import { getCanonicalBaseOrigin, preferCanonicalOrigin } from '@/lib/canonical-host';
 
 function addSecurityHeaders(response: NextResponse): NextResponse {
   response.headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
@@ -12,13 +12,13 @@ function addSecurityHeaders(response: NextResponse): NextResponse {
 
 export function middleware(request: NextRequest) {
   const canonicalOrigin = getCanonicalBaseOrigin();
-  const requestHostname = request.nextUrl.hostname;
+  const preferredOrigin = preferCanonicalOrigin(request.nextUrl.origin);
 
   if (
     process.env.NODE_ENV === 'production' &&
     canonicalOrigin &&
-    request.nextUrl.origin !== canonicalOrigin &&
-    isHerokuHostname(requestHostname)
+    preferredOrigin === canonicalOrigin &&
+    request.nextUrl.origin !== canonicalOrigin
   ) {
     const redirectUrl = new URL(request.nextUrl.pathname + request.nextUrl.search, canonicalOrigin);
     return addSecurityHeaders(NextResponse.redirect(redirectUrl, 308));
