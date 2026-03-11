@@ -8,16 +8,22 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
 import { PACKAGE_ID, getCirclePackageId } from '../../../../services/circle-service';
-import { getCurrentRpcUrl, getCurrentNetwork } from '../../../../services/network-config';
-import StablecoinSwapForm from '../../../../components/StablecoinSwapForm';
+import {
+  getCurrentRpcUrl,
+  getCurrentNetwork,
+  getCurrentCoinTypes,
+  getCurrentTokens,
+  getCurrentEmberConfig,
+} from '../../../../services/network-config';
 import RotationOrderList from '../../../../components/RotationOrderList';
 import ConfirmationModal from '../../../../components/ConfirmationModal';
-import { ZkLoginClient, ZkLoginError } from '../../../../services/zkLoginClient';
-import { YieldStrategySection } from '../../../../components/YieldManagement';
-import { yieldTrackingService, TrackedYieldData } from '../../../../services/yield-tracking-service';
+import {
+  ZkLoginClient,
+  ZkLoginError,
+  type EmberSourceAsset,
+  type EmberOperationLifecycle,
+} from '../../../../services/zkLoginClient';
 import WhatsAppCircleIntegration from '../../../../components/WhatsAppCircleIntegration';
-
-import type { YieldStrategy } from '../../../../components/YieldManagement/types/yield.types';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -45,6 +51,12 @@ interface Circle {
     stablecoinBalance: number;
     suiBalance: number;
     securityDeposits?: number;
+    suiUsdeBalance?: number;
+    emberReceiptBalance?: number;
+    emberPendingRedeemShares?: number;
+    emberPendingRedeemRequests?: number;
+    emberGlobalPendingRequests?: number;
+    emberHasPendingRedemption?: boolean;
   };
 }
 
@@ -69,6 +81,135 @@ const debugLog = (message: string, data?: unknown) => {
 const shortenAddress = (address: string) => {
   if (!address) return '';
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
+};
+
+type DynamicFieldRef = {
+  objectId: string;
+  objectType?: string;
+  name?: {
+    type?: string;
+    value?: unknown;
+  };
+};
+
+const parseU64Like = (value: unknown): bigint => {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return BigInt(Math.max(0, Math.trunc(value)));
+  if (typeof value === 'string' && /^\d+$/.test(value)) return BigInt(value);
+  return 0n;
+};
+
+const extractNestedBalance = (value: unknown): bigint => {
+  if (value === null || typeof value === 'undefined') return 0n;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint') {
+    return parseU64Like(value);
+  }
+
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if ('fields' in record && record.fields && typeof record.fields === 'object') {
+      const fields = record.fields as Record<string, unknown>;
+      if ('value' in fields) {
+        return extractNestedBalance(fields.value);
+      }
+    }
+    if ('value' in record) {
+      return extractNestedBalance(record.value);
+    }
+  }
+
+  return 0n;
+};
+
+const extractVectorLength = (value: unknown): number => {
+  if (Array.isArray(value)) return value.length;
+  if (value && typeof value === 'object' && 'fields' in value) {
+    const fields = (value as { fields?: Record<string, unknown> }).fields;
+    const vec = fields?.vec;
+    if (Array.isArray(vec)) return vec.length;
+  }
+  return 0;
+};
+
+const toDisplayAmount = (value: bigint, decimals: number): number => {
+  if (value <= 0n) return 0;
+  return Number(value) / 10 ** decimals;
+};
+
+const decimalToBaseUnits = (amount: string, decimals: number): bigint => {
+  const normalized = amount.trim();
+  if (!normalized) return 0n;
+  if (!/^\d+(\.\d+)?$/.test(normalized)) {
+    throw new Error('Amount must be a positive number');
+  }
+
+  const [wholePart, fractionalPart = ''] = normalized.split('.');
+  const normalizedFraction = fractionalPart.slice(0, decimals).padEnd(decimals, '0');
+  const full = `${wholePart}${normalizedFraction}`.replace(/^0+/, '') || '0';
+  return BigInt(full);
+};
+
+const formatRawTokenAmount = (rawAmount: string, decimals: number): string => {
+  const value = toDisplayAmount(parseU64Like(rawAmount), decimals);
+  return value.toLocaleString(undefined, { maximumFractionDigits: Math.min(9, decimals) });
+};
+
+const readCustodyCoinBalance = async (
+  client: SuiClient,
+  walletDynamicFields: DynamicFieldRef[],
+  coinType: string
+): Promise<bigint> => {
+  if (!coinType) return 0n;
+
+  const normalizedCoinType = coinType.toLowerCase();
+  let total = 0n;
+
+  const typedField = walletDynamicFields.find((field) => {
+    const nameValue = field.name?.value;
+    return typeof nameValue === 'string' && nameValue.toLowerCase() === normalizedCoinType;
+  });
+
+  if (typedField?.objectId) {
+    try {
+      const fieldObject = await client.getObject({
+        id: typedField.objectId,
+        options: { showContent: true }
+      });
+
+      if (fieldObject.data?.content && 'fields' in fieldObject.data.content) {
+        const fieldContent = fieldObject.data.content.fields as Record<string, unknown>;
+        total += extractNestedBalance(fieldContent.value);
+      }
+    } catch (error) {
+      debugLog('Failed to read typed custody balance field', { coinType, error });
+    }
+  }
+
+  const legacyCoinFields = walletDynamicFields.filter(
+    (field) =>
+      typeof field.objectType === 'string' &&
+      field.objectType.toLowerCase().includes(`::coin::coin<${normalizedCoinType}>`)
+  );
+
+  if (legacyCoinFields.length > 0) {
+    const legacyCoinObjects = await Promise.all(
+      legacyCoinFields.map((field) =>
+        client.getObject({
+          id: field.objectId,
+          options: { showContent: true }
+        })
+      )
+    );
+
+    for (const coinObject of legacyCoinObjects) {
+      if (coinObject.data?.content && 'fields' in coinObject.data.content) {
+        const coinFields = coinObject.data.content.fields as Record<string, unknown>;
+        total += parseU64Like(coinFields.balance);
+      }
+    }
+  }
+
+  return total;
 };
 
 // Utility function to extract configuration from transaction inputs
@@ -220,6 +361,27 @@ const checkMemberDepositStatus = async (
 
 // Constants for time calculations
 const MS_PER_DAY = 86400000; // 24 * 60 * 60 * 1000
+const SOURCE_ASSET_DECIMALS: Record<EmberSourceAsset, number> = {
+  SUI: 9,
+  USDC: 6,
+  USDT: 6,
+  SUI_USDE: 9,
+};
+
+const SOURCE_ASSET_LABELS: Record<EmberSourceAsset, string> = {
+  SUI: 'SUI',
+  USDC: 'USDC',
+  USDT: 'USDT',
+  SUI_USDE: 'suiUSDe',
+};
+
+const EMBER_SOURCE_PRIORITY: EmberSourceAsset[] = ['USDC', 'SUI_USDE', 'USDT', 'SUI'];
+
+const formatAmountForInput = (amount: number, maxFractionDigits: number): string => {
+  if (!Number.isFinite(amount) || amount <= 0) return '';
+  const fixed = amount.toFixed(maxFractionDigits);
+  return fixed.replace(/\.?0+$/, '');
+};
 
 // Define types for SUI object field values
 type SuiFieldValue = string | number | boolean | null | undefined | SuiFieldValue[] | Record<string, unknown>;
@@ -330,6 +492,18 @@ interface CircleCreatedEvent {
   cycle_length: string;
 }
 
+interface EmberActionSnapshot {
+  operation: 'deposit' | 'redemption_request';
+  digest: string;
+  status?: string;
+  lifecycle: EmberOperationLifecycle;
+  timestampMs: number;
+  sourceAsset?: EmberSourceAsset;
+  sourceAmountRaw?: string;
+  receiptAmountRaw?: string;
+  note?: string;
+}
+
 // Skeleton component for loading state
 const ManageCircleSkeleton = () => (
   <div className="animate-pulse">
@@ -438,11 +612,77 @@ export default function ManageCircle() {
   const [payoutCoinType, setPayoutCoinType] = useState<'sui' | 'stablecoin'>('sui');
   const [payoutProgress, setPayoutProgress] = useState<{current: number, total: number}>({current: 0, total: 0});
 
-  // Yield management state
-  const [selectedYieldStrategy, setSelectedYieldStrategy] = useState<YieldStrategy>('conservative');
-  const [isChangingYieldStrategy, setIsChangingYieldStrategy] = useState(false);
-  const [trackedYields, setTrackedYields] = useState<TrackedYieldData[]>([]);
-  const [isLoadingYieldData, setIsLoadingYieldData] = useState(false);
+  const [emberSourceAsset, setEmberSourceAsset] = useState<EmberSourceAsset>('SUI_USDE');
+  const [emberDepositAmount, setEmberDepositAmount] = useState('');
+  const [emberRedeemAmount, setEmberRedeemAmount] = useState('');
+  const [isSubmittingEmberDeposit, setIsSubmittingEmberDeposit] = useState(false);
+  const [isSubmittingEmberRedemption, setIsSubmittingEmberRedemption] = useState(false);
+  const [lastEmberDigest, setLastEmberDigest] = useState<string | null>(null);
+  const [emberActionSnapshot, setEmberActionSnapshot] = useState<EmberActionSnapshot | null>(null);
+  const [emberActionHistory, setEmberActionHistory] = useState<EmberActionSnapshot[]>([]);
+
+  const emberSourceBalances = useMemo<Record<EmberSourceAsset, number>>(() => {
+    const stablecoinType = (circle?.custody?.stablecoinType || '').toUpperCase();
+    const stablecoinBalance = circle?.custody?.stablecoinBalance || 0;
+    return {
+      SUI: circle?.custody?.suiBalance || 0,
+      USDC: stablecoinType === 'USDC' ? stablecoinBalance : 0,
+      USDT: stablecoinType === 'USDT' ? stablecoinBalance : 0,
+      SUI_USDE: circle?.custody?.suiUsdeBalance || 0,
+    };
+  }, [
+    circle?.custody?.stablecoinType,
+    circle?.custody?.stablecoinBalance,
+    circle?.custody?.suiBalance,
+    circle?.custody?.suiUsdeBalance,
+  ]);
+
+  const emberDepositSourceCards = useMemo(() => {
+    return EMBER_SOURCE_PRIORITY.map((asset) => {
+      const balance = emberSourceBalances[asset] || 0;
+      const requiresSwap = asset !== 'SUI_USDE';
+      const routeSummary = requiresSwap
+        ? `${SOURCE_ASSET_LABELS[asset]} -> suiUSDe -> Ember Vault`
+        : 'suiUSDe -> Ember Vault';
+      return {
+        asset,
+        balance,
+        available: balance > 0,
+        label: SOURCE_ASSET_LABELS[asset],
+        requiresSwap,
+        routeSummary,
+      };
+    });
+  }, [emberSourceBalances]);
+
+  const recommendedEmberSource = useMemo<EmberSourceAsset | null>(() => {
+    const available = emberDepositSourceCards.find((card) => card.available);
+    return available?.asset || null;
+  }, [emberDepositSourceCards]);
+
+  const selectedEmberSourceCard = useMemo(() => {
+    return emberDepositSourceCards.find((card) => card.asset === emberSourceAsset) || emberDepositSourceCards[0];
+  }, [emberDepositSourceCards, emberSourceAsset]);
+
+  const emberDepositPrimaryCta = selectedEmberSourceCard?.requiresSwap
+    ? `Convert ${selectedEmberSourceCard.label} to suiUSDe and Deposit`
+    : 'Deposit suiUSDe to Ember Vault';
+
+  const emberDepositDisabledReason = !circle?.custody?.walletId
+    ? 'Custody wallet is unavailable.'
+    : !circle?.isActive
+      ? 'Circle must be active to deploy funds.'
+      : circle?.paused
+        ? 'Circle is paused. Resume before deploying.'
+        : (selectedEmberSourceCard?.balance || 0) <= 0
+          ? `No ${selectedEmberSourceCard?.label || 'source'} balance available.`
+          : null;
+
+  useEffect(() => {
+    if (!recommendedEmberSource) return;
+    if ((emberSourceBalances[emberSourceAsset] || 0) > 0) return;
+    setEmberSourceAsset(recommendedEmberSource);
+  }, [recommendedEmberSource, emberSourceBalances, emberSourceAsset]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -484,54 +724,6 @@ export default function ManageCircle() {
       setNewMaxMembersValue(circle.maxMembers);
     }
   }, [circle]);
-
-  // Load existing yield configuration when circle is loaded
-  useEffect(() => {
-    if (circle && id) {
-      fetchYieldConfiguration();
-    }
-  }, [circle, id]);
-
-  // Function to fetch yield data - memoized so it can be called from other functions
-  const fetchYieldData = useCallback(async () => {
-    if (!userAddress) {
-      setIsLoadingYieldData(false);
-      return;
-    }
-
-    setIsLoadingYieldData(true);
-    try {
-      // Set the correct package ID for this circle before fetching yield data
-      debugLog('Setting yield tracking service package ID', circlePackageId);
-      yieldTrackingService.setPackageId(circlePackageId);
-      
-      // Use the new dynamic method with custody wallet and circle filtering
-      debugLog('Fetching yield data for circle', { 
-        userAddress: shortenAddress(userAddress), 
-        circleId: id, 
-        custodyWalletId: circle?.custody?.walletId 
-      });
-      
-      const allYieldData = await yieldTrackingService.getAllUserYieldData(
-        userAddress, 
-        circle?.custody?.walletId, // custody wallet ID
-        id as string // circle ID
-      );
-      
-      debugLog('Yield data loaded', { count: allYieldData.length });
-      setTrackedYields(allYieldData);
-    } catch (err) {
-      console.error('Error fetching yield data:', err);
-      setTrackedYields([]);
-    } finally {
-      setIsLoadingYieldData(false);
-    }
-  }, [userAddress, id, circle?.custody?.walletId, circlePackageId]);
-
-  // Fetch yield data when user address is available
-  useEffect(() => {
-    fetchYieldData();
-  }, [fetchYieldData]); // Use fetchYieldData as dependency since it's memoized
 
   // Add request deduplication
   const [isFetching, setIsFetching] = useState(false);
@@ -1008,16 +1200,24 @@ export default function ManageCircle() {
           const walletId = (custodyEvent?.parsedJson as { wallet_id?: string })?.wallet_id;
           
           if (walletId) {
+              const emberConfig = getCurrentEmberConfig();
+              const emberVaultId = emberConfig.suiUsdeVaultId || '';
+              const shouldLoadEmberVaultState = getCurrentNetwork() === 'mainnet' && !!emberVaultId;
+
               // Parallel fetch: wallet data and dynamic fields
-              const [walletData, walletDynamicFields] = await Promise.all([
+              const [walletData, walletDynamicFields, emberVaultData] = await Promise.all([
                 client.getObject({ id: walletId, options: { showContent: true } }),
-                client.getDynamicFields({ parentId: walletId })
+                client.getDynamicFields({ parentId: walletId }),
+                shouldLoadEmberVaultState
+                  ? client.getObject({ id: emberVaultId, options: { showContent: true } })
+                  : Promise.resolve(null)
               ]);
             if (walletData.data?.content && 'fields' in walletData.data.content) {
                   const wf = walletData.data.content.fields as Record<string, SuiFieldValue>; 
                   // Access nested fields safely
                   const stablecoinConfigFields = wf.stablecoin_config && typeof wf.stablecoin_config === 'object' && wf.stablecoin_config !== null && 'fields' in wf.stablecoin_config ? wf.stablecoin_config.fields as Record<string, unknown> : null;
                   const balanceFields = wf.balance && typeof wf.balance === 'object' && wf.balance !== null && 'fields' in wf.balance ? wf.balance.fields as Record<string, unknown> : null;
+                  const dynamicFields = walletDynamicFields.data as unknown as DynamicFieldRef[];
                   
                   // Get the main balance - this represents contributions
                   const contributionsBalance = balanceFields?.value ? Number(balanceFields.value) / 1e9 : 0;
@@ -1027,10 +1227,10 @@ export default function ManageCircle() {
                   
                   // Process security deposits from dynamic fields (using pre-fetched data)
                   try {
-                    debugLog('Custody wallet dynamic fields', { count: walletDynamicFields.data.length });
+                    debugLog('Custody wallet dynamic fields', { count: dynamicFields.length });
                     
                     // Look for coin objects in the dynamic fields
-                    for (const field of walletDynamicFields.data) {
+                    for (const field of dynamicFields) {
                       if (field.objectType && typeof field.objectType === 'string' && 
                           field.objectType.includes('::coin::Coin<0x2::sui::SUI>')) {
                         
@@ -1054,6 +1254,77 @@ export default function ManageCircle() {
                     // Fallback to the hardcoded security deposit value
                     securityDeposits = 0.163488;
                   }
+
+                  const coinTypes = getCurrentCoinTypes();
+                  const tokens = getCurrentTokens();
+                  const suiUsdeCoinType = coinTypes.SUI_USDE || tokens.SUI_USDE || '';
+                  const emberReceiptCoinType = emberConfig.receiptCoinType || '';
+
+                  const [suiUsdeBalanceRaw, emberReceiptBalanceRaw] = await Promise.all([
+                    readCustodyCoinBalance(client, dynamicFields, suiUsdeCoinType),
+                    readCustodyCoinBalance(client, dynamicFields, emberReceiptCoinType)
+                  ]);
+
+                  let emberGlobalPendingRequests = 0;
+                  let emberPendingRedeemSharesRaw = 0n;
+                  let emberPendingRedeemRequests = 0;
+
+                  if (emberVaultData && emberVaultData.data?.content && 'fields' in emberVaultData.data.content) {
+                    const vaultFields = emberVaultData.data.content.fields as Record<string, unknown>;
+                    const pendingWithdrawals = vaultFields.pending_withdrawals &&
+                      typeof vaultFields.pending_withdrawals === 'object' &&
+                      vaultFields.pending_withdrawals !== null &&
+                      'fields' in vaultFields.pending_withdrawals
+                        ? (vaultFields.pending_withdrawals as { fields: Record<string, unknown> }).fields
+                        : null;
+
+                    const pendingTable = pendingWithdrawals?.table &&
+                      typeof pendingWithdrawals.table === 'object' &&
+                      pendingWithdrawals.table !== null &&
+                      'fields' in pendingWithdrawals.table
+                        ? (pendingWithdrawals.table as { fields: Record<string, unknown> }).fields
+                        : null;
+
+                    emberGlobalPendingRequests = Number(parseU64Like(pendingTable?.size));
+
+                    const accountsField = vaultFields.accounts &&
+                      typeof vaultFields.accounts === 'object' &&
+                      vaultFields.accounts !== null &&
+                      'fields' in vaultFields.accounts
+                        ? (vaultFields.accounts as { fields: Record<string, unknown> }).fields
+                        : null;
+                    const accountsId = accountsField?.id &&
+                      typeof accountsField.id === 'object' &&
+                      accountsField.id !== null &&
+                      'id' in accountsField.id
+                        ? ((accountsField.id as { id?: string }).id || '')
+                        : '';
+
+                    const circleAdminAddress = typeof fields.admin === 'string' ? fields.admin : '';
+                    if (accountsId && circleAdminAddress) {
+                      try {
+                        const accountField = await client.getDynamicFieldObject({
+                          parentId: accountsId,
+                          name: { type: 'address', value: circleAdminAddress }
+                        });
+
+                        if (accountField.data?.content && 'fields' in accountField.data.content) {
+                          const accountWrapper = accountField.data.content.fields as Record<string, unknown>;
+                          const accountFields = accountWrapper.value &&
+                            typeof accountWrapper.value === 'object' &&
+                            accountWrapper.value !== null &&
+                            'fields' in accountWrapper.value
+                              ? (accountWrapper.value as { fields: Record<string, unknown> }).fields
+                              : accountWrapper;
+
+                          emberPendingRedeemSharesRaw = parseU64Like(accountFields.total_pending_withdrawal_shares);
+                          emberPendingRedeemRequests = extractVectorLength(accountFields.pending_withdrawal_requests);
+                        }
+                      } catch (error) {
+                        debugLog('No Ember account pending-redemption record found for admin yet', error);
+                      }
+                    }
+                  }
                   
                   debugLog('Custody wallet info', {
                     walletId: shortenAddress(walletId),
@@ -1070,7 +1341,14 @@ export default function ManageCircle() {
                       stablecoinType: (stablecoinConfigFields?.target_coin_type as string) || 'USDC',
                       stablecoinBalance: wf.stablecoin_balance ? Number(wf.stablecoin_balance) / 1e8 : 0,
                       suiBalance: contributionsBalance, // This is for regular contributions
-                      securityDeposits: securityDeposits
+                      securityDeposits: securityDeposits,
+                      suiUsdeBalance: toDisplayAmount(suiUsdeBalanceRaw, 9),
+                      emberReceiptBalance: toDisplayAmount(emberReceiptBalanceRaw, 9),
+                      emberPendingRedeemShares: toDisplayAmount(emberPendingRedeemSharesRaw, 9),
+                      emberPendingRedeemRequests: emberPendingRedeemRequests,
+                      emberGlobalPendingRequests: emberGlobalPendingRequests,
+                      emberHasPendingRedemption:
+                        emberPendingRedeemRequests > 0 || emberPendingRedeemSharesRaw > 0n
                     }
                   } : prev);
             }
@@ -1120,15 +1398,6 @@ export default function ManageCircle() {
     //   setLoading(false);
     // }
   }, [id]);
-
-  // Function to refresh all data after yield configuration is created
-  const handleYieldConfigCreated = useCallback(() => {
-    // Refresh all relevant data after yield configuration is created
-    fetchYieldData();
-    fetchCustodyWalletSuiBalance();
-    fetchCustodyWalletUsdcBalance();
-    fetchCircleDetails(); // This will update the circle data including security deposits
-  }, [fetchYieldData]);
 
   // Call the admin_approve_member function on the blockchain
   const callAdminApproveMember = async (circleId: string, memberAddress: string): Promise<boolean> => {
@@ -2133,7 +2402,7 @@ export default function ManageCircle() {
     currencyType?: string;
     className?: string;
   }) => {
-    const isPriceStale = priceService.getFetchStatus() === 'error';
+    const isPriceStale = priceService.isPriceStale();
     
     console.log('CurrencyDisplay received values:', { usd, sui, currencyType });
     
@@ -2266,17 +2535,24 @@ export default function ManageCircle() {
     return `${id.slice(0, 10)}...${id.slice(-8)}`;
   };
 
-  // Add this new function to toggle the auto swap setting on the blockchain
-  const toggleAutoSwap = async (enabled: boolean) => {
+  // Circle-level routing policy toggle persisted on-chain.
+  // We currently reuse the existing `toggleAutoSwap` endpoint for this flag.
+  const toggleNativeSuiOptIn = async (enabled: boolean) => {
     try {
       if (!account || !circle) {
         toast.error('Account or circle information not available');
         return false;
       }
+
+      // Lock token mode changes while the current cycle is active.
+      if (circle.isActive && !circle.paused) {
+        toast.error('Token mode is locked during an active cycle. Wait until the cycle is completed and payouts are finished.');
+        return false;
+      }
       
-      toast.loading('Updating auto-swap configuration...', { id: 'toggle-auto-swap' });
+      toast.loading('Updating circle token mode...', { id: 'toggle-native-sui-optin' });
       
-      // Call the API to toggle auto-swap setting on blockchain
+      // Reuse existing API action that persists the underlying config flag.
       const response = await fetch('/api/zkLogin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2292,21 +2568,35 @@ export default function ManageCircle() {
       const result = await response.json();
       
       if (!response.ok) {
-        console.error('Failed to toggle auto-swap:', result);
-        toast.error(result.error || 'Failed to update auto-swap configuration', { id: 'toggle-auto-swap' });
+        console.error('Failed to update circle token mode:', result);
+        toast.error(result.error || 'Failed to update circle token mode', { id: 'toggle-native-sui-optin' });
         return false;
       }
       
-      // Update toast on success
-      toast.success('Successfully updated auto-swap setting', { id: 'toggle-auto-swap' });
+      console.log(
+        '[analytics] native_sui_opt_in_toggled',
+        JSON.stringify({
+          circleId: circle.id,
+          enabled,
+          toggledBy: account.userAddr,
+          timestamp: new Date().toISOString(),
+        })
+      );
+
+      toast.success(
+        enabled
+          ? 'SUI mode enabled. Once the circle is active, contributions and payouts will run in SUI for all members.'
+          : 'USDC mode restored. Contributions and payouts will run in USDC.',
+        { id: 'toggle-native-sui-optin' }
+      );
       
       // Update local state
       setCircle(prevCircle => prevCircle ? { ...prevCircle, autoSwapEnabled: enabled } : null);
       
       return true;
     } catch (error) {
-      console.error('Error toggling auto-swap:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to update configuration', { id: 'toggle-auto-swap' });
+      console.error('Error updating circle token mode:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to update circle token mode', { id: 'toggle-native-sui-optin' });
       return false;
     }
   };
@@ -2577,8 +2867,8 @@ export default function ManageCircle() {
     }
   }, [circle, usdcSecurityDepositBalance, usdcContributionBalance, suiPrice]); // suiPrice is a dependency for priceService
 
-  // Add this new component before the return statement
-  const StablecoinSettings = ({ 
+  // Circle routing configuration card
+  const CircleRoutingSettings = ({ 
     circle, 
     totalLocalDisplay,
     securityDepositLocalDisplay,
@@ -2589,60 +2879,63 @@ export default function ManageCircle() {
     securityDepositLocalDisplay: string | null,
     contributionLocalDisplay: string | null
   }) => {
-    const [isEnabled, setIsEnabled] = useState(circle.autoSwapEnabled);
-    const [showSwapForm, setShowSwapForm] = useState(false);
+    const [allowNativeSui, setAllowNativeSui] = useState(circle.autoSwapEnabled);
     const [isConfiguring, setIsConfiguring] = useState(false);
+    const isTokenModeLockedForActiveCycle = circle.isActive && !circle.paused;
     
-    // Add useEffect to sync internal state with prop changes
+    // Keep local toggle state synchronized with on-chain circle config.
     useEffect(() => {
-      if (circle.autoSwapEnabled !== isEnabled) {
-        console.log(`StablecoinSettings: Syncing internal state (${isEnabled}) with prop (${circle.autoSwapEnabled})`);
-        setIsEnabled(circle.autoSwapEnabled);
+      if (circle.autoSwapEnabled !== allowNativeSui) {
+        console.log(`CircleRoutingSettings: Syncing internal state (${allowNativeSui}) with prop (${circle.autoSwapEnabled})`);
+        setAllowNativeSui(circle.autoSwapEnabled);
       }
-    }, [circle.autoSwapEnabled, isEnabled]); // Depend on prop and internal state
+    }, [circle.autoSwapEnabled, allowNativeSui]);
     
-    // Function to handle toggle directly on blockchain
-    const handleToggleAutoSwap = async () => {
-      // Show confirmation dialog first
-      const newState = !isEnabled;
+    const handleToggleNativeSuiOptIn = async () => {
+      if (isTokenModeLockedForActiveCycle) {
+        toast.error('Token mode is locked during an active cycle. Wait until the cycle is completed and payouts are finished.');
+        return;
+      }
+
+      const newState = !allowNativeSui;
       const actionText = newState ? 'enable' : 'disable';
       
       setConfirmationModal({
         isOpen: true,
-        title: `${newState ? 'Enable' : 'Disable'} Auto-Swap`,
+        title: `${newState ? 'Enable' : 'Disable'} SUI Circle Mode`,
         message: (
           <div>
-            <p>Are you sure you want to {actionText} automatic stablecoin conversion?</p>
+            <p>Are you sure you want to {actionText} SUI circle mode for this circle?</p>
             {newState ? (
               <div className="mt-2 text-sm">
                 <p>When enabled:</p>
                 <ul className="list-disc pl-5 mt-1">
-                  <li>Members can use DEX swaps for contributions</li>
-                  <li>SUI will be automatically converted to USDC</li>
-                  <li>This helps protect against market volatility</li>
+                  <li>Once the circle is active, all member contributions run in SUI</li>
+                  <li>Payouts for active cycles are processed in SUI</li>
+                  <li>This is a circle-wide mode (no per-member token override)</li>
                 </ul>
               </div>
             ) : (
               <div className="mt-2 text-sm text-amber-700">
                 <p className="font-semibold">When disabled:</p>
                 <ul className="list-disc pl-5 mt-1">
-                  <li>Direct USDC deposits will not be available</li>
-                  <li>Funds will remain in SUI and be subject to market volatility</li>
-                  <li>Members will only be able to contribute using SUI</li>
+                  <li>Circle contributions and payouts return to USDC routing</li>
+                  <li>Members will not be able to contribute in SUI</li>
+                  <li>This is recommended for stable-value accounting</li>
                 </ul>
               </div>
             )}
           </div>
         ),
-        confirmText: newState ? 'Enable Auto-Swap' : 'Disable Auto-Swap',
+        confirmText: newState ? 'Enable SUI Mode' : 'Disable SUI Mode',
         cancelText: 'Cancel',
         confirmButtonVariant: newState ? 'primary' : 'warning',
         onConfirm: async () => {
           setIsConfiguring(true);
           try {
-            const success = await toggleAutoSwap(newState);
+            const success = await toggleNativeSuiOptIn(newState);
             if (success) {
-              setIsEnabled(newState);
+              setAllowNativeSui(newState);
             }
           } finally {
             setIsConfiguring(false);
@@ -2651,26 +2944,45 @@ export default function ManageCircle() {
       });
     };
 
-    const handleSwapComplete = () => {
-      // Refresh wallet info
-      fetchCircleDetails();
-      fetchCustodyWalletSuiBalance();
-      fetchCustodyWalletUsdcBalance();
-    };
-
     // Function to refresh all balances
     const refreshAllBalances = () => {
       fetchCustodyWalletSuiBalance();
       fetchCustodyWalletUsdcBalance();
     };
 
+    const usdcTotalBalance = circle.custody?.stablecoinBalance && circle.custody.stablecoinBalance > 0
+      ? circle.custody.stablecoinBalance
+      : 0;
+    const suiTotalBalance = circle.custody?.suiBalance && circle.custody.suiBalance > 0
+      ? circle.custody.suiBalance
+      : 0;
+    const suiUsdEquivalent = suiTotalBalance * suiPrice;
+    const treasuryUsdTotal = usdcTotalBalance + suiUsdEquivalent;
+    const usdcTreasuryShare = treasuryUsdTotal > 0 ? (usdcTotalBalance / treasuryUsdTotal) * 100 : 0;
+    const usdcToSuiValueRatio = suiUsdEquivalent > 0 ? usdcTotalBalance / suiUsdEquivalent : null;
+    const activeMembersCount = contributionStatus.totalActiveInRotation > 0
+      ? contributionStatus.totalActiveInRotation
+      : members.filter((member) => member.status === 'active').length;
+    const expectedCycleUsdcContributions = activeMembersCount > 0 && circle.contributionAmountUsd > 0
+      ? activeMembersCount * circle.contributionAmountUsd
+      : 0;
+    const usdcContributedThisCycle = usdcContributionBalance ?? 0;
+    const usdcContributionProgress = expectedCycleUsdcContributions > 0
+      ? Math.min((usdcContributedThisCycle / expectedCycleUsdcContributions) * 100, 100)
+      : 0;
+    const treasuryHealth = usdcTreasuryShare >= 70
+      ? { label: 'Stable (USDC-heavy)', className: 'bg-emerald-100 text-emerald-700' }
+      : usdcTreasuryShare >= 40
+        ? { label: 'Balanced', className: 'bg-amber-100 text-amber-700' }
+        : { label: 'Volatile (SUI-heavy)', className: 'bg-rose-100 text-rose-700' };
+
 
     
     return (
       <div className="bg-white rounded-lg shadow-md overflow-hidden">
         <div className="bg-blue-50 px-4 py-3 border-b border-blue-100">
-          <h3 className="text-lg font-semibold text-blue-800">Stablecoin Auto-Swap Settings</h3>
-          <p className="text-sm text-blue-600">Configure automatic conversion of SUI to stablecoins to protect from market volatility</p>
+          <h3 className="text-lg font-semibold text-blue-800">Circle Token Routing Settings</h3>
+          <p className="text-sm text-blue-600">Set one circle-wide token mode for active-cycle contributions and payouts. Once a cycle is active, this mode is locked until cycle completion and payouts finish.</p>
         </div>
         
         <div className="p-4">
@@ -2683,29 +2995,36 @@ export default function ManageCircle() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h4 className="font-medium text-gray-800">Auto-Swap Funds</h4>
-                    <p className="text-sm text-gray-500">Automatically convert SUI to stablecoins when received</p>
+                    <h4 className="font-medium text-gray-800">Use SUI For Active Circle</h4>
+                    <p className="text-sm text-gray-500">If enabled, all active-cycle contributions and payouts run in SUI for all members. This setting cannot be changed mid-cycle.</p>
                   </div>
                   <div className="flex items-center">
                     <button
                       type="button"
-                      onClick={handleToggleAutoSwap}
-                      disabled={isConfiguring}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full ${isEnabled ? 'bg-blue-600' : 'bg-gray-200'} ${isConfiguring ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      onClick={handleToggleNativeSuiOptIn}
+                      disabled={isConfiguring || isTokenModeLockedForActiveCycle}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full ${allowNativeSui ? 'bg-blue-600' : 'bg-gray-200'} ${(isConfiguring || isTokenModeLockedForActiveCycle) ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
-                      <span className="sr-only">Enable auto-swap</span>
+                      <span className="sr-only">Enable SUI circle mode</span>
                       <span 
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${isEnabled ? 'translate-x-6' : 'translate-x-1'}`} 
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${allowNativeSui ? 'translate-x-6' : 'translate-x-1'}`} 
                       />
                     </button>
                   </div>
                 </div>
+
+                {isTokenModeLockedForActiveCycle && (
+                  <div className="bg-amber-50 p-3 rounded-lg border border-amber-200">
+                    <p className="text-sm text-amber-700">
+                      <strong>Locked:</strong> Token mode cannot be changed while cycle {circle.currentCycle} is active. Update it after the cycle completes and payouts are done.
+                    </p>
+                  </div>
+                )}
                 
                 <div className="bg-yellow-50 p-3 rounded-lg border border-yellow-200">
                   <p className="text-sm text-yellow-700">
-                    <strong>Note:</strong> When auto-swap is enabled, all members contributing to this circle will 
-                    have the option to use DEX swaps for their contributions. Additional DEX settings (coin type, 
-                    slippage, etc.) are configured by each member individually.
+                    <strong>Note:</strong> This setting applies to every member in the circle.
+                    Enabling SUI mode increases exposure to token price volatility.
                   </p>
                 </div>
                 
@@ -2737,21 +3056,125 @@ export default function ManageCircle() {
                       </button>
                     </div>
 
-                    {/* SUI Balance Section */}
                     <div className="space-y-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                          <p className="text-xs text-gray-500 mb-1">USDC/SUI Value Ratio</p>
+                          <p className="text-sm font-semibold text-gray-800">
+                            {usdcToSuiValueRatio !== null ? `${usdcToSuiValueRatio.toFixed(2)}x` : 'USDC-only treasury'}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-1">USDC share: {usdcTreasuryShare.toFixed(1)}%</p>
+                        </div>
+                        <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                          <p className="text-xs text-gray-500 mb-1">Treasury Health</p>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${treasuryHealth.className}`}>
+                              {treasuryHealth.label}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-1">USDC value is prioritized for payout stability.</p>
+                        </div>
+                      </div>
+
+                      {/* USDC Balance Section (Primary) */}
+                      <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                        <div className="flex justify-between items-start mb-3">
+                          <div>
+                            <p className="text-xs font-semibold text-blue-700 tracking-wide">USDC (PRIMARY)</p>
+                            <p className="text-3xl font-bold text-blue-900 leading-tight">
+                              {formatUSD(usdcTotalBalance)}
+                            </p>
+                            <p className="text-xs text-blue-700">
+                              USD equivalent (1 USDC ~= $1.00)
+                              {totalLocalDisplay && ` | Local ~= ${totalLocalDisplay}`}
+                            </p>
+                          </div>
+                          {fetchingUsdcBalance ? (
+                            <span className="text-xs text-gray-400">Updating...</span>
+                          ) : (
+                            <span className="text-xs bg-white text-blue-700 px-2 py-0.5 rounded-full border border-blue-200">
+                              Total: {formatUSD(usdcTotalBalance)}
+                            </span>
+                          )}
+                        </div>
+
+                        {!fetchingUsdcBalance && ((usdcContributionBalance !== null && usdcContributionBalance > 0) ||
+                                               (usdcSecurityDepositBalance !== null && usdcSecurityDepositBalance > 0)) && (
+                          <div className="space-y-2">
+                            {usdcContributionBalance !== null && usdcContributionBalance > 0 && (
+                              <div className="flex items-center">
+                                <div className="w-3 h-3 bg-green-300 rounded-sm mr-2"></div>
+                                <span className="text-sm text-gray-700">
+                                  {formatUSD(usdcContributionBalance)}
+                                  {contributionLocalDisplay && ` (~= ${contributionLocalDisplay})`}
+                                </span>
+                                <span className="ml-2 px-1.5 py-0.5 bg-green-100 text-green-800 text-xs font-medium rounded-full">
+                                  Contributions
+                                </span>
+                              </div>
+                            )}
+
+                            {usdcSecurityDepositBalance !== null && usdcSecurityDepositBalance > 0 && (
+                              <div className="flex items-center">
+                                <div className="w-3 h-3 bg-amber-300 rounded-sm mr-2"></div>
+                                <span className="text-sm text-gray-700">
+                                  {formatUSD(usdcSecurityDepositBalance)}
+                                  {securityDepositLocalDisplay && ` (~= ${securityDepositLocalDisplay})`}
+                                </span>
+                                <span className="ml-2 px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs font-medium rounded-full">
+                                  Security Deposits
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {!fetchingUsdcBalance && (usdcContributionBalance === null || usdcContributionBalance === 0) &&
+                          (usdcSecurityDepositBalance === null || usdcSecurityDepositBalance === 0) && (
+                          <p className="text-sm text-gray-500 mt-1">No USDC balances available</p>
+                        )}
+
+                        <div className="mt-3 p-3 bg-white rounded-lg border border-blue-100">
+                          <div className="flex justify-between items-center mb-2">
+                            <p className="text-xs font-semibold text-blue-700">USDC Contribution Trend</p>
+                            <p className="text-xs text-blue-700">{usdcContributionProgress.toFixed(1)}%</p>
+                          </div>
+                          <div className="h-2 bg-blue-100 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-blue-600 rounded-full transition-all duration-500"
+                              style={{ width: `${usdcContributionProgress}%` }}
+                            />
+                          </div>
+                          <div className="mt-2 flex justify-between text-xs text-gray-500">
+                            <span>{formatUSD(usdcContributedThisCycle)} tracked</span>
+                            <span>
+                              {expectedCycleUsdcContributions > 0
+                                ? `Target ${formatUSD(expectedCycleUsdcContributions)}`
+                                : 'Target unavailable'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* SUI Balance Section */}
                       <div className="p-3 bg-gray-50 rounded-lg">
                         <div className="flex justify-between items-center mb-2">
-                          <p className="text-xs text-gray-500 font-medium">SUI</p>
+                          <div>
+                            <p className="text-xs text-gray-500 font-medium">SUI</p>
+                            <p className="text-xs text-gray-500">
+                              USD equivalent at {formatUSD(suiPrice)} / SUI: {formatUSD(suiUsdEquivalent)}
+                            </p>
+                          </div>
                           {fetchingSuiBalance ? (
                             <span className="text-xs text-gray-400">Updating...</span>
                           ) : (
                             <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
-                              Total: {circle.custody.suiBalance > 0 ? circle.custody.suiBalance.toFixed(6) : '0'} SUI
+                              Total: {suiTotalBalance > 0 ? suiTotalBalance.toFixed(6) : '0'} SUI
                             </span>
                           )}
                         </div>
-                        
-                        {!fetchingSuiBalance && ((suiContributionBalance !== null && suiContributionBalance > 0) || 
+
+                        {!fetchingSuiBalance && ((suiContributionBalance !== null && suiContributionBalance > 0) ||
                                                (suiSecurityDepositBalance !== null && suiSecurityDepositBalance > 0)) && (
                           <div className="space-y-2">
                             {suiContributionBalance !== null && suiContributionBalance > 0 && (
@@ -2765,7 +3188,7 @@ export default function ManageCircle() {
                                 </span>
                               </div>
                             )}
-                            
+
                             {suiSecurityDepositBalance !== null && suiSecurityDepositBalance > 0 && (
                               <div className="flex items-center">
                                 <div className="w-3 h-3 bg-amber-300 rounded-sm mr-2"></div>
@@ -2777,100 +3200,41 @@ export default function ManageCircle() {
                                 </span>
                               </div>
                             )}
-                            
-                            {/* Show yield information if available */}
-                            {!isLoadingYieldData && trackedYields.length > 0 && (
-                              <div className="mt-2 p-2 bg-gradient-to-r from-green-50 to-blue-50 rounded-md border border-green-200">
+
+                            {(circle?.custody?.suiUsdeBalance || circle?.custody?.emberReceiptBalance || circle?.custody?.emberHasPendingRedemption) && (
+                              <div className="mt-2 p-2 bg-gradient-to-r from-amber-50 to-indigo-50 rounded-md border border-amber-200">
                                 <div className="flex items-center justify-between">
                                   <div className="flex items-center">
-                                    <div className="w-3 h-3 bg-gradient-to-r from-green-400 to-blue-400 rounded-full mr-2 animate-pulse"></div>
-                                    <span className="text-xs font-medium text-green-800">
-                                      Earning Yield: {trackedYields.reduce((sum, y) => sum + y.positionValue.current, 0).toFixed(6)} SUI
+                                    <div className="w-3 h-3 bg-gradient-to-r from-amber-400 to-indigo-400 rounded-full mr-2"></div>
+                                    <span className="text-xs font-medium text-amber-900">
+                                      Ember Exposure: {(circle?.custody?.suiUsdeBalance || 0).toFixed(4)} suiUSDe / {(circle?.custody?.emberReceiptBalance || 0).toFixed(4)} esuiUSDe
                                     </span>
                                   </div>
-                                  <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
-                                    +{trackedYields.reduce((sum, y) => sum + y.earnings.currentAPR, 0) / trackedYields.length}% APR
+                                  <span className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-medium">
+                                    {circle?.custody?.emberHasPendingRedemption ? 'Pending Redemption' : 'Vault Active'}
                                   </span>
-                                </div>
-                                <div className="mt-1 text-xs text-green-700">
-                                  Total Earnings: +{trackedYields.reduce((sum, y) => sum + y.earnings.totalEarned, 0).toFixed(6)} SUI
                                 </div>
                               </div>
                             )}
                           </div>
                         )}
-                        
-                        {!fetchingSuiBalance && (suiContributionBalance === null || suiContributionBalance === 0) && 
+
+                        {!fetchingSuiBalance && (suiContributionBalance === null || suiContributionBalance === 0) &&
                           (suiSecurityDepositBalance === null || suiSecurityDepositBalance === 0) && (
                           <div>
-                            {!isLoadingYieldData && trackedYields.length > 0 ? (
-                              <div className="p-2 bg-gradient-to-r from-green-50 to-blue-50 rounded-md border border-green-200">
+                            {(circle?.custody?.suiUsdeBalance || circle?.custody?.emberReceiptBalance) ? (
+                              <div className="p-2 bg-gradient-to-r from-amber-50 to-indigo-50 rounded-md border border-amber-200">
                                 <div className="flex items-center">
-                                  <div className="w-3 h-3 bg-gradient-to-r from-green-400 to-blue-400 rounded-full mr-2 animate-pulse"></div>
-                                  <span className="text-xs font-medium text-green-800">
-                                    Security deposits deployed in yield strategies
+                                  <div className="w-3 h-3 bg-gradient-to-r from-amber-400 to-indigo-400 rounded-full mr-2"></div>
+                                  <span className="text-xs font-medium text-amber-900">
+                                    Base SUI is fully deployed; custody currently tracks suiUSDe and Ember receipt balances.
                                   </span>
-                                </div>
-                                <div className="mt-1 text-xs text-green-700">
-                                  {trackedYields.reduce((sum, y) => sum + y.positionValue.current, 0).toFixed(6)} SUI earning 
-                                  +{(trackedYields.reduce((sum, y) => sum + y.earnings.currentAPR, 0) / trackedYields.length).toFixed(2)}% APR
                                 </div>
                               </div>
                             ) : (
-                          <p className="text-sm text-gray-500 mt-1">No SUI balances available</p>
+                              <p className="text-sm text-gray-500 mt-1">No SUI balances available</p>
                             )}
                           </div>
-                        )}
-                      </div>
-                      
-                      {/* USDC Balance Section */}
-                      <div className="p-3 bg-gray-50 rounded-lg">
-                        <div className="flex justify-between items-center mb-2">
-                          <p className="text-xs text-gray-500 font-medium">USDC</p>
-                          {fetchingUsdcBalance ? (
-                            <span className="text-xs text-gray-400">Updating...</span>
-                          ) : (
-                            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
-                              Total: {formatUSD(circle.custody.stablecoinBalance && circle.custody.stablecoinBalance > 0 ? circle.custody.stablecoinBalance : 0)}
-                              {totalLocalDisplay && ` (≈ ${totalLocalDisplay})`}
-                            </span>
-                          )}
-                        </div>
-                        
-                        {!fetchingUsdcBalance && ((usdcContributionBalance !== null && usdcContributionBalance > 0) || 
-                                               (usdcSecurityDepositBalance !== null && usdcSecurityDepositBalance > 0)) && (
-                          <div className="space-y-2">
-                            {usdcContributionBalance !== null && usdcContributionBalance > 0 && (
-                              <div className="flex items-center">
-                                <div className="w-3 h-3 bg-green-300 rounded-sm mr-2"></div>
-                                <span className="text-sm text-gray-700">
-                                  {formatUSD(usdcContributionBalance)}
-                                  {contributionLocalDisplay && ` (≈ ${contributionLocalDisplay})`}
-                                </span>
-                                <span className="ml-2 px-1.5 py-0.5 bg-green-100 text-green-800 text-xs font-medium rounded-full">
-                                  Contributions
-                                </span>
-                              </div>
-                            )}
-                            
-                            {usdcSecurityDepositBalance !== null && usdcSecurityDepositBalance > 0 && (
-                              <div className="flex items-center">
-                                <div className="w-3 h-3 bg-amber-300 rounded-sm mr-2"></div>
-                                <span className="text-sm text-gray-700">
-                                  {formatUSD(usdcSecurityDepositBalance)}
-                                  {securityDepositLocalDisplay && ` (≈ ${securityDepositLocalDisplay})`}
-                                </span>
-                                <span className="ml-2 px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs font-medium rounded-full">
-                                  Security Deposits
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        
-                        {!fetchingUsdcBalance && (usdcContributionBalance === null || usdcContributionBalance === 0) && 
-                          (usdcSecurityDepositBalance === null || usdcSecurityDepositBalance === 0) && (
-                          <p className="text-sm text-gray-500 mt-1">No USDC balances available</p>
                         )}
                       </div>
                     </div>
@@ -2878,27 +3242,6 @@ export default function ManageCircle() {
                 )}
               </div>
 
-              <div className="border-t border-gray-200 pt-4">
-                <div className="flex justify-between items-center mb-4">
-                  <h4 className="font-medium text-gray-800">Manual Swap</h4>
-                  <button
-                    type="button"
-                    onClick={() => setShowSwapForm(!showSwapForm)}
-                    className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-100 rounded-md hover:bg-blue-200"
-                  >
-                    {showSwapForm ? 'Hide Swap Form' : 'Show Swap Form'}
-                  </button>
-                </div>
-                
-                {showSwapForm && circle.custody?.walletId && (
-                  <StablecoinSwapForm 
-                    walletId={circle.custody.walletId} 
-                    circleId={circle.id}
-                    contributionAmount={circle.contributionAmount}
-                    onSwapComplete={handleSwapComplete}
-                  />
-                )}
-              </div>
             </div>
           )}
         </div>
@@ -4118,137 +4461,188 @@ export default function ManageCircle() {
     );
   };
 
-  // Handle yield strategy changes
-  const handleYieldStrategyChange = async (strategy: YieldStrategy) => {
-    if (!circle || isChangingYieldStrategy) return;
-    
-    setIsChangingYieldStrategy(true);
+  const formatEmberActionError = (error: unknown, fallback: string): string => {
+    if (error instanceof ZkLoginError) {
+      const tags = [error.operation, error.stage, error.code].filter(Boolean).join(' / ');
+      return tags ? `${tags}: ${error.message}` : error.message;
+    }
+    if (error instanceof Error && error.message) return error.message;
+    return fallback;
+  };
+
+  const recordEmberSnapshot = (snapshot: EmberActionSnapshot) => {
+    setEmberActionSnapshot(snapshot);
+    setEmberActionHistory((prev) => [snapshot, ...prev].slice(0, 8));
+  };
+
+  const handleUseMaxEmberDeposit = () => {
+    const maxAmount = selectedEmberSourceCard?.balance || 0;
+    if (maxAmount <= 0) return;
+    setEmberDepositAmount(formatAmountForInput(maxAmount, Math.min(SOURCE_ASSET_DECIMALS[emberSourceAsset], 6)));
+  };
+
+  const handleUseMaxEmberRedemption = () => {
+    const maxShares = circle?.custody?.emberReceiptBalance || 0;
+    if (maxShares <= 0) return;
+    setEmberRedeemAmount(formatAmountForInput(maxShares, 6));
+  };
+
+  const handleEmberDeposit = async () => {
+    if (!circle?.custody?.walletId) {
+      toast.error('Custody wallet information is missing.');
+      return;
+    }
+    if (!account) {
+      toast.error('Authentication required. Please login again.');
+      return;
+    }
+
+    let sourceAmountRaw = 0n;
     try {
-      // Use account from useAuth hook like other functions in this component
-      if (!account) {
-        toast.error('Authentication required. Please login again.');
-        setIsChangingYieldStrategy(false);
-        return;
-      }
-      
-      // Call the zkLogin API to create or update yield config
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'createYieldConfig',
-          account,
-          circleId: circle.id,
-          strategy,
-          autoCompound: true,
-          network: getCurrentNetwork()
-        }),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        console.error('Failed to update yield strategy:', result);
-        const errorDetail = parseMoveError(result.error || '');
-        toast.error(`Failed to update yield strategy: ${errorDetail.message}`);
-        setIsChangingYieldStrategy(false);
-        return;
-      }
-
-      // Update local state
-      setSelectedYieldStrategy(strategy);
-      
-      toast.success(`Yield strategy updated to ${strategy}! Transaction: ${result.digest?.slice(0, 8)}...`);
-
-      console.log('Yield strategy change successful:', {
-        strategy,
-        transactionDigest: result.digest,
-        gasUsed: result.gasUsed
-      });
-
+      sourceAmountRaw = decimalToBaseUnits(emberDepositAmount, SOURCE_ASSET_DECIMALS[emberSourceAsset]);
     } catch (error) {
-      console.error('Error changing yield strategy:', error);
-      toast.error('Failed to update yield strategy. Please try again.');
+      toast.error(error instanceof Error ? error.message : 'Invalid deposit amount');
+      return;
+    }
+
+    if (sourceAmountRaw <= 0n) {
+      toast.error('Enter a deposit amount greater than zero.');
+      return;
+    }
+
+    const sourceBalance = selectedEmberSourceCard?.balance || 0;
+    const sourceBalanceRaw = decimalToBaseUnits(
+      formatAmountForInput(sourceBalance, SOURCE_ASSET_DECIMALS[emberSourceAsset]) || '0',
+      SOURCE_ASSET_DECIMALS[emberSourceAsset]
+    );
+
+    if (sourceBalanceRaw <= 0n) {
+      toast.error(`No ${SOURCE_ASSET_LABELS[emberSourceAsset]} balance available in custody.`);
+      return;
+    }
+
+    if (sourceAmountRaw > sourceBalanceRaw) {
+      toast.error(`Amount exceeds available ${SOURCE_ASSET_LABELS[emberSourceAsset]} balance.`);
+      return;
+    }
+
+    setIsSubmittingEmberDeposit(true);
+    const toastId = 'ember-deposit';
+    try {
+      toast.loading(
+        selectedEmberSourceCard?.requiresSwap
+          ? `Converting ${selectedEmberSourceCard.label} to suiUSDe and depositing...`
+          : 'Depositing suiUSDe to Ember vault...',
+        { id: toastId }
+      );
+      const zkLoginClient = ZkLoginClient.getInstance();
+      const result = await zkLoginClient.deployToEmberVault(account, {
+        circleId: circle.id,
+        walletId: circle.custody.walletId,
+        sourceAsset: emberSourceAsset,
+        sourceAmount: sourceAmountRaw.toString(),
+        targetCoinType: 'SUI_USDE',
+      });
+
+      setLastEmberDigest(result.digest);
+      recordEmberSnapshot({
+        operation: 'deposit',
+        digest: result.digest,
+        status: result.status,
+        lifecycle: result.lifecycle,
+        timestampMs: Date.now(),
+        sourceAsset: result.sourceAsset,
+        sourceAmountRaw: result.sourceAmount,
+        note: result.lifecycle.partialCompletion
+          ? 'Swap completed but vault deposit is partial; custody now holds intermediate suiUSDe.'
+          : 'Vault deposit completed and Ember receipt was redeposited to custody.',
+      });
+      setEmberDepositAmount('');
+      if (result.lifecycle.partialCompletion) {
+        toast.error(`Partial completion: ${result.lifecycle.status}`, { id: toastId });
+      } else {
+        toast.success(`Deposit submitted. ${result.lifecycle.status}`, { id: toastId });
+      }
+      await fetchCircleDetails();
+    } catch (error) {
+      const message = formatEmberActionError(error, 'Failed to deploy custody balance to Ember vault.');
+      toast.error(message, { id: toastId });
+      if (error instanceof ZkLoginError && error.requireRelogin) {
+        router.push('/');
+      }
     } finally {
-      setIsChangingYieldStrategy(false);
+      setIsSubmittingEmberDeposit(false);
     }
   };
 
-  // Calculate total security deposits available for yield (returns number)
-  const calculateTotalSecurityDeposits = () => {
-    if (!circle) return 0;
-    
-    // Return total security deposits in SUI equivalent for yield calculations
-    // This reflects what's actually deposited and available for yield generation
-    let totalDepositsSui = 0;
-    
-    // Add actual SUI security deposits from custody wallet
-    if (suiSecurityDepositBalance) {
-      totalDepositsSui += suiSecurityDepositBalance;
+  const handleEmberRequestRedemption = async () => {
+    if (!circle?.custody?.walletId) {
+      toast.error('Custody wallet information is missing.');
+      return;
     }
-    
-    // Add actual USDC security deposits from custody wallet (convert to SUI equivalent)
-    if (usdcSecurityDepositBalance && suiPrice) {
-      totalDepositsSui += usdcSecurityDepositBalance / suiPrice;
+    if (!account) {
+      toast.error('Authentication required. Please login again.');
+      return;
     }
-    
-    console.log('Security deposits calculation (SUI equivalent):', {
-      suiSecurityDepositBalance,
-      usdcSecurityDepositBalance,
-      suiPrice,
-      totalCalculatedSui: totalDepositsSui
-    });
-    
-    return totalDepositsSui;
-  };
 
-  // Function to fetch existing yield configuration
-  const fetchYieldConfiguration = async () => {
-    if (!id) return;
-    
+    let receiptAmountRaw = 0n;
     try {
-      const client = new SuiClient({ url: getCurrentRpcUrl() });
-      
-      // Query for YieldConfigCreated events for this circle
-      const yieldEvents = await client.queryEvents({
-        query: { MoveEventType: `${circlePackageId}::njangi_yield_integration::YieldConfigCreated` },
-        limit: 50
-      });
-      
-      // Find the most recent event for this circle
-      const circleYieldEvent = yieldEvents.data
-        .filter(event => (event.parsedJson as { circle_id?: string })?.circle_id === id)
-        .sort((a, b) => Number(b.timestampMs) - Number(a.timestampMs))[0];
-      
-      if (circleYieldEvent?.parsedJson) {
-        const eventData = circleYieldEvent.parsedJson as {
-          config_id: string;
-          strategy: number;
-          navi_allocation: string;
-          cetus_allocation: string;
-        };
-        const strategyNumber = Number(eventData.strategy);
-        
-        // Map strategy number to strategy name
-        const strategyMap: Record<number, YieldStrategy> = {
-          0: 'conservative',  // 100% NAVI
-          1: 'balanced',      // 70% NAVI, 30% Cetus  
-          2: 'aggressive'     // 50% NAVI, 50% Cetus
-        };
-        
-        const strategyName = strategyMap[strategyNumber] || 'conservative';
-        setSelectedYieldStrategy(strategyName);
-        
-        console.log('Loaded existing yield configuration:', {
-          configId: eventData.config_id,
-          strategy: strategyName,
-          naviAllocation: eventData.navi_allocation,
-          cetusAllocation: eventData.cetus_allocation
-        });
-      }
+      receiptAmountRaw = decimalToBaseUnits(emberRedeemAmount, 9);
     } catch (error) {
-      console.error('Error fetching yield configuration:', error);
-      // Keep default conservative strategy if fetch fails
+      toast.error(error instanceof Error ? error.message : 'Invalid redemption amount');
+      return;
+    }
+
+    if (receiptAmountRaw <= 0n) {
+      toast.error('Enter a redemption amount greater than zero.');
+      return;
+    }
+
+    const receiptBalanceRaw = decimalToBaseUnits(
+      formatAmountForInput(circle?.custody?.emberReceiptBalance || 0, 9) || '0',
+      9
+    );
+    if (receiptBalanceRaw <= 0n) {
+      toast.error('No Ember receipt balance is available for redemption.');
+      return;
+    }
+    if (receiptAmountRaw > receiptBalanceRaw) {
+      toast.error('Requested redemption amount exceeds available receipt balance.');
+      return;
+    }
+
+    setIsSubmittingEmberRedemption(true);
+    const toastId = 'ember-redeem';
+    try {
+      toast.loading('Submitting Ember redemption request...', { id: toastId });
+      const zkLoginClient = ZkLoginClient.getInstance();
+      const result = await zkLoginClient.requestEmberRedemption(account, {
+        circleId: circle.id,
+        walletId: circle.custody.walletId,
+        receiptAmount: receiptAmountRaw.toString(),
+      });
+
+      setLastEmberDigest(result.digest);
+      recordEmberSnapshot({
+        operation: 'redemption_request',
+        digest: result.digest,
+        status: result.status,
+        lifecycle: result.lifecycle,
+        timestampMs: Date.now(),
+        receiptAmountRaw: result.receiptAmount,
+        note: result.message,
+      });
+      setEmberRedeemAmount('');
+      toast.success(`Redemption requested. ${result.lifecycle.status}`, { id: toastId });
+      await fetchCircleDetails();
+    } catch (error) {
+      const message = formatEmberActionError(error, 'Failed to request Ember redemption.');
+      toast.error(message, { id: toastId });
+      if (error instanceof ZkLoginError && error.requireRelogin) {
+        router.push('/');
+      }
+    } finally {
+      setIsSubmittingEmberRedemption(false);
     }
   };
 
@@ -5463,9 +5857,9 @@ export default function ManageCircle() {
                   </div>
                 </div>
                 
-                {/* Stablecoin Auto-Swap Configuration */}
+                {/* Circle Token Routing Configuration */}
                 <div className="pt-4 sm:pt-6 border-t border-gray-200 px-1 sm:px-2 mt-2 sm:mt-6">
-                  {circle && <StablecoinSettings 
+                  {circle && <CircleRoutingSettings 
                     circle={circle} 
                     totalLocalDisplay={manageCustodyUsdcTotalLocalDisplay}
                     securityDepositLocalDisplay={manageCustodyUsdcSecurityDepositLocalDisplay}
@@ -5473,21 +5867,266 @@ export default function ManageCircle() {
                   />}
                 </div>
 
-                {/* Yield Management Section */}
+                {/* Ember Vault Operations */}
                 <div className="pt-4 sm:pt-6 border-t border-gray-200 px-1 sm:px-2 mt-2 sm:mt-6">
                   {circle && (
-                    <YieldStrategySection
-                      currentStrategy={selectedYieldStrategy}
-                      onStrategyChange={handleYieldStrategyChange}
-                      totalSecurityDeposits={calculateTotalSecurityDeposits()}
-                      isLoading={isChangingYieldStrategy || loading}
-                      disabled={!circle?.isActive || circle?.paused}
-                      walletId={circle.custody?.walletId}
-                      circleId={id as string}
-                      userAddress={userAddress || undefined}
-                      onYieldConfigCreated={handleYieldConfigCreated}
-                      packageId={circlePackageId}
-                    />
+                    <div className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 sm:p-5">
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                        <h3 className="text-lg font-semibold text-gray-900">Ember Vault Operations</h3>
+                        <span className="text-xs font-medium bg-amber-100 text-amber-800 px-2 py-1 rounded-full w-fit">
+                          Admin Only
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-600 mt-2">
+                        Move custody balances into the Ember `suiUSDe` vault, then request redemption when liquidity is needed.
+                        Withdrawal processing stays external/operator-driven.
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        APR is intentionally not shown here until a verified live share-price/APR source is wired for this exact vault route.
+                      </p>
+
+                      <div className="grid grid-cols-1 xl:grid-cols-5 gap-4 mt-4">
+                        <div className="xl:col-span-3 rounded-lg border border-gray-200 bg-white p-4 sm:p-5">
+                          <div className="flex items-center justify-between gap-3">
+                            <h4 className="text-base font-semibold text-gray-900">1) Convert and Deposit</h4>
+                            <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full font-medium">
+                              Guided Flow
+                            </span>
+                          </div>
+                          <p className="text-xs sm:text-sm text-gray-600 mt-1">
+                            Pick a custody source. If it is not already <span className="font-medium">suiUSDe</span>, we convert it
+                            automatically, then deposit to Ember in one action.
+                          </p>
+
+                          <div className="mt-4">
+                            <p className="text-xs font-medium text-gray-600 mb-2">Funding Source</p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {emberDepositSourceCards.map((card) => (
+                                <button
+                                  key={card.asset}
+                                  type="button"
+                                  onClick={() => setEmberSourceAsset(card.asset)}
+                                  disabled={!card.available}
+                                  className={`text-left rounded-lg border p-3 transition-all ${
+                                    emberSourceAsset === card.asset
+                                      ? 'border-indigo-400 bg-indigo-50/70 ring-2 ring-indigo-200'
+                                      : card.available
+                                        ? 'border-gray-200 bg-white hover:border-indigo-300'
+                                        : 'border-gray-200 bg-gray-50 opacity-60 cursor-not-allowed'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="text-sm font-semibold text-gray-900">{card.label}</span>
+                                    {recommendedEmberSource === card.asset && card.available && (
+                                      <span className="text-[11px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-medium">
+                                        Recommended
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-gray-600 mt-1">
+                                    {card.balance.toFixed(4)} available
+                                  </p>
+                                  <p className="text-[11px] text-gray-500 mt-1">{card.routeSummary}</p>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="mt-4">
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-xs font-medium text-gray-600">
+                                Amount ({selectedEmberSourceCard?.label || SOURCE_ASSET_LABELS[emberSourceAsset]})
+                              </label>
+                              <button
+                                type="button"
+                                onClick={handleUseMaxEmberDeposit}
+                                className="text-xs font-medium text-indigo-700 hover:text-indigo-800 disabled:text-gray-400"
+                                disabled={(selectedEmberSourceCard?.balance || 0) <= 0}
+                              >
+                                Use max
+                              </button>
+                            </div>
+                            <input
+                              type="number"
+                              min="0"
+                              step="any"
+                              value={emberDepositAmount}
+                              onChange={(event) => setEmberDepositAmount(event.target.value)}
+                              placeholder="0.0"
+                              className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm text-gray-800"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">
+                              Available: {(selectedEmberSourceCard?.balance || 0).toFixed(4)}{' '}
+                              {selectedEmberSourceCard?.label || SOURCE_ASSET_LABELS[emberSourceAsset]}
+                            </p>
+                          </div>
+
+                          <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+                            <p className="text-xs font-semibold text-indigo-900">What happens next</p>
+                            <p className="text-xs text-indigo-900 mt-1">
+                              1. Withdraw {selectedEmberSourceCard?.label || SOURCE_ASSET_LABELS[emberSourceAsset]} from custody.
+                            </p>
+                            <p className="text-xs text-indigo-900 mt-1">
+                              2. {selectedEmberSourceCard?.requiresSwap
+                                ? `Swap into suiUSDe.`
+                                : 'Skip swap because source is already suiUSDe.'}
+                            </p>
+                            <p className="text-xs text-indigo-900 mt-1">
+                              3. Deposit to Ember vault and redeposit esuiUSDe receipts back to custody.
+                            </p>
+                          </div>
+
+                          <button
+                            onClick={handleEmberDeposit}
+                            disabled={isSubmittingEmberDeposit || !!emberDepositDisabledReason}
+                            className={`w-full mt-4 px-3 py-2.5 rounded-lg text-sm font-semibold text-white transition-colors ${
+                              isSubmittingEmberDeposit || !!emberDepositDisabledReason
+                                ? 'bg-gray-400 cursor-not-allowed'
+                                : 'bg-gradient-to-r from-indigo-600 to-amber-500 hover:from-indigo-700 hover:to-amber-600'
+                            }`}
+                          >
+                            {isSubmittingEmberDeposit ? 'Submitting...' : emberDepositPrimaryCta}
+                          </button>
+                          {emberDepositDisabledReason && (
+                            <p className="text-xs text-amber-700 mt-2">{emberDepositDisabledReason}</p>
+                          )}
+                        </div>
+
+                        <div className="xl:col-span-2 rounded-lg border border-gray-200 bg-white p-4 sm:p-5">
+                          <h4 className="text-base font-semibold text-gray-900">2) Request Redemption</h4>
+                          <p className="text-xs sm:text-sm text-gray-600 mt-1">
+                            Submit the shares to redeem. Processing is operator-driven; custody receives returned suiUSDe after settlement.
+                          </p>
+                          <div className="mt-4">
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-xs font-medium text-gray-600">Receipt Amount (esuiUSDe)</label>
+                              <button
+                                type="button"
+                                onClick={handleUseMaxEmberRedemption}
+                                className="text-xs font-medium text-indigo-700 hover:text-indigo-800 disabled:text-gray-400"
+                                disabled={(circle.custody?.emberReceiptBalance || 0) <= 0}
+                              >
+                                Use max
+                              </button>
+                            </div>
+                            <input
+                              type="number"
+                              min="0"
+                              step="any"
+                              value={emberRedeemAmount}
+                              onChange={(event) => setEmberRedeemAmount(event.target.value)}
+                              placeholder="0.0"
+                              className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm text-gray-800"
+                            />
+                          </div>
+                          <button
+                            onClick={handleEmberRequestRedemption}
+                            disabled={isSubmittingEmberRedemption || !circle?.custody?.walletId || !circle?.isActive || circle?.paused}
+                            className={`w-full mt-4 px-3 py-2.5 rounded-lg text-sm font-semibold text-white transition-colors ${
+                              isSubmittingEmberRedemption || !circle?.custody?.walletId || !circle?.isActive || circle?.paused
+                                ? 'bg-gray-400 cursor-not-allowed'
+                                : 'bg-indigo-600 hover:bg-indigo-700'
+                            }`}
+                          >
+                            {isSubmittingEmberRedemption ? 'Submitting...' : 'Request Redemption'}
+                          </button>
+                          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                            <div className="rounded-md border border-gray-200 bg-gray-50 p-2">
+                              <p className="text-gray-500">Receipt Balance</p>
+                              <p className="font-semibold text-gray-900">
+                                {circle.custody?.emberReceiptBalance?.toFixed(4) || '0.0000'}
+                              </p>
+                            </div>
+                            <div className="rounded-md border border-gray-200 bg-gray-50 p-2">
+                              <p className="text-gray-500">Pending Requests</p>
+                              <p className="font-semibold text-gray-900">{circle.custody?.emberPendingRedeemRequests ?? 0}</p>
+                            </div>
+                            <div className="rounded-md border border-gray-200 bg-gray-50 p-2">
+                              <p className="text-gray-500">Pending Shares</p>
+                              <p className="font-semibold text-gray-900">
+                                {circle.custody?.emberPendingRedeemShares?.toFixed(4) || '0.0000'}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {(emberActionSnapshot || lastEmberDigest) && (
+                        <div className="mt-4 rounded-lg border border-gray-200 bg-white p-3 text-xs text-gray-700 space-y-1">
+                          <p className="font-medium text-gray-900">Latest Ember Transaction</p>
+                          {emberActionSnapshot?.operation && (
+                            <p>
+                              Operation: {emberActionSnapshot.operation === 'deposit' ? 'Deposit' : 'Request Redemption'}
+                            </p>
+                          )}
+                          {emberActionSnapshot?.status && <p>Status: {emberActionSnapshot.status}</p>}
+                          {emberActionSnapshot?.lifecycle?.status && (
+                            <p>Lifecycle: {emberActionSnapshot.lifecycle.status}</p>
+                          )}
+                          {emberActionSnapshot?.sourceAsset && emberActionSnapshot.sourceAmountRaw && (
+                            <p>
+                              Source: {emberActionSnapshot.sourceAsset} {formatRawTokenAmount(
+                                emberActionSnapshot.sourceAmountRaw,
+                                SOURCE_ASSET_DECIMALS[emberActionSnapshot.sourceAsset]
+                              )}
+                            </p>
+                          )}
+                          {emberActionSnapshot?.receiptAmountRaw && (
+                            <p>
+                              Requested Shares: {formatRawTokenAmount(emberActionSnapshot.receiptAmountRaw, 9)}
+                            </p>
+                          )}
+                          {emberActionSnapshot?.note && (
+                            <p className="text-amber-700">{emberActionSnapshot.note}</p>
+                          )}
+                          <p>
+                            Digest:{' '}
+                            <a
+                              href={`https://suivision.xyz/txblock/${emberActionSnapshot?.digest || lastEmberDigest}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-blue-600 hover:text-blue-700 underline break-all"
+                            >
+                              {emberActionSnapshot?.digest || lastEmberDigest}
+                            </a>
+                          </p>
+                          {circle.custody?.emberHasPendingRedemption && (
+                            <p className="text-amber-700">
+                              Pending redemption remains open until external operator processing settles withdrawals.
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {emberActionHistory.length > 0 && (
+                        <div className="mt-3 rounded-lg border border-gray-200 bg-white p-3">
+                          <p className="text-xs font-medium text-gray-900 mb-2">Recent Ember Activity</p>
+                          <div className="space-y-2">
+                            {emberActionHistory.map((item) => (
+                              <div
+                                key={`${item.digest}-${item.timestampMs}`}
+                                className="text-xs text-gray-700 border-b border-gray-100 pb-2 last:border-b-0 last:pb-0"
+                              >
+                                <p className="font-medium text-gray-900">
+                                  {item.operation === 'deposit' ? 'Deposit' : 'Request Redemption'} · {item.lifecycle.status}
+                                </p>
+                                <p className="text-gray-600">{new Date(item.timestampMs).toLocaleString()}</p>
+                                <p className="break-all">
+                                  <a
+                                    href={`https://suivision.xyz/txblock/${item.digest}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-blue-600 hover:text-blue-700 underline"
+                                  >
+                                    {item.digest}
+                                  </a>
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -5507,18 +6146,6 @@ export default function ManageCircle() {
                   )}
                 </div>
 
-                {/* Add this after the existing admin action buttons */}
-                <div className="mt-4">
-                  <button
-                    onClick={() => router.push(`/circle/${id}/manage/swap-settings`)}
-                    className="w-full py-2 px-4 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors flex items-center justify-center gap-2 shadow-sm border border-indigo-200 text-sm"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-                    </svg>
-                    Configure Stablecoin Auto-Swap
-                  </button>
-                </div>
               </div>
             ) : (
               <div className="py-4 text-center">

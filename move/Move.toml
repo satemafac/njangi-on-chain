@@ -27,11 +27,5 @@ cetus_lp_burn = "0x9c751fccc633f3ebad2becbe7884e5f38b4e497127689be0d404b24f79d95
 cetus_stable_farming = "0x3c4582ee27a09f7e6c091022d0d279fdc8e54c1f782916bf135a71a8e8006aa5"  # testnet-v1.25.0
 cetus_xcetus = "0xdebaab6b851fd3414c0a62dbdf8eb752d6b0d31f5cfce5e38541bc6c6daa8966"  # testnet-v1.24.0
 cetus_dividend = "0x20d948d640edd0c749f533d41efc5f843f212d441220324ad7959c6e1d281828"  # testnet-v1.25.0
-
-# Pyth Network Package IDs - from https://docs.pyth.network/price-feeds/core/contract-addresses/sui
-# Using git dependency (sui-contract-testnet branch) which auto-resolves addresses
-# Testnet Package ID: 0xf30e51dab2c4f8e96b1cca3c9dd6e6d60e08b7cfc13e8e76d9c7ce6f3c2e1a0
-# Mainnet Package ID: 0x04e4288eccd6b9f9ed528fbe3e02c18e9f92c04a96c00e19e09c6c325e53c2d0
-# Testnet State ID (for runtime): 0x243759059f4c3111179da5878c12f68d612c21a8d54d85edc86164bb18be1c7c
-# Mainnet State ID (for runtime): 0x1f9310238ee9298fb703c3419030b35b22bb1cc37113e3bb5007c99aec79e5b8
-# Currently using: Testnet (sui-contract-testnet branch) 
+# Pyth testnet address
+pyth_network = "0x41c21c1c0c8d43e39b1fcf0cb61e8b3e84acea99877e1948fd1fb87cc60e69b4" 

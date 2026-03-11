@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { SuiClient } from '@mysten/sui.js/client';
+import { getCurrentNetworkConfig } from '@/services/network-config';
 
 /**
  * 🔐 Circle Admin Verification API
@@ -32,7 +33,7 @@ export default async function handler(
 
     // Initialize Sui client
     const suiClient = new SuiClient({
-      url: process.env.NEXT_PUBLIC_SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443',
+      url: getCurrentNetworkConfig().rpcUrl,
     });
 
     // Get circle object from blockchain

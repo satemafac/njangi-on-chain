@@ -101,7 +101,7 @@ Configuration files are located in:
 ### **Manual Build (Traditional)**
 ```bash
 cd move
-sui move build
+sui move build --skip-fetch-latest-git-deps
 ```
 
 ### **Enhanced Build with Network Switching**
@@ -143,7 +143,7 @@ sui move test
 ./scripts/switch-network.sh mainnet
 
 # Then publish
-sui client publish --gas-budget 200000000
+sui client publish . --gas-budget 200000000 --skip-fetch-latest-git-deps
 ```
 
 ## 💰 **Wallet Setup for Deployment**
@@ -180,12 +180,12 @@ sui --version
 2. Build the package:
 ```bash
 cd move
-sui move build
+sui move build --skip-fetch-latest-git-deps
 ```
 
 3. Publish the package to testnet:
 ```bash
-sui client publish --gas-budget 100000000
+sui client publish . --gas-budget 100000000 --skip-fetch-latest-git-deps
 ```
 
 ## Cetus DEX Integration

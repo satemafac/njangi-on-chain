@@ -21,7 +21,7 @@ export class CircleLinkListenerService {
 
   constructor() {
     const config = getConfig();
-    const rpcUrl = config.sui.testnetRpcUrl;
+    const rpcUrl = config.sui.currentRpcUrl;
     this.suiClient = new SuiClient({ url: rpcUrl });
 
     appLogger.info('CircleLinkListenerService initialized', {
@@ -44,7 +44,7 @@ export class CircleLinkListenerService {
     }
 
     try {
-      const registryId = process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID || '0x9e203f7dd2d56b058d82fb4f1fafe135133245fef347d8de4967e2c1c78b9459';
+      const registryId = getConfig().sui.currentWhatsAppRegistryId;
       
       const registryObject = await this.suiClient.getObject({
         id: registryId,
@@ -130,7 +130,7 @@ export class CircleLinkListenerService {
       return Array.from(this.discoveredPackageIds);
     }
     // Fallback to environment variable
-    const envPackageId = process.env.NEXT_PUBLIC_PACKAGE_ID || process.env.NEXT_PUBLIC_TESTNET_PACKAGE_ID;
+    const envPackageId = getConfig().sui.currentPackageId;
     if (envPackageId) {
       return [envPackageId];
     }
@@ -403,7 +403,7 @@ export class CircleLinkListenerService {
    */
   private async getPhoneNumberForCircle(circleId: string): Promise<string | null> {
     try {
-      const registryId = process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID || '0x9e203f7dd2d56b058d82fb4f1fafe135133245fef347d8de4967e2c1c78b9459';
+      const registryId = getConfig().sui.currentWhatsAppRegistryId;
 
       const registryObject = await this.suiClient.getObject({
         id: registryId,

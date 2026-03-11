@@ -16,6 +16,8 @@ module njangi::njangi_price_validator {
     const E_INVALID_PRICE_ID: u64 = 101;
     const E_PRICE_TOO_OLD: u64 = 102;
     const E_INSUFFICIENT_VALUE: u64 = 103;
+    const E_ARITHMETIC_OVERFLOW: u64 = 104;
+    const MAX_U64: u64 = 0xFFFF_FFFF_FFFF_FFFF;
     
     // Known price feed IDs from Pyth Network
     // ETH/USD price feed ID
@@ -68,6 +70,29 @@ module njangi::njangi_price_validator {
         
         usd_value
     }
+
+    /// Reads a SUI/USD oracle snapshot and returns:
+    /// (price_usd_cents_per_sui, oracle_timestamp_seconds).
+    /// Uses a caller-supplied lookback window so callers can implement custom
+    /// stale-price fallback behavior.
+    public fun get_sui_price_snapshot(
+        price_info_object: &PriceInfoObject,
+        clock: &Clock,
+        max_age_seconds: u64
+    ): (u64, u64) {
+        let price_struct = pyth::get_price_no_older_than(price_info_object, clock, max_age_seconds);
+
+        let price_info = price_info::get_price_info_from_price_info_object(price_info_object);
+        let price_id = price_identifier::get_bytes(&price_info::get_price_identifier(&price_info));
+        assert!(price_id == SUI_USD_PRICE_ID, E_INVALID_PRICE_ID);
+
+        let decimal_adjust = price::get_expo(&price_struct);
+        let price_value = price::get_price(&price_struct);
+        let price_usd_cents = to_usd_cents_per_token(price_value, decimal_adjust);
+        let price_time = price::get_timestamp(&price_struct);
+
+        (price_usd_cents, price_time)
+    }
     
     /// Validates that the price ID matches the expected ID for the given coin type
     fun validate_price_id(price_id: vector<u8>, coin_type_str: String) {
@@ -96,25 +121,48 @@ module njangi::njangi_price_validator {
         
         // Handle different coin decimal places
         let coin_decimals = get_coin_decimals(str);
-        
-        // Convert I64 to u64 for calculation (simplified)
-        let price_value_u64 = i64::get_magnitude_if_positive(&price_value);
-        let expo_value = i64::get_magnitude_if_negative(&decimal_adjust);
-        
-        // Adjust for decimals (simplified calculation)
-        // For stablecoins, price is typically close to 1.0
-        // This is a simplified approach - in production, more precise math would be needed
-        let scaling_factor = 1000000; // 6 decimals for microdollars
-        
-        if (string::index_of(&str, &string::utf8(b"USDC")) != 18446744073709551615 || 
-            string::index_of(&str, &string::utf8(b"USDT")) != 18446744073709551615) {
-            // For stablecoins, we can simplify the conversion
-            // Since price is close to 1.0, we just adjust the decimal places
-            amount * scaling_factor / (10 ^ ((coin_decimals as u64) - 6))
+
+        // Convert oracle price into USD cents per token.
+        let price_usd_cents = to_usd_cents_per_token(price_value, decimal_adjust);
+        let coin_scale = pow10(coin_decimals as u64);
+
+        // amount (coin base units) * price (usd cents per token) / 10^coin_decimals
+        assert!(amount == 0 || price_usd_cents <= MAX_U64 / amount, E_ARITHMETIC_OVERFLOW);
+        let usd_cents_numerator = amount * price_usd_cents;
+        usd_cents_numerator / coin_scale
+    }
+
+    // Converts oracle price representation (value * 10^expo) into USD cents per token.
+    fun to_usd_cents_per_token(price_value: I64, decimal_adjust: I64): u64 {
+        let price_magnitude = i64::get_magnitude_if_positive(&price_value);
+
+        if (i64::get_is_negative(&decimal_adjust)) {
+            // price = magnitude / 10^expo
+            let expo = i64::get_magnitude_if_negative(&decimal_adjust);
+            let denom = pow10(expo);
+            assert!(price_magnitude == 0 || 100 <= MAX_U64 / price_magnitude, E_ARITHMETIC_OVERFLOW);
+            (price_magnitude * 100) / denom
         } else {
-            // For other tokens we apply the price
-            (amount * price_value_u64) / (10 ^ (coin_decimals as u64 + expo_value - 6))
+            // price = magnitude * 10^expo
+            let expo = i64::get_magnitude_if_positive(&decimal_adjust);
+            let expo_scale = pow10(expo);
+            assert!(price_magnitude == 0 || expo_scale <= MAX_U64 / price_magnitude, E_ARITHMETIC_OVERFLOW);
+            let scaled_price = price_magnitude * expo_scale;
+            assert!(scaled_price == 0 || 100 <= MAX_U64 / scaled_price, E_ARITHMETIC_OVERFLOW);
+            scaled_price * 100
         }
+    }
+
+    // 10^shift with overflow protection.
+    fun pow10(shift: u64): u64 {
+        let mut out = 1u64;
+        let mut i = 0u64;
+        while (i < shift) {
+            assert!(10 <= MAX_U64 / out, E_ARITHMETIC_OVERFLOW);
+            out = out * 10;
+            i = i + 1;
+        };
+        out
     }
     
     /// Returns the number of decimal places for a given coin type

@@ -87,12 +87,13 @@ const AuthContext = createContext<AuthContextType>({
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [account, setAccount] = useState<AccountData | null>(null);
   const [userAddress, setUserAddress] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [isLocalDevMode, setIsLocalDevMode] = useState(false);
+  const [hasHydratedAuth, setHasHydratedAuth] = useState(false);
   const zkLogin = ZkLoginClient.getInstance();
 
   const handleAutoLogout = () => {
@@ -116,37 +117,59 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   // Load saved authentication state on mount
   useEffect(() => {
-    const savedAccount = localStorage.getItem('account');
-    const savedIsAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
-    const savedUserAddress = localStorage.getItem('userAddress');
+    try {
+      const savedAccount = localStorage.getItem('account');
+      const savedIsAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
+      const savedUserAddress = localStorage.getItem('userAddress');
 
-    if (savedAccount && savedIsAuthenticated && savedUserAddress) {
-      setAccount(JSON.parse(savedAccount));
-      setIsAuthenticated(true);
-      setUserAddress(savedUserAddress);
+      if (savedAccount && savedIsAuthenticated && savedUserAddress) {
+        setAccount(JSON.parse(savedAccount));
+        setIsAuthenticated(true);
+        setUserAddress(savedUserAddress);
+      }
+    } catch (err) {
+      console.warn('Failed to restore saved authentication state:', err);
+      localStorage.removeItem('account');
+      localStorage.removeItem('isAuthenticated');
+      localStorage.removeItem('userAddress');
+    } finally {
+      setHasHydratedAuth(true);
+      setIsLoading(false);
     }
   }, []);
 
   // Persist state changes to localStorage
   useEffect(() => {
+    if (!hasHydratedAuth) {
+      return;
+    }
+
     if (account) {
       localStorage.setItem('account', JSON.stringify(account));
     } else {
       localStorage.removeItem('account');
     }
-  }, [account]);
+  }, [account, hasHydratedAuth]);
 
   useEffect(() => {
+    if (!hasHydratedAuth) {
+      return;
+    }
+
     localStorage.setItem('isAuthenticated', isAuthenticated.toString());
-  }, [isAuthenticated]);
+  }, [isAuthenticated, hasHydratedAuth]);
 
   useEffect(() => {
+    if (!hasHydratedAuth) {
+      return;
+    }
+
     if (userAddress) {
       localStorage.setItem('userAddress', userAddress);
     } else {
       localStorage.removeItem('userAddress');
     }
-  }, [userAddress]);
+  }, [userAddress, hasHydratedAuth]);
 
   const login = async (provider: OAuthProvider) => {
     try {
@@ -191,6 +214,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setAccount(accountData);
     setUserAddress(accountData.userAddr);
     setIsAuthenticated(true);
+
+    // Persist immediately so a navigation/remount cannot lose the fresh session.
+    localStorage.setItem('account', JSON.stringify(accountData));
+    localStorage.setItem('userAddress', accountData.userAddr);
+    localStorage.setItem('isAuthenticated', 'true');
+    setHasHydratedAuth(true);
+
     // Reset idle timer after successful login
     resetIdleTimerWithLogging();
     

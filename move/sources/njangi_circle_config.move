@@ -233,6 +233,43 @@ module njangi::njangi_circle_config {
         config.max_members = new_max_members;
     }
 
+    // Update contribution and security-deposit requirements.
+    public fun set_contribution_requirements(
+        obj: &mut UID,
+        contribution_amount: u64,
+        contribution_amount_local: u64,
+        contribution_amount_usd: u64,
+        security_deposit: u64,
+        security_deposit_local: u64,
+        security_deposit_usd: u64
+    ) {
+        let config = get_circle_config_mut(obj);
+        config.contribution_amount = contribution_amount;
+        config.contribution_amount_local = contribution_amount_local;
+        config.contribution_amount_usd = contribution_amount_usd;
+        config.security_deposit = security_deposit;
+        config.security_deposit_local = security_deposit_local;
+        config.security_deposit_usd = security_deposit_usd;
+    }
+
+    // Update payout schedule controls.
+    public fun set_cycle_schedule(obj: &mut UID, cycle_length: u64, cycle_day: u64) {
+        let config = get_circle_config_mut(obj);
+        config.cycle_length = cycle_length;
+        config.cycle_day = cycle_day;
+    }
+
+    // Refresh native display amounts while keeping USD amounts unchanged.
+    public fun set_native_display_amounts(
+        obj: &mut UID,
+        contribution_amount: u64,
+        security_deposit: u64
+    ) {
+        let config = get_circle_config_mut(obj);
+        config.contribution_amount = contribution_amount;
+        config.security_deposit = security_deposit;
+    }
+
     // Get target amount from milestone config
     public fun get_target_amount(obj: &UID): Option<u64> {
         let config = get_milestone_config(obj);
@@ -267,5 +304,17 @@ module njangi::njangi_circle_config {
     public fun get_security_deposit_usd(obj: &UID): u64 {
         let config = get_circle_config(obj);
         config.security_deposit_usd
+    }
+
+    // Return (usd_cents, native_9dp_display) for contribution amount.
+    public fun get_contribution_amount_dual(obj: &UID): (u64, u64) {
+        let config = get_circle_config(obj);
+        (config.contribution_amount_usd, config.contribution_amount)
+    }
+
+    // Return (usd_cents, native_9dp_display) for security deposit.
+    public fun get_security_deposit_dual(obj: &UID): (u64, u64) {
+        let config = get_circle_config(obj);
+        (config.security_deposit_usd, config.security_deposit)
     }
 } 

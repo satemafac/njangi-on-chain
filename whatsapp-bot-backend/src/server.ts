@@ -9,14 +9,11 @@
  */
 
 import express, { Express, Request, Response } from 'express';
-import dotenv from 'dotenv';
 import { getConfig, validateConfig } from './config';
 import { appLogger } from './utils/logger';
 import { requestLoggerMiddleware, userIdMiddleware } from './middleware/requestLogger';
 import { errorHandler, asyncHandler, notFoundHandler } from './middleware/errorHandler';
 import { circleLinkListener } from './services/circle-link-listener.service';
-
-dotenv.config();
 
 // Load configuration
 const config = getConfig();
@@ -70,8 +67,8 @@ app.get('/api/status', asyncHandler(async (_req: Request, res: Response) => {
       messageSenderEnabled: config.app.enableMessageSender,
       onChainLoggingEnabled: config.app.enableOnChainLogging,
       whatsappConfigured: !!config.whatsapp.accessToken,
-      suiConfigured: !!config.sui.defaultPackageId,
-      zkLoginConfigured: !!config.zkLogin.google.clientId
+      suiConfigured: !!config.sui.currentPackageId,
+      zkLoginConfigured: !!config.zkLogin.currentEnoki
     }
   });
 }));
@@ -183,15 +180,14 @@ app.listen(PORT, () => {
 ║   Status: http://localhost:${PORT}/api/status          
 ║   Env: ${config.app.nodeEnv}                             
 ║   Log Level: ${config.app.logLevel}                      
+║   Network: ${config.sui.currentNetwork}                       
 ╠════════════════════════════════════════════════════════╣
 ║   ✅ Sui - Testnet: ${config.sui.testnetPackageId.substring(0, 10)}...
 ║   ✅ Sui - Mainnet: ${config.sui.mainnetPackageId.substring(0, 10)}...
+║   ✅ Sui - Current: ${config.sui.currentPackageId.substring(0, 10)}...
 ║   ✅ WhatsApp: Configured
-║   ✅ OAuth Providers:
-║      - Google: Configured
-║      - Facebook: Configured
-║      - Apple: Configured
-║   ✅ Enoki Keys: ${config.zkLogin.testnetEnoki.substring(0, 8)}... / ${config.zkLogin.mainnetEnoki.substring(0, 8)}...
+║   ✅ OAuth Providers: ${config.zkLogin.google.clientId ? 'Present' : 'Optional / unset'}
+║   ✅ Enoki Keys: ${config.zkLogin.testnetEnoki ? config.zkLogin.testnetEnoki.substring(0, 8) + '...' : 'unset'} / ${config.zkLogin.mainnetEnoki ? config.zkLogin.mainnetEnoki.substring(0, 8) + '...' : 'unset'}
 ╚════════════════════════════════════════════════════════╝
     `
   );

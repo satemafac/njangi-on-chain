@@ -11,7 +11,7 @@ export class CircleStatusService {
 
   constructor() {
     const config = getConfig();
-    const rpcUrl = config.sui.testnetRpcUrl;
+    const rpcUrl = config.sui.currentRpcUrl;
     this.suiClient = new SuiClient({ url: rpcUrl });
   }
 
@@ -107,4 +107,3 @@ _Last updated: ${new Date().toLocaleTimeString()}_`;
 
 // Export singleton instance
 export const circleStatusService = new CircleStatusService();
-

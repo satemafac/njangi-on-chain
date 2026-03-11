@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { SuiClient } from '@mysten/sui.js/client';
 import { TransactionBlock } from '@mysten/sui.js/transactions';
+import { getCurrentNetworkConfig } from '@/services/network-config';
 
 /**
  * ⏰ Circle Payout Status API
@@ -31,12 +32,10 @@ export default async function handler(
     }
 
     // Initialize Sui client
-    const suiClient = new SuiClient({
-      url: process.env.NEXT_PUBLIC_SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443',
-    });
+    const networkConfig = getCurrentNetworkConfig();
+    const suiClient = new SuiClient({ url: networkConfig.rpcUrl });
 
-    // Get the package ID from environment or use a default
-    const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID || '0x1';
+    const packageId = networkConfig.packageId;
 
     // Create transaction to check payout status using smart contract
     const tx = new TransactionBlock();
@@ -49,7 +48,7 @@ export default async function handler(
 
     // Call the smart contract function to check automation status
     tx.moveCall({
-      target: `${PACKAGE_ID}::njangi_circles::get_automation_status`,
+      target: `${packageId}::njangi_circles::get_automation_status`,
       arguments: [
         tx.object(circleId as string),
         clock,

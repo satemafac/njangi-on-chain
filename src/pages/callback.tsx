@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -8,6 +8,8 @@ export default function AuthCallback() {
   const [status, setStatus] = useState('Processing authentication...');
   const [progress, setProgress] = useState(0);
   const [isError, setIsError] = useState(false);
+  const hasProcessedCallbackRef = useRef(false);
+  const redirectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   useEffect(() => {
     // Show progress animation
@@ -20,8 +22,23 @@ export default function AuthCallback() {
     
     return () => clearInterval(progressInterval);
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (redirectTimeoutRef.current) {
+        clearTimeout(redirectTimeoutRef.current);
+        redirectTimeoutRef.current = null;
+      }
+    };
+  }, []);
   
   useEffect(() => {
+    if (hasProcessedCallbackRef.current) {
+      return;
+    }
+
+    hasProcessedCallbackRef.current = true;
+
     const processCallback = async () => {
       try {
         console.log('Processing authentication callback');
@@ -77,7 +94,7 @@ export default function AuthCallback() {
         const redirectUrl = localStorage.getItem('redirectAfterLogin');
         
         // Short delay before redirecting to show completion
-        setTimeout(() => {
+        redirectTimeoutRef.current = setTimeout(() => {
           if (redirectUrl) {
             // Clear the stored redirect URL
             localStorage.removeItem('redirectAfterLogin');
@@ -86,7 +103,7 @@ export default function AuthCallback() {
             window.location.href = redirectUrl;
           } else {
             // Default redirect to dashboard
-            router.push('/dashboard');
+            router.replace('/dashboard');
           }
         }, 500);
       } catch (err) {
@@ -96,8 +113,8 @@ export default function AuthCallback() {
         setError(err instanceof Error ? err.message : 'Authentication failed');
         
         // Short delay before redirecting on error
-        setTimeout(() => {
-          router.push('/');
+        redirectTimeoutRef.current = setTimeout(() => {
+          router.replace('/');
         }, 2000);
       }
     };

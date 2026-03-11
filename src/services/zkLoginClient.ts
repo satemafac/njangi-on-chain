@@ -2,20 +2,50 @@ import { AccountData } from './zkLoginService';
 import type { OAuthProvider } from './zkLoginService';
 import { getCurrentNetwork } from './network-config';
 
+export interface EmberOperationLifecycle {
+  status: string;
+  partialCompletion: boolean;
+  pendingRedemption: boolean;
+  processing: string;
+}
+
+interface ZkLoginErrorMetadata {
+  code?: string;
+  stage?: string;
+  operation?: string;
+  lifecycle?: EmberOperationLifecycle;
+}
+
 // Custom error class for zkLogin errors that includes requireRelogin property
 export class ZkLoginError extends Error {
   requireRelogin: boolean;
+  code?: string;
+  stage?: string;
+  operation?: string;
+  lifecycle?: EmberOperationLifecycle;
   
-  constructor(message: string, requireRelogin: boolean = false) {
+  constructor(
+    message: string,
+    requireRelogin: boolean = false,
+    metadata: ZkLoginErrorMetadata = {}
+  ) {
     super(message);
     this.requireRelogin = requireRelogin;
     this.name = 'ZkLoginError';
+    this.code = metadata.code;
+    this.stage = metadata.stage;
+    this.operation = metadata.operation;
+    this.lifecycle = metadata.lifecycle;
   }
 }
 
 interface ZkLoginResponse {
   error?: string;
   details?: string;
+  code?: string;
+  stage?: string;
+  operation?: string;
+  lifecycle?: EmberOperationLifecycle;
   requireRelogin?: boolean;
   digest?: string;
   status?: 'success' | 'failure';
@@ -24,6 +54,7 @@ interface ZkLoginResponse {
     storageCost: string;
     storageRebate: string;
   };
+  [key: string]: unknown;
 }
 
 interface CircleData {
@@ -42,6 +73,82 @@ interface CircleData {
   verification_required: boolean;
 }
 
+export type StablecoinTarget = 'USDC' | 'USDT' | 'SUI_USDE';
+export type EmberSourceAsset = 'SUI' | 'USDC' | 'USDT' | 'SUI_USDE';
+
+export interface EmberDeployRequest {
+  circleId: string;
+  walletId: string;
+  sourceAsset: EmberSourceAsset;
+  sourceAmount: string;
+  targetCoinType: 'SUI_USDE';
+  slippageBps?: number;
+  emberVaultId?: string;
+  emberVaultPackageId?: string;
+  emberProtocolConfigId?: string;
+}
+
+export interface EmberRedeemRequest {
+  circleId: string;
+  walletId: string;
+  receiptAmount: string;
+  receiptCoinType?: string;
+  emberVaultId?: string;
+  emberVaultPackageId?: string;
+  emberProtocolConfigId?: string;
+  receiver?: string;
+}
+
+export interface EmberDeployResponse {
+  operation: 'deployToEmberVault';
+  digest: string;
+  status: string;
+  gasUsed?: {
+    computationCost: string;
+    storageCost: string;
+    storageRebate: string;
+  };
+  circleId: string;
+  walletId: string;
+  network: string;
+  sourceAsset: EmberSourceAsset;
+  sourceCoinType: string;
+  targetCoinType: 'SUI_USDE';
+  sourceAmount: string;
+  swapExecuted: boolean;
+  estimatedSuiUsdeOut: string;
+  slippageBps?: number;
+  vaultId: string;
+  vaultPackageId: string;
+  protocolConfigId: string;
+  receiptCoinType: string;
+  lifecycle: EmberOperationLifecycle;
+  requireRelogin?: boolean;
+}
+
+export interface EmberRedemptionResponse {
+  operation: 'requestEmberRedemption';
+  digest: string;
+  status: string;
+  gasUsed?: {
+    computationCost: string;
+    storageCost: string;
+    storageRebate: string;
+  };
+  circleId: string;
+  walletId: string;
+  network: string;
+  receiptAmount: string;
+  receiptCoinType: string;
+  vaultId: string;
+  vaultPackageId: string;
+  protocolConfigId: string;
+  receiver: string;
+  lifecycle: EmberOperationLifecycle;
+  message: string;
+  requireRelogin?: boolean;
+}
+
 export class ZkLoginClient {
   private static instance: ZkLoginClient;
 
@@ -53,10 +160,13 @@ export class ZkLoginClient {
   }
 
   public async beginLogin(provider: OAuthProvider = 'Google'): Promise<{ loginUrl: string }> {
+    const network = getCurrentNetwork();
+    console.log('🌍 ZkLoginClient.beginLogin: Starting login on network:', network);
+
     const response = await fetch('/api/zkLogin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'beginLogin', provider })
+      body: JSON.stringify({ action: 'beginLogin', provider, network })
     });
 
     if (!response.ok) {
@@ -473,7 +583,7 @@ export class ZkLoginClient {
     walletId: string,
     config: {
       enabled: boolean;
-      targetCoinType: 'USDC' | 'USDT';
+      targetCoinType: StablecoinTarget;
       slippageTolerance: number; 
       minimumSwapAmount: number;
     }
@@ -528,6 +638,116 @@ export class ZkLoginClient {
       };
     } catch (error) {
       console.error('Stablecoin configuration error:', error);
+      if (error instanceof ZkLoginError) {
+        throw error;
+      }
+      throw new ZkLoginError(String(error), false);
+    }
+  }
+
+  public async deployToEmberVault(
+    account: AccountData,
+    payload: EmberDeployRequest
+  ): Promise<EmberDeployResponse> {
+    try {
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'deployToEmberVault',
+          account,
+          payload
+        })
+      });
+
+      const responseData = await response.json() as EmberDeployResponse & ZkLoginResponse;
+      if (response.status === 401) {
+        throw new ZkLoginError(
+          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`,
+          true,
+          {
+            code: responseData.code,
+            stage: responseData.stage,
+            operation: responseData.operation,
+            lifecycle: responseData.lifecycle
+          }
+        );
+      }
+      if (!response.ok) {
+        throw new ZkLoginError(
+          responseData.error || 'Failed to deploy to Ember vault',
+          !!responseData.requireRelogin,
+          {
+            code: responseData.code,
+            stage: responseData.stage,
+            operation: responseData.operation,
+            lifecycle: responseData.lifecycle
+          }
+        );
+      }
+      if (!responseData.digest) {
+        throw new ZkLoginError('No transaction digest received from server', false);
+      }
+      return {
+        ...responseData,
+        requireRelogin: responseData.requireRelogin
+      };
+    } catch (error) {
+      if (error instanceof ZkLoginError) {
+        throw error;
+      }
+      throw new ZkLoginError(String(error), false);
+    }
+  }
+
+  public async requestEmberRedemption(
+    account: AccountData,
+    payload: EmberRedeemRequest
+  ): Promise<EmberRedemptionResponse> {
+    try {
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'requestEmberRedemption',
+          account,
+          payload
+        })
+      });
+
+      const responseData = await response.json() as EmberRedemptionResponse & ZkLoginResponse;
+      if (response.status === 401) {
+        throw new ZkLoginError(
+          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`,
+          true,
+          {
+            code: responseData.code,
+            stage: responseData.stage,
+            operation: responseData.operation,
+            lifecycle: responseData.lifecycle
+          }
+        );
+      }
+      if (!response.ok) {
+        throw new ZkLoginError(
+          responseData.error || 'Failed to request Ember redemption',
+          !!responseData.requireRelogin,
+          {
+            code: responseData.code,
+            stage: responseData.stage,
+            operation: responseData.operation,
+            lifecycle: responseData.lifecycle
+          }
+        );
+      }
+      if (!responseData.digest) {
+        throw new ZkLoginError('No transaction digest received from server', false);
+      }
+      return {
+        ...responseData,
+        requireRelogin: responseData.requireRelogin
+      };
+    } catch (error) {
       if (error instanceof ZkLoginError) {
         throw error;
       }
@@ -1143,8 +1363,12 @@ export class ZkLoginClient {
   }
 
   // ============================================
-  // CETUS DEX INTEGRATION METHODS
+  // LEGACY CETUS METHODS (NOT EMBER FLOW)
   // ============================================
+  // Kept for backward compatibility with old admin tooling.
+  // The active eSui-dollar migration path uses:
+  // - deployToEmberVault
+  // - requestEmberRedemption
 
   /**
    * Add liquidity to Cetus DEX pool for yield generation

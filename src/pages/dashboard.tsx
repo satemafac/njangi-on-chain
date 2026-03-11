@@ -9,7 +9,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import * as Dialog from '@radix-ui/react-dialog';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
-import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink } from 'lucide-react';
+import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink, ArrowRightLeft, ChevronDown, ChevronUp } from 'lucide-react';
 import MoonPayWrapper from '@/components/MoonPayWrapper';
 import CoinbaseOnrampLauncher from '@/components/CoinbaseOnrampLauncher';
 import {
@@ -18,6 +18,7 @@ import {
   normalizeOnrampProviderFlag,
   shouldUseCoinbaseProvider,
 } from '@/lib/onramp-provider';
+import { cetusService } from '@/lib/cetus-service';
 import { clearWalletBalanceCache, refreshWalletBalances } from '@/lib/wallet';
 import type { CoinbaseSessionClientError } from '@/hooks/useCoinbaseSession';
 import type {
@@ -30,6 +31,7 @@ import ConfirmationModal from '@/components/ConfirmationModal';
 import { 
   getCurrentNetwork, 
   getCurrentNetworkConfig, 
+  getNetworkConfig,
   getCurrentRpcUrl, 
   getCurrentPackageId,
   setCurrentNetwork
@@ -1193,10 +1195,35 @@ const shouldAutoOpenMoonPayFallback =
   (process.env.NEXT_PUBLIC_ONRAMP_AUTO_MOONPAY_FALLBACK ?? 'false').toLowerCase() ===
   'true';
 
+type SwapDirection = 'SUI_TO_USDC' | 'USDC_TO_SUI';
+
+const MANUAL_SWAP_SLIPPAGE = 0.5;
+const MANUAL_SWAP_SUI_GAS_BUFFER = 0.02;
+
+const getManualSwapDecimals = (symbol: 'SUI' | 'USDC') => (symbol === 'SUI' ? 4 : 2);
+
+const formatManualSwapAmount = (amount: number, symbol: 'SUI' | 'USDC') =>
+  `${amount.toFixed(getManualSwapDecimals(symbol))} ${symbol}`;
+
+const getManualSwapBalance = (
+  coins: Array<{ coinType: string; symbol: string; balance: string }>,
+  symbol: 'SUI' | 'USDC',
+) => {
+  const coin = coins.find((entry) => entry.symbol === symbol);
+  if (!coin) {
+    return 0;
+  }
+
+  const decimals = symbol === 'SUI' ? 1e9 : 1e6;
+  return Number(coin.balance) / decimals;
+};
+
+const formatManualSwapPercent = (value: number) => `${value.toFixed(2)}%`;
+
 export default function Dashboard() {
   console.log('🚨 DASHBOARD COMPONENT RENDERING');
   const router = useRouter();
-  const { isAuthenticated, userAddress, account, deleteCircle: authDeleteCircle, sendTokens } = useAuth();
+  const { isAuthenticated, isLoading: isAuthLoading, userAddress, account, deleteCircle: authDeleteCircle, sendTokens } = useAuth();
   console.log('🚨 DASHBOARD userAddress:', userAddress, 'isAuthenticated:', isAuthenticated);
   
   // Suppress "Failed to fetch" errors from deleted packages in Next.js error overlay
@@ -1319,6 +1346,17 @@ export default function Dashboard() {
     null,
   );
   const [isOnrampResultRefreshing, setIsOnrampResultRefreshing] = useState(false);
+  const [swapDirection, setSwapDirection] = useState<SwapDirection>('SUI_TO_USDC');
+  const [swapAmount, setSwapAmount] = useState('');
+  const [swapQuote, setSwapQuote] = useState<{
+    amountOut: number;
+    priceImpact: number;
+  } | null>(null);
+  const [isSwapQuoteLoading, setIsSwapQuoteLoading] = useState(false);
+  const [swapQuoteError, setSwapQuoteError] = useState<string | null>(null);
+  const [isSwapSubmitting, setIsSwapSubmitting] = useState(false);
+  const [lastSwapDigest, setLastSwapDigest] = useState<string | null>(null);
+  const [isManualSwapOpen, setIsManualSwapOpen] = useState(false);
 
   // Keep the confirmation modal state
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
@@ -1395,6 +1433,24 @@ export default function Dashboard() {
     }
     return isMainBalance ? '••••••' : '••••';
   };
+
+  const activeSwapNetwork = network === 'mainnet' ? 'mainnet' : 'testnet';
+  const swapNetworkConfig = getNetworkConfig(activeSwapNetwork);
+  const sourceSymbol: 'SUI' | 'USDC' = swapDirection === 'SUI_TO_USDC' ? 'SUI' : 'USDC';
+  const targetSymbol: 'SUI' | 'USDC' = swapDirection === 'SUI_TO_USDC' ? 'USDC' : 'SUI';
+  const sourceCoinType =
+    sourceSymbol === 'SUI' ? swapNetworkConfig.coinTypes.SUI : swapNetworkConfig.coinTypes.USDC;
+  const targetCoinType =
+    targetSymbol === 'SUI' ? swapNetworkConfig.coinTypes.SUI : swapNetworkConfig.coinTypes.USDC;
+  const sourceBalance = getManualSwapBalance(allCoins, sourceSymbol);
+  const targetBalance = getManualSwapBalance(allCoins, targetSymbol);
+  const maxSwapAmount =
+    sourceSymbol === 'SUI'
+      ? Math.max(0, sourceBalance - MANUAL_SWAP_SUI_GAS_BUFFER)
+      : sourceBalance;
+  const parsedSwapAmount = Number.parseFloat(swapAmount);
+  const hasValidSwapAmount = Number.isFinite(parsedSwapAmount) && parsedSwapAmount > 0;
+  const hasEnoughSourceBalance = hasValidSwapAmount && parsedSwapAmount <= maxSwapAmount;
 
   // useEffect to calculate total wallet value when convertedBalances changes
   useEffect(() => {
@@ -1548,13 +1604,18 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    if (isAuthLoading) {
+      console.log("Auth state is still hydrating, waiting before redirect check");
+      return;
+    }
+
     if (!isAuthenticated) {
       console.log("User not authenticated, redirecting to home");
-      router.push('/');
+      router.replace('/');
     } else {
       console.log("User is authenticated:", userAddress);
     }
-  }, [isAuthenticated, router]);
+  }, [isAuthenticated, isAuthLoading, router, userAddress]);
 
   // Initialize network preference from localStorage
   useEffect(() => {
@@ -1654,89 +1715,110 @@ export default function Dashboard() {
 
   // Extract fetchBalance into a reusable function
   const fetchBalance = useCallback(async () => {
-    if (!userAddress) return;
+    if (!userAddress) return false;
 
-    try {
-      // Use official Sui RPC for balance checks - no rate limiting needed for simple reads
-      const officialRpcUrl = getCurrentNetwork() === 'mainnet'
-        ? 'https://fullnode.mainnet.sui.io:443'
-        : 'https://fullnode.testnet.sui.io:443';
+    const activeNetwork = getCurrentNetwork();
+    const activeNetworkConfig = getCurrentNetworkConfig();
+    const officialRpcUrl = activeNetwork === 'mainnet'
+      ? 'https://fullnode.mainnet.sui.io:443'
+      : 'https://fullnode.testnet.sui.io:443';
 
-      const client = getSuiClientFromPool(officialRpcUrl);
+    const rpcCandidates = Array.from(new Set([
+      activeNetworkConfig.rpcUrl,
+      getJsonRpcUrl(0, true),
+      getJsonRpcUrl(1, true),
+      officialRpcUrl,
+    ].filter(Boolean)));
 
-      // Simple balance check - no need for rate limiting queue
-      console.log('🔍 Fetching SUI balance directly from official Sui RPC...');
-      const suiBalance = await client.getBalance({
-        owner: userAddress,
-        coinType: '0x2::sui::SUI'
-      });
-      setBalance(suiBalance.totalBalance);
+    let lastErrorMessage = 'Unknown error';
 
-      // Fetch all coins - also simple read operation
+    for (const activeRpcUrl of rpcCandidates) {
       try {
-        console.log('🔍 Fetching all coins directly from official Sui RPC...');
-        const allCoinsData = await client.getAllCoins({
-          owner: userAddress
+        const client = getSuiClientFromPool(activeRpcUrl);
+
+        console.log(`🔍 Fetching wallet balances from ${activeNetwork} RPC...`, {
+          rpcUrl: activeRpcUrl,
+          packageId: activeNetworkConfig.packageId,
+          network: activeNetwork,
         });
-        
-        // Create a map to aggregate coins by symbol
+
+        const chainBalances = await client.getAllBalances({
+          owner: userAddress,
+        });
+
         const coinMap = new Map<string, {coinType: string, symbol: string, balance: string}>();
-        
-        // Process the coins
-        allCoinsData.data.forEach((coin: any) => {
-          // Extract coin symbol from the type string with network-aware mapping
+
+        chainBalances.forEach((coin: any) => {
           const typeStr = coin.coinType;
+          const totalBalance = coin.totalBalance || '0';
           let symbol: string;
-          
-          // Map known coin types to proper symbols
-          if (typeStr === currentNetworkConfig.coinTypes.SUI) {
+
+          if (typeStr === activeNetworkConfig.coinTypes.SUI) {
             symbol = 'SUI';
-          } else if (typeStr === currentNetworkConfig.coinTypes.USDC) {
+          } else if (typeStr === activeNetworkConfig.coinTypes.USDC) {
             symbol = 'USDC';
           } else {
-            // For unknown types, extract from the end of the type string
             const typeMatch = typeStr.match(/::([^:]+)$/);
             symbol = typeMatch ? typeMatch[1] : typeStr;
           }
-          
-          // If this symbol already exists in our map, add to its balance
+
           if (coinMap.has(symbol)) {
             const existingCoin = coinMap.get(symbol)!;
-            const newBalance = BigInt(existingCoin.balance) + BigInt(coin.balance);
+            const newBalance = BigInt(existingCoin.balance) + BigInt(totalBalance);
             coinMap.set(symbol, {
               ...existingCoin,
               balance: newBalance.toString()
             });
           } else {
-            // Otherwise, add it as a new entry
             coinMap.set(symbol, {
-              coinType: coin.coinType,
-              symbol: symbol,
-              balance: coin.balance
+              coinType: typeStr,
+              symbol,
+              balance: totalBalance
             });
           }
         });
-        
-        // Convert the map back to an array
+
         const processedCoins = Array.from(coinMap.values());
-        
-        console.log('Aggregated coins by symbol:', processedCoins);
+        const suiBalance = chainBalances.find(
+          (coin: any) => coin.coinType === activeNetworkConfig.coinTypes.SUI
+        );
+
+        setBalance(suiBalance?.totalBalance || '0');
         setAllCoins(processedCoins);
+        console.log('Aggregated balances by symbol:', processedCoins);
+        return true;
       } catch (error) {
-        console.error('Error fetching all coins:', error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        lastErrorMessage = errorMessage;
+
+        if (
+          error instanceof TypeError ||
+          errorMessage.includes('Failed to fetch') ||
+          errorMessage.includes('Network request failed')
+        ) {
+          blacklistEndpoint(activeRpcUrl, `Balance fetch failed: ${errorMessage}`);
+        }
+
+        console.warn(`Balance fetch failed on ${activeRpcUrl}: ${errorMessage}`);
       }
-    } catch (error) {
-      console.error('Error fetching balance:', error);
-      toast.error('Failed to refresh balance');
     }
+
+    console.warn(`Unable to fetch wallet balances on ${activeNetwork}: ${lastErrorMessage}`);
+    toast.error(`Failed to refresh balance on ${activeNetwork}`);
+    return false;
   }, [userAddress]);
 
   // Handle manual balance refresh
   const handleRefreshBalance = async () => {
     setIsRefreshingBalance(true);
     try {
-      await fetchBalance();
-      toast.success('Balance refreshed successfully');
+      if (userAddress) {
+        clearWalletBalanceCache(userAddress);
+      }
+      const didRefresh = await fetchBalance();
+      if (didRefresh) {
+        toast.success('Balance refreshed successfully');
+      }
     } catch (error) {
       console.error('Error refreshing balance:', error);
       toast.error('Failed to refresh balance');
@@ -1749,8 +1831,151 @@ export default function Dashboard() {
     fetchBalance();
   }, [userAddress, fetchBalance]);
 
+  useEffect(() => {
+    if (!userAddress || !hasValidSwapAmount) {
+      setSwapQuote(null);
+      setSwapQuoteError(null);
+      setIsSwapQuoteLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      setIsSwapQuoteLoading(true);
+      setSwapQuoteError(null);
+
+      try {
+        cetusService.init(userAddress, activeSwapNetwork);
+        const nextQuote = await cetusService.getSwapEstimate(
+          sourceCoinType,
+          targetCoinType,
+          parsedSwapAmount,
+        );
+
+        if (!nextQuote) {
+          throw new Error('No swap route is available right now.');
+        }
+
+        if (!cancelled) {
+          setSwapQuote({
+            amountOut: Number.parseFloat(nextQuote.amountOut),
+            priceImpact: nextQuote.priceImpact,
+          });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setSwapQuote(null);
+          setSwapQuoteError(
+            error instanceof Error ? error.message : 'Unable to calculate a live quote.',
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setIsSwapQuoteLoading(false);
+        }
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    activeSwapNetwork,
+    hasValidSwapAmount,
+    parsedSwapAmount,
+    sourceCoinType,
+    targetCoinType,
+    userAddress,
+  ]);
+
+  const applySwapQuickAmount = (ratio: number) => {
+    if (maxSwapAmount <= 0) {
+      setSwapAmount('');
+      return;
+    }
+
+    const nextAmount = maxSwapAmount * ratio;
+    setSwapAmount(nextAmount.toFixed(getManualSwapDecimals(sourceSymbol)));
+  };
+
+  const handleManualSwap = async () => {
+    if (!account || !userAddress) {
+      toast.error('Your session is not ready yet. Please try again.');
+      return;
+    }
+
+    if (!hasValidSwapAmount) {
+      toast.error('Enter an amount before swapping.');
+      return;
+    }
+
+    if (!hasEnoughSourceBalance) {
+      toast.error(`You need more ${sourceSymbol} to complete this swap.`);
+      return;
+    }
+
+    setIsSwapSubmitting(true);
+
+    try {
+      cetusService.init(userAddress, activeSwapNetwork);
+      const payload = await cetusService.getSwapTransactionPayload(
+        sourceCoinType,
+        targetCoinType,
+        parsedSwapAmount,
+        MANUAL_SWAP_SLIPPAGE,
+      );
+
+      if (!payload) {
+        throw new Error('Unable to prepare the swap transaction.');
+      }
+
+      toast.loading(`Swapping ${sourceSymbol} to ${targetSymbol}...`, {
+        id: 'dashboard-manual-swap',
+      });
+
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'executeSwap',
+          account,
+          txb: Array.from(payload),
+          network: activeSwapNetwork,
+        }),
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Swap failed.');
+      }
+
+      setLastSwapDigest(result.digest || null);
+      if (userAddress) {
+        clearWalletBalanceCache(userAddress);
+      }
+      await fetchBalance();
+      setSwapAmount('');
+      setSwapQuote(null);
+      setSwapQuoteError(null);
+
+      toast.success(`Swap complete. ${targetSymbol} balance is refreshing.`, {
+        id: 'dashboard-manual-swap',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Swap failed.';
+      toast.error(message, { id: 'dashboard-manual-swap' });
+    } finally {
+      setIsSwapSubmitting(false);
+    }
+  };
+
   // Fetch SUI price - only on page load, no interval
   useEffect(() => {
+    if (isAuthLoading || !isAuthenticated) {
+      return;
+    }
+
     const fetchPrice = async () => {
       setIsPriceLoading(true);
       try {
@@ -1758,8 +1983,8 @@ export default function Dashboard() {
         const price = await priceService.forceRefreshPrice();
         setSuiPrice(price);
         
-        // Show error toast if price fetching failed
-        if (priceService.getFetchStatus() === 'error') {
+        // Only show an error if we truly failed to resolve any price.
+        if (price === null || priceService.getFetchStatus() === 'error') {
           toast.error(
             'Unable to fetch latest SUI price. Some values may not be displayed accurately.',
             {
@@ -1775,7 +2000,8 @@ export default function Dashboard() {
           );
         }
       } catch (error) {
-        console.error('Error in price fetch flow:', error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.warn(`Error in price fetch flow: ${errorMessage}`);
         setSuiPrice(null);
       } finally {
         setIsPriceLoading(false);
@@ -1783,7 +2009,7 @@ export default function Dashboard() {
     };
 
     fetchPrice();
-  }, []);
+  }, [isAuthLoading, isAuthenticated]);
 
   // Save selectedCurrency to localStorage when it changes
   useEffect(() => {
@@ -1795,31 +2021,36 @@ export default function Dashboard() {
   // Update converted balances when currency or balances change
   useEffect(() => {
     const updateConvertedBalances = async () => {
-      if (!suiPrice) return;
+      try {
+        if (!suiPrice) return;
 
-      const newConvertedBalances: Record<string, number> = {};
-      
-      // Convert SUI balance
-      const suiBalance = Number(balance) / 1000000000;
-      const suiPriceInCurrency = await priceService.getSUIPriceInCurrency(selectedCurrency);
-      if (suiPriceInCurrency) {
-        newConvertedBalances.SUI = suiBalance * suiPriceInCurrency;
-      }
-
-      // Convert other token balances
-      for (const coin of allCoins) {
-        const tokenBalance = Number(coin.balance) / getCoinDecimals(coin.coinType);
-
-        if (coin.symbol === 'SUI') {
-          newConvertedBalances[coin.symbol] = newConvertedBalances.SUI || 0;
-        } else if (coin.symbol === 'USDC') {
-          // USDC is pegged to USD, so we convert from USD to target currency
-          const convertedValue = await priceService.convertFromUSD(tokenBalance, selectedCurrency);
-          newConvertedBalances[coin.symbol] = convertedValue;
+        const newConvertedBalances: Record<string, number> = {};
+        
+        // Convert SUI balance
+        const suiBalance = Number(balance) / 1000000000;
+        const suiPriceInCurrency = await priceService.getSUIPriceInCurrency(selectedCurrency);
+        if (suiPriceInCurrency) {
+          newConvertedBalances.SUI = suiBalance * suiPriceInCurrency;
         }
-      }
 
-      setConvertedBalances(newConvertedBalances);
+        // Convert other token balances
+        for (const coin of allCoins) {
+          const tokenBalance = Number(coin.balance) / getCoinDecimals(coin.coinType);
+
+          if (coin.symbol === 'SUI') {
+            newConvertedBalances[coin.symbol] = newConvertedBalances.SUI || 0;
+          } else if (coin.symbol === 'USDC') {
+            // USDC is pegged to USD, so we convert from USD to target currency
+            const convertedValue = await priceService.convertFromUSD(tokenBalance, selectedCurrency);
+            newConvertedBalances[coin.symbol] = convertedValue;
+          }
+        }
+
+        setConvertedBalances(newConvertedBalances);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.warn(`Failed to update converted balances: ${errorMessage}`);
+      }
     };
 
     updateConvertedBalances();
@@ -3108,9 +3339,27 @@ export default function Dashboard() {
             console.warn(`⚠️ Batch fetch attempt ${retryCount}/${maxRetries} failed: ${errorMsg}`);
             
             if (retryCount >= maxRetries) {
-              console.error(`❌ Failed to fetch batch after ${maxRetries} retries:`, error);
-              // Continue to next batch instead of failing completely
-              batchObjectsData = null;
+              console.warn(`⚠️ multiGetObjects failed after ${maxRetries} attempts. Falling back to per-object fetches for this batch.`);
+              try {
+                const fallbackObjects = await batchFetchCircleObjects(batch, client, {
+                  maxConcurrent: 2,
+                  showType: true,
+                  showOwner: true,
+                  showContent: true
+                });
+
+                batchObjectsData = batch.map((circleId) => {
+                  const objectData = fallbackObjects.get(circleId);
+                  return objectData && Object.keys(objectData).length > 0 ? objectData : null;
+                });
+
+                console.log(`✅ Fallback fetch completed for ${batch.length} circles`);
+              } catch (fallbackError) {
+                const fallbackErrorMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+                console.warn(`⚠️ Fallback object fetch failed for batch: ${fallbackErrorMsg}`);
+                batchObjectsData = null;
+              }
+              break;
             } else {
               // Exponential backoff: 1s, 2s, 4s
               const delayMs = Math.pow(2, retryCount - 1) * 1000;
@@ -3752,7 +4001,10 @@ export default function Dashboard() {
             forceRefresh: true,
             network: getCurrentNetwork(),
           });
-          await fetchBalance();
+          const didRefresh = await fetchBalance();
+          if (!didRefresh) {
+            throw new Error('Failed to load refreshed wallet balances.');
+          }
 
           if (parsedResult.status === 'success') {
             setOnrampResultMessage(
@@ -5351,6 +5603,285 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
+
+          <div className="mt-8 bg-white shadow rounded-lg overflow-hidden">
+            <div className="border-b border-gray-200 bg-gradient-to-r from-slate-900 to-slate-800 px-6 py-5 text-white">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="flex items-center text-lg font-semibold">
+                    <ArrowRightLeft className="mr-2 h-5 w-5 text-cyan-300" />
+                    Manual Swap
+                  </h3>
+                  <p className="mt-1 text-sm text-slate-200">
+                    Spend one token, get the other. Enter one amount, review the live quote, then swap.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-100">
+                    {activeSwapNetwork}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsManualSwapOpen((current) => !current)}
+                    className="inline-flex items-center rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-white/20"
+                    aria-expanded={isManualSwapOpen}
+                    aria-label={isManualSwapOpen ? 'Collapse manual swap' : 'Expand manual swap'}
+                  >
+                    {isManualSwapOpen ? (
+                      <>
+                        Hide
+                        <ChevronUp className="ml-2 h-4 w-4" />
+                      </>
+                    ) : (
+                      <>
+                        Open
+                        <ChevronDown className="ml-2 h-4 w-4" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {!isManualSwapOpen ? (
+              <div className="px-6 py-4">
+                <div className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-4 text-sm text-gray-600">
+                  Manual swap is hidden. Open it only when you need to convert between SUI and USDC.
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-6 px-6 py-6 xl:grid-cols-[minmax(0,1.7fr),minmax(280px,1fr)]">
+                <div className="space-y-5">
+                  <div className="rounded-2xl border border-gray-200 p-5">
+                    <p className="text-sm font-semibold text-gray-500">1. Pick what you are spending</p>
+                    <div className="mt-3 inline-flex rounded-2xl bg-gray-100 p-1">
+                      <button
+                        type="button"
+                        onClick={() => setSwapDirection('SUI_TO_USDC')}
+                        className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                          swapDirection === 'SUI_TO_USDC'
+                            ? 'bg-white text-gray-900 shadow-sm'
+                            : 'text-gray-500'
+                        }`}
+                      >
+                        Spend SUI
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSwapDirection('USDC_TO_SUI')}
+                        className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                          swapDirection === 'USDC_TO_SUI'
+                            ? 'bg-white text-gray-900 shadow-sm'
+                            : 'text-gray-500'
+                        }`}
+                      >
+                        Spend USDC
+                      </button>
+                    </div>
+                    <p className="mt-3 text-sm text-gray-600">
+                      The destination token is chosen automatically, so there is no routing setup.
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-gray-200 p-5">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-gray-500">2. Enter one amount</p>
+                        <p className="mt-1 text-xs text-gray-500">
+                          Available now: {formatManualSwapAmount(sourceBalance, sourceSymbol)}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleRefreshBalance}
+                        disabled={isRefreshingBalance}
+                        className="inline-flex items-center justify-center rounded-xl border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshingBalance ? 'animate-spin' : ''}`} />
+                        Refresh
+                      </button>
+                    </div>
+
+                    <div className="mt-4 rounded-2xl border border-gray-200 px-4 py-3">
+                      <label className="block text-sm font-medium text-gray-700">
+                        Amount in {sourceSymbol}
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step={sourceSymbol === 'SUI' ? '0.0001' : '0.01'}
+                        value={swapAmount}
+                        onChange={(event) => setSwapAmount(event.target.value)}
+                        placeholder={sourceSymbol === 'SUI' ? '0.2500' : '10.00'}
+                        className="mt-2 w-full border-0 p-0 text-3xl font-semibold text-gray-900 focus:outline-none focus:ring-0"
+                      />
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => applySwapQuickAmount(0.25)}
+                        className="rounded-full border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50"
+                      >
+                        25%
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applySwapQuickAmount(0.5)}
+                        className="rounded-full border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50"
+                      >
+                        50%
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applySwapQuickAmount(1)}
+                        className="rounded-full border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50"
+                      >
+                        Max
+                      </button>
+                    </div>
+
+                    {sourceSymbol === 'SUI' && (
+                      <p className="mt-3 text-xs text-gray-500">
+                        Max keeps {MANUAL_SWAP_SUI_GAS_BUFFER.toFixed(2)} SUI available for gas.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="rounded-2xl border border-gray-200 p-5">
+                    <p className="text-sm font-semibold text-gray-500">3. Review and swap</p>
+
+                    <div className="mt-4 rounded-2xl bg-gray-50 p-4">
+                      <div className="flex items-center justify-between text-sm text-gray-600">
+                        <span>You pay</span>
+                        <span className="font-semibold text-gray-900">
+                          {hasValidSwapAmount
+                            ? formatManualSwapAmount(parsedSwapAmount, sourceSymbol)
+                            : `0.00 ${sourceSymbol}`}
+                        </span>
+                      </div>
+                      <div className="mt-3 flex items-center justify-center text-gray-400">
+                        <ArrowRightLeft className="h-4 w-4" />
+                      </div>
+                      <div className="mt-3 flex items-center justify-between text-sm text-gray-600">
+                        <span>You receive</span>
+                        <span className="font-semibold text-gray-900">
+                          {!hasValidSwapAmount
+                            ? `Enter an amount`
+                            : swapQuote
+                              ? `~${formatManualSwapAmount(swapQuote.amountOut, targetSymbol)}`
+                              : 'Waiting for quote'}
+                        </span>
+                      </div>
+                      <div className="mt-4 grid grid-cols-1 gap-3 text-xs sm:grid-cols-2">
+                        <div className="rounded-xl bg-white px-3 py-2 text-gray-600">
+                          Slippage protection: {MANUAL_SWAP_SLIPPAGE.toFixed(1)}%
+                        </div>
+                        <div className="rounded-xl bg-white px-3 py-2 text-gray-600">
+                          Price impact: {swapQuote ? formatManualSwapPercent(swapQuote.priceImpact) : '--'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {isSwapQuoteLoading && (
+                      <p className="mt-3 text-sm text-gray-500">Updating live quote...</p>
+                    )}
+
+                    {swapQuoteError && (
+                      <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                        {swapQuoteError}
+                      </div>
+                    )}
+
+                    {hasValidSwapAmount && !hasEnoughSourceBalance && (
+                      <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-4">
+                        <p className="text-sm font-semibold text-blue-900">
+                          You need more {sourceSymbol} for this swap.
+                        </p>
+                        <p className="mt-1 text-sm text-blue-800">
+                          Buy the token you want to spend, then come back and keep the same amount.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => openBuyFlow(sourceSymbol === 'SUI' ? 'sui' : 'usdc')}
+                          className="mt-3 inline-flex items-center rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+                        >
+                          <CreditCard className="mr-2 h-4 w-4" />
+                          Buy {sourceSymbol}
+                        </button>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => void handleManualSwap()}
+                      disabled={
+                        isSwapSubmitting ||
+                        !hasValidSwapAmount ||
+                        !hasEnoughSourceBalance ||
+                        isSwapQuoteLoading ||
+                        !!swapQuoteError ||
+                        !swapQuote
+                      }
+                      className="mt-5 inline-flex w-full items-center justify-center rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                    >
+                      {isSwapSubmitting
+                        ? 'Swapping...'
+                        : `Swap ${sourceSymbol} For ${targetSymbol}`}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-5">
+                  <div className="rounded-2xl border border-gray-200 p-5">
+                    <h4 className="text-base font-semibold text-gray-900">Wallet snapshot</h4>
+                    <div className="mt-4 space-y-3">
+                      <div className="rounded-xl bg-gray-50 px-4 py-3">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">SUI</p>
+                        <p className="mt-1 text-xl font-semibold text-gray-900">
+                          {formatManualSwapAmount(getManualSwapBalance(allCoins, 'SUI'), 'SUI')}
+                        </p>
+                      </div>
+                      <div className="rounded-xl bg-gray-50 px-4 py-3">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">USDC</p>
+                        <p className="mt-1 text-xl font-semibold text-gray-900">
+                          {formatManualSwapAmount(getManualSwapBalance(allCoins, 'USDC'), 'USDC')}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-gray-200 p-5">
+                    <h4 className="text-base font-semibold text-gray-900">How this works</h4>
+                    <div className="mt-4 space-y-3 text-sm text-gray-600">
+                      <p>1. Choose the token you already hold.</p>
+                      <p>2. Enter one amount or use a quick amount button.</p>
+                      <p>3. Review the quote and press the swap button once.</p>
+                    </div>
+                    <div className="mt-4 rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+                      You currently hold {formatManualSwapAmount(targetBalance, targetSymbol)} on the receive side.
+                    </div>
+                  </div>
+
+                  {lastSwapDigest && (
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
+                      <p className="text-sm font-semibold text-emerald-900">Latest swap submitted</p>
+                      <a
+                        href={`https://explorer.sui.io/txblock/${lastSwapDigest}?network=${activeSwapNetwork}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-3 inline-flex items-center text-sm font-medium text-emerald-800 hover:text-emerald-900"
+                      >
+                        View transaction
+                        <ExternalLink className="ml-2 h-4 w-4" />
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Njangi Circles Section */}
           <div className="mt-8">
                           <div className="bg-white shadow rounded-lg p-6">

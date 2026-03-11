@@ -6,7 +6,7 @@ import Link from 'next/link';
 import Head from 'next/head';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
-import { setCurrentNetwork } from '../services/network-config';
+import { getNetworkConfig, setCurrentNetwork } from '../services/network-config';
 
 // Global type declaration for network config
 declare global {
@@ -40,30 +40,35 @@ export default function Home() {
   const [circleCount, setCircleCount] = useState<number | null>(null);
 
   // Network configuration - memoized to prevent unnecessary re-renders
-  const NETWORK_CONFIG = useMemo(() => ({
-    testnet: {
-      rpcUrl: 'https://fullnode.testnet.sui.io:443',
-      packageId: process.env.NEXT_PUBLIC_TESTNET_PACKAGE_ID || process.env.NEXT_PUBLIC_PACKAGE_ID || '',
-      usdcAddress: process.env.NEXT_PUBLIC_TESTNET_USDC || '0x26b3bc67befc214058ca78ea9a2690298d731a2d4309485ec3d40198063c4abc::usdc::USDC',
-      networkName: 'Testnet',
-      enoki: {
-        apiKey: process.env.NEXT_PUBLIC_ENOKI_TESTNET || process.env.NEXT_PUBLIC_ENOKI,
-        baseUrl: 'https://api.enoki.mystenlabs.com/v1',
-        graphqlUrl: 'https://sui-testnet.mystenlabs.com/graphql'
-      }
-    },
-    mainnet: {
-      rpcUrl: 'https://fullnode.mainnet.sui.io:443', 
-      packageId: process.env.NEXT_PUBLIC_MAINNET_PACKAGE_ID || process.env.NEXT_PUBLIC_PACKAGE_ID || '',
-      usdcAddress: '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN',
-      networkName: 'Mainnet',
-      enoki: {
-        apiKey: process.env.NEXT_PUBLIC_ENOKI_MAINNET || process.env.NEXT_PUBLIC_ENOKI,
-        baseUrl: 'https://api.enoki.mystenlabs.com/v1',
-        graphqlUrl: 'https://sui-mainnet.mystenlabs.com/graphql'
-      }
-    }
-  }), []);
+  const NETWORK_CONFIG = useMemo(() => {
+    const testnet = getNetworkConfig('testnet');
+    const mainnet = getNetworkConfig('mainnet');
+
+    return {
+      testnet: {
+        rpcUrl: testnet.rpcUrl,
+        packageId: testnet.packageId,
+        usdcAddress: testnet.coinTypes.USDC,
+        networkName: 'Testnet',
+        enoki: {
+          apiKey: testnet.enoki.apiKey,
+          baseUrl: 'https://api.enoki.mystenlabs.com/v1',
+          graphqlUrl: testnet.graphqlUrl,
+        },
+      },
+      mainnet: {
+        rpcUrl: mainnet.rpcUrl,
+        packageId: mainnet.packageId,
+        usdcAddress: mainnet.coinTypes.USDC,
+        networkName: 'Mainnet',
+        enoki: {
+          apiKey: mainnet.enoki.apiKey,
+          baseUrl: 'https://api.enoki.mystenlabs.com/v1',
+          graphqlUrl: mainnet.graphqlUrl,
+        },
+      },
+    };
+  }, []);
 
   // Network state
   const [network, setNetwork] = useState<'testnet' | 'mainnet'>('testnet');

@@ -10,6 +10,20 @@ import { PACKAGE_ID, getCirclePackageId } from '../../../../services/circle-serv
 import SimplifiedSwapUI from '../../../../components/SimplifiedSwapUI';
 import { getCoinType } from '../../../../config/constants';
 import { getCurrentRpcUrl, getCurrentNetwork } from '../../../../services/network-config';
+import { cetusService } from '../../../../lib/cetus-service';
+import MoonPayWrapper from '@/components/MoonPayWrapper';
+import CoinbaseOnrampLauncher from '@/components/CoinbaseOnrampLauncher';
+import {
+  mapCurrencyCodeToIntent,
+  mapIntentToMoonPayCurrency,
+  normalizeOnrampProviderFlag,
+  shouldUseCoinbaseProvider,
+} from '@/lib/onramp-provider';
+import type { CoinbaseSessionClientError } from '@/hooks/useCoinbaseSession';
+import type {
+  CoinbaseApiErrorPayload,
+  CoinbaseAssetIntent,
+} from '@/types/coinbase-onramp';
 
 // Add this helper function at the top level
 function getJsonRpcUrl(): string {
@@ -20,6 +34,22 @@ function getJsonRpcUrl(): string {
 const ESTIMATED_GAS_FEE = 0.00021; // Gas fee in SUI
 const DEFAULT_SLIPPAGE = 0.5; // Default slippage percentage
 const BUFFER_PERCENTAGE = 1.5; // Additional buffer percentage for swap rate fluctuations
+const TOKEN_ASSIST_SWAP_GAS_RESERVE_SUI = 0.005;
+const TOKEN_ASSIST_EXTRA_OUTPUT_BUFFER_PERCENT = 0.5;
+const ENABLE_SWAP_AND_DEPOSIT_FORM = process.env.NEXT_PUBLIC_ENABLE_SWAP_AND_DEPOSIT_FORM === 'true';
+const ONE_CLICK_GAS_RESERVE_SUI = 0.005;
+const onrampProviderFlag = normalizeOnrampProviderFlag(
+  process.env.NEXT_PUBLIC_ONRAMP_PROVIDER,
+);
+const isCoinbaseOnrampEnabled =
+  (process.env.NEXT_PUBLIC_COINBASE_ONRAMP_ENABLED ?? 'false').toLowerCase() ===
+  'true';
+const isMoonPayEnabled =
+  (process.env.NEXT_PUBLIC_MOONPAY_ENABLED ?? 'false').toLowerCase() ===
+  'true';
+const shouldAutoOpenMoonPayFallback =
+  (process.env.NEXT_PUBLIC_ONRAMP_AUTO_MOONPAY_FALLBACK ?? 'false').toLowerCase() ===
+  'true';
 
 // Helper function to format USD amounts - MOVED TO MODULE SCOPE
 const formatUSD = (amount: number): string => {
@@ -29,6 +59,13 @@ const formatUSD = (amount: number): string => {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   }).format(amount);
+};
+
+type PaymentCurrency = 'USDC' | 'SUI';
+
+const formatUsdCentsAsUsdc = (usdCents: number): string => {
+  const cents = Number.isFinite(usdCents) ? usdCents : 0;
+  return `${formatUSD(cents / 100)} USDC`;
 };
 
 // Format currency value based on currency type - MOVED TO MODULE SCOPE
@@ -616,6 +653,33 @@ export default function ContributeToCircle() {
   const [circle, setCircle] = useState<Circle | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [suiPrice, setSuiPrice] = useState(1.25);
+  const [isOneClickSwapProcessing, setIsOneClickSwapProcessing] = useState(false);
+  const [oneClickSwapDigest, setOneClickSwapDigest] = useState<string | null>(null);
+  const [oneClickSwapError, setOneClickSwapError] = useState<string | null>(null);
+  const [oneClickSwapQuote, setOneClickSwapQuote] = useState<{
+    suiIn: number;
+    usdcOut: number;
+    priceImpact: number;
+  } | null>(null);
+  const [isOneClickSwapQuoteLoading, setIsOneClickSwapQuoteLoading] = useState(false);
+  const [oneClickSwapQuoteError, setOneClickSwapQuoteError] = useState<string | null>(null);
+  const [isTokenAssistSwapProcessing, setIsTokenAssistSwapProcessing] = useState(false);
+  const [tokenAssistSwapDigest, setTokenAssistSwapDigest] = useState<string | null>(null);
+  const [tokenAssistSwapError, setTokenAssistSwapError] = useState<string | null>(null);
+  const [tokenAssistQuote, setTokenAssistQuote] = useState<{
+    usdcIn: number;
+    suiOut: number;
+    priceImpact: number;
+  } | null>(null);
+  const [isTokenAssistQuoteLoading, setIsTokenAssistQuoteLoading] = useState(false);
+  const [tokenAssistQuoteError, setTokenAssistQuoteError] = useState<string | null>(null);
+  const [isMoonPayVisible, setIsMoonPayVisible] = useState(false);
+  const [moonPayCurrency, setMoonPayCurrency] = useState<'sui' | 'usdc'>('usdc');
+  const [showInlineOnrampLauncher, setShowInlineOnrampLauncher] = useState(false);
+  const [coinbaseAssetIntent, setCoinbaseAssetIntent] =
+    useState<CoinbaseAssetIntent>('USDC_ON_SUI');
+  const [coinbaseFallbackCurrency, setCoinbaseFallbackCurrency] =
+    useState<'sui' | 'usdc'>('usdc');
   
   // New state variables
   const [userBalance, setUserBalance] = useState<number | null>(null);
@@ -675,8 +739,11 @@ export default function ContributeToCircle() {
   // Add dynamic package ID state
   const [circlePackageId, setCirclePackageId] = useState<string>(PACKAGE_ID);
 
-  // Membership verification state
-  const [membershipVerified, setMembershipVerified] = useState<boolean | null>(null);
+  // Circle token mode tab index: 0 = USDC, 1 = SUI
+  const [currencyTabIndex, setCurrencyTabIndex] = useState<number>(0);
+
+  const selectedPaymentCurrency: PaymentCurrency = currencyTabIndex === 0 ? 'USDC' : 'SUI';
+  const isSuiCircleModeEnabled = Boolean(circle?.autoSwapEnabled);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -684,6 +751,145 @@ export default function ContributeToCircle() {
       return;
     }
   }, [isAuthenticated, router]);
+
+  // Circle-wide token mode is admin-managed; force tab to match active mode.
+  useEffect(() => {
+    setCurrencyTabIndex(isSuiCircleModeEnabled ? 1 : 0);
+  }, [isSuiCircleModeEnabled]);
+
+  const getZkLoginEndpointWithCurrency = (currency: PaymentCurrency) =>
+    currency === 'SUI' ? '/api/zkLogin?currency=SUI' : '/api/zkLogin';
+
+  const requiredContributionUsdc = (circle?.contributionAmountUsd || 0) / 100;
+  const requiredSecurityDepositUsdc = (circle?.securityDepositUsd || 0) / 100;
+
+  const openMoonPayWidget = (currencyCode: 'sui' | 'usdc' = 'usdc') => {
+    if (!isMoonPayEnabled) {
+      toast('MoonPay integration is coming soon.');
+      return;
+    }
+
+    setMoonPayCurrency(currencyCode);
+    setIsMoonPayVisible(true);
+    toast.success('Opening MoonPay widget...');
+  };
+
+  const closeMoonPayWidget = () => {
+    setIsMoonPayVisible(false);
+  };
+
+  const closeInlineOnrampLauncher = () => {
+    setShowInlineOnrampLauncher(false);
+  };
+
+  const getCoinbaseErrorDetails = (
+    rawError: CoinbaseSessionClientError | CoinbaseApiErrorPayload | Error,
+  ): {
+    code: string;
+    message: string;
+    fallbackProvider: 'moonpay' | null;
+  } => {
+    const code =
+      'code' in rawError && typeof rawError.code === 'string'
+        ? rawError.code
+        : 'error' in rawError && typeof rawError.error === 'string'
+          ? rawError.error
+          : 'COINBASE_UNAVAILABLE';
+
+    const message =
+      'message' in rawError && typeof rawError.message === 'string'
+        ? rawError.message
+        : 'Coinbase checkout is temporarily unavailable.';
+
+    const fallbackProvider =
+      'fallbackProvider' in rawError &&
+      (rawError.fallbackProvider === 'moonpay' ||
+        rawError.fallbackProvider === null)
+        ? rawError.fallbackProvider
+        : 'moonpay';
+
+    return {
+      code,
+      message,
+      fallbackProvider,
+    };
+  };
+
+  const openBuyFlow = (currencyCode: 'sui' | 'usdc' = 'usdc') => {
+    const assetIntent = mapCurrencyCodeToIntent(currencyCode);
+    const fallbackCurrency = mapIntentToMoonPayCurrency(assetIntent);
+    const useCoinbase = shouldUseCoinbaseProvider(
+      onrampProviderFlag,
+      isCoinbaseOnrampEnabled,
+    );
+
+    if (!useCoinbase) {
+      if (isMoonPayEnabled) {
+        openMoonPayWidget(fallbackCurrency);
+      } else {
+        toast.error(
+          'Coinbase onramp is currently unavailable. MoonPay integration is coming soon.',
+        );
+      }
+      return;
+    }
+
+    if (!userAddress) {
+      toast.error('Wallet address is unavailable. Please sign in and retry.');
+      return;
+    }
+
+    closeMoonPayWidget();
+    setCoinbaseAssetIntent(assetIntent);
+    setCoinbaseFallbackCurrency(fallbackCurrency);
+    setShowInlineOnrampLauncher(true);
+  };
+
+  const handleCoinbaseLaunchSuccess = () => {
+    closeMoonPayWidget();
+    toast.success('Opening Coinbase checkout...');
+    closeInlineOnrampLauncher();
+  };
+
+  const handleCoinbaseLaunchError = (
+    rawError: CoinbaseSessionClientError | CoinbaseApiErrorPayload | Error,
+  ) => {
+    const details = getCoinbaseErrorDetails(rawError);
+
+    if (details.fallbackProvider === 'moonpay') {
+      if (shouldAutoOpenMoonPayFallback && isMoonPayEnabled) {
+        toast.error(`${details.message} Switching to MoonPay.`);
+        closeInlineOnrampLauncher();
+        openMoonPayWidget(coinbaseFallbackCurrency);
+        return;
+      }
+
+      if (isMoonPayEnabled) {
+        toast.error(
+          `${details.message} You can switch using "Use MoonPay Instead".`,
+        );
+      } else {
+        toast.error(`${details.message} MoonPay fallback is coming soon.`);
+      }
+      return;
+    }
+
+    toast.error(details.message);
+  };
+
+  const handleCoinbaseCancel = () => {
+    closeInlineOnrampLauncher();
+  };
+
+  const handleMoonPayFallbackClick = () => {
+    if (!isMoonPayEnabled) {
+      toast('MoonPay integration is coming soon.');
+      return;
+    }
+
+    closeInlineOnrampLauncher();
+    openMoonPayWidget(coinbaseFallbackCurrency);
+  };
 
   // Verify user membership before allowing access to contribute page
   const verifyMembership = async (): Promise<boolean> => {
@@ -808,7 +1014,6 @@ export default function ContributeToCircle() {
     // Verify membership and fetch circle details when ID is available
     if (id && userAddress) {
       verifyMembership().then(isMember => {
-        setMembershipVerified(isMember);
         if (isMember) {
       fetchCircleDetails();
         } else {
@@ -1638,7 +1843,6 @@ export default function ContributeToCircle() {
 
         const hasEnoughForSecurity = totalUsdcBalance >= securityDepositInDollars;
         const hasEnoughForContribution = totalUsdcBalance >= contributionInDollars;
-        const autoSwapOn = Boolean(circle.autoSwapEnabled);
         const circleActive = Boolean(circle.isActive);
         const circlePaused = Boolean(circle.pausedAfterCycle);
 
@@ -1647,7 +1851,6 @@ export default function ContributeToCircle() {
             userDepositPaid, 
             hasEnoughForSecurity,
             hasEnoughForContribution,
-            autoSwapOn,
             circleActive,
             circlePaused,
             securityDepositRequiredUSD_ForCheck: securityDepositInDollars,
@@ -1658,15 +1861,15 @@ export default function ContributeToCircle() {
         });
 
         // Condition 1: Paying Security Deposit (userDepositPaid state is false)
-        if (!userDepositPaid && securityDepositInDollars > 0 && hasEnoughForSecurity && autoSwapOn) {
+        if (!userDepositPaid && securityDepositInDollars > 0 && hasEnoughForSecurity) {
           showOption = true;
-          console.log("Logic: Showing direct deposit for SECURITY DEPOSIT because it's > 0, user has enough, and autoswap is on.");
+          console.log("Logic: Showing direct deposit for SECURITY DEPOSIT because it's > 0 and user has enough USDC.");
         }
         // Condition 2: Making Regular Contribution (userDepositPaid state is true)
         // Don't allow contributions if circle is paused after cycle
-        else if (userDepositPaid && contributionInDollars > 0 && hasEnoughForContribution && autoSwapOn && circleActive && !circlePaused) {
+        else if (userDepositPaid && contributionInDollars > 0 && hasEnoughForContribution && circleActive && !circlePaused) {
            showOption = true;
-           console.log("Logic: Showing direct deposit for CONTRIBUTION because it's > 0, user has enough, autoswap is on, circle active & not paused.");
+           console.log("Logic: Showing direct deposit for CONTRIBUTION because it's > 0, user has enough USDC, circle active & not paused.");
         }
         
         setShowDirectDepositOption(showOption);
@@ -2257,29 +2460,44 @@ export default function ContributeToCircle() {
         return;
       }
       
-      // Check if there's sufficient USDC balance in contribution funds (not security deposits)
-      const hasEnoughUSDC = contributionBalance !== null && 
-                           contributionBalance >= circle.contributionAmountUsd;
-
-      // Log the contribution source decision with detailed breakdown
-      console.log('Contribution source decision:', {
-        totalBalance: custodyStablecoinBalance,
-        securityDeposits: securityDepositBalance,
-        contributionFunds: contributionBalance,
-        requiredAmount: circle.contributionAmountUsd,
-        hasEnoughUSDC,
-        willUseUSDC: hasEnoughUSDC
-      });
-      
-      // Show different toast message based on the source of funds
-      if (hasEnoughUSDC) {
-        toast.loading('Processing contribution from custody wallet USDC...', { id: 'contribute-tx' });
-      } else {
-        toast.loading('Processing contribution from SUI...', { id: 'contribute-tx' });
+      const isSuiFlow = selectedPaymentCurrency === 'SUI';
+      if (isSuiFlow && !isSuiCircleModeEnabled) {
+        toast.error('This circle is in USDC mode. Ask the admin to enable SUI mode first.');
+        setIsProcessing(false);
+        return;
       }
+
+      if (!isSuiFlow && userUsdcBalance !== null && userUsdcBalance < requiredContributionUsdc) {
+        toast.error(
+          `Insufficient USDC balance. Need ${requiredContributionUsdc.toFixed(2)} USDC but you have ${userUsdcBalance.toFixed(2)} USDC.`
+        );
+        setIsProcessing(false);
+        return;
+      }
+
+      if (isSuiFlow && userBalance !== null && userBalance < getRequiredContributionAmount()) {
+        toast.error('Insufficient SUI wallet balance for contribution.');
+        setIsProcessing(false);
+        return;
+      }
+
+      console.log('Contribution flow selection:', {
+        selectedPaymentCurrency,
+        userUsdcBalance,
+        requiredContributionUsdc,
+        userSuiBalance: userBalance,
+        requiredSuiAmount: getRequiredContributionAmount(),
+      });
+
+      toast.loading(
+        isSuiFlow
+          ? 'Processing contribution in native SUI...'
+          : 'Processing contribution in USDC...',
+        { id: 'contribute-tx' }
+      );
       
       // Execute contribution through the custody wallet
-      const result = await fetch('/api/zkLogin', {
+      const result = await fetch(getZkLoginEndpointWithCurrency(selectedPaymentCurrency), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2287,7 +2505,8 @@ export default function ContributeToCircle() {
           account,
           circleId: circle.id,
           walletId: circle.walletId,
-          useUSDC: hasEnoughUSDC, // Tell backend to prefer USDC if available
+          currency: selectedPaymentCurrency,
+          useUSDC: selectedPaymentCurrency === 'USDC',
           network: getCurrentNetwork() // Include current network selection
         }),
       });
@@ -2300,12 +2519,12 @@ export default function ContributeToCircle() {
         return;
       }
       
-      // Show success message based on source of funds
-      if (hasEnoughUSDC) {
-        toast.success('Contribution successful! Used USDC from custody wallet.', { id: 'contribute-tx' });
-      } else {
-        toast.success('Contribution successful!', { id: 'contribute-tx' });
-      }
+      toast.success(
+        selectedPaymentCurrency === 'USDC'
+          ? 'Contribution successful in USDC.'
+          : 'Contribution successful in SUI.',
+        { id: 'contribute-tx' }
+      );
       
       console.log('Contribution transaction digest:', responseData.digest);
       
@@ -2371,6 +2590,559 @@ export default function ContributeToCircle() {
     return calculateTotalRequiredAmount(baseAmount);
   };
 
+  const getCurrentUsdcPaymentAmount = (): number =>
+    userDepositPaid ? requiredContributionUsdc : requiredSecurityDepositUsdc;
+
+  const getCurrentSuiPaymentAmount = (): number =>
+    userDepositPaid ? getRequiredContributionAmount() : getRequiredDepositAmount();
+
+  const getCurrentSuiBasePaymentAmount = (): number =>
+    userDepositPaid ? getValidContributionAmount() : getSecurityDepositInSui();
+
+  const getSuiAmountShortfallForAssistSwap = (): number => {
+    const requiredSuiForPayment = getCurrentSuiPaymentAmount();
+    if (!requiredSuiForPayment) return 0;
+
+    const executionBuffer = requiredSuiForPayment * (TOKEN_ASSIST_EXTRA_OUTPUT_BUFFER_PERCENT / 100);
+    const totalSuiTarget =
+      requiredSuiForPayment + TOKEN_ASSIST_SWAP_GAS_RESERVE_SUI + executionBuffer;
+
+    return Math.max(0, totalSuiTarget - (userBalance || 0));
+  };
+
+  const getLegacyUsdcAmountNeededForSuiAssistSwap = (): number => {
+    const requiredSui = getSuiAmountShortfallForAssistSwap();
+    if (!requiredSui || suiPrice <= 0) return 0;
+
+    const usdEquivalent = requiredSui * suiPrice;
+    const swapBuffer = 1 + (DEFAULT_SLIPPAGE / 100) + (BUFFER_PERCENTAGE / 100);
+    return usdEquivalent * swapBuffer;
+  };
+
+  const getUsdcAmountNeededForSuiAssistSwap = (): number => {
+    if (tokenAssistQuote && tokenAssistQuote.usdcIn > 0) {
+      return tokenAssistQuote.usdcIn;
+    }
+
+    return getLegacyUsdcAmountNeededForSuiAssistSwap();
+  };
+
+  const currentSuiAssistShortfall = getSuiAmountShortfallForAssistSwap();
+
+  const getCurrentUsdcShortfallForOneClickSwap = (): number => {
+    const requiredUsdc = getCurrentUsdcPaymentAmount();
+    return Math.max(0, requiredUsdc - (userUsdcBalance || 0));
+  };
+
+  const getLegacySuiAmountNeededForOneClickSwap = (): number => {
+    const usdcShortfall = getCurrentUsdcShortfallForOneClickSwap();
+    if (!usdcShortfall || suiPrice <= 0) return 0;
+
+    const estimatedSui = usdcShortfall / suiPrice;
+    const swapBuffer = 1 + (DEFAULT_SLIPPAGE / 100) + (BUFFER_PERCENTAGE / 100);
+    return estimatedSui * swapBuffer;
+  };
+
+  const getOneClickQuotedSuiInput = (): number => {
+    if (oneClickSwapQuote && oneClickSwapQuote.suiIn > 0) {
+      return oneClickSwapQuote.suiIn;
+    }
+
+    return getLegacySuiAmountNeededForOneClickSwap();
+  };
+
+  const currentUsdcShortfallForOneClickSwap = getCurrentUsdcShortfallForOneClickSwap();
+
+  useEffect(() => {
+    if (!userAddress || selectedPaymentCurrency !== 'SUI' || !isSuiCircleModeEnabled) {
+      setTokenAssistQuote(null);
+      setTokenAssistQuoteError(null);
+      setIsTokenAssistQuoteLoading(false);
+      return;
+    }
+
+    if (currentSuiAssistShortfall <= 0) {
+      setTokenAssistQuote(null);
+      setTokenAssistQuoteError(null);
+      setIsTokenAssistQuoteLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      setIsTokenAssistQuoteLoading(true);
+      setTokenAssistQuoteError(null);
+
+      try {
+        cetusService.init(userAddress, getCurrentNetwork());
+        const quote = await cetusService.getSwapEstimate(
+          USDC_COIN_TYPE,
+          getCoinType('SUI'),
+          Number(currentSuiAssistShortfall.toFixed(9)),
+          false
+        );
+
+        if (!quote) {
+          throw new Error('No swap route is available right now.');
+        }
+
+        if (!cancelled) {
+          setTokenAssistQuote({
+            usdcIn: Number.parseFloat(quote.amountIn),
+            suiOut: Number.parseFloat(quote.amountOut),
+            priceImpact: quote.priceImpact,
+          });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setTokenAssistQuote(null);
+          setTokenAssistQuoteError(
+            error instanceof Error ? error.message : 'Unable to calculate a live swap quote.'
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setIsTokenAssistQuoteLoading(false);
+        }
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    USDC_COIN_TYPE,
+    circle?.contributionAmount,
+    circle?.contributionAmountUsd,
+    circle?.id,
+    circle?.securityDeposit,
+    circle?.securityDepositUsd,
+    currentSuiAssistShortfall,
+    isSuiCircleModeEnabled,
+    selectedPaymentCurrency,
+    suiPrice,
+    userAddress,
+    userBalance,
+    userDepositPaid,
+  ]);
+
+  useEffect(() => {
+    if (!userAddress || selectedPaymentCurrency !== 'USDC') {
+      setOneClickSwapQuote(null);
+      setOneClickSwapQuoteError(null);
+      setIsOneClickSwapQuoteLoading(false);
+      return;
+    }
+
+    if (currentUsdcShortfallForOneClickSwap <= 0) {
+      setOneClickSwapQuote(null);
+      setOneClickSwapQuoteError(null);
+      setIsOneClickSwapQuoteLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      setIsOneClickSwapQuoteLoading(true);
+      setOneClickSwapQuoteError(null);
+
+      try {
+        cetusService.init(userAddress, getCurrentNetwork());
+        const quote = await cetusService.getSwapEstimate(
+          getCoinType('SUI'),
+          USDC_COIN_TYPE,
+          Number(currentUsdcShortfallForOneClickSwap.toFixed(6)),
+          false
+        );
+
+        if (!quote) {
+          throw new Error('No swap route is available right now.');
+        }
+
+        if (!cancelled) {
+          setOneClickSwapQuote({
+            suiIn: Number.parseFloat(quote.amountIn),
+            usdcOut: Number.parseFloat(quote.amountOut),
+            priceImpact: quote.priceImpact,
+          });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setOneClickSwapQuote(null);
+          setOneClickSwapQuoteError(
+            error instanceof Error ? error.message : 'Unable to calculate a live swap quote.'
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setIsOneClickSwapQuoteLoading(false);
+        }
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    USDC_COIN_TYPE,
+    currentUsdcShortfallForOneClickSwap,
+    selectedPaymentCurrency,
+    userAddress,
+    userUsdcBalance,
+  ]);
+
+  const hasSufficientSuiForOneClickSwap = (): boolean => {
+    if (userBalance === null) return false;
+    const requiredSui = getOneClickQuotedSuiInput();
+    return userBalance - ONE_CLICK_GAS_RESERVE_SUI >= requiredSui;
+  };
+
+  const getOneClickSwapAmountSui = (): number => {
+    if (userBalance === null) return 0;
+    const requiredSui = getOneClickQuotedSuiInput();
+    if (requiredSui <= 0) return 0;
+
+    const maxSpendable = Math.max(0, userBalance - ONE_CLICK_GAS_RESERVE_SUI);
+    return Math.max(0, Math.min(requiredSui, maxSpendable));
+  };
+
+  const pollOneClickSwapTxStatus = async (digest: string): Promise<void> => {
+    const client = new SuiClient({ url: getCurrentRpcUrl() });
+    const maxAttempts = 15;
+    const intervalMs = 2000;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const txData = await client.getTransactionBlock({
+          digest,
+          options: { showEffects: true },
+        });
+
+        const status = txData.effects?.status?.status;
+        if (status === 'success') {
+          return;
+        }
+
+        if (status === 'failure') {
+          throw new Error(txData.effects?.status?.error || 'Swap + deposit transaction failed.');
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message.toLowerCase() : '';
+        const txNotIndexedYet =
+          errorMessage.includes('not found') ||
+          errorMessage.includes('not exist') ||
+          errorMessage.includes('could not find');
+
+        if (!txNotIndexedYet) {
+          throw error;
+        }
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+
+    throw new Error('Timed out waiting for transaction confirmation. Check your wallet history and retry.');
+  };
+
+  const handleOneClickSwapAndDeposit = async () => {
+    if (!circle || !account || !userAddress) {
+      toast.error('Missing circle or account information.');
+      return;
+    }
+
+    if (!circle.walletId) {
+      toast.error('Circle wallet is unavailable. Refresh the page and try again.');
+      return;
+    }
+
+    if (selectedPaymentCurrency !== 'USDC') {
+      toast.error('One-click conversion is only available in USDC circle mode.');
+      return;
+    }
+
+    if (!userDepositPaid && (circle.securityDepositUsd || 0) <= 0) {
+      toast.error('Security deposit amount is unavailable. Refresh the page and try again.');
+      return;
+    }
+
+    if (
+      userDepositPaid &&
+      (!circle.isActive || circle.pausedAfterCycle || userHasContributed || isCurrentRecipient)
+    ) {
+      toast.error('You cannot contribute at this time.');
+      return;
+    }
+
+    if (!userDepositPaid && circle.pausedAfterCycle && securityDepositReturnedDuringPause) {
+      toast.error('Your prior security deposit was already returned for this paused cycle.');
+      return;
+    }
+
+    const usdcShortfall = getCurrentUsdcShortfallForOneClickSwap();
+    if (usdcShortfall <= 0) {
+      toast.error('Your wallet already has enough USDC for this payment.');
+      return;
+    }
+
+    if (isOneClickSwapQuoteLoading) {
+      toast.error('Still calculating the live swap quote. Try again in a moment.');
+      return;
+    }
+
+    if (oneClickSwapQuoteError) {
+      toast.error(oneClickSwapQuoteError);
+      return;
+    }
+
+    const quotedSuiInput = getOneClickQuotedSuiInput();
+    if (!hasSufficientSuiForOneClickSwap()) {
+      toast.error(
+        `Insufficient SUI for conversion. Need about ${quotedSuiInput.toFixed(4)} SUI plus gas reserve.`
+      );
+      return;
+    }
+
+    if (quotedSuiInput <= 0) {
+      toast.error('Invalid swap amount. Refresh balances and try again.');
+      return;
+    }
+
+    setIsOneClickSwapProcessing(true);
+    setOneClickSwapError(null);
+    setOneClickSwapDigest(null);
+
+    try {
+      const paymentLabel = userDepositPaid ? 'contribution' : 'security deposit';
+      toast.loading(`Submitting SUI -> USDC conversion for your ${paymentLabel}...`, {
+        id: 'one-click-swap-deposit',
+      });
+
+      cetusService.init(userAddress, getCurrentNetwork());
+      const liveQuote = await cetusService.getSwapEstimate(
+        getCoinType('SUI'),
+        USDC_COIN_TYPE,
+        Number(usdcShortfall.toFixed(6)),
+        false
+      );
+
+      if (!liveQuote) {
+        throw new Error('Unable to find a valid SUI -> USDC route for this payment.');
+      }
+
+      const latestQuotedSuiInput = Number.parseFloat(liveQuote.amountIn);
+      if (!Number.isFinite(latestQuotedSuiInput) || latestQuotedSuiInput <= 0) {
+        throw new Error('Invalid quote returned for the SUI -> USDC conversion.');
+      }
+
+      if (userBalance === null || userBalance - ONE_CLICK_GAS_RESERVE_SUI < latestQuotedSuiInput) {
+        throw new Error(
+          `Insufficient SUI for conversion. Need about ${latestQuotedSuiInput.toFixed(4)} SUI plus gas reserve.`
+        );
+      }
+
+      setOneClickSwapQuote({
+        suiIn: latestQuotedSuiInput,
+        usdcOut: Number.parseFloat(liveQuote.amountOut),
+        priceImpact: liveQuote.priceImpact,
+      });
+
+      const payload = await cetusService.getSwapTransactionPayload(
+        getCoinType('SUI'),
+        USDC_COIN_TYPE,
+        Number(usdcShortfall.toFixed(6)),
+        DEFAULT_SLIPPAGE,
+        false
+      );
+
+      if (!payload) {
+        throw new Error('Failed to prepare the SUI -> USDC swap transaction.');
+      }
+
+      const swapResponse = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'executeSwap',
+          account,
+          txb: Array.from(payload),
+          network: getCurrentNetwork(),
+        }),
+      });
+
+      const swapResponseData = await swapResponse.json();
+      if (!swapResponse.ok) {
+        throw new Error(swapResponseData.error || 'Failed to submit the SUI -> USDC swap.');
+      }
+
+      setOneClickSwapDigest(swapResponseData.digest || null);
+      toast.loading('Transaction submitted. Waiting for on-chain confirmation...', {
+        id: 'one-click-swap-deposit',
+      });
+
+      await pollOneClickSwapTxStatus(swapResponseData.digest);
+      await fetchUserWalletInfo();
+
+      toast.loading('Swap confirmed. Submitting the USDC payment...', {
+        id: 'one-click-swap-deposit',
+      });
+
+      const requiredAmountInCents = userDepositPaid
+        ? circle.contributionAmountUsd || 0
+        : circle.securityDepositUsd || 0;
+
+      const depositResponse = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'depositUsdcDirect',
+          account,
+          circleId: circle.id,
+          walletId: circle.walletId,
+          usdcAmount: requiredAmountInCents,
+          isSecurityDeposit: !userDepositPaid,
+          network: getCurrentNetwork(),
+        }),
+      });
+
+      const depositResponseData = await depositResponse.json();
+      if (!depositResponse.ok) {
+        throw new Error(
+          depositResponseData.error ||
+            'Swap succeeded, but the follow-up USDC payment could not be submitted.'
+        );
+      }
+
+      toast.success(
+        userDepositPaid
+          ? 'Converted SUI to USDC, then deposited your contribution successfully.'
+          : 'Converted SUI to USDC, then paid your security deposit successfully.',
+        {
+          id: 'one-click-swap-deposit',
+        }
+      );
+
+      // Refresh key page state after confirmation.
+      fetchUserWalletInfo();
+      fetchCircleDetails();
+      fetchCustodyWalletBalance();
+      checkUserContribution();
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'One-click swap + deposit failed.';
+      setOneClickSwapError(errorMessage);
+      toast.error(errorMessage, { id: 'one-click-swap-deposit' });
+    } finally {
+      setIsOneClickSwapProcessing(false);
+    }
+  };
+
+  const handleSwapUsdcToSuiForPayment = async () => {
+    if (!circle || !account || !userAddress) {
+      toast.error('Missing circle or account information.');
+      return;
+    }
+
+    if (selectedPaymentCurrency !== 'SUI') {
+      toast.error('This balance assist is only available for SUI circle mode.');
+      return;
+    }
+
+    if (!isSuiCircleModeEnabled) {
+      toast.error('This circle is not currently routing payments in SUI.');
+      return;
+    }
+
+    const requiredSuiShortfall = getSuiAmountShortfallForAssistSwap();
+    if (!requiredSuiShortfall || requiredSuiShortfall <= 0) {
+      toast.error('Your wallet already has enough SUI for this payment.');
+      return;
+    }
+
+    setIsTokenAssistSwapProcessing(true);
+    setTokenAssistSwapError(null);
+    setTokenAssistSwapDigest(null);
+
+    try {
+      toast.loading('Converting USDC to SUI for this payment...', {
+        id: 'token-assist-swap',
+      });
+
+      cetusService.init(userAddress, getCurrentNetwork());
+      const liveQuote = await cetusService.getSwapEstimate(
+        USDC_COIN_TYPE,
+        getCoinType('SUI'),
+        Number(requiredSuiShortfall.toFixed(9)),
+        false
+      );
+
+      if (!liveQuote) {
+        throw new Error('Unable to estimate the USDC amount needed for this SUI payment.');
+      }
+
+      const quotedUsdcInput = Number.parseFloat(liveQuote.amountIn);
+      if (!Number.isFinite(quotedUsdcInput) || quotedUsdcInput <= 0) {
+        throw new Error('Invalid quote returned for the USDC -> SUI conversion.');
+      }
+
+      if (userUsdcBalance === null || userUsdcBalance < quotedUsdcInput) {
+        throw new Error(
+          `Insufficient USDC to convert. Need about ${formatUSD(quotedUsdcInput)} but only ${formatUSD(userUsdcBalance || 0)} is available.`
+        );
+      }
+
+      setTokenAssistQuote({
+        usdcIn: quotedUsdcInput,
+        suiOut: Number.parseFloat(liveQuote.amountOut),
+        priceImpact: liveQuote.priceImpact,
+      });
+
+      const payload = await cetusService.getSwapTransactionPayload(
+        USDC_COIN_TYPE,
+        getCoinType('SUI'),
+        Number(requiredSuiShortfall.toFixed(9)),
+        DEFAULT_SLIPPAGE,
+        false
+      );
+
+      if (!payload) {
+        throw new Error('Failed to prepare the USDC -> SUI swap transaction.');
+      }
+
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'executeSwap',
+          account,
+          txb: Array.from(payload),
+          network: getCurrentNetwork(),
+        }),
+      });
+
+      const responseData = await response.json();
+
+      if (!response.ok) {
+        throw new Error(responseData.error || 'Failed to convert USDC into SUI.');
+      }
+
+      setTokenAssistSwapDigest(responseData.digest || null);
+      toast.success('Converted USDC to SUI. Your SUI balance is refreshing now.', {
+        id: 'token-assist-swap',
+      });
+
+      fetchUserWalletInfo();
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'USDC -> SUI conversion failed.';
+      setTokenAssistSwapError(errorMessage);
+      toast.error(errorMessage, { id: 'token-assist-swap' });
+    } finally {
+      setIsTokenAssistSwapProcessing(false);
+    }
+  };
+
   // Helper function to show the breakdown of a calculation
   const getAmountBreakdown = (baseAmount: number): { 
     baseAmount: number;
@@ -2406,10 +3178,24 @@ export default function ContributeToCircle() {
     
     // Use the calculated amount that includes slippage and fees
     const requiredAmount = getRequiredDepositAmount();
-    
-    // Check if wallet balance is sufficient for the total required amount
-    if (userBalance !== null && userBalance < requiredAmount) {
-      toast.error('Insufficient wallet balance to pay security deposit.');
+    const isSuiFlow = selectedPaymentCurrency === 'SUI';
+
+    if (isSuiFlow && !isSuiCircleModeEnabled) {
+      toast.error('This circle is in USDC mode. Ask the admin to enable SUI mode first.');
+      return;
+    }
+
+    if (isSuiFlow) {
+      // SUI path requires enough native balance (including buffer)
+      if (userBalance !== null && userBalance < requiredAmount) {
+        toast.error('Insufficient SUI wallet balance to pay security deposit.');
+        return;
+      }
+    } else if (userUsdcBalance !== null && userUsdcBalance < requiredSecurityDepositUsdc) {
+      // USDC path checks required USDC amount directly
+      toast.error(
+        `Insufficient USDC balance. Need ${requiredSecurityDepositUsdc.toFixed(2)} USDC but you have ${userUsdcBalance.toFixed(2)} USDC.`
+      );
       return;
     }
     
@@ -2417,8 +3203,11 @@ export default function ContributeToCircle() {
     
     try {
       console.log('Preparing to pay security deposit:', {
+        selectedPaymentCurrency,
         baseAmount: getSecurityDepositInSui(),
         requiredAmount,
+        requiredSecurityDepositUsdc,
+        userUsdcBalance,
         breakdown: getAmountBreakdown(getSecurityDepositInSui())
       });
       
@@ -2428,14 +3217,18 @@ export default function ContributeToCircle() {
         return;
       }
       
-      toast.loading('Processing security deposit payment...', { id: 'pay-security-deposit' });
+      toast.loading(
+        isSuiFlow
+          ? 'Processing security deposit payment in SUI...'
+          : 'Processing security deposit payment in USDC...',
+        { id: 'pay-security-deposit' }
+      );
       
-      // Use the original security deposit amount for the actual transaction
-      // as the contract expects the exact amount, buffers are just for checking sufficient balance
-      const depositAmount = getSecurityDepositInSui();
+      // SUI path uses SUI amount in MIST; USDC path derives exact amount from CircleConfig in backend.
+      const depositAmount = isSuiFlow ? getSecurityDepositInSui() : 0;
       
       // Execute the transaction through the API
-      const response = await fetch('/api/zkLogin', {
+      const response = await fetch(getZkLoginEndpointWithCurrency(selectedPaymentCurrency), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2444,6 +3237,8 @@ export default function ContributeToCircle() {
           circleId: circle.id,
           walletId: circle.walletId,
           depositAmount: Math.floor(depositAmount * 1e9),
+          currency: selectedPaymentCurrency,
+          useUSDC: selectedPaymentCurrency === 'USDC',
           network: getCurrentNetwork() // Include current network selection
         }),
       });
@@ -2454,7 +3249,12 @@ export default function ContributeToCircle() {
         console.error('Security deposit payment failed:', responseData);
         toast.error(responseData.error || 'Failed to process security deposit payment', { id: 'pay-security-deposit' });
       } else {
-        toast.success('Security deposit paid successfully!', { id: 'pay-security-deposit' });
+        toast.success(
+          selectedPaymentCurrency === 'USDC'
+            ? 'Security deposit paid successfully in USDC.'
+            : 'Security deposit paid successfully in SUI.',
+          { id: 'pay-security-deposit' }
+        );
         // Refresh user's wallet info and circle data
         fetchUserWalletInfo();
         fetchCircleDetails();
@@ -2468,7 +3268,7 @@ export default function ContributeToCircle() {
   };
 
   // Helper function to get valid contribution amount
-  const getValidContributionAmount = (): number => {
+  function getValidContributionAmount(): number {
     // Make sure we have a valid, reasonable number
     const contributionAmount = typeof circle?.contributionAmount === 'number' && !isNaN(circle.contributionAmount)
       ? circle.contributionAmount : 0;
@@ -2487,7 +3287,7 @@ export default function ContributeToCircle() {
     
     // Return the original amount if it's valid, or 0 as a safe default
     return isValidAmount ? contributionAmount : 0;
-  };
+  }
 
   // Currency display component
   const CurrencyDisplay = ({ 
@@ -2502,7 +3302,7 @@ export default function ContributeToCircle() {
     className?: string;
   }) => {
     const isPriceUnavailable = suiPrice === null;
-    const isPriceStale = priceService.getFetchStatus() === 'error';
+    const isPriceStale = priceService.isPriceStale();
     
     console.log('CurrencyDisplay inputs:', { localAmount, sui, currencyType, suiPrice, isPriceUnavailable });
     
@@ -2964,6 +3764,62 @@ export default function ContributeToCircle() {
 
   // Update the renderContributionOptions function to show a message when user is the current recipient
   const renderContributionOptions = () => {
+    const paymentLabel = userDepositPaid ? 'Contribution' : 'Security Deposit';
+    const currentUsdcPaymentAmount = getCurrentUsdcPaymentAmount();
+    const currentUsdcShortfall = getCurrentUsdcShortfallForOneClickSwap();
+    const currentSuiBasePaymentAmount = getCurrentSuiBasePaymentAmount();
+    const currentSuiPaymentAmount = getCurrentSuiPaymentAmount();
+    const estimatedUsdcNeededForSuiSwap = getUsdcAmountNeededForSuiAssistSwap();
+    const quotedSuiOutputForAssistSwap = tokenAssistQuote?.suiOut || currentSuiAssistShortfall;
+    const tokenAssistExecutionBufferSui =
+      currentSuiPaymentAmount * (TOKEN_ASSIST_EXTRA_OUTPUT_BUFFER_PERCENT / 100);
+    const hasEnoughSuiForCurrentPayment =
+      userBalance !== null && userBalance >= currentSuiPaymentAmount;
+    const hasEnoughUsdcForCurrentPayment =
+      userUsdcBalance !== null && userUsdcBalance >= currentUsdcPaymentAmount;
+    const hasEnoughUsdcForSuiAssistSwap =
+      userUsdcBalance !== null && userUsdcBalance >= estimatedUsdcNeededForSuiSwap;
+    const showSuiDirectPayCard = selectedPaymentCurrency === 'SUI' && userBalance !== null;
+    const showUsdcSwapAssist =
+      circle &&
+      selectedPaymentCurrency === 'USDC' &&
+      userUsdcBalance !== null &&
+      !hasEnoughUsdcForCurrentPayment &&
+      userBalance !== null &&
+      userBalance > ONE_CLICK_GAS_RESERVE_SUI &&
+      (
+        userDepositPaid
+          ? circle.isActive && !circle.pausedAfterCycle && !userHasContributed && !isCurrentRecipient
+          : (!circle.pausedAfterCycle || !securityDepositReturnedDuringPause) &&
+            (circle.securityDepositUsd || 0) > 0
+      );
+    const showSuiSwapAssist =
+      circle &&
+      selectedPaymentCurrency === 'SUI' &&
+      userBalance !== null &&
+      userUsdcBalance !== null &&
+      !hasEnoughSuiForCurrentPayment &&
+      hasEnoughUsdcForSuiAssistSwap &&
+      (!userDepositPaid || (!userHasContributed && !isCurrentRecipient && circle.isActive && !circle.pausedAfterCycle));
+    const lacksBothTokensForCurrentPayment =
+      userBalance !== null &&
+      userUsdcBalance !== null &&
+      (
+        selectedPaymentCurrency === 'SUI'
+          ? !hasEnoughSuiForCurrentPayment && !hasEnoughUsdcForSuiAssistSwap
+          : !hasEnoughUsdcForCurrentPayment && !hasSufficientSuiForOneClickSwap()
+      );
+    const onrampTargetCurrency: 'sui' | 'usdc' =
+      selectedPaymentCurrency === 'SUI' ? 'sui' : 'usdc';
+    const inlineOnrampAmountUsd = Math.max(
+      10,
+      Math.ceil(
+        selectedPaymentCurrency === 'SUI'
+          ? Math.max(estimatedUsdcNeededForSuiSwap, currentSuiPaymentAmount * Math.max(suiPrice, 1))
+          : currentUsdcPaymentAmount
+      )
+    );
+
     return (
       <div className="pt-6 border-t border-gray-200 px-2">
         <div className="flex justify-between items-center mb-4">
@@ -2980,12 +3836,77 @@ export default function ContributeToCircle() {
              Refresh Status
            </button>
          </div>
+
+        <div className="mb-4">
+          <p className="mb-2 text-sm font-medium text-gray-700">Circle Token Mode</p>
+          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
+            <button
+              type="button"
+              onClick={() => {
+                if (isSuiCircleModeEnabled) {
+                  toast.error('Circle is currently in SUI mode. USDC is unavailable while SUI mode is active.');
+                  return;
+                }
+                setCurrencyTabIndex(0);
+              }}
+              disabled={isSuiCircleModeEnabled}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                currencyTabIndex === 0
+                  ? 'bg-emerald-600 text-white'
+                  : isSuiCircleModeEnabled
+                    ? 'text-gray-400 cursor-not-allowed'
+                    : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              USDC Mode
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!isSuiCircleModeEnabled) {
+                  toast.error('SUI mode is disabled by the circle admin.');
+                  return;
+                }
+                console.log(
+                  '[analytics] sui_circle_mode_selected',
+                  JSON.stringify({
+                    circleId: circle?.id,
+                    userAddress,
+                    timestamp: new Date().toISOString(),
+                  })
+                );
+                setCurrencyTabIndex(1);
+              }}
+              disabled={!isSuiCircleModeEnabled}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                currencyTabIndex === 1
+                  ? 'bg-blue-600 text-white'
+                  : isSuiCircleModeEnabled
+                    ? 'text-gray-600 hover:bg-gray-100'
+                    : 'text-gray-400 cursor-not-allowed'
+              }`}
+            >
+              SUI Mode
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-gray-500">
+            Token mode is admin-managed. {isSuiCircleModeEnabled ? 'This circle is in SUI mode for all active-cycle contributions and payouts.' : 'This circle is in USDC mode.'}
+          </p>
+        </div>
         
-        {/* Show auto swap enabled notice if applicable */}
-        {circle?.autoSwapEnabled && (
-          <div className="mb-4 p-3 bg-blue-50 rounded border border-blue-200">
-            <p className="text-sm text-blue-700">
-              <strong>Auto-swap enabled:</strong> Your SUI contribution will automatically be swapped to USDC.
+        {/* Admin-managed token policy notice */}
+        {circle && (
+          <div className={`mb-4 p-3 rounded border ${isSuiCircleModeEnabled ? 'bg-blue-50 border-blue-200' : 'bg-emerald-50 border-emerald-200'}`}>
+            <p className={`text-sm ${isSuiCircleModeEnabled ? 'text-blue-700' : 'text-emerald-700'}`}>
+              {isSuiCircleModeEnabled ? (
+                <>
+                  <strong>SUI mode enabled:</strong> Once active, all member contributions and payouts are processed in SUI.
+                </>
+              ) : (
+                <>
+                  <strong>USDC mode enabled:</strong> Contributions and payouts are routed in USDC.
+                </>
+              )}
             </p>
           </div>
         )}
@@ -3060,8 +3981,67 @@ export default function ContributeToCircle() {
           </div>
         )}
 
-        {/* Show direct USDC deposit option if user has sufficient USDC balance and auto-swap is enabled */}
-        {showDirectDepositOption && userUsdcBalance !== null && circle?.autoSwapEnabled && (
+        {/* Show a dedicated SUI payment card when the circle is in SUI mode */}
+        {showSuiDirectPayCard && (
+          <div className="mb-4 p-4 bg-blue-50 rounded-lg border-2 border-blue-200">
+            <div className="flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
+              <div className="bg-blue-100 p-1.5 rounded-full flex-shrink-0 self-start">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <h4 className="font-medium text-blue-800">Pay in SUI from your wallet</h4>
+                <p className="text-sm text-blue-700 mt-1">
+                  You have <span className="font-medium">{userBalance?.toFixed(4)} SUI</span> available.
+                  This payment needs about <span className="font-medium">{currentSuiPaymentAmount.toFixed(4)} SUI</span> including slippage and gas.
+                </p>
+                <div className="mt-3">
+                  <button
+                    onClick={userDepositPaid ? handleContribute : handlePaySecurityDeposit}
+                    disabled={
+                      (userDepositPaid && (!circle?.isActive || circle?.pausedAfterCycle || userHasContributed || isCurrentRecipient)) ||
+                      (!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause) ||
+                      (!userDepositPaid && (circle?.securityDepositUsd || 0) <= 0) ||
+                      !hasEnoughSuiForCurrentPayment ||
+                      isProcessing ||
+                      isPayingDeposit
+                    }
+                    className="w-full sm:w-auto px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+                  >
+                    {(isProcessing || isPayingDeposit) ? (
+                      <span className="flex items-center">
+                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Processing...
+                      </span>
+                    ) : !userDepositPaid ? (
+                      `Pay ${currentSuiBasePaymentAmount.toFixed(4)} SUI as Security Deposit`
+                    ) : userHasContributed ? (
+                      'Already Contributed'
+                    ) : isCurrentRecipient ? (
+                      'You Are the Current Recipient'
+                    ) : circle?.pausedAfterCycle ? (
+                      'Circle is Paused After Cycle'
+                    ) : (
+                      `Contribute ${currentSuiBasePaymentAmount.toFixed(4)} SUI`
+                    )}
+                  </button>
+                </div>
+                {!hasEnoughSuiForCurrentPayment && (
+                  <p className="mt-2 text-xs text-amber-700">
+                    Your SUI balance is short for this payment. Use the assist option below to top up or convert before retrying.
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Show direct USDC deposit option if user has sufficient USDC balance */}
+        {showDirectDepositOption && userUsdcBalance !== null && selectedPaymentCurrency === 'USDC' && (
           <div className="mb-4 p-4 bg-emerald-50 rounded-lg border-2 border-emerald-200">
             <div className="flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
               <div className="bg-emerald-100 p-1.5 rounded-full flex-shrink-0 self-start">
@@ -3094,7 +4074,7 @@ export default function ContributeToCircle() {
                         Processing...
                       </span>
                     ) : !userDepositPaid ? (
-                      `Deposit ${formatCurrency((circle?.securityDepositLocal || 0) / 100, circle?.currencyType || 'USD')} as Security Deposit`
+                      `Deposit ${formatUsdCentsAsUsdc(circle?.securityDepositUsd || 0)} as Security Deposit`
                     ) : userHasContributed ? (
                       `Already Contributed`
                     ) : isCurrentRecipient ? (
@@ -3102,7 +4082,7 @@ export default function ContributeToCircle() {
                     ) : circle?.pausedAfterCycle ? (
                       `Circle is Paused After Cycle`
                     ) : (
-                      `Contribute ${formatCurrency((circle?.contributionAmountLocal || 0) / 100, circle?.currencyType || 'USD')} Directly`
+                      `Contribute ${formatUsdCentsAsUsdc(circle?.contributionAmountUsd || 0)} Directly`
                     )}
                   </button>
                 </div>
@@ -3111,8 +4091,209 @@ export default function ContributeToCircle() {
           </div>
         )}
 
-        {/* Show the appropriate form based on auto-swap setting */}
-        {circle?.autoSwapEnabled ? (
+        {/* Auto-assist: convert SUI -> USDC and immediately submit the active USDC payment */}
+        {showUsdcSwapAssist && (
+            <div className="mb-4 p-4 bg-indigo-50 rounded-lg border-2 border-indigo-200">
+              <div className="flex items-start space-x-3">
+                <div className="bg-indigo-100 p-1.5 rounded-full flex-shrink-0 mt-0.5">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h4 className="font-medium text-indigo-900">Convert SUI to USDC &amp; Pay</h4>
+                  <p className="text-sm text-indigo-700 mt-1">
+                    One click swaps only the missing USDC first, then submits your {paymentLabel.toLowerCase()} once the swap confirms.
+                  </p>
+                  <p className="text-xs text-indigo-700 mt-2">
+                    Estimated SUI input: <span className="font-semibold">{getOneClickSwapAmountSui().toFixed(4)} SUI</span> for{' '}
+                    <span className="font-semibold">{formatUSD(currentUsdcShortfall)} USDC</span> shortfall.
+                  </p>
+                  {isOneClickSwapQuoteLoading && (
+                    <p className="mt-2 text-xs text-indigo-700">Refreshing live Cetus quote...</p>
+                  )}
+                  {oneClickSwapQuote && (
+                    <p className="mt-2 text-xs text-indigo-700">
+                      Live quote price impact: <span className="font-semibold">{oneClickSwapQuote.priceImpact.toFixed(2)}%</span>
+                    </p>
+                  )}
+                  {oneClickSwapQuoteError && (
+                    <p className="mt-2 text-xs text-amber-700">{oneClickSwapQuoteError}</p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleOneClickSwapAndDeposit}
+                    disabled={
+                      isOneClickSwapProcessing ||
+                      isOneClickSwapQuoteLoading ||
+                      !!oneClickSwapQuoteError ||
+                      !hasSufficientSuiForOneClickSwap() ||
+                      isProcessing
+                    }
+                    className="mt-3 w-full sm:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+                  >
+                    {isOneClickSwapProcessing ? 'Converting & Paying...' : `Convert SUI to USDC, Then Pay ${paymentLabel}`}
+                  </button>
+
+                  {!hasSufficientSuiForOneClickSwap() && (
+                    <p className="mt-2 text-xs text-amber-700">
+                      You need about {getOneClickQuotedSuiInput().toFixed(4)} SUI plus gas reserve to run this conversion.
+                    </p>
+                  )}
+
+                  {oneClickSwapDigest && (
+                    <p className="mt-2 text-xs text-indigo-700 break-all">
+                      Tracking transaction: {oneClickSwapDigest}
+                    </p>
+                  )}
+
+                  {oneClickSwapError && (
+                    <p className="mt-2 text-xs text-red-600">{oneClickSwapError}</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+        {/* Auto-assist: convert USDC -> SUI when the circle requires SUI and the wallet is short on native balance */}
+        {showSuiSwapAssist && (
+          <div className="mb-4 p-4 bg-cyan-50 rounded-lg border-2 border-cyan-200">
+            <div className="flex items-start space-x-3">
+              <div className="bg-cyan-100 p-1.5 rounded-full flex-shrink-0 mt-0.5">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-cyan-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <h4 className="font-medium text-cyan-900">Convert USDC to SUI for this payment</h4>
+                <p className="text-sm text-cyan-800 mt-1">
+                  Your wallet is short on SUI. This conversion tops up the payment gap and keeps a small reserve for swap execution.
+                </p>
+                <p className="text-xs text-cyan-800 mt-2">
+                  Estimated conversion: <span className="font-semibold">{formatUSD(estimatedUsdcNeededForSuiSwap)} USDC</span> into
+                  approximately <span className="font-semibold"> {quotedSuiOutputForAssistSwap.toFixed(4)} SUI</span>.
+                </p>
+                <p className="mt-2 text-xs text-cyan-700">
+                  This target includes <span className="font-semibold">{TOKEN_ASSIST_SWAP_GAS_RESERVE_SUI.toFixed(4)} SUI</span> reserved for swap gas
+                  and <span className="font-semibold"> {tokenAssistExecutionBufferSui.toFixed(4)} SUI</span> as an execution buffer.
+                </p>
+                {isTokenAssistQuoteLoading && (
+                  <p className="mt-2 text-xs text-cyan-700">Refreshing live Cetus quote...</p>
+                )}
+                {tokenAssistQuote && (
+                  <p className="mt-2 text-xs text-cyan-700">
+                    Live quote price impact: <span className="font-semibold">{tokenAssistQuote.priceImpact.toFixed(2)}%</span>
+                  </p>
+                )}
+                {tokenAssistQuoteError && (
+                  <p className="mt-2 text-xs text-amber-700">{tokenAssistQuoteError}</p>
+                )}
+                <button
+                  type="button"
+                  onClick={handleSwapUsdcToSuiForPayment}
+                  disabled={
+                    isTokenAssistSwapProcessing ||
+                    isTokenAssistQuoteLoading ||
+                    isProcessing ||
+                    isPayingDeposit ||
+                    !!tokenAssistQuoteError
+                  }
+                  className="mt-3 w-full sm:w-auto px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+                >
+                  {isTokenAssistSwapProcessing ? 'Converting...' : 'Convert USDC to SUI'}
+                </button>
+
+                {tokenAssistSwapDigest && (
+                  <p className="mt-2 text-xs text-cyan-800 break-all">
+                    Swap submitted: {tokenAssistSwapDigest}
+                  </p>
+                )}
+
+                {tokenAssistSwapError && (
+                  <p className="mt-2 text-xs text-red-600">{tokenAssistSwapError}</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Buy assist: if neither token can cover the payment, reuse the dashboard onramp flow inline */}
+        {circle && lacksBothTokensForCurrentPayment && (
+          <div className="mb-4 p-4 bg-slate-50 rounded-lg border-2 border-slate-200">
+            <div className="flex flex-col gap-3">
+              <div>
+                <h4 className="font-medium text-slate-900">Top up your wallet to continue</h4>
+                <p className="text-sm text-slate-700 mt-1">
+                  You do not have enough {selectedPaymentCurrency} or convertible balance to cover this {paymentLabel.toLowerCase()} right now.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => openBuyFlow(onrampTargetCurrency)}
+                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium rounded-md shadow-sm transition-colors"
+                >
+                  Buy {selectedPaymentCurrency}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRefreshContributionStatus}
+                  className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 text-sm font-medium rounded-md border border-slate-300 transition-colors"
+                >
+                  Refresh Status
+                </button>
+              </div>
+
+              {showInlineOnrampLauncher && (
+                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                        Instant Onramp
+                      </p>
+                      <p className="mt-1 text-sm text-slate-600">
+                        Buy {coinbaseAssetIntent === 'SUI' ? 'SUI' : 'USDC on Sui'} without leaving this payment flow.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={closeInlineOnrampLauncher}
+                      className="text-xs text-slate-500 hover:text-slate-700"
+                    >
+                      Close
+                    </button>
+                  </div>
+
+                  <CoinbaseOnrampLauncher
+                    className="mt-4"
+                    walletAddress={userAddress || ''}
+                    preferredAssetIntent={coinbaseAssetIntent}
+                    amount={inlineOnrampAmountUsd}
+                    fiatCurrency="USD"
+                    country="US"
+                    providerFlag={onrampProviderFlag}
+                    disabled={!userAddress}
+                    buttonLabel={`Continue with Coinbase to Buy ${coinbaseAssetIntent === 'SUI' ? 'SUI' : 'USDC'}`}
+                    onSuccess={handleCoinbaseLaunchSuccess}
+                    onError={handleCoinbaseLaunchError}
+                    onCancel={handleCoinbaseCancel}
+                  />
+
+                  <button
+                    type="button"
+                    onClick={handleMoonPayFallbackClick}
+                    className="mt-3 inline-flex w-full items-center justify-center rounded-md border border-slate-300 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100"
+                  >
+                    {isMoonPayEnabled ? 'Use MoonPay Instead' : 'MoonPay Coming Soon'}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Advanced swap-and-deposit flow is behind feature flag; default path is the standard form below. */}
+        {ENABLE_SWAP_AND_DEPOSIT_FORM && circle ? (
           <>
             {(!circle.isActive || circle.pausedAfterCycle) && (
               <div className="mb-4 p-3 bg-amber-50 rounded-lg border border-amber-200">
@@ -3152,7 +4333,7 @@ export default function ContributeToCircle() {
               <p className="text-sm text-gray-600 mb-2">You are about to contribute:</p>
               <div className="flex items-center">
                 <span className="bg-blue-100 text-blue-800 text-xl font-semibold rounded-lg py-2 px-4">
-                  {circle?.contributionAmountLocal ? formatCurrency(circle.contributionAmountLocal / 100, circle.currencyType) : formatCurrency(0, circle?.currencyType || 'USD')} ({getValidContributionAmount().toFixed(4)} SUI)
+                  {formatUsdCentsAsUsdc(circle?.contributionAmountUsd || 0)} ({getValidContributionAmount().toFixed(4)} SUI)
                 </span>
               </div>
             </div>
@@ -3174,7 +4355,7 @@ export default function ContributeToCircle() {
             {/* Show warning if balance is insufficient - only when deposit is already paid */}
             {(() => {
               // Skip if deposit not paid or balance not loaded
-              if (!userDepositPaid || userBalance === null) return null;
+              if (!userDepositPaid || userBalance === null || selectedPaymentCurrency !== 'SUI') return null;
               
               // Get required contribution amount with buffer
               const requiredAmount = getRequiredContributionAmount();
@@ -3197,7 +4378,7 @@ export default function ContributeToCircle() {
             })()}
 
             {/* Show detailed breakdown of contribution amount if deposit is paid */}
-            {userDepositPaid && circle && getValidContributionAmount() > 0 && (
+            {userDepositPaid && circle && getValidContributionAmount() > 0 && selectedPaymentCurrency === 'SUI' && (
               <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
                 <p className="text-sm font-medium text-blue-800">
                   Estimated amount needed for contribution:
@@ -3224,11 +4405,11 @@ export default function ContributeToCircle() {
                     </p>
                     <p className="text-sm text-amber-600">
                       You need to pay a security deposit of{' '}
-                      {(!circle || isNaN(circle.securityDepositLocal || 0) || (circle.securityDepositLocal || 0) <= 0) ? (
+                      {!circle ? (
                         'amount unavailable'
                       ) : (
                         <span className="font-semibold">
-                          <CurrencyDisplay localAmount={circle.securityDepositLocal} className="inline" currencyType={circle.currencyType} />
+                          {formatUsdCentsAsUsdc(circle.securityDepositUsd || 0)}
                         </span>
                       )}{' '}
                       before contributing.
@@ -3240,7 +4421,7 @@ export default function ContributeToCircle() {
                   </div>
                   
                   {/* Show the required amount including slippage and fees */}
-                  {userBalance !== null && circle && circle.securityDeposit > 0 && (
+                  {selectedPaymentCurrency === 'SUI' && userBalance !== null && circle && circle.securityDeposit > 0 && (
                     <div className="bg-blue-50 p-2 rounded border border-blue-100 text-sm">
                       <p className="font-medium text-blue-800">Estimated amount needed:</p>
                       <div className="text-blue-700 text-xs space-y-1 mt-1">
@@ -3256,7 +4437,7 @@ export default function ContributeToCircle() {
                   )}
                   
                   {/* Show combined insufficient balance warning for both security deposit and contribution */}
-                  {userBalance !== null && circle && userBalance < getRequiredDepositAmount() && (
+                  {selectedPaymentCurrency === 'SUI' && userBalance !== null && circle && userBalance < getRequiredDepositAmount() && (
                     <div className="p-2 bg-red-50 text-red-700 rounded border border-red-200 text-sm">
                       <p className="font-medium">Insufficient funds for security deposit</p>
                       <p className="text-xs mt-1">
@@ -3268,7 +4449,9 @@ export default function ContributeToCircle() {
                   <button
                     onClick={handlePaySecurityDeposit}
                     disabled={isPayingDeposit || !circle || (circle.securityDepositUsd || 0) <= 0 || 
-                             (userBalance !== null && userBalance < getRequiredDepositAmount()) ||
+                             (selectedPaymentCurrency === 'SUI' && !isSuiCircleModeEnabled) ||
+                             (selectedPaymentCurrency === 'SUI' && userBalance !== null && userBalance < getRequiredDepositAmount()) ||
+                             (selectedPaymentCurrency === 'USDC' && userUsdcBalance !== null && userUsdcBalance < requiredSecurityDepositUsdc) ||
                              (circle.pausedAfterCycle && securityDepositReturnedDuringPause)}
                     className="w-full py-3 px-4 rounded-lg shadow-sm text-sm font-bold text-white bg-amber-500 hover:bg-amber-600 transition-all disabled:opacity-70 disabled:cursor-not-allowed"
                   >
@@ -3281,7 +4464,7 @@ export default function ContributeToCircle() {
                         Processing...
                       </span>
                     ) : (
-                      'Pay Security Deposit'
+                      `Pay Security Deposit in ${selectedPaymentCurrency}`
                     )}
                   </button>
                   
@@ -3312,18 +4495,18 @@ export default function ContributeToCircle() {
             {/* Add contribution source indicator */}
             {userDepositPaid && (
               <div className="mb-4 p-3 rounded-lg border">
-                {userDepositPaid && contributionBalance !== null && circle?.contributionAmountUsd !== undefined && contributionBalance >= circle.contributionAmountUsd ? (
-                  <div className="bg-green-50 border-green-200 p-3 rounded-lg flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
+                {selectedPaymentCurrency === 'USDC' ? (
+                  <div className="bg-emerald-50 border-emerald-200 p-3 rounded-lg flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
                     <div className="bg-green-100 rounded-full p-1 self-start">
                       <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-600" viewBox="0 0 20 20" fill="currentColor">
                         <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                       </svg>
                     </div>
                     <div>
-                      <p className="text-sm font-medium text-green-800">USDC available for contribution</p>
+                      <p className="text-sm font-medium text-green-800">USDC selected (default)</p>
                       <p className="text-xs text-green-700 mt-1">
-                        Your contribution will use ${contributionBalance.toFixed(2)} USDC from the contribution funds in the custody wallet.
-                        No SUI will be taken from your wallet for this contribution.
+                        Required: {formatUsdCentsAsUsdc(circle?.contributionAmountUsd || 0)}.
+                        Available in wallet: {userUsdcBalance !== null ? `${formatUSD(userUsdcBalance)} USDC` : 'loading...'}.
                       </p>
                     </div>
                   </div>
@@ -3335,12 +4518,9 @@ export default function ContributeToCircle() {
                       </svg>
                     </div>
                     <div>
-                      <p className="text-sm font-medium text-blue-800">Using SUI for contribution</p>
+                      <p className="text-sm font-medium text-blue-800">SUI opt-in selected</p>
                       <p className="text-xs text-blue-700 mt-1">
                         This contribution will require {getValidContributionAmount().toFixed(4)} SUI from your wallet.
-                        {contributionBalance !== null && contributionBalance > 0 && (
-                          <span> The custody wallet has ${contributionBalance.toFixed(2)} USDC available for contributions, but it&apos;s not enough for this contribution.</span>
-                        )}
                       </p>
                     </div>
                   </div>
@@ -3351,7 +4531,9 @@ export default function ContributeToCircle() {
             <button
               onClick={handleContribute}
               disabled={isProcessing || 
-                      (userBalance !== null && userBalance < getRequiredContributionAmount()) || 
+                      (selectedPaymentCurrency === 'SUI' && !isSuiCircleModeEnabled) ||
+                      (selectedPaymentCurrency === 'SUI' && userBalance !== null && userBalance < getRequiredContributionAmount()) ||
+                      (selectedPaymentCurrency === 'USDC' && userUsdcBalance !== null && userUsdcBalance < requiredContributionUsdc) ||
                       !userDepositPaid || 
                       (!circle?.isActive && userDepositPaid) ||
                       (circle?.pausedAfterCycle && userDepositPaid) ||
@@ -3363,7 +4545,7 @@ export default function ContributeToCircle() {
                isCurrentRecipient ? 'You Are the Current Recipient' : 
                userHasContributed ? 'Already Contributed' : 
                circle?.pausedAfterCycle ? 'Circle is Paused After Cycle' : 
-               'Contribute Now'}
+               `Contribute in ${selectedPaymentCurrency}`}
             </button>
             
             <p className="mt-3 text-xs text-center text-gray-500">
@@ -3685,6 +4867,18 @@ export default function ContributeToCircle() {
           </div>
         </div>
       </main>
+
+      {isMoonPayEnabled && (
+        <MoonPayWrapper
+          variant="overlay"
+          baseCurrencyCode="usd"
+          baseCurrencyAmount="50"
+          defaultCurrencyCode={moonPayCurrency}
+          walletAddress={userAddress || undefined}
+          visible={isMoonPayVisible}
+          onClose={async () => closeMoonPayWidget()}
+        />
+      )}
     </div>
   );
-} 
+}

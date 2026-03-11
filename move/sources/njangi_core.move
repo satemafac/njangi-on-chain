@@ -28,6 +28,10 @@ module njangi::njangi_core {
     const EInsufficientBalance: u64 = 12;
     const ENO_SECURITY_DEPOSIT: u64 = 21;
     const EMINIMUM_MEMBERS_REQUIRED: u64 = 22;
+    const EInvalidDecimalPrecision: u64 = 23;
+    const EDecimalConversionOverflow: u64 = 24;
+    const MAX_U64: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+    const MAX_DECIMAL_SHIFT: u8 = 18;
     
     // Time constants (all in milliseconds)
     const MS_PER_DAY: u64 = 86_400_000;       // 24 * 60 * 60 * 1000
@@ -431,6 +435,9 @@ module njangi::njangi_core {
     // For example, to convert an amount from USDC (6 decimals) to SUI decimal scale (9 decimals)
     // call adjust_decimals(usdc_amount, 6, 9)
     public fun adjust_decimals(amount: u64, from_decimals: u8, to_decimals: u8): u64 {
+        assert!(from_decimals <= MAX_DECIMAL_SHIFT, EInvalidDecimalPrecision);
+        assert!(to_decimals <= MAX_DECIMAL_SHIFT, EInvalidDecimalPrecision);
+
         if (from_decimals == to_decimals) {
             return amount
         };
@@ -441,9 +448,11 @@ module njangi::njangi_core {
             let diff = (to_decimals - from_decimals) as u64;
             let mut i = 0u64;
             while (i < diff) {
+                assert!(scale_factor <= MAX_U64 / 10, EDecimalConversionOverflow);
                 scale_factor = scale_factor * 10;
                 i = i + 1;
             };
+            assert!(amount <= MAX_U64 / scale_factor, EDecimalConversionOverflow);
             amount * scale_factor
         } else {
             // Scale down (e.g. SUI 9 decimals to USDC 6 decimals)
@@ -452,6 +461,7 @@ module njangi::njangi_core {
             let diff = (from_decimals - to_decimals) as u64;
             let mut i = 0u64;
             while (i < diff) {
+                assert!(scale_factor <= MAX_U64 / 10, EDecimalConversionOverflow);
                 scale_factor = scale_factor * 10;
                 i = i + 1;
             };

@@ -12,10 +12,21 @@ import {
 } from '@mysten/sui/zklogin';
 import { decodeJwt } from 'jose';
 import { SuiTransactionBlockResponse, ExecuteTransactionRequestType } from '@mysten/sui/client';
-import { getCurrentRpcUrl, getCurrentEnokiConfig, getCurrentNetwork, getNetworkConfig } from './network-config';
+import {
+  getCurrentEnokiConfig,
+  getCurrentGraphqlUrl,
+  getCurrentNetwork,
+  getCurrentRpcUrl,
+  getGraphqlUrlForNetwork,
+  getNetworkConfig,
+  NetworkType,
+} from './network-config';
 
 // Dynamic RPC URL based on network configuration
 function getNetworkRpcUrl(): string {
+  if (networkOverride) {
+    return getNetworkConfig(networkOverride).rpcUrl;
+  }
   return getCurrentRpcUrl();
 }
 
@@ -48,11 +59,11 @@ const MAX_EPOCH = 1; // keep ephemeral keys active for this many Sui epochs from
 
 // Dynamic GraphQL URL based on network
 function getGraphQLUrl(): string {
-  const network = getCurrentNetwork();
-  // Use the official Sui RPC GraphQL endpoints
-  return network === 'mainnet' 
-    ? 'https://mainnet.sui.io:443/graphql'
-    : 'https://testnet.sui.io:443/graphql';
+  if (networkOverride) {
+    return getGraphqlUrlForNetwork(networkOverride);
+  }
+
+  return getCurrentGraphqlUrl();
 }
 
 export type OAuthProvider = 'Google' | 'Facebook' | 'Apple';
@@ -123,9 +134,10 @@ export class EnokiZkLoginService {
     this.initializeWithNetwork();
   }
 
-  public initializeWithNetwork() {
-    const currentNetwork = getCurrentNetwork();
-    const enokiConfig = getEnokiConfig();
+  public initializeWithNetwork(targetNetwork?: NetworkType) {
+    const currentNetwork = targetNetwork ?? getCurrentNetwork();
+    const networkConfig = targetNetwork ? getNetworkConfig(targetNetwork) : undefined;
+    const enokiConfig = networkConfig?.enoki ?? getEnokiConfig();
     
     console.log('🔧 EnokiZkLoginService initializing with network:', currentNetwork);
     console.log('🔑 Enoki config:', {
@@ -139,7 +151,7 @@ export class EnokiZkLoginService {
     }
     
     this.suiClient = new SuiClient({
-      url: getNetworkRpcUrl()
+      url: networkConfig?.rpcUrl ?? getNetworkRpcUrl()
     });
   }
 
@@ -153,7 +165,10 @@ export class EnokiZkLoginService {
     return EnokiZkLoginService.instance;
   }
 
-  public async beginLogin(provider: OAuthProvider = 'Google'): Promise<{ loginUrl: string, setupData: SetupData }> {
+  public async beginLogin(
+    provider: OAuthProvider = 'Google',
+    targetNetwork?: NetworkType
+  ): Promise<{ loginUrl: string, setupData: SetupData }> {
     if (
       !GOOGLE_CLIENT_ID || 
       !FACEBOOK_CLIENT_ID || 
@@ -162,6 +177,16 @@ export class EnokiZkLoginService {
     ) {
       throw new Error('Missing OAuth configuration');
     }
+
+    const effectiveNetwork = targetNetwork ?? getCurrentNetwork();
+    const networkConfig = getNetworkConfig(effectiveNetwork);
+    this.initializeWithNetwork(effectiveNetwork);
+
+    console.log('🌍 beginLogin: Using network configuration', {
+      network: effectiveNetwork,
+      rpcUrl: networkConfig.rpcUrl,
+      packageId: networkConfig.packageId,
+    });
 
     // Create a nonce
     const { epoch } = await this.suiClient.getLatestSuiSystemState();
@@ -176,6 +201,7 @@ export class EnokiZkLoginService {
       maxEpoch,
       randomness: randomness.toString(),
       ephemeralPrivateKey: ephemeralKeyPair.getSecretKey(),
+      network: effectiveNetwork,
     };
 
     // Create OAuth URL based on provider
@@ -629,9 +655,9 @@ export class EnokiZkLoginService {
         
         return verifyResult.success;
     } catch (err) {
-        console.error('Signature verification error:', err);
-        // Don't throw - signature verification is optional and transaction may have already succeeded
-        console.warn('Signature verification failed, but this does not necessarily mean the transaction failed');
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        // Don't throw - signature verification is optional and transaction may have already succeeded.
+        console.warn(`Signature verification skipped: ${errorMessage}`);
         return false;
     }
   }
@@ -683,7 +709,7 @@ export class EnokiZkLoginService {
    */
   public async sendTransaction(
     account: AccountData,
-    prepareBlock: (txb: TransactionBlock) => void,
+    prepareBlock: ((txb: TransactionBlock) => void) | TransactionBlock,
     options: TransactionOptions = {},
     networkOverride?: 'testnet' | 'mainnet'
   ): Promise<TransactionResult> {
@@ -696,9 +722,7 @@ export class EnokiZkLoginService {
 
       // Use network-specific RPC URL if override provided
       const suiClient = networkOverride 
-        ? new SuiClient({ url: networkOverride === 'testnet' 
-            ? 'https://fullnode.testnet.sui.io:443' 
-            : 'https://fullnode.mainnet.sui.io:443' })
+        ? new SuiClient({ url: getNetworkConfig(networkOverride).rpcUrl })
         : this.suiClient;
 
       // Validate current epoch against maxEpoch
@@ -732,12 +756,18 @@ export class EnokiZkLoginService {
       ).toString();
       console.log(`Generated address seed: ${addressSeed}`);
 
-      // Create and prepare transaction block
-      const txb = new TransactionBlock();
-      txb.setSender(account.userAddr);
-      
-      // Let the caller customize the transaction block
-      prepareBlock(txb);
+      // Create a new transaction block or use the prebuilt one directly.
+      const txb =
+        typeof prepareBlock === 'function'
+          ? (() => {
+              const nextTxb = new TransactionBlock();
+              nextTxb.setSender(account.userAddr);
+              prepareBlock(nextTxb);
+              return nextTxb;
+            })()
+          : TransactionBlock.from(prepareBlock);
+
+      txb.setSenderIfNotSet(account.userAddr);
 
       // Set gas budget with validation - increase default gas for zkLogin transactions
       const DEFAULT_GAS_BUDGET = 50000000;
@@ -745,7 +775,11 @@ export class EnokiZkLoginService {
       if (gasBudget < 1000000) {
         console.warn(`Gas budget ${gasBudget} may be too low for zkLogin transactions`);
       }
-      txb.setGasBudget(gasBudget);
+      if (options.gasBudget) {
+        txb.setGasBudget(options.gasBudget);
+      } else {
+        txb.setGasBudgetIfNotSet(DEFAULT_GAS_BUDGET);
+      }
 
       // Build transaction to get bytes for signing
       const { bytes, signature: userSignature } = await txb.sign({
@@ -846,11 +880,11 @@ export class EnokiZkLoginService {
 
         // Verify the signature using GraphQL (optional - for debugging)
         if (process.env.NODE_ENV === 'development') {
-          try {
-            await this.verifyZkLoginSignature(bytes, zkLoginSignature, account.userAddr);
+          const verified = await this.verifyZkLoginSignature(bytes, zkLoginSignature, account.userAddr);
+          if (verified) {
             console.log('zkLogin signature verified successfully');
-          } catch (verifyError) {
-            console.warn('Signature verification failed (transaction may still be valid):', verifyError);
+          } else {
+            console.warn('zkLogin signature verification could not be confirmed.');
           }
         }
 

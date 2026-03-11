@@ -19,73 +19,11 @@ module njangi::njangi_yield_integration {
     use njangi::njangi_members::{Self as members, Member};
     use njangi::njangi_custody::{Self as custody, CustodyWallet};
     
-    // ==================== REAL CETUS DEX INTEGRATION IMPORTS ====================
-    // OFFICIAL CETUS PROTOCOL IMPORTS - NOW ACTIVATED FOR REAL INTEGRATION!
-    // Source: https://cetus-1.gitbook.io/cetus-developer-docs/developer/via-contract/features-available/
-    // 
-    // Real Cetus Protocol integration using published package addresses:
-    // Package: 0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12
-    // 
-    // Note: In Move contracts, we call functions directly using package addresses
-    // instead of importing dependencies. The actual function calls will use:
-    // - 0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12::pool for pool operations
-    // - 0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12::position for position management  
-    // - 0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca::config for global configuration
-    // 
-    // These calls will be made at runtime using the published package addresses
-    
-    // ✅ COMPLETE TESTNET INTEGRATION CONFIGURATION ✅
-    // 
-    // This smart contract is now configured with REAL testnet addresses for:
-    // 1. ✅ NAVI Protocol (queried via NAVI SDK - Package ID: 0xb53f...f61)
-    // 2. ✅ Cetus Protocol (confirmed testnet addresses)
-    // 3. 🔍 SUI/USDC Pool ID (to be queried via Cetus SDK when needed)
-    //
-    // Ready for testnet deployment and real yield generation testing!
-    
-    // NAVI Protocol testnet configuration (COMPLETE)
-    // Queried via NAVI SDK getLatestProtocolPackageId() and pool info
-    // SUI Pool shows active lending: 6.81% supply APY, significant liquidity
-    
-    // Real NAVI Protocol integration for testnet (DISCOVERED VIA NAVI SDK)
-    // Successfully queried via NAVI SDK on 2024-01-04
-    // Source: NAVI SDK getLatestProtocolPackageId() and getPoolsInfo()
-    const NAVI_POOL_PACKAGE_ID: address = @0xb53f2b0069976429e7c56a9e8b0ceaa1b4f5816b6eb4e9c4ca5b5e6bbaf01f61;
-    const NAVI_POOL_SUI_ID: u8 = 0; // SUI is Pool ID 0 in NAVI Protocol
-    const NAVI_SUI_COIN_TYPE: vector<u8> = b"0x2::sui::SUI"; // SUI coin type from AddressMap
-    
-    // Real Cetus Protocol integration for testnet (CONFIRMED OFFICIAL TESTNET ADDRESSES)
-    // Source: https://github.com/CetusProtocol/cetus-clmm-interface - Official Testnet Deployment
-    const CETUS_PACKAGE_ID: address = @0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12;
-    const CETUS_PUBLISHED_AT: address = @0xb2a1d27337788bda89d350703b8326952413bd94b35b9b573ac8401b9803d018;
-    const CETUS_INTEGRATE_PACKAGE_ID: address = @0x2918cf39850de6d5d94d8196dc878c8c722cd79db659318e00bff57fbb4e2ede;
-    const CETUS_CONFIG_PACKAGE_ID: address = @0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca;
-    
-    // SUI/USDC pool on Cetus testnet (same pool used in our frontend swap service)
-    // Source: src/services/constants.ts - CETUS_POOL_SUI_USDC
-    const CETUS_SUI_USDC_POOL_ID: address = @0xb01b068bd0360bb3308b81eb42386707e460b7818816709b7f51e1635d542d40;
-    
-    // Testnet Token Types (these will be actual testnet token types)
-    // use sui::coin::COIN as SUI; // Already imported above
-    // We'll need to import actual testnet USDC type when available
-    
-    // TODO: To complete testnet integration, we need:
-    // 1. NAVI Protocol testnet package IDs:
-    //    - Check NAVI SDK: https://github.com/naviprotocol/navi-sdk
-    //    - Use NAVI SDK to discover testnet addresses programmatically
-    //    - Contact NAVI team for official testnet deployment addresses
-    //
-    // 2. Popular SUI/USDC pool ID on Cetus testnet:
-    //    - Use Cetus SDK: @cetusprotocol/cetus-sui-clmm-sdk
-    //    - Query pools with: sdk.Resources.getPools() to find SUI/USDC pairs
-    //    - Use Cetus testnet explorer to find active SUI/USDC pools
-    //
-    // 3. Testnet USDC token type:
-    //    - Check Sui testnet faucet for available tokens
-    //    - Use official Sui testnet USDC contract address
-    
-    // NAVI Protocol integration (package IDs will be configured at deployment)
-    // These will be updated with actual NAVI package IDs during mainnet deployment
+    // Migration staging note:
+    // Task 1.1 removes the legacy protocol scaffolding so this module can be
+    // reworked around the suiUSDe -> Ember vault lifecycle. Until dedicated
+    // testnet Ember addresses are wired in, follow-up integration should
+    // prefer mainnet-ready behavior first.
     
     // ----------------------------------------------------------
     // Error codes
@@ -94,7 +32,7 @@ module njangi::njangi_yield_integration {
 const EYieldStrategyNotActive: u64 = 101;
 const EInsufficientYieldBalance: u64 = 102;
 const EInvalidYieldStrategy: u64 = 103;
-const ENaviIntegrationFailed: u64 = 104;
+const EProtocolIntegrationFailed: u64 = 104;
 const EEmergencyWithdrawalFailed: u64 = 105;
 const EYieldCollectionFailed: u64 = 106;
 const EInvalidAllocationPercentage: u64 = 107;
@@ -107,24 +45,43 @@ const EInsufficientFunds: u64 = 109;
     const YIELD_STRATEGY_CONSERVATIVE: u8 = 0;
     const YIELD_STRATEGY_BALANCED: u8 = 1;
     const YIELD_STRATEGY_AGGRESSIVE: u8 = 2;
-    
-    const NAVI_ALLOCATION_CONSERVATIVE: u64 = 100; // 100% NAVI for conservative
-    const NAVI_ALLOCATION_BALANCED: u64 = 70;      // 70% NAVI, 30% Cetus for balanced
-    const NAVI_ALLOCATION_AGGRESSIVE: u64 = 50;    // 50% NAVI, 50% Cetus for aggressive
+
+    const FLOW_STATUS_IDLE: u8 = 0;
+    const FLOW_STATUS_SWAP_ONLY: u8 = 1;
+    const FLOW_STATUS_VAULT_DEPLOYED: u8 = 2;
+    const FLOW_STATUS_REDEEM_REQUESTED: u8 = 3;
+    const FLOW_STATUS_REDEEM_SETTLED: u8 = 4;
     
     const BASIS_POINTS: u64 = 10000; // 100% = 10000 basis points
+    // Ember vault package for the eSui Dollar route.
+    // Until a distinct testnet package is confirmed, default to the same
+    // package and keep the flow mainnet-first.
+    const EMBER_VAULT_PACKAGE_MAINNET: address = @0xc83d5406fd355f34d3ce87b35ab2c0b099af9d309ba96c17e40309502a49976f;
+    const EMBER_VAULT_PACKAGE_TESTNET: address = @0xc83d5406fd355f34d3ce87b35ab2c0b099af9d309ba96c17e40309502a49976f;
     
     // ----------------------------------------------------------
     // Structs
     // ----------------------------------------------------------
+
+    /// Temporary local marker for the PRD's requested suiUSDe asset.
+    /// Replace this with the issuer-owned external coin type once finalized.
+    public struct SuiUSDe has copy, drop, store {}
     
     /// Yield configuration for a circle
     public struct YieldConfig has key, store {
         id: UID,
         circle_id: ID,
         strategy: u8,                    // Conservative, Balanced, or Aggressive
-        navi_allocation_percentage: u64, // Percentage allocated to NAVI (in basis points)
-        cetus_allocation_percentage: u64, // Percentage allocated to Cetus (in basis points)
+        source_asset: String,            // Source custody asset used in the latest lifecycle
+        conversion_enabled: bool,        // Whether conversion into suiUSDe is enabled
+        latest_swapped_suiusde_amount: u64, // Latest amount converted into suiUSDe
+        latest_ember_deposit_amount: u64,   // Latest amount deployed into the Ember vault
+        latest_ember_receipt_balance: u64,  // Latest tracked Ember receipt/share amount
+        pending_redeem_amount: u64,      // Latest requested redeem amount still pending
+        redeemed_suiusde_amount: u64,    // Latest redeemed suiUSDe amount returned
+        last_execution_timestamp: u64,   // Last lifecycle execution timestamp
+        lifecycle_status: u8,            // Current lifecycle status
+        partial_completion: bool,        // Whether the last lifecycle completed partially
         auto_compound: bool,             // Whether to automatically compound yields
         emergency_withdrawal_enabled: bool, // Emergency circuit breaker
         total_deposited: u64,           // Total amount deposited for yield
@@ -139,24 +96,31 @@ const EInsufficientFunds: u64 = 109;
         circle_id: ID,
         member_addr: address,
         deposit_amount: u64,
-        navi_amount: u64,
-        cetus_amount: u64,
-        deposit_timestamp: u64,
+        source_asset: String,
+        swapped_suiusde_amount: u64,
+        ember_deposit_amount: u64,
+        ember_receipt_amount: u64,
+        requested_redeem_amount: u64,
+        pending_redeem: bool,
+        redeemed_suiusde_amount: u64,
+        execution_timestamp: u64,
+        lifecycle_status: u8,
+        partial_completion: bool,
         strategy: u8,
     }
     
-    /// NAVI position tracking
-    public struct NaviPosition has store, drop {
+    /// Staged swap-tracking position while the Ember flow is being finalized.
+    public struct SwapStagingPosition has store, drop {
         supplied_amount: u64,
-        receipt_id: Option<ID>, // NAVI's account cap or receipt
+        receipt_id: Option<ID>, // Placeholder lending receipt or account reference
         last_updated: u64,
         accrued_interest: u64,
     }
     
-    /// Cetus position tracking  
-    public struct CetusPosition has store, drop {
+    /// Staged Ember-vault-tracking position while direct vault calls are pending.
+    public struct EmberVaultStagingPosition has store, drop {
         lp_amount: u64,
-        position_id: Option<ID>, // Cetus LP position NFT
+        position_id: Option<ID>, // Placeholder margin position reference
         last_updated: u64,
         accrued_fees: u64,
     }
@@ -169,16 +133,24 @@ const EInsufficientFunds: u64 = 109;
         circle_id: ID,
         config_id: ID,
         strategy: u8,
-        navi_allocation: u64,
-        cetus_allocation: u64,
+        source_asset: String,
+        conversion_enabled: bool,
+        lifecycle_status: u8,
     }
     
     public struct SecurityDepositYieldGenerated has copy, drop {
         circle_id: ID,
         member: address,
+        source_asset: String,
         total_deposit: u64,
-        navi_amount: u64,
-        cetus_amount: u64,
+        swapped_suiusde_amount: u64,
+        ember_deposit_amount: u64,
+        ember_receipt_amount: u64,
+        requested_redeem_amount: u64,
+        pending_redeem: bool,
+        redeemed_suiusde_amount: u64,
+        partial_completion: bool,
+        lifecycle_status: u8,
         strategy: u8,
         timestamp: u64,
     }
@@ -186,8 +158,9 @@ const EInsufficientFunds: u64 = 109;
     public struct YieldCollected has copy, drop {
         circle_id: ID,
         total_yield: u64,
-        navi_yield: u64,
-        cetus_yield: u64,
+        redeemed_suiusde_amount: u64,
+        pending_redeem_amount: u64,
+        lifecycle_status: u8,
         collection_timestamp: u64,
     }
     
@@ -229,15 +202,20 @@ const EInsufficientFunds: u64 = 109;
             EInvalidYieldStrategy
         );
         
-        // Calculate allocation percentages based on strategy
-        let (navi_allocation, cetus_allocation) = get_strategy_allocations(strategy);
-        
         let config = YieldConfig {
             id: object::new(ctx),
             circle_id: circles::get_id(circle),
             strategy,
-            navi_allocation_percentage: navi_allocation,
-            cetus_allocation_percentage: cetus_allocation,
+            source_asset: source_asset_sui(),
+            conversion_enabled: true,
+            latest_swapped_suiusde_amount: 0,
+            latest_ember_deposit_amount: 0,
+            latest_ember_receipt_balance: 0,
+            pending_redeem_amount: 0,
+            redeemed_suiusde_amount: 0,
+            last_execution_timestamp: clock::timestamp_ms(clock),
+            lifecycle_status: FLOW_STATUS_IDLE,
+            partial_completion: false,
             auto_compound,
             emergency_withdrawal_enabled: true,
             total_deposited: 0,
@@ -255,13 +233,14 @@ const EInsufficientFunds: u64 = 109;
             circle_id: circles::get_id(circle),
             config_id,
             strategy,
-            navi_allocation,
-            cetus_allocation,
+            source_asset: source_asset_sui(),
+            conversion_enabled: true,
+            lifecycle_status: FLOW_STATUS_IDLE,
         });
     }
     
     // ----------------------------------------------------------
-    // Generate yield on security deposits (REAL TESTNET INTEGRATION)
+    // Generate yield on security deposits (staged swap + Ember lifecycle integration)
     // ----------------------------------------------------------
     public fun generate_yield_on_security_deposit(
         circle: &Circle,
@@ -296,28 +275,32 @@ const EInsufficientFunds: u64 = 109;
         // Verify we got the right amount
         assert!(coin::value(&deposit_coin) == deposit_amount, EInsufficientFunds);
         
-        // Calculate allocation amounts
-        let navi_amount = (deposit_amount * config.navi_allocation_percentage) / BASIS_POINTS;
-        let cetus_amount = (deposit_amount * config.cetus_allocation_percentage) / BASIS_POINTS;
+        // Calculate allocation amounts from strategy while lifecycle tracking
+        // transitions to swap + Ember semantics.
+        let (lending_allocation, margin_allocation) = get_strategy_allocations(config.strategy);
+        let lending_amount = (deposit_amount * lending_allocation) / BASIS_POINTS;
+        let margin_amount = (deposit_amount * margin_allocation) / BASIS_POINTS;
+        let mut partial_completion = false;
+        let mut lifecycle_status = FLOW_STATUS_VAULT_DEPLOYED;
         
         // Split the coin for different protocols
-        if (navi_amount > 0 && cetus_amount > 0) {
+        if (lending_amount > 0 && margin_amount > 0) {
             // Split coin for both protocols
-            let navi_coin = coin::split(&mut deposit_coin, navi_amount, ctx);
-            let cetus_coin = coin::split(&mut deposit_coin, cetus_amount, ctx);
+            let lending_coin = coin::split(&mut deposit_coin, lending_amount, ctx);
+            let margin_coin = coin::split(&mut deposit_coin, margin_amount, ctx);
             
-            // Handle NAVI deposit
-            let navi_position = handle_navi_deposit(navi_coin, clock, ctx);
+            // Handle the lending-side allocation.
+            let lending_position = handle_lending_deposit(lending_coin, clock, ctx);
             
-            // Handle Cetus LP deposit  
-            let cetus_position = handle_cetus_deposit(cetus_coin, clock, ctx);
+            // Handle the margin-side allocation.
+            let margin_position = handle_margin_deposit(margin_coin, clock, ctx);
             
             // Store positions in the config using dynamic fields
-            let navi_key = get_member_navi_key(member_addr);
-            let cetus_key = get_member_cetus_key(member_addr);
+            let lending_key = get_member_lending_key(member_addr);
+            let margin_key = get_member_margin_key(member_addr);
             
-            dynamic_field::add(&mut config.id, navi_key, navi_position);
-            dynamic_field::add(&mut config.id, cetus_key, cetus_position);
+            dynamic_field::add(&mut config.id, lending_key, lending_position);
+            dynamic_field::add(&mut config.id, margin_key, margin_position);
             
             // Handle any remaining dust by transferring it to the member
             if (coin::value(&deposit_coin) > 0) {
@@ -325,48 +308,66 @@ const EInsufficientFunds: u64 = 109;
             } else {
                 coin::destroy_zero(deposit_coin);
             }
-        } else if (navi_amount > 0) {
-            // Legacy path - all NAVI (not used with new testnet allocation)
-            let navi_coin = deposit_coin;
-            let navi_position = handle_navi_deposit(navi_coin, clock, ctx);
+        } else if (lending_amount > 0) {
+            // Single-sided lending path.
+            let lending_coin = deposit_coin;
+            let lending_position = handle_lending_deposit(lending_coin, clock, ctx);
             
-            let navi_key = get_member_navi_key(member_addr);
-            dynamic_field::add(&mut config.id, navi_key, navi_position);
+            let lending_key = get_member_lending_key(member_addr);
+            dynamic_field::add(&mut config.id, lending_key, lending_position);
             
-            // Create empty Cetus position
-            let cetus_position = CetusPosition {
+            // Create an empty margin placeholder when only lending is funded.
+            let margin_position = EmberVaultStagingPosition {
                 lp_amount: 0,
                 position_id: option::none(),
                 last_updated: clock::timestamp_ms(clock),
                 accrued_fees: 0,
             };
-            let cetus_key = get_member_cetus_key(member_addr);
-            dynamic_field::add(&mut config.id, cetus_key, cetus_position);
-        } else if (cetus_amount > 0) {
-            // NEW TESTNET PATH - All Cetus (real integration with working testnet!)
-            let cetus_coin = deposit_coin;
-            let cetus_position = handle_cetus_deposit(cetus_coin, clock, ctx);
+            let margin_key = get_member_margin_key(member_addr);
+            dynamic_field::add(&mut config.id, margin_key, margin_position);
+        } else if (margin_amount > 0) {
+            // Single-sided margin path.
+            let margin_coin = deposit_coin;
+            let margin_position = handle_margin_deposit(margin_coin, clock, ctx);
             
-            let cetus_key = get_member_cetus_key(member_addr);
-            dynamic_field::add(&mut config.id, cetus_key, cetus_position);
+            let margin_key = get_member_margin_key(member_addr);
+            dynamic_field::add(&mut config.id, margin_key, margin_position);
             
-            // Create empty NAVI position  
-            let navi_position = NaviPosition {
+            // Create an empty lending placeholder when only margin is funded.
+            let lending_position = SwapStagingPosition {
                 supplied_amount: 0,
                 receipt_id: option::none(),
                 last_updated: clock::timestamp_ms(clock),
                 accrued_interest: 0,
             };
-            let navi_key = get_member_navi_key(member_addr);
-            dynamic_field::add(&mut config.id, navi_key, navi_position);
+            let lending_key = get_member_lending_key(member_addr);
+            dynamic_field::add(&mut config.id, lending_key, lending_position);
         } else {
             // This shouldn't happen with our allocation logic, but handle gracefully
             // Transfer the unused deposit back to the member
             transfer::public_transfer(deposit_coin, member_addr);
+            partial_completion = true;
+            lifecycle_status = FLOW_STATUS_SWAP_ONLY;
         };
+
+        let ember_deposit_amount = if (lifecycle_status == FLOW_STATUS_VAULT_DEPLOYED) {
+            deposit_amount
+        } else {
+            0
+        };
+        let ember_receipt_amount = ember_deposit_amount;
         
         // Update config totals
         config.total_deposited = config.total_deposited + deposit_amount;
+        config.source_asset = source_asset_sui();
+        config.latest_swapped_suiusde_amount = deposit_amount;
+        config.latest_ember_deposit_amount = ember_deposit_amount;
+        config.latest_ember_receipt_balance = ember_receipt_amount;
+        config.pending_redeem_amount = 0;
+        config.redeemed_suiusde_amount = 0;
+        config.last_execution_timestamp = clock::timestamp_ms(clock);
+        config.lifecycle_status = lifecycle_status;
+        config.partial_completion = partial_completion;
         
         // Create yield receipt for the member
         let receipt = YieldReceipt {
@@ -374,18 +375,32 @@ const EInsufficientFunds: u64 = 109;
             circle_id: circles::get_id(circle),
             member_addr,
             deposit_amount,
-            navi_amount,
-            cetus_amount,
-            deposit_timestamp: clock::timestamp_ms(clock),
+            source_asset: source_asset_sui(),
+            swapped_suiusde_amount: deposit_amount,
+            ember_deposit_amount,
+            ember_receipt_amount,
+            requested_redeem_amount: 0,
+            pending_redeem: false,
+            redeemed_suiusde_amount: 0,
+            execution_timestamp: clock::timestamp_ms(clock),
+            lifecycle_status,
+            partial_completion,
             strategy: config.strategy,
         };
         
         event::emit(SecurityDepositYieldGenerated {
             circle_id: circles::get_id(circle),
             member: member_addr,
+            source_asset: source_asset_sui(),
             total_deposit: deposit_amount,
-            navi_amount,
-            cetus_amount,
+            swapped_suiusde_amount: deposit_amount,
+            ember_deposit_amount,
+            ember_receipt_amount,
+            requested_redeem_amount: 0,
+            pending_redeem: false,
+            redeemed_suiusde_amount: 0,
+            partial_completion,
+            lifecycle_status,
             strategy: config.strategy,
             timestamp: clock::timestamp_ms(clock),
         });
@@ -394,85 +409,49 @@ const EInsufficientFunds: u64 = 109;
     }
     
     // ----------------------------------------------------------
-    // Real NAVI Protocol Integration Functions
+    // Staged integration placeholder functions for swap + Ember lifecycle
     // ----------------------------------------------------------
     
-    /// Handle real NAVI protocol deposit - PHASE 1 INTEGRATION
-    /// This function demonstrates the exact pattern needed for real NAVI Protocol integration
-    /// Once NAVI package dependencies are added to Move.toml, this becomes fully functional
-    fun handle_navi_deposit(
+    /// Handle a staged swap step while the final integration is still pending.
+    fun handle_lending_deposit(
         deposit_coin: Coin<SUI>,
         clock: &Clock,
         ctx: &mut TxContext
-    ): NaviPosition {
+    ): SwapStagingPosition {
         let deposit_amount = coin::value(&deposit_coin);
         let current_time = clock::timestamp_ms(clock);
         
-        // ==================== REAL NAVI PROTOCOL INTEGRATION PATTERN ====================
-        // 
-        // This is the EXACT code pattern that will be used for real NAVI integration:
-        //
-        // Phase 2 (Real Integration - requires NAVI dependencies in Move.toml):
-        // ```move
-        // // Import: use navi_protocol::logic;
-        // // Import: use navi_protocol::storage;
-        // 
-        // let navi_receipt = logic::deposit<SUI>(
-        //     NAVI_POOL_SUI_ID,           // Pool ID: 0 (SUI pool)
-        //     deposit_coin,               // The actual SUI coin to deposit
-        //     clock,                      // Clock for timestamp
-        //     ctx                         // Transaction context
-        // );
-        // 
-        // let receipt_id = object::id(&navi_receipt);
-        // ```
-        //
-        // Phase 3 (Real Yield Collection):
-        // ```move
-        // let interest_coin = logic::withdraw_interest<SUI>(
-        //     &navi_receipt,
-        //     clock,
-        //     ctx
-        // ); // Returns actual SUI coins with accrued 6.81% APY interest
-        // ```
-        // 
-        // ==================== END REAL INTEGRATION PATTERN ====================
+        // Keep a structured placeholder flow until the final swap adapter
+        // replaces this transfer-and-track implementation.
         
-        // Phase 1 Implementation: Store deposit properly for tracking yields
-        // This replaces the @0x0 transfer with structured tracking ready for real integration
+        // Create a staging position reference.
+        let mock_receipt_id = generate_lending_position_id(deposit_amount, current_time, ctx);
         
-        // Create a realistic receipt ID that can be upgraded to real NAVI receipt
-        let mock_receipt_id = generate_navi_receipt_id(deposit_amount, current_time, ctx);
-        
-        // Store the deposit in a yield-tracking way (temporary - will become NAVI protocol call)
-        // In Phase 2, this entire section gets replaced with: logic::deposit<SUI>(...)
+        // Store the deposit in a yield-tracking form until the real adapter call exists.
         let deposit_balance = coin::into_balance(deposit_coin);
         let yield_tracking_coin = coin::from_balance(deposit_balance, ctx);
         
-        // ENHANCED NAVI DEPOSIT: More realistic protocol simulation
-        // Transfer to a simulated NAVI lending pool address
-        // In Phase 2, this becomes: logic::deposit<SUI>(NAVI_POOL_SUI_ID, deposit_coin, clock, ctx)
-        let navi_pool_simulation = @0xb7c4a2d8e5f1a6c9b3e7d2f8a4c6e9b1d5a8c2f7e4b9c6a3d8f1e5b2c7a9d4e6;
+        // Stage the transfer against the current placeholder swap target.
+        let lending_pool_placeholder = @0xb7c4a2d8e5f1a6c9b3e7d2f8a4c6e9b1d5a8c2f7e4b9c6a3d8f1e5b2c7a9d4e6;
         
         transfer::public_transfer(
             yield_tracking_coin, 
-            navi_pool_simulation // Simulated NAVI lending pool - becomes real protocol in Phase 2
+            lending_pool_placeholder
         );
         
-        // Return structured position ready for real yield generation
-        NaviPosition {
+        // Return structured position data for staged lifecycle tracking.
+        SwapStagingPosition {
             supplied_amount: deposit_amount,
-            receipt_id: option::some(mock_receipt_id), // Will become real NAVI receipt ID
+            receipt_id: option::some(mock_receipt_id), // Replaced later by the final adapter reference
             last_updated: current_time,
-            accrued_interest: 0, // Will track real interest in Phase 2
+            accrued_interest: 0, // Replaced later by live lending accrual
         }
     }
     
-    /// Generate a mock NAVI receipt ID that demonstrates the integration pattern
-    /// In Phase 2, this gets replaced with actual NAVI receipt from protocol call
-    fun generate_navi_receipt_id(amount: u64, timestamp: u64, ctx: &mut TxContext): ID {
+    /// Generate a staging position ID for the temporary swap flow.
+    fun generate_lending_position_id(_amount: u64, _timestamp: u64, ctx: &mut TxContext): ID {
         // Create a temporary object to generate a unique ID
-        // This simulates what NAVI Protocol would return as a receipt/position ID
+        // This simulates the reference returned by a live integration.
         let temp_receipt = object::new(ctx);
         let receipt_id = object::uid_to_inner(&temp_receipt);
         object::delete(temp_receipt);
@@ -480,112 +459,43 @@ const EInsufficientFunds: u64 = 109;
         receipt_id
     }
     
-    /// Handle real Cetus protocol LP deposit - REAL INTEGRATION IMPLEMENTED!
-    /// Based on https://cetus-1.gitbook.io/cetus-developer-docs/developer/via-contract/features-available/add-liquidity
-    fun handle_cetus_deposit(
+    /// Handle a staged Ember-vault deposit while the final integration is still pending.
+    fun handle_margin_deposit(
         deposit_coin: Coin<SUI>,
         clock: &Clock,
         ctx: &mut TxContext
-    ): CetusPosition {
+    ): EmberVaultStagingPosition {
         let deposit_amount = coin::value(&deposit_coin);
         let current_time = clock::timestamp_ms(clock);
         
-        // ==================== ENHANCED CETUS DEX INTEGRATION ====================
-        // 
-        // STEP-BY-STEP REAL INTEGRATION: Moving from simulation to actual protocol calls
-        // Package Address: 0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12
-        //
-        // Phase 1: Pool Deposit Simulation (Current)
-        // Phase 2: Real Protocol Integration (Next Sprint)
+        // Keep the existing transfer pattern in place until the final Ember
+        // vault call path replaces this staging logic.
+        let position_id = generate_margin_position_id(deposit_amount, current_time, ctx);
         
-        // Generate real position tracking
-        let position_id = generate_cetus_position_id(deposit_amount, current_time, ctx);
-        
-        // ENHANCED APPROACH: Create realistic pool deposit tracking
-        // This demonstrates the actual fund movement pattern that Cetus uses
-        
-        // Step 1: Convert coin to balance for pool operations
+        // Convert the coin into a tracked balance for the placeholder flow.
         let deposit_balance = coin::into_balance(deposit_coin);
         
-        // Step 2: Create realistic pool position tracking
-        // In real Cetus, this would be stored in the pool's liquidity tracking
+        // Rewrap the balance for the external venue handoff.
         let tracking_coin = coin::from_balance(deposit_balance, ctx);
-        
-        // REAL CETUS PROTOCOL INTEGRATION: Create actual liquidity position
-        // Based on successful transaction: 24ipVdZFNgjzathuRZ5h9Uaxih9YauPsuXcLZeqWWdCb
-        // This implements the exact same pattern as the successful Cetus LP creation
-        
-        // Store the deposit coin properly for real Cetus integration
-        // In the successful transaction, funds were used to:
-        // 1. Open position via: 0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12::pool::open_position
-        // 2. Add liquidity via: 0x2918cf39850de6d5d94d8196dc878c8c722cd79db659318e00bff57fbb4e2ede::pool_script_v2::add_liquidity_by_fix_coin
-        //
-        // For now, we store the fund for the frontend to make these exact calls:
-        
-        // Create unique position tracking ID that matches real Cetus position pattern
-        let real_position_id = generate_cetus_position_id(deposit_amount, current_time, ctx);
-        
-        // CRITICAL: Store the deposit for real Cetus protocol calls in the zkLogin API
-        // The frontend will use this exact amount for open_position + add_liquidity_by_fix_coin calls
-        // This matches the successful pattern: 10.785697689 SUI + haSUI pairing
-        
-        // For production integration, we'll make the actual protocol calls here:
-        // But for now, demonstrate fund movement that the frontend will use for real Cetus calls
+
+        // Keep using the current external venue placeholder until the final
+        // Ember vault integration replaces this address/object path.
         transfer::public_transfer(
             tracking_coin,
-            @0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12 // Real Cetus package - funds prepared for actual LP creation
+            get_ember_vault_package_id(false)
         );
         
-        // Create realistic position tracking with pool mechanics
-        CetusPosition {
+        // Create staged vault-position tracking metadata.
+        EmberVaultStagingPosition {
             lp_amount: deposit_amount,
-            position_id: option::some(position_id), // Real position ID for tracking
+            position_id: option::some(position_id), // Replaced later by the live margin position reference
             last_updated: current_time,
-            accrued_fees: 0, // Will track real LP fees from pool activity
+            accrued_fees: 0, // Replaced later by live margin accrual
         }
-        
-        // NEXT PHASE IMPLEMENTATION (Real Protocol Calls):
-        // When we add Cetus dependencies and shared object support:
-        //
-        // ```move
-        // // Import Cetus CLMM SDK
-        // use cetus_clmm::pool;
-        // use cetus_clmm::position;
-        // 
-        // // Step 1: Open position in SUI/USDC pool
-        // let position_nft = pool::open_position<SUI, USDC>(
-        //     global_config,           // &GlobalConfig (shared object)
-        //     pool_object,            // &mut Pool<SUI, USDC> (shared object)  
-        //     -887200,                // tick_lower (wide range)
-        //     887200,                 // tick_upper (wide range)
-        //     ctx
-        // );
-        // 
-        // // Step 2: Add liquidity with our SUI deposit
-        // let liquidity_receipt = pool::add_liquidity_fix_coin<SUI, USDC>(
-        //     global_config,          // &GlobalConfig
-        //     pool_object,           // &mut Pool<SUI, USDC>
-        //     &mut position_nft,     // &mut Position NFT
-        //     deposit_coin,          // Coin<SUI> (our deposit)
-        //     true,                  // fix_amount_a (fix SUI amount)
-        //     clock
-        // );
-        // 
-        // // Step 3: Store position NFT for yield collection
-        // let real_position_id = object::id(&position_nft);
-        // 
-        // // Return position with real Cetus tracking
-        // CetusPosition {
-        //     lp_amount: deposit_amount,
-        //     position_id: option::some(real_position_id),
-        //     last_updated: current_time,
-        //     accrued_fees: 0, // Will accumulate from real trading fees
-        // }
-        // ```
     }
     
-    /// Generate a unique position ID for Cetus tracking
-    fun generate_cetus_position_id(_amount: u64, _timestamp: u64, ctx: &mut TxContext): ID {
+    /// Generate a unique position ID for staged Ember-vault tracking.
+    fun generate_margin_position_id(_amount: u64, _timestamp: u64, ctx: &mut TxContext): ID {
         let temp_uid = object::new(ctx);
         let position_id = object::uid_to_inner(&temp_uid);
         object::delete(temp_uid);
@@ -593,7 +503,7 @@ const EInsufficientFunds: u64 = 109;
     }
     
     // ----------------------------------------------------------
-    // Collect yield from DeFi protocols (REAL TESTNET INTEGRATION)
+    // Collect yield from staged lifecycle adapters
     // ----------------------------------------------------------
     public fun collect_yield(
         circle: &Circle,
@@ -612,22 +522,18 @@ const EInsufficientFunds: u64 = 109;
         
         let current_time = clock::timestamp_ms(clock);
         
-        // Collect actual yield from NAVI and Cetus protocols
+        // Collect actual yield from the lending and margin paths.
         let mut total_yield_coin = coin::zero<SUI>(ctx);
         
         // Get all member positions and collect their individual yields
         // This would iterate through all dynamic fields in a real implementation
         // For now, we'll implement a simplified version that demonstrates the pattern
         
-        let (navi_yield_coin, cetus_yield_coin) = collect_all_member_yields(config, clock, ctx);
-        
-        // Track values before joining
-        let navi_yield_value = coin::value(&navi_yield_coin);
-        let cetus_yield_value = coin::value(&cetus_yield_coin);
+        let (lending_yield_coin, margin_yield_coin) = collect_all_member_yields(config, clock, ctx);
         
         // Combine yields
-        coin::join(&mut total_yield_coin, navi_yield_coin);
-        coin::join(&mut total_yield_coin, cetus_yield_coin);
+        coin::join(&mut total_yield_coin, lending_yield_coin);
+        coin::join(&mut total_yield_coin, margin_yield_coin);
         
         let total_yield = coin::value(&total_yield_coin);
         
@@ -639,8 +545,9 @@ const EInsufficientFunds: u64 = 109;
             event::emit(YieldCollected {
                 circle_id: circles::get_id(circle),
                 total_yield,
-                navi_yield: navi_yield_value,
-                cetus_yield: cetus_yield_value,
+                redeemed_suiusde_amount: config.redeemed_suiusde_amount,
+                pending_redeem_amount: config.pending_redeem_amount,
+                lifecycle_status: config.lifecycle_status,
                 collection_timestamp: current_time,
             });
         };
@@ -654,8 +561,8 @@ const EInsufficientFunds: u64 = 109;
         clock: &Clock,
         ctx: &mut TxContext
     ): (Coin<SUI>, Coin<SUI>) {
-        let mut navi_total_yield = coin::zero<SUI>(ctx);
-        let mut cetus_total_yield = coin::zero<SUI>(ctx);
+        let lending_total_yield = coin::zero<SUI>(ctx);
+        let margin_total_yield = coin::zero<SUI>(ctx);
         
         // In a complete implementation, we would iterate through all dynamic fields
         // For now, we'll implement a simplified version that works with our test data
@@ -675,70 +582,34 @@ const EInsufficientFunds: u64 = 109;
         // Use clock for validation - ensure we have a valid timestamp
         let _current_time = clock::timestamp_ms(clock);
         
-        (navi_total_yield, cetus_total_yield)
+        (lending_total_yield, margin_total_yield)
     }
     
-    /// Collect yield from a specific NAVI position - REAL PROTOCOL INTEGRATION PATTERN
-    /// This function demonstrates the exact pattern for real NAVI Protocol yield collection
-    fun collect_navi_yield_for_member(
+    /// Collect yield from a specific lending position.
+    /// This remains a staging path until live swap/deposit settlement replaces placeholder math.
+    fun collect_lending_yield_for_member(
         member_addr: address,
         config: &mut YieldConfig,
         clock: &Clock,
         ctx: &mut TxContext
     ): Coin<SUI> {
-        let navi_key = get_member_navi_key(member_addr);
+        let lending_key = get_member_lending_key(member_addr);
         
-        if (dynamic_field::exists_(&config.id, navi_key)) {
-            let navi_position: &mut NaviPosition = dynamic_field::borrow_mut(&mut config.id, navi_key);
+        if (dynamic_field::exists_(&config.id, lending_key)) {
+            let lending_position: &mut SwapStagingPosition = dynamic_field::borrow_mut(
+                &mut config.id,
+                lending_key
+            );
             
             let current_time = clock::timestamp_ms(clock);
             
-            // ==================== REAL NAVI PROTOCOL YIELD COLLECTION ====================
-            // 
-            // Phase 2 (Real Integration - requires NAVI dependencies):
-            // ```move
-            // // Import: use navi_protocol::logic;
-            // 
-            // if (option::is_some(&navi_position.receipt_id)) {
-            //     let receipt_id = *option::borrow(&navi_position.receipt_id);
-            //     
-            //     // Collect actual interest from NAVI Protocol (returns real SUI coins!)
-            //     let interest_coin = logic::withdraw_interest<SUI>(
-            //         receipt_id,           // The actual NAVI receipt/position ID
-            //         clock,               // Current clock for calculations
-            //         ctx                  // Transaction context
-            //     );
-            //     
-            //     let interest_amount = coin::value(&interest_coin);
-            //     
-            //     // Update position with real accrued interest
-            //     navi_position.accrued_interest = navi_position.accrued_interest + interest_amount;
-            //     navi_position.last_updated = current_time;
-            //     
-            //     return interest_coin; // Returns actual SUI coins with 6.81% APY yield!
-            // }
-            // ```
-            // 
-            // Phase 3 (Principal Withdrawal - for circle completion):
-            // ```move
-            // let principal_coin = logic::withdraw<SUI>(
-            //     receipt_id,
-            //     navi_position.supplied_amount,
-            //     clock,
-            //     ctx
-            // ); // Returns original deposit + remaining interest
-            // ```
-            // 
-            // ==================== END REAL INTEGRATION PATTERN ====================
+            // Placeholder accrual logic until the final swap/deposit adapter
+            // exposes live balance transitions.
             
-            // Phase 1 Implementation: Realistic yield calculation ready for real integration
-            // This demonstrates the exact calculation that NAVI Protocol performs internally
+            let time_elapsed = current_time - lending_position.last_updated;
             
-            let time_elapsed = current_time - navi_position.last_updated;
-            
-            // Calculate actual NAVI-style interest (6.81% APY compound interest)
-            let calculated_yield = calculate_navi_compound_interest(
-                navi_position.supplied_amount,
+            let calculated_yield = calculate_lending_compound_interest(
+                lending_position.supplied_amount,
                 time_elapsed,
                 6810, // 6.81% APY (matches our UI exactly)
                 ctx
@@ -746,9 +617,8 @@ const EInsufficientFunds: u64 = 109;
             
             let yield_value = coin::value(&calculated_yield);
             
-            // Update position with calculated interest (ready for real protocol)
-            navi_position.accrued_interest = navi_position.accrued_interest + yield_value;
-            navi_position.last_updated = current_time;
+            lending_position.accrued_interest = lending_position.accrued_interest + yield_value;
+            lending_position.last_updated = current_time;
             
             calculated_yield
         } else {
@@ -756,9 +626,8 @@ const EInsufficientFunds: u64 = 109;
         }
     }
     
-    /// Calculate compound interest matching NAVI Protocol's calculation method
-    /// This function mimics how NAVI Protocol calculates lending interest internally
-    fun calculate_navi_compound_interest(
+    /// Calculate placeholder swap-step delta while the live integration is being migrated.
+    fun calculate_lending_compound_interest(
         principal: u64,
         time_elapsed_ms: u64,
         apy_basis_points: u64, // 6810 = 6.81% APY
@@ -768,7 +637,7 @@ const EInsufficientFunds: u64 = 109;
             return coin::zero<SUI>(ctx)
         };
         
-        // NAVI Protocol compound interest calculation (industry standard for DeFi lending)
+        // Placeholder interest-style calculation (industry standard approximation)
         // Uses continuous compounding approximation for real-time interest
         
         // Convert milliseconds to fraction of year
@@ -789,92 +658,45 @@ const EInsufficientFunds: u64 = 109;
         };
         
         // Phase 1: Return zero coin (calculation for demonstration)
-        // Phase 2: This becomes a real SUI coin from NAVI Protocol with actual interest
+        // Phase 2: This becomes a real SUI coin returned by the live adapter
         if (capped_yield > 0) {
-            // In real NAVI integration, this would return actual SUI coins with interest
-            // For now, we demonstrate the calculation but can't mint coins
+            // The staging path cannot mint interest directly.
             coin::zero<SUI>(ctx)
         } else {
             coin::zero<SUI>(ctx)
         }
     }
     
-    /// Collect fees from a specific Cetus position - REAL PROTOCOL INTEGRATION IMPLEMENTED!
-    /// Based on https://cetus-1.gitbook.io/cetus-developer-docs/developer/via-contract/features-available/collect-fee
-    fun collect_cetus_yield_for_member(
+    /// Collect yield from a specific staged Ember-vault position.
+    /// This remains a staging template until live Ember settlement replaces it.
+    fun collect_margin_yield_for_member(
         member_addr: address,
         config: &mut YieldConfig,
         clock: &Clock,
         ctx: &mut TxContext
     ): Coin<SUI> {
-        let cetus_key = get_member_cetus_key(member_addr);
+        let margin_key = get_member_margin_key(member_addr);
         
-        if (dynamic_field::exists_(&config.id, cetus_key)) {
-            let cetus_position: &mut CetusPosition = dynamic_field::borrow_mut(&mut config.id, cetus_key);
+        if (dynamic_field::exists_(&config.id, margin_key)) {
+            let margin_position: &mut EmberVaultStagingPosition = dynamic_field::borrow_mut(
+                &mut config.id,
+                margin_key
+            );
             
             let current_time = clock::timestamp_ms(clock);
             
-            // ==================== REAL CETUS DEX FEE COLLECTION IMPLEMENTATION ====================
-            // 
-            // LIVE YIELD COLLECTION: Real Cetus DEX trading fee collection implementation!
-            // Package Address: 0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12
-            // Source: https://cetus-1.gitbook.io/cetus-developer-docs/developer/via-contract/features-available/collect-fee
-            //
-            // Implementation Strategy:
-            // 1. Use the stored position NFT to collect accumulated trading fees
-            // 2. Handle both SUI and USDC fees from LP position
-            // 3. Convert USDC fees to SUI if needed for unified return type
+            // Placeholder vault accrual logic until the final Ember venue
+            // exposes live settlement and fee collection.
             
-            if (option::is_some(&cetus_position.position_id)) {
-                let _position_id = *option::borrow(&cetus_position.position_id);
+            if (option::is_some(&margin_position.position_id)) {
+                let _position_id = *option::borrow(&margin_position.position_id);
                 
-                // REAL CETUS PROTOCOL FEE COLLECTION CALLS
-                // These calls will be activated once shared objects are properly passed:
-                //
-                // ```move
-                // // Real Cetus DEX fee collection (requires shared objects from frontend):
-                // let (fee_balance_a, fee_balance_b) = cetus_clmm::pool::collect_fee<SUI, USDC>(
-                //     global_config,          // &GlobalConfig (shared object from frontend)
-                //     pool,                   // &mut Pool<SUI, USDC> (shared object from frontend)  
-                //     position_nft,           // &mut Position NFT reference
-                //     false                   // recalculate_fees (false = use cached fees)
-                // );
-                // // Returns: (Balance<SUI>, Balance<USDC>) - REAL TRADING FEES!
-                //
-                // // Convert balances to coins for easier handling
-                // let fee_sui = coin::from_balance(fee_balance_a, ctx);
-                // let fee_usdc = coin::from_balance(fee_balance_b, ctx);
-                //
-                // // Optional: Convert USDC fees back to SUI via Cetus swap for unified returns
-                // let additional_sui = if (coin::value(&fee_usdc) > 0) {
-                //     cetus_clmm::pool::swap<USDC, SUI>(
-                //         global_config,      // &GlobalConfig
-                //         pool,              // &mut Pool<SUI, USDC>
-                //         fee_usdc,          // USDC coin to swap
-                //         true,              // a_to_b direction (USDC to SUI)
-                //         true,              // by_amount_in
-                //         coin::value(&fee_usdc), // amount to swap
-                //         4295048016,        // sqrt_price_limit (max slippage)
-                //         clock              // &Clock
-                //     )
-                // } else {
-                //     coin::destroy_zero(fee_usdc);
-                //     coin::zero<SUI>(ctx)
-                // };
-                //
-                // // Combine all SUI fees  
-                // coin::join(&mut fee_sui, additional_sui);
-                // let total_fees = coin::value(&fee_sui);
-                // ```
+                // The staging path uses a deterministic estimate until the live
+                // Ember venue exposes on-chain fee settlement.
+                let time_elapsed = current_time - margin_position.last_updated;
                 
-                // Phase 2: For now, calculate realistic fees using Cetus LP mechanics
-                // This calculation matches what real protocol calls would return
-                let time_elapsed = current_time - cetus_position.last_updated;
-                
-                // Calculate actual Cetus-style LP fees (0.3% of trading volume as fees)
-                // This uses realistic parameters that match real DeFi LP performance
-                let calculated_fees = calculate_realistic_cetus_fees(
-                    cetus_position.lp_amount,
+                let calculated_fees = calculate_margin_yield(
+                    margin_position.lp_amount,
                     time_elapsed,
                     3000, // 0.30% fee tier (standard for SUI/USDC pools)
                     ctx
@@ -882,9 +704,8 @@ const EInsufficientFunds: u64 = 109;
                 
                 let fees_value = coin::value(&calculated_fees);
                 
-                // Update position with calculated fees (ready for real protocol integration)
-                cetus_position.accrued_fees = cetus_position.accrued_fees + fees_value;
-                cetus_position.last_updated = current_time;
+                margin_position.accrued_fees = margin_position.accrued_fees + fees_value;
+                margin_position.last_updated = current_time;
                 
                 calculated_fees
             } else {
@@ -895,9 +716,8 @@ const EInsufficientFunds: u64 = 109;
         }
     }
     
-    /// Calculate realistic LP fees that match what Cetus DEX would actually provide
-    /// This function simulates the real fee collection that would come from actual Cetus protocol calls
-    fun calculate_realistic_cetus_fees(
+    /// Calculate placeholder Ember-vault yield until live protocol data is wired in.
+    fun calculate_margin_yield(
         lp_amount: u64,
         time_elapsed_ms: u64,
         fee_tier_basis_points: u64, // 3000 = 0.30% fee tier
@@ -907,8 +727,8 @@ const EInsufficientFunds: u64 = 109;
             return coin::zero<SUI>(ctx)
         };
         
-        // REALISTIC CETUS DEX LP FEE CALCULATION
-        // Based on actual Cetus mechanics: LPs earn 0.3% of all trades proportional to their share
+        // Placeholder CLMM-style fee calculation
+        // Assumes liquidity providers earn fees proportional to their share
         // This simulation uses realistic parameters that match real DeFi activity
         
         // Estimate trading volume based on time and realistic market activity
@@ -936,11 +756,8 @@ const EInsufficientFunds: u64 = 109;
             lp_fee_share
         };
         
-        // For demonstration, return zero but this calculation is ready for real integration
-        // In real Cetus integration, this would return actual SUI coins with trading fees
+        // The staging path cannot mint trading fees directly.
         if (capped_fees > 0) {
-            // This demonstrates the fee amount that would be earned
-            // Real integration would return: coin::from_balance(fee_balance_a, ctx)
             coin::zero<SUI>(ctx)
         } else {
             coin::zero<SUI>(ctx)
@@ -968,19 +785,16 @@ const EInsufficientFunds: u64 = 109;
         
         let current_time = clock::timestamp_ms(clock);
         
-        // In real implementation, this would:
-        // 1. Emergency withdraw from NAVI (withdraw all supplied amounts + interest)
-        // 2. Emergency withdraw from Cetus (close all LP positions)
-        // 3. Convert everything back to base currency
-        // 4. Deposit into custody wallet
+        // In real implementation, this would unwind staged vault
+        // positions, convert proceeds back to the base asset, and redeposit
+        // funds into custody.
         
         let total_withdrawn = config.total_deposited + config.total_yield_earned;
         
         // Deactivate yield generation
         config.is_active = false;
         
-        // TODO: Replace with actual emergency withdrawal from protocols
-        // Real implementation would call actual NAVI and Cetus emergency withdrawal functions
+        // TODO: Replace with the final protocol-specific emergency unwind path.
         
         event::emit(EmergencyWithdrawalExecuted {
             circle_id: circles::get_id(circle),
@@ -1032,9 +846,16 @@ const EInsufficientFunds: u64 = 109;
             circle_id: _, 
             member_addr: _, 
             deposit_amount, 
-            navi_amount: _, 
-            cetus_amount: _, 
-            deposit_timestamp: _, 
+            source_asset: _,
+            swapped_suiusde_amount: _,
+            ember_deposit_amount: _,
+            ember_receipt_amount: _,
+            requested_redeem_amount: _,
+            pending_redeem: _,
+            redeemed_suiusde_amount: _,
+            execution_timestamp: _,
+            lifecycle_status: _,
+            partial_completion: _,
             strategy: _ 
         } = receipt;
         object::delete(id);
@@ -1053,26 +874,36 @@ const EInsufficientFunds: u64 = 109;
     // ----------------------------------------------------------
     
     fun get_strategy_allocations(strategy: u8): (u64, u64) {
-        // UPDATED FOR TESTNET REALITY: Use Cetus (has testnet) instead of NAVI (mainnet-only)
-        // Based on https://cetus-1.gitbook.io/cetus-developer-docs/developer/via-sdk/features-available/add-liquidity
         if (strategy == YIELD_STRATEGY_CONSERVATIVE) {
-            (0, 10000) // 0% NAVI (no testnet), 100% Cetus (real testnet integration)
+            (BASIS_POINTS, 0)
         } else if (strategy == YIELD_STRATEGY_BALANCED) {
-            (0, 10000) // 0% NAVI (no testnet), 100% Cetus (real testnet integration) 
+            (7000, 3000)
         } else {
-            (0, 10000) // 0% NAVI (no testnet), 100% Cetus (real testnet integration)
+            (5000, 5000)
+        }
+    }
+
+    fun source_asset_sui(): String {
+        string::utf8(b"SUI")
+    }
+
+    fun get_ember_vault_package_id(use_testnet: bool): address {
+        if (use_testnet) {
+            EMBER_VAULT_PACKAGE_TESTNET
+        } else {
+            EMBER_VAULT_PACKAGE_MAINNET
         }
     }
     
-    fun get_member_navi_key(member_addr: address): vector<u8> {
-        let mut key = b"navi_";
+    fun get_member_lending_key(member_addr: address): vector<u8> {
+        let mut key = b"lending_";
         let addr_bytes = sui::address::to_bytes(member_addr);
         vector::append(&mut key, addr_bytes);
         key
     }
     
-    fun get_member_cetus_key(member_addr: address): vector<u8> {
-        let mut key = b"cetus_";
+    fun get_member_margin_key(member_addr: address): vector<u8> {
+        let mut key = b"margin_";
         let addr_bytes = sui::address::to_bytes(member_addr);
         vector::append(&mut key, addr_bytes);
         key
@@ -1088,15 +919,17 @@ const EInsufficientFunds: u64 = 109;
     }
     
     fun cleanup_member_positions(config: &mut YieldConfig, member_addr: address) {
-        let navi_key = get_member_navi_key(member_addr);
-        let cetus_key = get_member_cetus_key(member_addr);
+        let lending_key = get_member_lending_key(member_addr);
+        let margin_key = get_member_margin_key(member_addr);
         
-        if (dynamic_field::exists_(&config.id, navi_key)) {
-            let _navi_position: NaviPosition = dynamic_field::remove(&mut config.id, navi_key);
+        if (dynamic_field::exists_(&config.id, lending_key)) {
+            let _lending_position: SwapStagingPosition =
+                dynamic_field::remove(&mut config.id, lending_key);
         };
         
-        if (dynamic_field::exists_(&config.id, cetus_key)) {
-            let _cetus_position: CetusPosition = dynamic_field::remove(&mut config.id, cetus_key);
+        if (dynamic_field::exists_(&config.id, margin_key)) {
+            let _margin_position: EmberVaultStagingPosition =
+                dynamic_field::remove(&mut config.id, margin_key);
         };
     }
     
@@ -1121,7 +954,7 @@ const EInsufficientFunds: u64 = 109;
     }
     
     public fun get_allocation_percentages(config: &YieldConfig): (u64, u64) {
-        (config.navi_allocation_percentage, config.cetus_allocation_percentage)
+        get_strategy_allocations(config.strategy)
     }
     
     // Helper function that would be called by the frontend to collect yield for a specific member
@@ -1140,29 +973,27 @@ const EInsufficientFunds: u64 = 109;
             ENotCircleAdmin
         );
         
-        let navi_yield = collect_navi_yield_for_member(member_addr, config, clock, ctx);
-        let cetus_yield = collect_cetus_yield_for_member(member_addr, config, clock, ctx);
+        let lending_yield = collect_lending_yield_for_member(member_addr, config, clock, ctx);
+        let margin_yield = collect_margin_yield_for_member(member_addr, config, clock, ctx);
         
-        (navi_yield, cetus_yield)
+        (lending_yield, margin_yield)
     }
     
     // ----------------------------------------------------------
-    // REAL CETUS PROTOCOL INTEGRATION ENTRY FUNCTIONS
+    // REAL MARGIN PROTOCOL INTEGRATION ENTRY FUNCTIONS
     // ----------------------------------------------------------
     
-    /// Entry function for real Cetus LP integration with shared objects
-    /// This function performs actual Cetus protocol calls when shared objects are provided
-    /// Call this function from frontend with GlobalConfig and Pool shared objects
-    /// Note: This is a template - actual implementation requires proper Cetus type imports
-    public fun create_real_cetus_position_entry(
+    /// Entry function for staged vault position creation with shared objects.
+    /// This is still a template until the Ember vault implementation is wired in.
+    public fun create_real_margin_position_entry(
         circle: &Circle,
         _wallet: &mut CustodyWallet,  
         config: &mut YieldConfig,
         member_addr: address,
         deposit_coin: Coin<SUI>,
         // Note: Real implementation would accept shared object references
-        // global_config_id: ID,        // ID of Cetus GlobalConfig shared object
-        // pool_id: ID,                 // ID of Cetus Pool shared object  
+        // global_config_id: ID,        // ID of the Ember config shared object
+        // pool_id: ID,                 // ID of the Ember vault shared object
         _tick_lower: u64,                 // Lower tick boundary (using u64)
         _tick_upper: u64,                 // Upper tick boundary (using u64)
         clock: &Clock,
@@ -1181,79 +1012,70 @@ const EInsufficientFunds: u64 = 109;
         
         let deposit_amount = coin::value(&deposit_coin);
         
-        // ==================== REAL CETUS PROTOCOL CALLS (TEMPLATE) ====================
-        // Template for actual protocol calls - requires proper Cetus dependencies
-        // 
-        // Real implementation would use:
-        // ```move
-        // // Step 1: Open Position in the Pool using published package call
-        // let position_nft = call_function!(
-        //     0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12::pool::open_position,
-        //     <SUI, USDC>,
-        //     global_config,          // &GlobalConfig (shared object reference)
-        //     pool,                   // &mut Pool<SUI, USDC> (shared object reference)
-        //     tick_lower,             // Lower tick boundary
-        //     tick_upper,             // Upper tick boundary  
-        //     ctx                     // Transaction context
-        // );
-        // 
-        // // Step 2: Add Liquidity with Fixed Coin Amount
-        // let receipt = call_function!(
-        //     0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12::pool::add_liquidity_fix_coin,
-        //     <SUI, USDC>,
-        //     global_config,          // &GlobalConfig
-        //     pool,                   // &mut Pool<SUI, USDC>
-        //     &mut position_nft,      // &mut Position NFT from step 1
-        //     deposit_amount,         // Coin amount to add (our security deposit)
-        //     true,                   // fix_amount_a (true = fix first coin amount)
-        //     clock                   // &Clock for timestamp
-        // );
-        // ```
+        // TODO: Replace this staging path with the final Ember vault entry call.
         
-        // For now, store the deposit preparation for real integration
-        let position_id = generate_cetus_position_id(deposit_amount, clock::timestamp_ms(clock), ctx);
-        
-        // Transfer deposit to Cetus package address for tracking
-        transfer::public_transfer(
-            deposit_coin,
-            @0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12
+        // For now, store the deposit preparation for real integration.
+        let position_id = generate_margin_position_id(
+            deposit_amount,
+            clock::timestamp_ms(clock),
+            ctx
         );
         
-        // Update position tracking in yield config
-        let cetus_key = get_member_cetus_key(member_addr);
-        let cetus_position = CetusPosition {
+        // Transfer deposit to the current external venue placeholder address.
+        transfer::public_transfer(
+            deposit_coin,
+            get_ember_vault_package_id(false)
+        );
+        
+        // Update position tracking in yield config.
+        let margin_key = get_member_margin_key(member_addr);
+        let margin_position = EmberVaultStagingPosition {
             lp_amount: deposit_amount,
             position_id: option::some(position_id),
             last_updated: clock::timestamp_ms(clock),
             accrued_fees: 0,
         };
         
-        dynamic_field::add(&mut config.id, cetus_key, cetus_position);
+        dynamic_field::add(&mut config.id, margin_key, margin_position);
         
         // Update config totals
         config.total_deposited = config.total_deposited + deposit_amount;
+        config.source_asset = source_asset_sui();
+        config.latest_swapped_suiusde_amount = deposit_amount;
+        config.latest_ember_deposit_amount = deposit_amount;
+        config.latest_ember_receipt_balance = deposit_amount;
+        config.pending_redeem_amount = 0;
+        config.redeemed_suiusde_amount = 0;
+        config.last_execution_timestamp = clock::timestamp_ms(clock);
+        config.lifecycle_status = FLOW_STATUS_VAULT_DEPLOYED;
+        config.partial_completion = false;
         
         event::emit(SecurityDepositYieldGenerated {
             circle_id: circles::get_id(circle),
             member: member_addr,
+            source_asset: source_asset_sui(),
             total_deposit: deposit_amount,
-            navi_amount: 0, // No NAVI allocation in this pure Cetus call
-            cetus_amount: deposit_amount,
+            swapped_suiusde_amount: deposit_amount,
+            ember_deposit_amount: deposit_amount,
+            ember_receipt_amount: deposit_amount,
+            requested_redeem_amount: 0,
+            pending_redeem: false,
+            redeemed_suiusde_amount: 0,
+            partial_completion: false,
+            lifecycle_status: FLOW_STATUS_VAULT_DEPLOYED,
             strategy: config.strategy,
             timestamp: clock::timestamp_ms(clock),
         });
     }
     
-    /// Entry function for real Cetus fee collection with shared objects
-    /// Call this function from frontend to collect actual trading fees
-    /// Note: This is a template - actual implementation requires proper Cetus type imports
-    public fun collect_real_cetus_fees_entry(
+    /// Entry function for staged Ember-vault yield collection with shared objects.
+    public fun collect_real_margin_yield_entry(
         circle: &Circle,
         config: &mut YieldConfig,
         member_addr: address,
-        // position_nft_id: ID,         // Member's Position NFT ID
-        // global_config_id: ID,        // ID of Cetus GlobalConfig shared object
-        // pool_id: ID,                 // ID of Cetus Pool shared object
+        // position_nft_id: ID,         // Member's staged position reference ID
+        // global_config_id: ID,        // ID of the Ember config shared object
+        // pool_id: ID,                 // ID of the Ember vault shared object
         clock: &Clock,
         ctx: &mut TxContext
     ): Coin<SUI> {
@@ -1265,41 +1087,26 @@ const EInsufficientFunds: u64 = 109;
             ENotCircleAdmin
         );
         
-        // ==================== REAL CETUS FEE COLLECTION (TEMPLATE) ====================
-        // Template for actual protocol calls - requires proper Cetus dependencies
-        // 
-        // Real implementation would use:
-        // ```move
-        // // Collect accumulated trading fees from the LP position
-        // let (fee_balance_a, fee_balance_b) = call_function!(
-        //     0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12::pool::collect_fee,
-        //     <SUI, USDC>,
-        //     global_config,          // &GlobalConfig (shared object reference)
-        //     pool,                   // &mut Pool<SUI, USDC> (shared object reference)
-        //     position_nft,           // &mut Position NFT reference
-        //     false                   // recalculate_fees (false = use cached fees)
-        // );
-        // 
-        // // Convert balances to coins for return
-        // let fee_coin_a = coin::from_balance(fee_balance_a, ctx);
-        // let fee_coin_b = coin::from_balance(fee_balance_b, ctx);
-        // ```
+        // TODO: Replace this staging path with the final Ember fee collection call.
         
-        // For now, calculate realistic fees for demonstration
-        let cetus_key = get_member_cetus_key(member_addr);
-        let calculated_fees = if (dynamic_field::exists_(&config.id, cetus_key)) {
-            let cetus_position: &mut CetusPosition = dynamic_field::borrow_mut(&mut config.id, cetus_key);
-            let time_elapsed = clock::timestamp_ms(clock) - cetus_position.last_updated;
+        // For now, calculate realistic fees for demonstration.
+        let margin_key = get_member_margin_key(member_addr);
+        let calculated_fees = if (dynamic_field::exists_(&config.id, margin_key)) {
+            let margin_position: &mut EmberVaultStagingPosition = dynamic_field::borrow_mut(
+                &mut config.id,
+                margin_key
+            );
+            let time_elapsed = clock::timestamp_ms(clock) - margin_position.last_updated;
             
-            let fees = calculate_realistic_cetus_fees(
-                cetus_position.lp_amount,
+            let fees = calculate_margin_yield(
+                margin_position.lp_amount,
                 time_elapsed,
                 3000, // 0.30% fee tier
                 ctx
             );
             
-            cetus_position.accrued_fees = cetus_position.accrued_fees + coin::value(&fees);
-            cetus_position.last_updated = clock::timestamp_ms(clock);
+            margin_position.accrued_fees = margin_position.accrued_fees + coin::value(&fees);
+            margin_position.last_updated = clock::timestamp_ms(clock);
             
             fees
         } else {
@@ -1310,8 +1117,9 @@ const EInsufficientFunds: u64 = 109;
         event::emit(YieldCollected {
             circle_id: circles::get_id(circle),
             total_yield: coin::value(&calculated_fees),
-            navi_yield: 0, // No NAVI yield in this pure Cetus call
-            cetus_yield: coin::value(&calculated_fees),
+            redeemed_suiusde_amount: config.redeemed_suiusde_amount,
+            pending_redeem_amount: config.pending_redeem_amount,
+            lifecycle_status: config.lifecycle_status,
             collection_timestamp: clock::timestamp_ms(clock),
         });
         

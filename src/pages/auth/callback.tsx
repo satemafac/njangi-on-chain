@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -8,6 +8,8 @@ export default function AuthCallback() {
   const [status, setStatus] = useState('Processing authentication...');
   const [progress, setProgress] = useState(0);
   const [isError, setIsError] = useState(false);
+  const hasProcessedCallbackRef = useRef(false);
+  const redirectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   useEffect(() => {
     // Show progress animation
@@ -20,8 +22,27 @@ export default function AuthCallback() {
     
     return () => clearInterval(progressInterval);
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (redirectTimeoutRef.current) {
+        clearTimeout(redirectTimeoutRef.current);
+        redirectTimeoutRef.current = null;
+      }
+    };
+  }, []);
   
   useEffect(() => {
+    if (!router.isReady) {
+      return;
+    }
+
+    if (hasProcessedCallbackRef.current) {
+      return;
+    }
+
+    hasProcessedCallbackRef.current = true;
+
     const processCallback = async () => {
       try {
         console.log('Processing authentication callback');
@@ -34,6 +55,9 @@ export default function AuthCallback() {
         const hash = window.location.hash.substring(1);
         const hashParams = new URLSearchParams(hash);
         idToken = hashParams.get('id_token');
+        const hashError = hashParams.get('error');
+        const hashErrorDescription = hashParams.get('error_description');
+        const hashCode = hashParams.get('code');
         
         // Extract Apple user data if available
         const userDataParam = hashParams.get('user');
@@ -51,6 +75,26 @@ export default function AuthCallback() {
           console.log('ID token not found in URL hash, checking search params');
           const searchParams = new URLSearchParams(window.location.search);
           idToken = searchParams.get('id_token');
+
+          const searchError = searchParams.get('error');
+          const searchErrorDescription = searchParams.get('error_description');
+          const searchCode = searchParams.get('code');
+
+          if (!idToken) {
+            const providerError = hashError || searchError;
+            const providerErrorDescription = hashErrorDescription || searchErrorDescription;
+            const authorizationCode = hashCode || searchCode;
+
+            if (providerError) {
+              throw new Error(
+                decodeURIComponent(providerErrorDescription || providerError)
+              );
+            }
+
+            if (authorizationCode) {
+              throw new Error('Authorization code received without an ID token. Check the OAuth response mode and callback route configuration.');
+            }
+          }
         }
         
         // 3. Try extracting from full URL if token format is recognizable
@@ -73,7 +117,13 @@ export default function AuthCallback() {
         });
 
         if (!idToken) {
-          throw new Error('No ID token found in callback URL');
+          setIsError(true);
+          setStatus('Authentication failed');
+          setError('No ID token found in callback URL. Check the OAuth redirect configuration and try again.');
+          redirectTimeoutRef.current = setTimeout(() => {
+            router.replace('/');
+          }, 2000);
+          return;
         }
 
         setStatus('Generating zero-knowledge proof...');
@@ -123,7 +173,7 @@ export default function AuthCallback() {
         const redirectUrl = localStorage.getItem('redirectAfterLogin');
         
         // Short delay before redirecting to show completion
-        setTimeout(() => {
+        redirectTimeoutRef.current = setTimeout(() => {
           if (redirectUrl) {
             // Clear the stored redirect URL
             localStorage.removeItem('redirectAfterLogin');
@@ -132,14 +182,15 @@ export default function AuthCallback() {
             window.location.href = redirectUrl;
           } else {
             // Default redirect to dashboard
-            router.push('/dashboard');
+            router.replace('/dashboard');
           }
         }, 1000);
       } catch (err) {
-        console.error('Auth callback error:', err);
+        const errorMessage = err instanceof Error ? err.message : 'Authentication failed';
+        console.warn('Auth callback error:', errorMessage);
         setIsError(true);
         setStatus('Authentication failed');
-        setError(err instanceof Error ? err.message : 'Authentication failed');
+        setError(errorMessage);
         
         // Check if this is a WhatsApp authentication failure
         const whatsappToken = localStorage.getItem('whatsappAuthToken');
@@ -158,7 +209,7 @@ export default function AuthCallback() {
                 token: whatsappToken, 
                 phone: formattedPhone, 
                 success: false,
-                message: err instanceof Error ? err.message : 'Authentication failed' 
+                message: errorMessage 
               }),
             });
           } catch (notifyError) {
@@ -171,14 +222,14 @@ export default function AuthCallback() {
         }
         
         // Short delay before redirecting on error
-        setTimeout(() => {
-          router.push('/');
+        redirectTimeoutRef.current = setTimeout(() => {
+          router.replace('/');
         }, 2000);
       }
     };
 
     processCallback();
-  }, [handleCallback, router, setError]);
+  }, [handleCallback, router, router.isReady, setError]);
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4">

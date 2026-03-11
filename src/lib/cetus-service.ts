@@ -1,42 +1,15 @@
-import { SuiClient } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
-import { suiSwapRouter } from '../services/sui-swap-router';
-import { getCurrentRpcUrl } from '../services/network-config';
-
-const SUI_TYPE = '0x2::sui::SUI';
-// These token types are used in the SUI router but not directly here
-// const USDC_TYPE = '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN';
-// const USDT_TYPE = '0x6674cb08a6ef2a155b3c240df0c559fcb5fef5738a17851c124dfbe96bc9a744::coin::COIN';
-
-// Define zkLogin account interface
-interface ZkLoginAccount {
-  userAddr: string;
-  ephemeralPrivateKey: string;
-  zkProofs: {
-    proofPoints: {
-      a: string[];
-      b: string[];
-      c: string[];
-    };
-    issBase64Details: string;
-    headerBase64: string;
-  };
-}
+import { cetusService as protocolCetusService } from '../services/cetus-service';
+import { getCurrentCoinTypes } from '../services/network-config';
 
 /**
  * Service for SUI token swaps and aggregation
- * This implementation uses the suiSwapRouter under the hood
+ * This wrapper keeps the existing frontend API but delegates to the real Cetus SDK service.
  */
 class CetusService {
-  private suiClient: SuiClient;
   private isInitialized = false;
   private userAddress = '';
   private network: 'testnet' | 'mainnet' = 'testnet';
-
-  constructor() {
-    // Initialize with network-aware RPC URL
-    this.suiClient = new SuiClient({ url: getCurrentRpcUrl() });
-  }
 
   /**
    * Initialize the service with user address
@@ -44,13 +17,6 @@ class CetusService {
   init(userAddress: string, network: 'testnet' | 'mainnet' = 'testnet') {
     this.userAddress = userAddress;
     this.network = network;
-    
-    // Update SuiClient with network-aware RPC URL
-    this.suiClient = new SuiClient({ url: getCurrentRpcUrl() });
-    
-    // Initialize swap router with network awareness
-    suiSwapRouter.setUserAddress(userAddress);
-    
     this.isInitialized = true;
   }
 
@@ -69,7 +35,7 @@ class CetusService {
     }
 
     try {
-      const quote = await suiSwapRouter.getSwapQuote(
+      const quote = await protocolCetusService.getSwapEstimateForPair(
         fromCoinType,
         toCoinType,
         amountIn,
@@ -80,11 +46,7 @@ class CetusService {
         return null;
       }
 
-      return {
-        amountIn: suiSwapRouter.formatTokenAmount(quote.inputAmount, fromCoinType),
-        amountOut: suiSwapRouter.formatTokenAmount(quote.outputAmount, toCoinType),
-        priceImpact: quote.priceImpact,
-      };
+      return quote;
     } catch (error) {
       console.error('Error getting swap estimate:', error);
       return null;
@@ -99,7 +61,8 @@ class CetusService {
     fromCoinType: string,
     toCoinType: string,
     amountIn: number | string,
-    slippage = 0.5 // 0.5% slippage by default
+    slippage = 0.5, // 0.5% slippage by default
+    byAmountIn = true
   ): Promise<{ txb: Transaction; expectedOutput: string } | null> {
     if (!this.isInitialized) {
       console.error('CetusService not initialized. Call init() first.');
@@ -107,20 +70,20 @@ class CetusService {
     }
 
     try {
-      const result = await suiSwapRouter.buildSwapTransaction(
+      const result = await protocolCetusService.prepareSwapTransactionForPair(
+        this.userAddress,
         fromCoinType,
         toCoinType,
         amountIn,
-        { slippageTolerance: slippage }
+        slippage,
+        byAmountIn
       );
 
       if (!result) {
         return null;
       }
 
-      const expectedOutput = suiSwapRouter.formatTokenAmount(result.expectedOutput, toCoinType);
-
-      return { txb: result.transaction, expectedOutput };
+      return { txb: result.tx, expectedOutput: result.expectedOutput };
     } catch (error) {
       console.error('Error preparing swap transaction:', error);
       return null;
@@ -135,50 +98,61 @@ class CetusService {
     fromCoinType: string,
     toCoinType: string,
     amountIn: number | string,
-    slippage = 0.5
+    slippage = 0.5,
+    byAmountIn = true
   ): Promise<Uint8Array | null> {
-    return suiSwapRouter.getZkLoginSwapPayload(
-      fromCoinType,
-      toCoinType,
-      amountIn,
-      { slippageTolerance: slippage }
-    );
+    if (!this.isInitialized) {
+      console.error('CetusService not initialized. Call init() first.');
+      return null;
+    }
+
+    try {
+      return await protocolCetusService.getSwapTransactionBytesForPair(
+        this.userAddress,
+        fromCoinType,
+        toCoinType,
+        amountIn,
+        slippage,
+        byAmountIn
+      );
+    } catch (error) {
+      console.error('Error preparing zkLogin swap payload:', error);
+      return null;
+    }
   }
 
   /**
    * Perform a swap and contribute in a single transaction using zkLogin
    */
   async swapAndContributeViaZkLogin(
-    account: ZkLoginAccount,
+    account: unknown,
     fromCoinType: string,
     amountIn: number | string,
     circleId: string,
     walletId: string,
-    slippage = 0.5
-  ): Promise<{ success: boolean; digest?: string; error?: string }> {
+    slippage = 150 // basis points (1.5%)
+  ): Promise<{ success: boolean; digest?: string; status?: string; error?: string; requireRelogin?: boolean }> {
     try {
-      // First generate swap transaction payload
-      const swapPayload = await this.getSwapTransactionPayload(
-        fromCoinType, 
-        SUI_TYPE, // Always swap to SUI
-        amountIn, 
-        slippage
-      );
-
-      if (!swapPayload) {
-        return { success: false, error: 'Failed to generate swap transaction' };
+      const parsedAmount =
+        typeof amountIn === 'string' ? Number.parseFloat(amountIn) : Number(amountIn);
+      if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+        return { success: false, error: 'Invalid swap amount. Provide a positive SUI amount.' };
       }
 
-      // Execute the swap through zkLogin API
+      const slippageBps = slippage <= 10 ? Math.floor(slippage * 100) : Math.floor(slippage);
+
       const result = await fetch('/api/zkLogin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'swapAndContribute',
+          action: 'swapAndDepositCetus',
           account,
           circleId,
           walletId,
-          swapPayload
+          fromCoinType,
+          suiAmount: parsedAmount,
+          slippage: slippageBps,
+          network: this.network,
         }),
       });
 
@@ -187,13 +161,15 @@ class CetusService {
       if (!result.ok) {
         return { 
           success: false, 
-          error: data.error || 'Failed to execute swap and contribution' 
+          error: data.error || 'Failed to execute swap and contribution',
+          requireRelogin: Boolean(data?.requireRelogin),
         };
       }
 
       return { 
         success: true, 
-        digest: data.digest 
+        digest: data.digest,
+        status: data.status,
       };
     } catch (error) {
       console.error('Error performing swap and contribution:', error);
@@ -208,7 +184,11 @@ class CetusService {
    * List all available tokens that can be swapped
    */
   async getSupportedTokens(): Promise<{ symbol: string; address: string; decimals: number }[]> {
-    return suiSwapRouter.getSupportedTokens();
+    const { SUI, USDC } = getCurrentCoinTypes();
+    return [
+      { symbol: 'SUI', address: SUI, decimals: 9 },
+      { symbol: 'USDC', address: USDC, decimals: 6 },
+    ];
   }
 }
 

@@ -221,7 +221,7 @@ sui client gas
 The deployment script automatically:
 - ✅ Extracts package ID from transaction
 - ✅ Updates `.env.local` with appropriate variables:
-  - `NEXT_PUBLIC_PACKAGE_ID` (testnet)
+  - `NEXT_PUBLIC_TESTNET_PACKAGE_ID` (testnet)
   - `NEXT_PUBLIC_MAINNET_PACKAGE_ID` (mainnet)
 - ✅ Displays deployment summary
 
@@ -242,13 +242,13 @@ The deployment process updates your `.env.local` file:
 
 ```bash
 # Testnet deployment
-NEXT_PUBLIC_PACKAGE_ID=0x1234...abcd
+NEXT_PUBLIC_TESTNET_PACKAGE_ID=0x1234...abcd
 
 # Mainnet deployment  
 NEXT_PUBLIC_MAINNET_PACKAGE_ID=0x5678...efgh
 
 # Both networks
-NEXT_PUBLIC_PACKAGE_ID=0x1234...abcd
+NEXT_PUBLIC_TESTNET_PACKAGE_ID=0x1234...abcd
 NEXT_PUBLIC_MAINNET_PACKAGE_ID=0x5678...efgh
 ```
 
@@ -256,9 +256,9 @@ NEXT_PUBLIC_MAINNET_PACKAGE_ID=0x5678...efgh
 
 ```typescript
 // In your Next.js app
-const packageId = process.env.NODE_ENV === 'production' 
+const packageId = process.env.NEXT_PUBLIC_SUI_NETWORK === 'mainnet'
   ? process.env.NEXT_PUBLIC_MAINNET_PACKAGE_ID
-  : process.env.NEXT_PUBLIC_PACKAGE_ID;
+  : process.env.NEXT_PUBLIC_TESTNET_PACKAGE_ID;
 ```
 
 ## 🛠️ **Advanced Usage**
@@ -348,8 +348,8 @@ grep -i "package" deployment_output.log
 # Enable verbose output
 ./deploy.sh mainnet --debug
 
-# Manual deployment with debug
-sui client publish --gas-budget 200000000 --dump --verbose
+# Manual deployment
+sui client publish . --gas-budget 200000000 --skip-fetch-latest-git-deps
 ```
 
 ## 📊 **Deployment Verification**

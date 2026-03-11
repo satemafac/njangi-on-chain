@@ -1,22 +1,26 @@
-interface PriceResponse {
-  sui: {
-    usd: number;
+interface ServerPriceResponse {
+  success: boolean;
+  data?: {
+    price: number;
+    source?: string;
+    stale?: boolean;
   };
+  message?: string;
 }
+
+type PriceFetchStatus = 'idle' | 'loading' | 'success' | 'degraded' | 'error';
 
 class PriceService {
   private static instance: PriceService;
   private lastFetchTime: number = 0;
   private cachedPrice: number | null = null;
   private readonly CACHE_DURATION = 300000; // 5 minutes cache (reduced from 30 minutes)
-  // Primary API - CoinGecko with API key if available
-  private readonly PRIMARY_API_URL = 'https://api.coingecko.com/api/v3/simple/price?ids=sui&vs_currencies=usd';
-  // Backup APIs
-  private readonly BACKUP_API_URL = 'https://price.jup.ag/v4/price?ids=SUI';
-  private readonly BINANCE_API_URL = 'https://api.binance.com/api/v3/ticker/price?symbol=SUIUSDT';
+  private readonly SERVER_PRICE_API_URL = '/api/sui-price';
   private readonly STORAGE_KEY = 'sui_cached_price';
   private readonly FALLBACK_PRICE = 3.71; // Current market price as fallback
-  private fetchStatus: 'idle' | 'loading' | 'success' | 'error' = 'idle';
+  private fetchStatus: PriceFetchStatus = 'idle';
+  private lastPriceSource: string = 'unavailable';
+  private usingStalePrice: boolean = false;
 
   // Exchange rate properties
   private exchangeRatesCache: Record<string, number> = {};
@@ -46,6 +50,10 @@ class PriceService {
     this.loadExchangeRatesCache();
   }
 
+  private getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
   public static getInstance(): PriceService {
     if (!PriceService.instance) {
       PriceService.instance = new PriceService();
@@ -58,27 +66,37 @@ class PriceService {
       const storedData = localStorage.getItem(this.STORAGE_KEY);
       if (storedData) {
         try {
-          const { price, timestamp } = JSON.parse(storedData);
+          const { price, timestamp, source, stale } = JSON.parse(storedData);
           this.cachedPrice = price;
           this.lastFetchTime = timestamp;
+          this.lastPriceSource = typeof source === 'string' ? source : 'local-cache';
+          this.usingStalePrice = stale === true;
         } catch (e) {
-          console.error('Error parsing cached price data:', e);
+          console.warn(`Error parsing cached price data: ${this.getErrorMessage(e)}`);
         }
       }
     }
   }
 
-  private saveCachedPrice(price: number, timestamp: number) {
+  private saveCachedPrice(price: number, timestamp: number, source: string, stale: boolean) {
     if (typeof window !== 'undefined') {
       localStorage.setItem(
         this.STORAGE_KEY,
-        JSON.stringify({ price, timestamp })
+        JSON.stringify({ price, timestamp, source, stale })
       );
     }
   }
 
-  public getFetchStatus(): 'idle' | 'loading' | 'success' | 'error' {
+  public getFetchStatus(): PriceFetchStatus {
     return this.fetchStatus;
+  }
+
+  public isPriceStale(): boolean {
+    return this.usingStalePrice;
+  }
+
+  public getLastPriceSource(): string {
+    return this.lastPriceSource;
   }
 
   public isPriceAvailable(): boolean {
@@ -96,38 +114,37 @@ class PriceService {
     return this.getSUIPrice();
   }
 
-  // Try Binance API as a fallback
-  private async fetchBinancePrice(): Promise<number | null> {
+  private async fetchServerPrice(): Promise<{ price: number; source: string; stale: boolean } | null> {
     try {
-      const response = await fetch(this.BINANCE_API_URL);
-      if (!response.ok) {
-        throw new Error('Failed to fetch from Binance');
-      }
-      const data = await response.json();
-      if (data && data.price) {
-        return parseFloat(data.price);
-      }
-      return null;
-    } catch (error) {
-      console.error('Error fetching from Binance:', error);
-      return null;
-    }
-  }
+      const response = await fetch(this.SERVER_PRICE_API_URL, {
+        headers: {
+          'Accept': 'application/json',
+        },
+      });
 
-  // Try Jupiter price API as a fallback
-  private async fetchJupiterPrice(): Promise<number | null> {
-    try {
-      const response = await fetch(this.BACKUP_API_URL);
       if (!response.ok) {
-        throw new Error('Failed to fetch from Jupiter');
+        throw new Error(`Local price API returned ${response.status}`);
       }
-      const data = await response.json();
-      if (data && data.data && data.data.SUI) {
-        return data.data.SUI.price;
+
+      const data: ServerPriceResponse = await response.json();
+      if (data.success && data.data?.price) {
+        if (data.data.source) {
+          console.log(`Successfully fetched SUI price from local API (${data.data.source}): $${data.data.price}`);
+        }
+        return {
+          price: data.data.price,
+          source: data.data.source || 'local-api',
+          stale: data.data.stale === true,
+        };
       }
+
+      if (data.message) {
+        console.warn(`Local price API did not return a live price: ${data.message}`);
+      }
+
       return null;
     } catch (error) {
-      console.error('Error fetching from Jupiter:', error);
+      console.warn(`Error fetching SUI price from local API: ${this.getErrorMessage(error)}`);
       return null;
     }
   }
@@ -139,70 +156,57 @@ class PriceService {
     if (this.cachedPrice !== null && 
         now - this.lastFetchTime < this.CACHE_DURATION) {
       console.log(`Using cached SUI price: $${this.cachedPrice} (${Math.floor((now - this.lastFetchTime)/1000)}s old)`);
+      this.fetchStatus = this.usingStalePrice ? 'degraded' : 'success';
       return this.cachedPrice;
     }
 
     this.fetchStatus = 'loading';
     
-    // Try primary API first
+    // Use a same-origin API route to avoid browser CORS failures.
     try {
-      const response = await fetch(this.PRIMARY_API_URL);
-      if (!response.ok) {
-        throw new Error('Failed to fetch SUI price from primary API');
+      const result = await this.fetchServerPrice();
+      if (result === null) {
+        throw new Error('No live SUI price available from local API');
       }
 
-      const data: PriceResponse = await response.json();
-      this.cachedPrice = data.sui.usd;
+      this.cachedPrice = result.price;
       this.lastFetchTime = now;
+      this.lastPriceSource = result.source;
+      this.usingStalePrice = result.stale;
       
       // Save to localStorage for persistence
-      this.saveCachedPrice(this.cachedPrice, now);
+      this.saveCachedPrice(this.cachedPrice, now, this.lastPriceSource, this.usingStalePrice);
       
-      this.fetchStatus = 'success';
-      console.log(`Successfully fetched fresh SUI price: $${this.cachedPrice}`);
+      this.fetchStatus = result.stale ? 'degraded' : 'success';
+      console.log(`Successfully resolved SUI price: $${this.cachedPrice} (source: ${this.lastPriceSource})`);
       return this.cachedPrice;
     } catch (primaryError) {
-      console.error('Error fetching SUI price from primary API:', primaryError);
-      
-      // Try Jupiter price API
-      const jupiterPrice = await this.fetchJupiterPrice();
-      if (jupiterPrice !== null) {
-        this.cachedPrice = jupiterPrice;
-        this.lastFetchTime = now;
-        this.saveCachedPrice(this.cachedPrice, now);
-        this.fetchStatus = 'success';
-        console.log(`Successfully fetched SUI price from Jupiter: $${this.cachedPrice}`);
-        return this.cachedPrice;
-      }
-      
-      // Try Binance API
-      const binancePrice = await this.fetchBinancePrice();
-      if (binancePrice !== null) {
-        this.cachedPrice = binancePrice;
-        this.lastFetchTime = now;
-        this.saveCachedPrice(this.cachedPrice, now);
-        this.fetchStatus = 'success';
-        console.log(`Successfully fetched SUI price from Binance: $${this.cachedPrice}`);
-        return this.cachedPrice;
-      }
-      
-      this.fetchStatus = 'error';
-      
+      console.warn(`Error fetching SUI price from live sources: ${this.getErrorMessage(primaryError)}`);
+
       // If we have a recently cached price (within 6 hours), use that
       if (this.cachedPrice !== null && now - this.lastFetchTime < 6 * 60 * 60 * 1000) {
+        this.fetchStatus = 'degraded';
+        this.usingStalePrice = true;
+        this.lastPriceSource = `${this.lastPriceSource || 'local-cache'} (client-stale-cache)`;
+        this.lastFetchTime = now;
         console.warn(`Using stale cached price: $${this.cachedPrice}`);
+        this.saveCachedPrice(this.cachedPrice, now, this.lastPriceSource, true);
         return this.cachedPrice;
       }
       
       // Use fallback price if we don't have any cached price or it's too old
       if (this.cachedPrice === null || now - this.lastFetchTime > 6 * 60 * 60 * 1000) {
+        this.fetchStatus = 'degraded';
+        this.usingStalePrice = true;
+        this.lastPriceSource = 'client-fallback';
         console.warn(`Using fallback price: $${this.FALLBACK_PRICE}`);
         this.cachedPrice = this.FALLBACK_PRICE;
         this.lastFetchTime = now;
-        this.saveCachedPrice(this.cachedPrice, now);
+        this.saveCachedPrice(this.cachedPrice, now, this.lastPriceSource, true);
         return this.cachedPrice;
       }
-      
+
+      this.fetchStatus = 'error';
       return this.cachedPrice;
     }
   }
@@ -216,7 +220,7 @@ class PriceService {
           this.exchangeRatesCache = rates;
           this.exchangeRatesLastFetch = timestamp;
         } catch (e) {
-          console.error('Error parsing exchange rates cache data:', e);
+          console.warn(`Error parsing exchange rates cache data: ${this.getErrorMessage(e)}`);
         }
       }
     }
@@ -252,7 +256,7 @@ class PriceService {
       }
       return null;
     } catch (error) {
-      console.error('Error fetching exchange rates:', error);
+      console.warn(`Error fetching exchange rates: ${this.getErrorMessage(error)}`);
       return null;
     }
   }

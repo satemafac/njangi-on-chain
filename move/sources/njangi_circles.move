@@ -35,6 +35,7 @@ module njangi::njangi_circles {
     const ECircleNotActive: u64 = 54;
     const ECircleIsActive: u64 = 55;
     const EInvalidMaxMembersLimit: u64 = 56;
+    const ECircleNotPausedForConfigChange: u64 = 58;
     // Define constants locally based on values from other modules
     const EInvalidContributionAmount: u64 = 1; // From core
     const ENotMember: u64 = 8;                 // From core
@@ -42,10 +43,23 @@ module njangi::njangi_circles {
     const EMemberSuspended: u64 = 13;          // From members
     const EDepositAlreadyPaid: u64 = 21;       // From members
     const EIncorrectDepositAmount: u64 = 2;    // From core
+    const ENoValidOraclePrice: u64 = 61;
     
     // Time constants (in milliseconds)
     const THIRTY_DAYS_MS: u64 = 2_592_000_000; // 30 days in milliseconds
     const SEVEN_DAYS_MS: u64 = 604_800_000;    // 7 days in milliseconds
+
+    // Oracle safety constants.
+    const ORACLE_MAX_STALE_SECONDS: u64 = 3_600; // 1 hour
+    const ORACLE_LOOKBACK_SECONDS: u64 = 31_536_000; // 1 year
+    const PRICE_FALLBACK_NONE: u8 = 0;
+    const PRICE_FALLBACK_STALE: u8 = 1;
+    const PRICE_FALLBACK_VOLATILITY: u8 = 2;
+    const PRICE_FALLBACK_INVALID: u8 = 3;
+
+    // Dynamic-field keys for cached oracle fallback price.
+    const FIELD_LAST_VALID_SUI_PRICE_USD_CENTS: vector<u8> = b"last_valid_sui_price_usd_cents";
+    const FIELD_LAST_VALID_SUI_PRICE_TS_SEC: vector<u8> = b"last_valid_sui_price_ts_sec";
     
     // ----------------------------------------------------------
     // Main Circle struct
@@ -67,7 +81,7 @@ module njangi::njangi_circles {
         current_position: u64,
         active_auction: Option<Auction>,
         is_active: bool,
-        contributions_this_cycle: u64, // Track total contributions for the current cycle
+        contributions_this_cycle: u64, // Track total contributions for the current cycle in USD cents
         paused_after_cycle: bool, // Flag to indicate if circle is paused after completing a cycle
     }
     
@@ -164,6 +178,38 @@ module njangi::njangi_circles {
         admin: address,
         old_max_members: u64,
         new_max_members: u64,
+    }
+
+    public struct CycleLimitsUpdated has copy, drop {
+        circle_id: ID,
+        admin: address,
+        old_cycle_length: u64,
+        new_cycle_length: u64,
+        old_cycle_day: u64,
+        new_cycle_day: u64,
+        old_contribution_usd_cents: u64,
+        new_contribution_usd_cents: u64,
+        old_security_deposit_usd_cents: u64,
+        new_security_deposit_usd_cents: u64,
+    }
+
+    public struct NativeDisplayAmountsSynced has copy, drop {
+        circle_id: ID,
+        admin: address,
+        contribution_usd_cents: u64,
+        contribution_native_amount: u64,
+        security_deposit_usd_cents: u64,
+        security_deposit_native_amount: u64,
+        sui_price_usd_cents: u64,
+    }
+
+    public struct OraclePriceResolved has copy, drop {
+        circle_id: ID,
+        candidate_price_usd_cents: u64,
+        resolved_price_usd_cents: u64,
+        candidate_age_seconds: u64,
+        used_fallback: bool,
+        fallback_reason: u8, // 0=none,1=stale,2=volatility,3=invalid
     }
 
     // Add after CircleMaxMembersUpdated event struct
@@ -294,15 +340,12 @@ module njangi::njangi_circles {
 
         // Basic validations
         assert!(max_members >= core::get_min_members() && max_members <= core::get_max_members(), 0);
+        assert!(contribution_amount_usd > 0, 1);
+        assert!(security_deposit_usd >= core::min_security_deposit(contribution_amount_usd), 2);
         assert!(contribution_amount_scaled > 0, 1);
-        assert!(security_deposit_scaled >= core::min_security_deposit(contribution_amount_scaled), 2);
+        assert!(security_deposit_scaled > 0, 2);
         assert!(cycle_length <= 3, 3); // Allow up to 3 (bi-weekly)
-        assert!(
-            (cycle_length == 0 && cycle_day < 7)   // weekly (weekday 0-6)
-            || (cycle_length == 3 && cycle_day < 7)   // bi-weekly (weekday 0-6)
-            || ((cycle_length == 1 || cycle_length == 2) && cycle_day > 0 && cycle_day <= 28), // monthly/quarterly (day 1-28)
-            4 // EInvalidCycleDay
-        );
+        assert!(is_valid_cycle_schedule(cycle_length, cycle_day), 4); // EInvalidCycleDay
 
         // Get admin address
         let admin = tx_context::sender(ctx);
@@ -326,7 +369,7 @@ module njangi::njangi_circles {
             current_position: 0,
             active_auction: option::none(),
             is_active: false,
-            contributions_this_cycle: 0, // Initialize to 0
+            contributions_this_cycle: 0, // Initialize to 0 USD cents
             paused_after_cycle: false,
         };
         
@@ -499,7 +542,14 @@ module njangi::njangi_circles {
         let sender = tx_context::sender(ctx);
         
         // Only admin can toggle auto-swap
-        assert!(sender == circle.admin, 7);
+        assert!(sender == circle.admin, ENotAdmin);
+
+        // Lock token mode while a cycle is actively running.
+        // Mode can only be changed pre-activation or when paused between cycles.
+        assert!(
+            !circle.is_active || circle.paused_after_cycle,
+            ECircleNotPausedForConfigChange
+        );
         
         // Update config using the config module
         config::toggle_auto_swap(&mut circle.id, enabled);
@@ -1372,8 +1422,8 @@ module njangi::njangi_circles {
         assert!(members::get_deposit_balance(member) == 0, 21); // Reuse error code EDepositAlreadyPaid
 
         // --- Simplified Validation Logic ---
-        // For USDC (6 decimals): Convert USD cents to microUSDC (multiply by 10000)
-        // For SUI (9 decimals): Use the raw security_deposit amount
+        // For USDC (6 decimals): Convert USD cents (2dp) to microUSDC (6dp) via custody helper.
+        // For SUI (9 decimals): Use the raw security_deposit amount.
         
         // Check if it's SUI or stablecoin by comparing with SUI type
         if (std::type_name::get<CoinType>() == std::type_name::get<SUI>()) {
@@ -1381,8 +1431,8 @@ module njangi::njangi_circles {
             assert!(amount == required_sui_amount, 2); // EIncorrectDepositAmount
         } else {
             // For stablecoins like USDC, validate against USD amount
-            // USD cents (e.g., 4062 = $40.62) to microUSDC = multiply by 10000
-            let expected_stablecoin_amount = required_usd_cents * 10000;
+            // Convert USD cents (2dp) into USDC micro-units (6dp).
+            let expected_stablecoin_amount = custody::usd_cents_to_usdc_amount(required_usd_cents);
             assert!(amount == expected_stablecoin_amount, 2); // EIncorrectDepositAmount
         };
 
@@ -1413,6 +1463,7 @@ module njangi::njangi_circles {
         ctx: &mut tx_context::TxContext
     ) {
         let sender = tx_context::sender(ctx);
+        let deposit_amount = coin::value(&stablecoin);
         
         // Circle must be active
         assert!(circle.is_active, ECircleNotActive);
@@ -1422,7 +1473,7 @@ module njangi::njangi_circles {
         
         // If we're using custom validation requirements
         if (required_amount == 0) {
-            required_amount = config::get_security_deposit(&circle.id);
+            required_amount = config::get_security_deposit_usd(&circle.id);
         };
         
         // Process the deposit with price validation
@@ -1436,8 +1487,8 @@ module njangi::njangi_circles {
             ctx
         );
         
-        // Update member status if deposit meets security deposit requirement
-        update_member_status_after_deposit(circle, sender, required_amount, ctx);
+        // Update member status (deposit amount already oracle-validated in custody module).
+        update_member_status_after_deposit(circle, sender, deposit_amount, ctx);
     }
     
     // ----------------------------------------------------------
@@ -1446,33 +1497,30 @@ module njangi::njangi_circles {
     fun update_member_status_after_deposit(
         circle: &mut Circle,
         member_addr: address,
-        amount: u64,
+        deposit_amount: u64,
         ctx: &mut tx_context::TxContext
     ) {
         let current_time = tx_context::epoch_timestamp_ms(ctx);
         
         // Get the member record
         let member = table::borrow_mut(&mut circle.members, member_addr);
-        
-        // Check if member is pending and deposit is sufficient
-        if (config::get_security_deposit(&circle.id) <= amount) {
-            // If the member is pending, activate them
-            let member_status = members::get_status(member);
-            if (member_status == core::member_status_pending()) {
-                // Change status to active - use core values consistently
-                members::set_status(member, core::member_status_active());
-                members::set_activated_at(member, current_time);
-                
-                // Update deposit balance
-                members::set_deposit_balance(member, amount);
-                
-                // Emit member activated event
-                event::emit(MemberActivated {
-                    circle_id: object::uid_to_inner(&circle.id),
-                    member: member_addr,
-                    deposit_amount: amount
-                });
-            };
+
+        // If the member is pending, activate them.
+        let member_status = members::get_status(member);
+        if (member_status == core::member_status_pending()) {
+            // Change status to active - use core values consistently
+            members::set_status(member, core::member_status_active());
+            members::set_activated_at(member, current_time);
+            
+            // Store actual deposited amount in the coin's native units.
+            members::set_deposit_balance(member, deposit_amount);
+            
+            // Emit member activated event
+            event::emit(MemberActivated {
+                circle_id: object::uid_to_inner(&circle.id),
+                member: member_addr,
+                deposit_amount
+            });
         };
     }
 
@@ -1572,9 +1620,8 @@ module njangi::njangi_circles {
         // --- Amount Validation --- 
         // Get required contribution amount in USD from config
         let required_contribution_usd_cents = config::get_contribution_amount_usd(&circle.id);
-        // Convert required USD cents to micro-units of the stablecoin (assuming 6 decimals for stablecoins like USDC)
-        // 1 cent = 10,000 micro-units
-        let required_stablecoin_amount = required_contribution_usd_cents * 10000;
+        // Convert required USD cents (2dp) to USDC micro-units (6dp).
+        let required_stablecoin_amount = custody::usd_cents_to_usdc_amount(required_contribution_usd_cents);
 
         // Validate the payment amount against the required stablecoin amount
         // Allow slightly more for potential rounding, but not less
@@ -1596,11 +1643,8 @@ module njangi::njangi_circles {
         // Use the *required* amount for recording, not the potentially larger payment amount
         members::record_contribution(member_mut, required_stablecoin_amount, clock::timestamp_ms(clock));
 
-        // Update circle's overall contribution tracking for stablecoins
-        // Get the SUI equivalent contribution amount
-        let contribution_amount = config::get_contribution_amount(&circle.id);
-        let contribution_amount_raw = core::to_decimals(contribution_amount);
-        add_to_contributions_this_cycle(circle, contribution_amount_raw);
+        // Update cycle tracking in USD cents (definitive accounting unit).
+        add_to_contributions_this_cycle(circle, required_contribution_usd_cents);
 
         // Emit the locally defined StablecoinContributionMade event
         event::emit(StablecoinContributionMade {
@@ -1655,15 +1699,172 @@ module njangi::njangi_circles {
     }
 
     // ----------------------------------------------------------
+    // Admin function to update cycle limits and contribution requirements.
+    // USD cents are the source of truth; native amounts are derived for display paths.
+    // ----------------------------------------------------------
+    public entry fun update_cycle_limits(
+        circle: &mut Circle,
+        cycle_length: u64,
+        cycle_day: u64,
+        contribution_amount_usd: u64,
+        security_deposit_usd: u64,
+        contribution_amount_local: u64,
+        security_deposit_local: u64,
+        sui_price_usd_cents: u64,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert!(sender == circle.admin, ENotAdmin);
+        assert!(!circle.is_active, ECircleIsActive);
+
+        assert!(contribution_amount_usd > 0, EInvalidContributionAmount);
+        assert!(
+            security_deposit_usd >= core::min_security_deposit(contribution_amount_usd),
+            EIncorrectDepositAmount
+        );
+        assert!(cycle_length <= 3, 3);
+        assert!(is_valid_cycle_schedule(cycle_length, cycle_day), 4);
+
+        // Derive native display values from USD cents using supplied price context.
+        let (contribution_amount_native, security_deposit_native) = derive_native_display_amounts(
+            contribution_amount_usd,
+            security_deposit_usd,
+            sui_price_usd_cents
+        );
+
+        let old_cycle_length = config::get_cycle_length(&circle.id);
+        let old_cycle_day = config::get_cycle_day(&circle.id);
+        let old_contribution_usd_cents = config::get_contribution_amount_usd(&circle.id);
+        let old_security_deposit_usd_cents = config::get_security_deposit_usd(&circle.id);
+
+        config::set_contribution_requirements(
+            &mut circle.id,
+            contribution_amount_native,
+            contribution_amount_local,
+            contribution_amount_usd,
+            security_deposit_native,
+            security_deposit_local,
+            security_deposit_usd
+        );
+        config::set_cycle_schedule(&mut circle.id, cycle_length, cycle_day);
+
+        // Reset in-flight cycle accounting to avoid mismatched thresholds.
+        circle.contributions_this_cycle = 0;
+        circle.next_payout_time = core::calculate_next_payout_time(
+            cycle_length,
+            cycle_day,
+            tx_context::epoch_timestamp_ms(ctx)
+        );
+
+        event::emit(CycleLimitsUpdated {
+            circle_id: object::uid_to_inner(&circle.id),
+            admin: sender,
+            old_cycle_length,
+            new_cycle_length: cycle_length,
+            old_cycle_day,
+            new_cycle_day: cycle_day,
+            old_contribution_usd_cents,
+            new_contribution_usd_cents: contribution_amount_usd,
+            old_security_deposit_usd_cents,
+            new_security_deposit_usd_cents: security_deposit_usd,
+        });
+    }
+
+    // Same as update_cycle_limits, but resolves SUI/USD price from oracle
+    // with stale-price fallback and volatility circuit-breaker.
+    public entry fun update_cycle_limits_with_oracle(
+        circle: &mut Circle,
+        cycle_length: u64,
+        cycle_day: u64,
+        contribution_amount_usd: u64,
+        security_deposit_usd: u64,
+        contribution_amount_local: u64,
+        security_deposit_local: u64,
+        price_info_object: &PriceInfoObject,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sui_price_usd_cents = resolve_sui_price_usd_cents_from_oracle(
+            circle,
+            price_info_object,
+            clock
+        );
+
+        update_cycle_limits(
+            circle,
+            cycle_length,
+            cycle_day,
+            contribution_amount_usd,
+            security_deposit_usd,
+            contribution_amount_local,
+            security_deposit_local,
+            sui_price_usd_cents,
+            ctx
+        );
+    }
+
+    // ----------------------------------------------------------
+    // Admin function to refresh native display amounts from USD
+    // without changing USD-centric logic thresholds.
+    // ----------------------------------------------------------
+    public entry fun sync_native_display_amounts(
+        circle: &mut Circle,
+        sui_price_usd_cents: u64,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert!(sender == circle.admin, ENotAdmin);
+
+        let contribution_usd_cents = config::get_contribution_amount_usd(&circle.id);
+        let security_deposit_usd_cents = config::get_security_deposit_usd(&circle.id);
+        let (contribution_native_amount, security_deposit_native_amount) = derive_native_display_amounts(
+            contribution_usd_cents,
+            security_deposit_usd_cents,
+            sui_price_usd_cents
+        );
+
+        config::set_native_display_amounts(
+            &mut circle.id,
+            contribution_native_amount,
+            security_deposit_native_amount
+        );
+
+        event::emit(NativeDisplayAmountsSynced {
+            circle_id: object::uid_to_inner(&circle.id),
+            admin: sender,
+            contribution_usd_cents,
+            contribution_native_amount,
+            security_deposit_usd_cents,
+            security_deposit_native_amount,
+            sui_price_usd_cents,
+        });
+    }
+
+    // Resolve price from oracle and sync native display amounts.
+    public entry fun sync_native_display_amounts_with_oracle(
+        circle: &mut Circle,
+        price_info_object: &PriceInfoObject,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sui_price_usd_cents = resolve_sui_price_usd_cents_from_oracle(
+            circle,
+            price_info_object,
+            clock
+        );
+        sync_native_display_amounts(circle, sui_price_usd_cents, ctx);
+    }
+
+    // ----------------------------------------------------------
     // Automatic Payout Helper Functions
     // ----------------------------------------------------------
     
-    // Get the current value of contributions for this cycle
+    // Get the current cycle contribution total in USD cents.
     public fun get_contributions_this_cycle(circle: &Circle): u64 {
         circle.contributions_this_cycle
     }
     
-    // Add to the contributions counter for this cycle
+    // Add a USD-cent amount to the cycle contribution counter.
     public(package) fun add_to_contributions_this_cycle(circle: &mut Circle, amount: u64) {
         circle.contributions_this_cycle = circle.contributions_this_cycle + amount;
     }
@@ -2037,17 +2238,14 @@ module njangi::njangi_circles {
             return true
         };
         
-        // Calculate expected total contributions
-        let contribution_amount = config::get_contribution_amount(&circle.id);
+        // Calculate expected total contributions in USD cents.
+        let contribution_amount_usd = config::get_contribution_amount_usd(&circle.id);
         
-        // Adjust active_members to exclude recipient if they're active
-        let contributing_members = if (recipient_is_active) {
-            active_members - 1
-        } else {
-            active_members
-        };
-        
-        let expected_contributions = contribution_amount * contributing_members;
+        let expected_contributions = expected_cycle_contributions_usd(
+            contribution_amount_usd,
+            active_members,
+            recipient_is_active
+        );
         
         // Compare with actual contributions this cycle
         circle.contributions_this_cycle >= expected_contributions
@@ -2087,8 +2285,181 @@ module njangi::njangi_circles {
         config::get_contribution_amount_usd(&circle.id)
     }
 
+    // Return (usd_cents_logic, native_9dp_display).
+    public fun get_contribution_amount_dual(circle: &Circle): (u64, u64) {
+        config::get_contribution_amount_dual(&circle.id)
+    }
+
+    // Valid schedule:
+    // - weekly or bi-weekly: weekday index [0..6]
+    // - monthly or quarterly: day-of-month [1..28]
+    fun is_valid_cycle_schedule(cycle_length: u64, cycle_day: u64): bool {
+        (cycle_length == 0 && cycle_day < 7)
+            || (cycle_length == 3 && cycle_day < 7)
+            || ((cycle_length == 1 || cycle_length == 2) && cycle_day > 0 && cycle_day <= 28)
+    }
+
+    // Convert SUI mist (9dp) to USD cents using the current SUI price.
+    public fun sui_amount_to_usd_cents(sui_amount: u64, sui_price_usd_cents: u64): u64 {
+        custody::sui_to_usd_cents(sui_amount, sui_price_usd_cents)
+    }
+
+    // Convert USD cents to SUI mist (9dp) using the current SUI price.
+    public fun usd_cents_to_sui_amount(usd_cents: u64, sui_price_usd_cents: u64): u64 {
+        custody::usd_cents_to_sui(usd_cents, sui_price_usd_cents)
+    }
+
     public fun get_security_deposit_usd(circle: &Circle): u64 {
         config::get_security_deposit_usd(&circle.id)
+    }
+
+    // Return (usd_cents_logic, native_9dp_display).
+    public fun get_security_deposit_dual(circle: &Circle): (u64, u64) {
+        config::get_security_deposit_dual(&circle.id)
+    }
+
+    // Resolve SUI/USD oracle price with:
+    // - stale check (> 1h uses last valid price)
+    // - volatility circuit breaker (> 50% change uses last valid price)
+    fun resolve_sui_price_usd_cents_from_oracle(
+        circle: &mut Circle,
+        price_info_object: &PriceInfoObject,
+        clock: &Clock
+    ): u64 {
+        let (candidate_price_usd_cents, candidate_timestamp_seconds) = price_validator::get_sui_price_snapshot(
+            price_info_object,
+            clock,
+            ORACLE_LOOKBACK_SECONDS
+        );
+        let now_seconds = clock::timestamp_ms(clock) / 1000;
+        let candidate_age_seconds = if (now_seconds > candidate_timestamp_seconds) {
+            now_seconds - candidate_timestamp_seconds
+        } else {
+            0
+        };
+        let last_valid_price = get_last_valid_sui_price_usd_cents(circle);
+
+        let (resolved_price_usd_cents, used_fallback, fallback_reason) = choose_effective_sui_price(
+            candidate_price_usd_cents,
+            candidate_age_seconds,
+            last_valid_price
+        );
+
+        // Only advance cache when we accepted the fresh candidate.
+        if (!used_fallback) {
+            cache_last_valid_sui_price(circle, resolved_price_usd_cents, candidate_timestamp_seconds);
+        };
+
+        event::emit(OraclePriceResolved {
+            circle_id: object::uid_to_inner(&circle.id),
+            candidate_price_usd_cents,
+            resolved_price_usd_cents,
+            candidate_age_seconds,
+            used_fallback,
+            fallback_reason,
+        });
+
+        resolved_price_usd_cents
+    }
+
+    // Returns:
+    // (effective_price_usd_cents, used_fallback, fallback_reason)
+    fun choose_effective_sui_price(
+        candidate_price_usd_cents: u64,
+        candidate_age_seconds: u64,
+        last_valid_price_usd_cents: Option<u64>
+    ): (u64, bool, u8) {
+        if (candidate_price_usd_cents == 0) {
+            if (option::is_some(&last_valid_price_usd_cents)) {
+                return (*option::borrow(&last_valid_price_usd_cents), true, PRICE_FALLBACK_INVALID)
+            };
+            assert!(false, ENoValidOraclePrice);
+        };
+
+        if (candidate_age_seconds > ORACLE_MAX_STALE_SECONDS) {
+            if (option::is_some(&last_valid_price_usd_cents)) {
+                return (*option::borrow(&last_valid_price_usd_cents), true, PRICE_FALLBACK_STALE)
+            };
+            assert!(false, ENoValidOraclePrice);
+        };
+
+        if (option::is_some(&last_valid_price_usd_cents)) {
+            let previous_price = *option::borrow(&last_valid_price_usd_cents);
+            if (is_extreme_price_change(previous_price, candidate_price_usd_cents)) {
+                return (previous_price, true, PRICE_FALLBACK_VOLATILITY)
+            };
+        };
+
+        (candidate_price_usd_cents, false, PRICE_FALLBACK_NONE)
+    }
+
+    // Extreme volatility means > 50% absolute change from last valid price.
+    fun is_extreme_price_change(previous_price: u64, candidate_price: u64): bool {
+        if (previous_price == 0) {
+            return false
+        };
+
+        let diff = if (candidate_price > previous_price) {
+            candidate_price - previous_price
+        } else {
+            previous_price - candidate_price
+        };
+
+        diff > (previous_price / 2)
+    }
+
+    fun get_last_valid_sui_price_usd_cents(circle: &Circle): Option<u64> {
+        if (dynamic_field::exists_(&circle.id, FIELD_LAST_VALID_SUI_PRICE_USD_CENTS)) {
+            option::some(*dynamic_field::borrow(&circle.id, FIELD_LAST_VALID_SUI_PRICE_USD_CENTS))
+        } else {
+            option::none()
+        }
+    }
+
+    fun cache_last_valid_sui_price(circle: &mut Circle, price_usd_cents: u64, timestamp_seconds: u64) {
+        if (dynamic_field::exists_(&circle.id, FIELD_LAST_VALID_SUI_PRICE_USD_CENTS)) {
+            *dynamic_field::borrow_mut(&mut circle.id, FIELD_LAST_VALID_SUI_PRICE_USD_CENTS) = price_usd_cents;
+        } else {
+            dynamic_field::add(&mut circle.id, FIELD_LAST_VALID_SUI_PRICE_USD_CENTS, price_usd_cents);
+        };
+
+        if (dynamic_field::exists_(&circle.id, FIELD_LAST_VALID_SUI_PRICE_TS_SEC)) {
+            *dynamic_field::borrow_mut(&mut circle.id, FIELD_LAST_VALID_SUI_PRICE_TS_SEC) = timestamp_seconds;
+        } else {
+            dynamic_field::add(&mut circle.id, FIELD_LAST_VALID_SUI_PRICE_TS_SEC, timestamp_seconds);
+        };
+    }
+
+    // Derive native display values from USD thresholds at a given SUI price.
+    fun derive_native_display_amounts(
+        contribution_usd_cents: u64,
+        security_deposit_usd_cents: u64,
+        sui_price_usd_cents: u64
+    ): (u64, u64) {
+        let contribution_native = usd_cents_to_sui_amount(contribution_usd_cents, sui_price_usd_cents);
+        let security_deposit_native = usd_cents_to_sui_amount(security_deposit_usd_cents, sui_price_usd_cents);
+        assert!(contribution_native > 0, EInvalidContributionAmount);
+        assert!(security_deposit_native > 0, EIncorrectDepositAmount);
+        (contribution_native, security_deposit_native)
+    }
+
+    // Contribution completeness is always based on USD amounts.
+    fun expected_cycle_contributions_usd(
+        contribution_usd_cents: u64,
+        active_members: u64,
+        recipient_is_active: bool
+    ): u64 {
+        if (active_members == 0) {
+            return 0
+        };
+
+        let contributing_members = if (recipient_is_active) {
+            active_members - 1
+        } else {
+            active_members
+        };
+
+        contribution_usd_cents * contributing_members
     }
 
     // ----------------------------------------------------------
@@ -2299,5 +2670,114 @@ module njangi::njangi_circles {
     public fun has_valid_rotation(circle: &Circle): bool {
         let rotation_len = vector::length(&circle.rotation_order);
         rotation_len > 0 && circle.current_position < rotation_len
+    }
+
+    #[test]
+    fun test_sui_usd_conversion_round_trip() {
+        let one_sui_mist = 1_000_000_000;
+        let price_usd_cents = 250; // $2.50
+
+        let usd_cents = sui_amount_to_usd_cents(one_sui_mist, price_usd_cents);
+        assert!(usd_cents == 250, 9001);
+
+        let sui_back = usd_cents_to_sui_amount(usd_cents, price_usd_cents);
+        assert!(sui_back == one_sui_mist, 9002);
+    }
+
+    #[test]
+    fun test_conversion_is_conservative_across_prices() {
+        let one_sui_mist = 1_000_000_000;
+        let prices = vector[50, 100, 250, 500, 1000]; // $0.50 .. $10.00
+
+        let mut i = 0;
+        let len = vector::length(&prices);
+        while (i < len) {
+            let price = *vector::borrow(&prices, i);
+            let usd_cents = sui_amount_to_usd_cents(one_sui_mist, price);
+            let sui_back = usd_cents_to_sui_amount(usd_cents, price);
+
+            // Integer division can round down; never allow round-up inflation.
+            assert!(sui_back <= one_sui_mist, 9003);
+            i = i + 1;
+        };
+    }
+
+    #[test]
+    fun test_cycle_schedule_validation_rules() {
+        // Weekly / bi-weekly use weekday [0..6]
+        assert!(is_valid_cycle_schedule(0, 0), 9004);
+        assert!(is_valid_cycle_schedule(0, 6), 9005);
+        assert!(!is_valid_cycle_schedule(0, 7), 9006);
+        assert!(is_valid_cycle_schedule(3, 2), 9007);
+        assert!(!is_valid_cycle_schedule(3, 8), 9008);
+
+        // Monthly / quarterly use day-of-month [1..28]
+        assert!(is_valid_cycle_schedule(1, 1), 9009);
+        assert!(is_valid_cycle_schedule(1, 28), 9010);
+        assert!(!is_valid_cycle_schedule(1, 0), 9011);
+        assert!(!is_valid_cycle_schedule(1, 29), 9012);
+
+        assert!(is_valid_cycle_schedule(2, 15), 9013);
+        assert!(!is_valid_cycle_schedule(2, 0), 9014);
+        assert!(!is_valid_cycle_schedule(2, 30), 9015);
+    }
+
+    #[test]
+    fun test_expected_cycle_contributions_usd() {
+        // Recipient contributes nothing to their own payout cycle.
+        assert!(expected_cycle_contributions_usd(2_000, 5, true) == 8_000, 9016);
+        assert!(expected_cycle_contributions_usd(2_000, 5, false) == 10_000, 9017);
+        assert!(expected_cycle_contributions_usd(2_000, 0, false) == 0, 9018);
+    }
+
+    #[test]
+    fun test_derive_native_display_amounts_from_usd() {
+        // At $2.50/SUI: $2.50 => 1 SUI, $5.00 => 2 SUI.
+        let (contribution_native, security_deposit_native) = derive_native_display_amounts(250, 500, 250);
+        assert!(contribution_native == 1_000_000_000, 9019);
+        assert!(security_deposit_native == 2_000_000_000, 9020);
+    }
+
+    #[test]
+    fun test_extreme_price_change_threshold() {
+        // Exactly 50% is allowed; >50% is blocked.
+        assert!(!is_extreme_price_change(200, 300), 9021); // +50%
+        assert!(is_extreme_price_change(200, 301), 9022); // +50.5%
+        assert!(is_extreme_price_change(200, 99), 9023); // -50.5%
+    }
+
+    #[test]
+    fun test_choose_effective_price_fallback_paths() {
+        let last_valid = option::some(250);
+
+        // Stale price should fallback to cached value.
+        let (stale_price, stale_used_fallback, stale_reason) = choose_effective_sui_price(
+            260,
+            ORACLE_MAX_STALE_SECONDS + 1,
+            last_valid
+        );
+        assert!(stale_price == 250, 9024);
+        assert!(stale_used_fallback, 9025);
+        assert!(stale_reason == PRICE_FALLBACK_STALE, 9026);
+
+        // Extreme volatility should fallback to cached value.
+        let (vol_price, vol_used_fallback, vol_reason) = choose_effective_sui_price(
+            400,
+            5,
+            option::some(250)
+        );
+        assert!(vol_price == 250, 9027);
+        assert!(vol_used_fallback, 9028);
+        assert!(vol_reason == PRICE_FALLBACK_VOLATILITY, 9029);
+
+        // Fresh, non-extreme candidate should be accepted.
+        let (fresh_price, fresh_used_fallback, fresh_reason) = choose_effective_sui_price(
+            320,
+            5,
+            option::some(250)
+        );
+        assert!(fresh_price == 320, 9030);
+        assert!(!fresh_used_fallback, 9031);
+        assert!(fresh_reason == PRICE_FALLBACK_NONE, 9032);
     }
 } 

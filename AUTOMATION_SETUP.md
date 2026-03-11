@@ -81,10 +81,10 @@ yarn install
 cd move
 
 # Build the contracts
-sui move build
+sui move build --skip-fetch-latest-git-deps
 
 # Publish contracts (if not already published)
-sui client publish --gas-budget 100000000
+sui client publish . --gas-budget 100000000 --skip-fetch-latest-git-deps
 
 # Note the package ID for your .env file
 ```

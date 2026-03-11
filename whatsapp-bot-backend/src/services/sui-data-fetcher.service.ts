@@ -163,7 +163,7 @@ export class SuiDataFetcherService {
       const config = getConfig();
 
       // Query the WhatsAppLinksRegistry shared object
-      const registryId = config.sui.whatsappLinksRegistryId;
+      const registryId = config.sui.currentWhatsAppRegistryId;
       const response = await client.getObject({
         id: registryId,
         options: { showContent: true },

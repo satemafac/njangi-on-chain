@@ -2,7 +2,7 @@
 
 import { SuiClient } from '@mysten/sui.js/client';
 import { TransactionBlock } from '@mysten/sui.js/transactions';
-import { getCurrentCoinTypes, getCurrentCetusConfig, getCurrentRpcUrl } from './network-config';
+import { getCurrentCetusConfig, getCurrentCoinTypes, getCurrentPackageId, getCurrentRpcUrl } from './network-config';
 
 interface CetusPoolData {
   address: string;
@@ -80,8 +80,7 @@ interface TrackedYieldData {
 }
 
 class YieldTrackingService {
-  private PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID || '0x918e07818381a856b74f76e212baebaae0b8ae4073a3ab4534e25de48928d3d6';
-  private currentPackageId = this.PACKAGE_ID; // Track current package ID for dynamic queries
+  private currentPackageId = getCurrentPackageId();
   private SUI_RPC_URL = getCurrentRpcUrl();
   
   // Use internal proxy API to avoid CORS issues (matches real-time-apr-service.ts approach)

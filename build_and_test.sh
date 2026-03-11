@@ -9,10 +9,63 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 SOURCE_DIR="./sources"
+SUIUP_BIN="$HOME/.local/bin/sui"
+
+# Prefer the suiup-managed CLI over older cargo-installed copies.
+if [[ -x "$SUIUP_BIN" ]]; then
+    export PATH="$HOME/.local/bin:$PATH"
+fi
 
 # Function to check if a command exists
 command_exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+supports_move_skip_fetch_latest_git_deps() {
+    sui move build --help 2>/dev/null | grep -q -- '--skip-fetch-latest-git-deps'
+}
+
+supports_publish_skip_fetch_latest_git_deps() {
+    sui client publish --help 2>/dev/null | grep -q -- '--skip-fetch-latest-git-deps'
+}
+
+get_move_network() {
+    if grep -q "Current configuration: MAINNET" Move.toml; then
+        echo "mainnet"
+    elif grep -q "Current configuration: TESTNET" Move.toml; then
+        echo "testnet"
+    else
+        echo "unknown"
+    fi
+}
+
+get_sui_env() {
+    sui client active-env 2>/dev/null | grep -v warning | tr -d '[:space:]'
+}
+
+ensure_network_consistency() {
+    local move_network
+    move_network=$(get_move_network)
+    local sui_env
+    sui_env=$(get_sui_env)
+
+    if [[ -z "$sui_env" || "$move_network" == "unknown" ]]; then
+        echo -e "${YELLOW}Unable to confirm Move/Sui network alignment. Proceeding without the consistency guard.${NC}"
+        return 0
+    fi
+
+    if [[ "$move_network" != "$sui_env" ]]; then
+        echo -e "${RED}Network mismatch detected.${NC}"
+        echo -e "${YELLOW}Move.toml is configured for: ${move_network}${NC}"
+        echo -e "${YELLOW}Sui CLI active env is: ${sui_env}${NC}"
+        echo -e "${CYAN}Fix one side before building/publishing:${NC}"
+        echo -e "  cd move && ./scripts/switch-network.sh ${sui_env}"
+        echo -e "  or"
+        echo -e "  sui client switch --env ${move_network}"
+        return 1
+    fi
+
+    return 0
 }
 
 # Function to display usage
@@ -49,7 +102,14 @@ if ! command_exists sui; then
     exit 1
 fi
 
+echo -e "${CYAN}Using Sui CLI: $(command -v sui)${NC}"
+echo -e "${CYAN}Sui version: $(sui --version 2>/dev/null | head -n 1)${NC}"
+
 # Display header
+if ! ensure_network_consistency; then
+    exit 1
+fi
+
 echo -e "${BLUE}============================================${NC}"
 echo -e "${BLUE}   Njangi Circle Contract Build Script     ${NC}"
 echo -e "${BLUE}============================================${NC}"
@@ -87,11 +147,32 @@ else
 fi
 
 # Build the modules
-echo -e "${BLUE}Running sui move build...${NC}"
-sui move build
+BUILD_CMD=(sui move build)
+BUILD_CMD_DISPLAY="sui move build"
+BUILD_USED_SKIP_FETCH=false
+
+# Default to cached dependency resolution for local builds. This avoids
+# unnecessary Git refreshes that can fail on macOS machines without the
+# Xcode license accepted. Set MOVE_BUILD_SKIP_FETCH_LATEST_GIT_DEPS=0 to
+# force a fresh dependency fetch.
+if [[ "${MOVE_BUILD_SKIP_FETCH_LATEST_GIT_DEPS:-1}" != "0" ]]; then
+    if supports_move_skip_fetch_latest_git_deps; then
+        BUILD_CMD=(sui move build --skip-fetch-latest-git-deps)
+        BUILD_CMD_DISPLAY="sui move build --skip-fetch-latest-git-deps"
+        BUILD_USED_SKIP_FETCH=true
+    else
+        echo -e "${YELLOW}Current Sui CLI does not support --skip-fetch-latest-git-deps for build. Falling back to plain build.${NC}"
+    fi
+fi
+
+echo -e "${BLUE}Running ${BUILD_CMD_DISPLAY}...${NC}"
+"${BUILD_CMD[@]}"
 
 # Check build result
 if [ $? -ne 0 ]; then
+    if [[ "$BUILD_USED_SKIP_FETCH" == true ]]; then
+        echo -e "${YELLOW}Tip: if you need to refresh Git dependencies, rerun with MOVE_BUILD_SKIP_FETCH_LATEST_GIT_DEPS=0 after fixing your Xcode/Git environment.${NC}"
+    fi
     echo -e "${RED}Build failed. Please fix the errors and try again.${NC}"
     exit 1
 fi
@@ -119,13 +200,25 @@ echo
 
 # Get gas objects for the active address
 echo -e "${BLUE}Checking gas objects for this address...${NC}"
-sui client gas --json | jq '.data[] | {id: .id.id, gas_value: .content.fields.balance}'
+sui client gas --json | jq '
+    if type == "array" then
+        .[]
+    elif (.data? | type) == "array" then
+        .data[]
+    else
+        .
+    end
+    | {
+        id: (.gasCoinId // .id.id // .objectId // "unknown"),
+        gas_value: (.mistBalance // .content.fields.balance // .balance // "unknown")
+    }
+'
 
 echo -e "${YELLOW}Please ensure the above address has sufficient gas for publishing.${NC}"
-echo -e "${YELLOW}If gas is insufficient, run: sui client gas --address ${ACTIVE_ADDRESS}${NC}"
+echo -e "${YELLOW}If gas is insufficient, run: sui client gas ${ACTIVE_ADDRESS}${NC}"
 
 # Prompt user to verify the build and publish
-echo -e "${YELLOW}Do you want to publish the package to testnet? (y/n)${NC}"
+echo -e "${YELLOW}Do you want to publish the package to the active network? (y/n)${NC}"
 read publish_response
 
 if [[ "$publish_response" == "y" || "$publish_response" == "Y" ]]; then
@@ -139,27 +232,35 @@ if [[ "$publish_response" == "y" || "$publish_response" == "Y" ]]; then
     # Ask for specific gas coin ID
     echo -e "${YELLOW}Enter gas coin ID to use (leave empty for default):${NC}"
     read gas_coin_id
-    
-    # Set up publish command with or without debug flags
-    PUBLISH_CMD="sui client publish"
-    
-    if [ "$DEBUG_PUBLISH" = true ]; then
-        echo -e "${BLUE}Publishing with debug flags enabled...${NC}"
-        PUBLISH_CMD="$PUBLISH_CMD --dump --verbose"
-    else
-        echo -e "${BLUE}Publishing to testnet with gas budget: ${gas_budget}...${NC}"
+
+    PUBLISH_CMD=(sui client publish . --gas-budget "$gas_budget")
+    PUBLISH_CMD_DISPLAY="sui client publish . --gas-budget ${gas_budget}"
+
+    if [[ "${MOVE_BUILD_SKIP_FETCH_LATEST_GIT_DEPS:-1}" != "0" ]]; then
+        if supports_publish_skip_fetch_latest_git_deps; then
+            PUBLISH_CMD+=(--skip-fetch-latest-git-deps)
+            PUBLISH_CMD_DISPLAY="${PUBLISH_CMD_DISPLAY} --skip-fetch-latest-git-deps"
+        else
+            echo -e "${YELLOW}Current Sui CLI does not support --skip-fetch-latest-git-deps for publish. Falling back to plain publish.${NC}"
+        fi
     fi
-    
+
+    if [ "$DEBUG_PUBLISH" = true ]; then
+        echo -e "${YELLOW}Debug publish requested, but this CLI does not support the old --dump/--verbose flags. Running the normal publish command and preserving full output on failure.${NC}"
+    fi
+
     # Add gas coin if specified
     if [ ! -z "$gas_coin_id" ]; then
-        PUBLISH_CMD="$PUBLISH_CMD --gas-object $gas_coin_id"
+        PUBLISH_CMD+=(--gas "$gas_coin_id")
+        PUBLISH_CMD_DISPLAY="${PUBLISH_CMD_DISPLAY} --gas ${gas_coin_id}"
         echo -e "${BLUE}Using gas object: ${gas_coin_id}${NC}"
     fi
-    
-    PUBLISH_CMD="$PUBLISH_CMD --gas-budget $gas_budget"
-    
+
+    echo -e "${BLUE}Publishing to the active network with gas budget: ${gas_budget}...${NC}"
+    echo -e "${BLUE}Running ${PUBLISH_CMD_DISPLAY}${NC}"
+
     # Capture both stdout and stderr
-    PUBLISH_OUTPUT=$(eval $PUBLISH_CMD 2>&1)
+    PUBLISH_OUTPUT=$("${PUBLISH_CMD[@]}" 2>&1)
     PUBLISH_STATUS=$?
     
     # Check if publish command succeeded
@@ -173,6 +274,10 @@ if [[ "$publish_response" == "y" || "$publish_response" == "Y" ]]; then
             echo -e "2. Incompatible function signatures"
             echo -e "3. Incorrect module dependencies"
             echo -e "4. Code using features not supported by the current Sui version"
+        fi
+
+        if echo "$PUBLISH_OUTPUT" | grep -q "client api version"; then
+            echo -e "${YELLOW}Your local Sui CLI is older than the connected network. Upgrade the CLI before retrying publish to avoid protocol/dependency verification issues.${NC}"
         fi
         
         # Print full error output for debugging
@@ -219,9 +324,8 @@ if [[ "$publish_response" == "y" || "$publish_response" == "Y" ]]; then
                 echo -e "${RED}Invalid package ID format. Exiting.${NC}"
                 exit 1
             fi
-        } else {
+        else
             echo -e "${GREEN}✅ Package published with ID: ${PACKAGE_ID}${NC}"
-        }
         fi
     fi
     

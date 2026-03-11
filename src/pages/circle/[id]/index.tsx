@@ -559,7 +559,7 @@ export default function CircleDetails() {
     currencyType?: string;
     className?: string;
   }) => {
-    const isPriceStale = priceService.getFetchStatus() === 'error';
+    const isPriceStale = priceService.isPriceStale();
     
     console.log('CurrencyDisplay inputs:', { usd, sui, currencyType, suiPrice, isPriceStale });
     

@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "rootDir": ".",
     "module": "commonjs",
     "moduleResolution": "node",
     "types": ["jest", "node"]

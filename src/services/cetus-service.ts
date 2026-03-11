@@ -1,4 +1,5 @@
 import { initCetusSDK } from '@cetusprotocol/cetus-sui-clmm-sdk';
+import { SuiClient } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
 import { PACKAGE_ID } from './circle-service';
 import { 
@@ -9,43 +10,92 @@ import {
   CetusRecoveryManager 
 } from './cetus-errors';
 
-// Configuration for SUI Testnet for v1.26.0 - Updated Cetus pools
 const DEFAULT_SLIPPAGE = 50; // 0.5%
 const SUI_TYPE = '0x2::sui::SUI';
+const SUI_DECIMALS = 9;
+const STABLECOIN_DECIMALS = 6;
 
-// Network-aware constants for stablecoins
-import { getCurrentCoinTypes, getCurrentCetusConfig, getCurrentRpcUrl, getCurrentNetwork } from './network-config';
-const coinTypes = getCurrentCoinTypes();
-const USDC_TYPE = coinTypes.USDC;
-const USDT_TYPE = '0x6674cb08a6ef2a155b3c240df0c559fcb5fef5738a17851c124dfbe96bc9a744::usdt::COIN';
+import {
+  getCurrentCoinTypes,
+  getCurrentCetusConfig,
+  getCurrentRpcUrl,
+  getCurrentNetwork,
+  getCurrentTokens,
+} from './network-config';
 
-// Network-aware Cetus configuration
-const cetusConfig = getCurrentCetusConfig();
-const CETUS_PACKAGE = cetusConfig.packageId;
+function getCurrentUsdcType(): string {
+  return getCurrentCoinTypes().USDC;
+}
 
-// Network-aware Cetus configuration
-const CETUS_CONFIG = {
-  clmmConfig: {
-    pools_id: cetusConfig.pools_id || '0xdf23f5920fbe7d529ddda0c814efd1c5ab3a4ce67fa34dadf9e135c3d617df25',
-    global_config_id: cetusConfig.globalConfig,
-    package_id: cetusConfig.packageId,
-    published_at: cetusConfig.published_at || '0xb2a1d27337788bda89d350703b8326952413bd94b35b9b573ac8401b9803d018',
-    config_id: cetusConfig.globalConfig
-  },
-  cetusConfig: {
-    coin_list_id: cetusConfig.coin_list_id || '0x1eabed72c53feb3805120a081dc15963c204dc8d091542592abaf7a35689b2fb',
-    launchpad_pools_id: cetusConfig.launchpad_pools_id || '0x38465dad7da5e2c57cd68be9cfb7a7b370ac0fae42057a6085e9c7b924af9b09',
-    package_id: cetusConfig.packageId,
-    global_config_id: cetusConfig.globalConfig,
-    cert_id: cetusConfig.cert_id || '0x6f1a1ccc1c8bfc4a5612fbea2d62c531832e99cbf46582410ec92d938cd1c66a'
-  },
-  networkOptions: {
-    url: getCurrentRpcUrl()
+function getCurrentUsdcTypeCandidates(): string[] {
+  const currentCoinTypes = getCurrentCoinTypes();
+  const currentTokens = getCurrentTokens();
+  return Array.from(
+    new Set([currentCoinTypes.USDC, currentTokens.USDC].filter((value): value is string => Boolean(value)))
+  );
+}
+
+function getCurrentUsdtType(): string {
+  return getCurrentTokens().USDT || getCurrentUsdcType();
+}
+
+function getCetusPackageId(): string {
+  return getCurrentCetusConfig().packageId;
+}
+
+function getCetusGlobalConfigId(): string {
+  return getCurrentCetusConfig().globalConfig;
+}
+
+function getCetusSuiUsdcPoolId(): string {
+  return getCurrentCetusConfig().pools.SUI_USDC;
+}
+
+function normalizeCoinTypeForNetwork(coinType: string): string {
+  const normalized = normalizeSuiObjectId(coinType);
+
+  if (normalizeSuiObjectId(SUI_TYPE) === normalized) {
+    return SUI_TYPE;
   }
-};
 
-// Network-aware SUI-USDC Pool on Cetus
-const USDC_SUI_POOL_ID = cetusConfig.pools.SUI_USDC;
+  if (getCurrentUsdcTypeCandidates().map(normalizeSuiObjectId).includes(normalized)) {
+    return getCurrentUsdcType();
+  }
+
+  if (normalized.toLowerCase().includes('::usdc::')) {
+    return getCurrentUsdcType();
+  }
+
+  return normalized;
+}
+
+function getCoinDecimals(coinType: string): number {
+  return normalizeCoinTypeForNetwork(coinType) === SUI_TYPE ? SUI_DECIMALS : STABLECOIN_DECIMALS;
+}
+
+function normalizeSlippageToBps(slippage: number): number {
+  if (!Number.isFinite(slippage) || slippage < 0) {
+    return DEFAULT_SLIPPAGE;
+  }
+
+  return slippage <= 10 ? Math.floor(slippage * 100) : Math.floor(slippage);
+}
+
+function toAtomicAmount(amount: number | string, coinType: string): bigint {
+  const parsedAmount =
+    typeof amount === 'string' ? Number.parseFloat(amount) : Number(amount);
+
+  if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+    throw new Error('Invalid swap amount');
+  }
+
+  return BigInt(Math.floor(parsedAmount * Math.pow(10, getCoinDecimals(coinType))));
+}
+
+function fromAtomicAmount(amount: bigint | string, coinType: string): number {
+  const normalizedAmount = typeof amount === 'string' ? Number.parseFloat(amount) : Number(amount);
+  return normalizedAmount / Math.pow(10, getCoinDecimals(coinType));
+}
 
 // SUI-USDC Pool will be fetched dynamically from the SDK
 // Don't hardcode pool IDs as they can change with protocol upgrades
@@ -55,17 +105,30 @@ interface CetusPoolData {
   poolAddress: string;
   coinTypeA: string;
   coinTypeB: string;
+  current_sqrt_price: number;
   [key: string]: unknown;
 }
 
 interface CetusSDKInterface {
+  senderAddress: string;
   Pool: {
     getPool: (poolId: string) => Promise<CetusPoolData>;
     getPoolByCoins: (coinTypes: string[]) => Promise<CetusPoolData[]>;
     getPoolsWithPage: (options: Record<string, unknown>) => Promise<CetusPoolData[]>;
   };
   Swap: {
-    createSwapTransactionPayload: (options: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    preswap: (options: Record<string, unknown>) => Promise<{
+      estimatedAmountIn: string;
+      estimatedAmountOut: string;
+      priceImpactPct?: number;
+      aToB: boolean;
+      byAmountIn: boolean;
+      [key: string]: unknown;
+    } | null>;
+    createSwapTransactionPayload: (
+      options: Record<string, unknown>,
+      gasEstimateArg?: Record<string, unknown>
+    ) => Promise<Transaction>;
     calculateRates: (options: Record<string, unknown>) => Promise<{
       estimatedAmountOut: string;
       priceImpact: string;
@@ -134,6 +197,7 @@ function normalizeSuiObjectId(id: string): string {
 class CetusService {
   private sdk: CetusSDKInterface | null = null;
   private initialized = false;
+  private initializedNetwork: ReturnType<typeof getCurrentNetwork> | null = null;
 
   constructor() {
     this.initialize();
@@ -145,10 +209,11 @@ class CetusService {
       // Using unknown as an intermediate step to avoid type errors with the SDK
       this.sdk = initCetusSDK({
         network: getCurrentNetwork(),
-        fullNodeUrl: CETUS_CONFIG.networkOptions.url
+        fullNodeUrl: getCurrentRpcUrl()
       }) as unknown as CetusSDKInterface;
       
       this.initialized = true;
+      this.initializedNetwork = getCurrentNetwork();
       console.log('Cetus SDK initialized successfully');
     } catch (error) {
       console.error('Failed to initialize Cetus SDK:', error);
@@ -169,9 +234,9 @@ class CetusService {
   }
 
   async ensureInitialized(): Promise<boolean> {
-    if (!this.initialized) {
+    if (!this.initialized || this.initializedNetwork !== getCurrentNetwork()) {
       try {
-      await this.initialize();
+        await this.initialize();
       } catch (cetusError) {
         // Error already logged in initialize method
         console.error('Failed to ensure Cetus SDK initialization:', cetusError);
@@ -179,6 +244,207 @@ class CetusService {
       }
     }
     return this.initialized;
+  }
+
+  private resolveCoinType(coinType: string): string {
+    return normalizeCoinTypeForNetwork(coinType);
+  }
+
+  private async getPoolOrThrow(poolId: string): Promise<CetusPoolData> {
+    if (!await this.ensureInitialized() || !this.sdk) {
+      throw createCetusError(CetusErrorCode.SDK_INITIALIZATION_FAILED);
+    }
+
+    const pool = await this.sdk.Pool.getPool(poolId);
+    if (!pool) {
+      throw createCetusError(CetusErrorCode.POOL_NOT_FOUND);
+    }
+
+    return pool;
+  }
+
+  private getSwapDirection(pool: CetusPoolData, fromCoinType: string, toCoinType: string): boolean {
+    const normalizedPoolCoinA = this.resolveCoinType(pool.coinTypeA);
+    const normalizedPoolCoinB = this.resolveCoinType(pool.coinTypeB);
+    const normalizedFrom = this.resolveCoinType(fromCoinType);
+    const normalizedTo = this.resolveCoinType(toCoinType);
+
+    if (normalizedPoolCoinA === normalizedFrom && normalizedPoolCoinB === normalizedTo) {
+      return true;
+    }
+
+    if (normalizedPoolCoinA === normalizedTo && normalizedPoolCoinB === normalizedFrom) {
+      return false;
+    }
+
+    throw new Error(`Pool ${pool.poolAddress} does not support ${fromCoinType} -> ${toCoinType}`);
+  }
+
+  private async getPreSwapQuote(
+    pool: CetusPoolData,
+    fromCoinType: string,
+    toCoinType: string,
+    amountAtomic: bigint,
+    byAmountIn: boolean = true
+  ): Promise<{
+    estimatedAmountIn: bigint;
+    estimatedAmountOut: bigint;
+    priceImpact: number;
+    a2b: boolean;
+    byAmountIn: boolean;
+  }> {
+    if (!await this.ensureInitialized() || !this.sdk) {
+      throw createCetusError(CetusErrorCode.SDK_INITIALIZATION_FAILED);
+    }
+
+    const a2b = this.getSwapDirection(pool, fromCoinType, toCoinType);
+    const preSwap = await this.sdk.Swap.preswap({
+      pool,
+      currentSqrtPrice: pool.current_sqrt_price,
+      coinTypeA: pool.coinTypeA,
+      coinTypeB: pool.coinTypeB,
+      decimalsA: getCoinDecimals(pool.coinTypeA),
+      decimalsB: getCoinDecimals(pool.coinTypeB),
+      a2b,
+      byAmountIn,
+      amount: amountAtomic.toString(),
+    });
+
+    if (!preSwap) {
+      throw new Error('Failed to get swap quote from Cetus');
+    }
+
+    return {
+      estimatedAmountIn: BigInt(preSwap.estimatedAmountIn),
+      estimatedAmountOut: BigInt(preSwap.estimatedAmountOut),
+      priceImpact: typeof preSwap.priceImpactPct === 'number' ? preSwap.priceImpactPct : 0,
+      a2b,
+      byAmountIn: Boolean(preSwap.byAmountIn),
+    };
+  }
+
+  async prepareSwapTransactionForPair(
+    walletAddress: string,
+    fromCoinType: string,
+    toCoinType: string,
+    amountIn: number | string,
+    slippageTolerance: number = DEFAULT_SLIPPAGE,
+    byAmountIn: boolean = true
+  ): Promise<{ tx: Transaction; expectedOutput: string; expectedInput: string }> {
+    if (!walletAddress) {
+      throw new Error('Wallet address is required');
+    }
+
+    if (!await this.ensureInitialized() || !this.sdk) {
+      throw new Error('Cetus SDK not initialized');
+    }
+
+    const resolvedFromCoin = this.resolveCoinType(fromCoinType);
+    const resolvedToCoin = this.resolveCoinType(toCoinType);
+    const amountAtomic = byAmountIn
+      ? toAtomicAmount(amountIn, resolvedFromCoin)
+      : toAtomicAmount(amountIn, resolvedToCoin);
+    const poolId = await this.findPoolForCoinPair(resolvedFromCoin, resolvedToCoin);
+
+    if (!poolId) {
+      throw new Error(`No Cetus pool available for ${resolvedFromCoin} -> ${resolvedToCoin}`);
+    }
+
+    const pool = await this.getPoolOrThrow(poolId);
+    const quote = await this.getPreSwapQuote(
+      pool,
+      resolvedFromCoin,
+      resolvedToCoin,
+      amountAtomic,
+      byAmountIn
+    );
+    const slippageBps = normalizeSlippageToBps(slippageTolerance);
+    const amountLimit = byAmountIn
+      ? quote.estimatedAmountOut * BigInt(Math.max(0, 10_000 - slippageBps)) / 10_000n
+      : (quote.estimatedAmountIn * BigInt(10_000 + slippageBps) + 9_999n) / 10_000n;
+
+    this.sdk.senderAddress = walletAddress;
+
+    const tx = await this.sdk.Swap.createSwapTransactionPayload({
+      pool_id: poolId,
+      coinTypeA: pool.coinTypeA,
+      coinTypeB: pool.coinTypeB,
+      a2b: quote.a2b,
+      by_amount_in: byAmountIn,
+      amount: amountAtomic.toString(),
+      amount_limit: amountLimit.toString(),
+    });
+
+    return {
+      tx,
+      expectedOutput: fromAtomicAmount(quote.estimatedAmountOut, resolvedToCoin).toString(),
+      expectedInput: fromAtomicAmount(quote.estimatedAmountIn, resolvedFromCoin).toString(),
+    };
+  }
+
+  async getSwapTransactionBytesForPair(
+    walletAddress: string,
+    fromCoinType: string,
+    toCoinType: string,
+    amountIn: number | string,
+    slippageTolerance: number = DEFAULT_SLIPPAGE,
+    byAmountIn: boolean = true
+  ): Promise<Uint8Array> {
+    const { tx } = await this.prepareSwapTransactionForPair(
+      walletAddress,
+      fromCoinType,
+      toCoinType,
+      amountIn,
+      slippageTolerance,
+      byAmountIn
+    );
+
+    tx.setSender(walletAddress);
+
+    return tx.build({
+      client: new SuiClient({ url: getCurrentRpcUrl() }),
+    });
+  }
+
+  async getSwapEstimateForPair(
+    fromCoinType: string,
+    toCoinType: string,
+    amountIn: number | string,
+    byAmountIn: boolean = true
+  ): Promise<{
+    amountIn: string;
+    amountOut: string;
+    priceImpact: number;
+  }> {
+    if (!await this.ensureInitialized() || !this.sdk) {
+      throw new Error('Cetus SDK not initialized');
+    }
+
+    const resolvedFromCoin = this.resolveCoinType(fromCoinType);
+    const resolvedToCoin = this.resolveCoinType(toCoinType);
+    const amountAtomic = byAmountIn
+      ? toAtomicAmount(amountIn, resolvedFromCoin)
+      : toAtomicAmount(amountIn, resolvedToCoin);
+    const poolId = await this.findPoolForCoinPair(resolvedFromCoin, resolvedToCoin);
+
+    if (!poolId) {
+      throw new Error(`No Cetus pool available for ${resolvedFromCoin} -> ${resolvedToCoin}`);
+    }
+
+    const pool = await this.getPoolOrThrow(poolId);
+    const quote = await this.getPreSwapQuote(
+      pool,
+      resolvedFromCoin,
+      resolvedToCoin,
+      amountAtomic,
+      byAmountIn
+    );
+
+    return {
+      amountIn: fromAtomicAmount(quote.estimatedAmountIn, resolvedFromCoin).toString(),
+      amountOut: fromAtomicAmount(quote.estimatedAmountOut, resolvedToCoin).toString(),
+      priceImpact: quote.priceImpact,
+    };
   }
 
   /**
@@ -189,50 +455,47 @@ class CetusService {
    */
   async findPoolForCoinPair(coinTypeA: string, coinTypeB: string): Promise<string | null> {
     return await CetusRecoveryManager.withRetry(async () => {
-    if (!await this.ensureInitialized() || !this.sdk) {
+      if (!await this.ensureInitialized() || !this.sdk) {
         throw createCetusError(CetusErrorCode.SDK_INITIALIZATION_FAILED);
-    }
-
-    try {
-      console.log(`Finding pools for: ${coinTypeA} and ${coinTypeB}`);
-      
-      // Special handling for SUI/USDC pair - enhanced to handle multiple USDC formats
-      const isSuiUsdcPair = (
-        (coinTypeA === SUI_TYPE && (coinTypeB === USDC_TYPE || coinTypeB.toLowerCase().includes('usdc') || coinTypeB.toLowerCase().includes('coin'))) ||
-        (coinTypeB === SUI_TYPE && (coinTypeA === USDC_TYPE || coinTypeA.toLowerCase().includes('usdc') || coinTypeA.toLowerCase().includes('coin')))
-      );
-
-      if (isSuiUsdcPair) {
-        console.log('Detected SUI/USDC pair, using hardcoded pool ID');
-        
-        // Validate that the pool exists before returning it
-        try {
-          const pool = await this.sdk.Pool.getPool(USDC_SUI_POOL_ID);
-          if (pool) {
-            console.log(`Confirmed hardcoded pool exists: ${USDC_SUI_POOL_ID}`);
-            console.log(`Pool details: CoinA=${pool.coinTypeA}, CoinB=${pool.coinTypeB}`);
-            return USDC_SUI_POOL_ID;
-          } else {
-            console.warn('Hardcoded pool ID exists but returned null pool data');
-          }
-        } catch (poolError) {
-          console.warn(`Failed to verify hardcoded pool: ${poolError}`);
-          // Continue with normal pool search as fallback
-        }
       }
+
+      try {
+        const resolvedCoinA = this.resolveCoinType(coinTypeA);
+        const resolvedCoinB = this.resolveCoinType(coinTypeB);
+        console.log(`Finding pools for: ${resolvedCoinA} and ${resolvedCoinB}`);
       
-      // Use getPoolsWithPage to get all pools
-      const allPools = await this.sdk.Pool.getPoolsWithPage({});
-      console.log(`Found ${allPools.length} total pools, filtering for matching pair...`);
+        const currentUsdcType = getCurrentUsdcType();
+        const isSuiUsdcPair = (
+          (resolvedCoinA === SUI_TYPE && resolvedCoinB === currentUsdcType) ||
+          (resolvedCoinB === SUI_TYPE && resolvedCoinA === currentUsdcType)
+        );
+
+        if (isSuiUsdcPair) {
+          const hardcodedPoolId = getCetusSuiUsdcPoolId();
+          console.log('Detected SUI/USDC pair, using network-configured pool ID');
+        
+          try {
+            const pool = await this.sdk.Pool.getPool(hardcodedPoolId);
+            if (pool) {
+              console.log(`Confirmed pool exists: ${hardcodedPoolId}`);
+              console.log(`Pool details: CoinA=${pool.coinTypeA}, CoinB=${pool.coinTypeB}`);
+              return hardcodedPoolId;
+            }
+            console.warn('Configured pool ID returned no pool data');
+          } catch (poolError) {
+            console.warn(`Failed to verify configured pool: ${poolError}`);
+          }
+        }
       
-      // Normalize inputs
-        const normalizedCoinA = normalizeSuiObjectId(coinTypeA);
-        const normalizedCoinB = normalizeSuiObjectId(coinTypeB);
+        const allPools = await this.sdk.Pool.getPoolsWithPage({});
+        console.log(`Found ${allPools.length} total pools, filtering for matching pair...`);
       
-        // Filter pools for exact matches
-      const matchingPools = allPools.filter(pool => {
-          const poolCoinA = normalizeSuiObjectId(pool.coinTypeA);
-          const poolCoinB = normalizeSuiObjectId(pool.coinTypeB);
+        const normalizedCoinA = normalizeSuiObjectId(resolvedCoinA);
+        const normalizedCoinB = normalizeSuiObjectId(resolvedCoinB);
+      
+        const matchingPools = allPools.filter(pool => {
+          const poolCoinA = normalizeSuiObjectId(this.resolveCoinType(pool.coinTypeA));
+          const poolCoinB = normalizeSuiObjectId(this.resolveCoinType(pool.coinTypeB));
         
           return (
             (poolCoinA === normalizedCoinA && poolCoinB === normalizedCoinB) ||
@@ -240,8 +503,8 @@ class CetusService {
         );
       });
       
-      if (matchingPools.length === 0) {
-          console.warn(`No pools found for pair: ${coinTypeA} / ${coinTypeB}`);
+        if (matchingPools.length === 0) {
+          console.warn(`No pools found for pair: ${resolvedCoinA} / ${resolvedCoinB}`);
           throw createCetusError(CetusErrorCode.POOL_NOT_FOUND);
         }
         
@@ -252,7 +515,7 @@ class CetusService {
         
         return selectedPool.poolAddress;
         
-    } catch (error) {
+      } catch (error) {
         const cetusError = parseError(error);
         CetusErrorLogger.log(cetusError);
         throw cetusError;
@@ -287,14 +550,14 @@ class CetusService {
       const tx = new Transaction();
       
       // Set target coin type based on selection
-      const targetCoinType = config.targetCoinType === 'USDC' ? USDC_TYPE : USDT_TYPE;
+      const targetCoinType = config.targetCoinType === 'USDC' ? getCurrentUsdcType() : getCurrentUsdtType();
       
       // Get pool details
       const poolId = await this.findPoolForCoinPair(SUI_TYPE, targetCoinType);
       if (!poolId) {
         throw new Error('USDC/SUI pool not found');
       }
-      const globalConfigId = CETUS_CONFIG.clmmConfig.global_config_id;
+      const globalConfigId = getCetusGlobalConfigId();
       
       // Convert minimum swap amount to MIST (1 SUI = 1e9 MIST)
       const minimumSwapAmount = BigInt(Math.floor(config.minimumSwapAmount * 1e9));
@@ -306,7 +569,7 @@ class CetusService {
           tx.object(walletId), // custody wallet object
           tx.pure.bool(config.enabled), // enabled
           tx.pure.string(targetCoinType), // target_coin_type
-          tx.pure.address(CETUS_PACKAGE), // dex_address
+          tx.pure.address(getCetusPackageId()), // dex_address
           tx.pure.u64(BigInt(config.slippageTolerance)), // slippage_tolerance
           tx.pure.u64(minimumSwapAmount), // minimum_swap_amount
           tx.pure.address(globalConfigId), // global_config_id
@@ -329,55 +592,15 @@ class CetusService {
     walletAddress: string,
     suiAmount: number,
     slippageTolerance: number = DEFAULT_SLIPPAGE
-  ): Promise<Record<string, unknown>> {
-    if (!await this.ensureInitialized() || !this.sdk) {
-      throw new Error('Cetus SDK not initialized');
-    }
-
-    try {
-      // Convert SUI amount to correct format (9 decimals)
-      const amountIn = Math.floor(suiAmount * 1e9).toString();
-      
-      // Fetch pool data
-      const pool = await this.sdk.Pool.getPool(USDC_SUI_POOL_ID);
-      if (!pool) {
-        throw new Error('USDC/SUI pool not found');
-      }
-
-      // Determine if we're swapping from SUI to USDC or vice versa
-      const coinTypeA = pool.coinTypeA;
-      const coinTypeB = pool.coinTypeB;
-      
-      // Make sure we're using normalized SUI type
-      const normalizedSuiType = normalizeSuiObjectId(SUI_TYPE);
-      
-      // Determine direction (SUI → USDC)
-      const isSuiToUsdc = 
-        normalizedSuiType === normalizeSuiObjectId(coinTypeA) ||
-        normalizedSuiType === coinTypeA;
-      
-      if (!isSuiToUsdc) {
-        throw new Error('SUI is not part of this pool');
-      }
-
-      // Prepare the swap transaction
-      const payload = await this.sdk.Swap.createSwapTransactionPayload({
-        pool,
-        coinTypeA: isSuiToUsdc ? coinTypeA : coinTypeB,
-        coinTypeB: isSuiToUsdc ? coinTypeB : coinTypeA,
-        address: walletAddress,
-        amount: amountIn,
-        amountSpecifiedIsInput: true, // We're specifying the input amount
-        slippage: slippageTolerance,
-        isXToY: isSuiToUsdc // SUI → USDC
-      });
-      
-      console.log('Swap transaction payload created:', payload);
-      return payload;
-    } catch (error) {
-      console.error('Failed to prepare swap transaction:', error);
-      throw error;
-    }
+  ): Promise<Transaction> {
+    const { tx } = await this.prepareSwapTransactionForPair(
+      walletAddress,
+      SUI_TYPE,
+      getCurrentUsdcType(),
+      suiAmount,
+      slippageTolerance
+    );
+    return tx;
   }
 
   /**
@@ -387,43 +610,11 @@ class CetusService {
     estimatedOutput: number;
     priceImpact: number;
   }> {
-    if (!await this.ensureInitialized() || !this.sdk) {
-      throw new Error('Cetus SDK not initialized');
-    }
-
-    try {
-      // Convert SUI amount to correct format (9 decimals)
-      const amountIn = Math.floor(suiAmount * 1e9).toString();
-      
-      // Fetch pool data
-      const pool = await this.sdk.Pool.getPool(USDC_SUI_POOL_ID);
-      if (!pool) {
-        throw new Error('USDC/SUI pool not found');
-      }
-
-      // Get the price impact and estimated output
-      const estResult = await this.sdk.Swap.calculateRates({
-        pool,
-        amount: amountIn,
-        decimalsA: 9, // SUI has 9 decimals
-        decimalsB: 6, // USDC has 6 decimals
-        slippage: DEFAULT_SLIPPAGE,
-        isXToY: true, // SUI → USDC
-        amountSpecifiedIsInput: true
-      });
-
-      // Convert the estimated USDC output from Cetus format (with decimals)
-      // USDC on SUI has 6 decimals
-      const estimatedOutput = Number(estResult.estimatedAmountOut) / 1e6;
-      
-      return {
-        estimatedOutput,
-        priceImpact: Number(estResult.priceImpact)
-      };
-    } catch (error) {
-      console.error('Failed to get swap estimate:', error);
-      throw error;
-    }
+    const quote = await this.getSwapEstimateForPair(SUI_TYPE, getCurrentUsdcType(), suiAmount);
+    return {
+      estimatedOutput: Number.parseFloat(quote.amountOut),
+      priceImpact: quote.priceImpact,
+    };
   }
   
   /**
@@ -592,7 +783,7 @@ class CetusService {
       }
 
       try {
-        const poolId = params.poolId || USDC_SUI_POOL_ID;
+        const poolId = params.poolId || getCetusSuiUsdcPoolId();
         
         // Get pool information
         const pool = await this.sdk.Pool.getPool(poolId);
@@ -666,7 +857,7 @@ class CetusService {
    */
   async calculateOptimalLiquidityAmounts(
     suiAmount: number,
-    poolId: string = USDC_SUI_POOL_ID
+    poolId: string = getCetusSuiUsdcPoolId()
   ): Promise<{
     suiAmount: string;
     usdcAmount: string;
@@ -709,7 +900,7 @@ class CetusService {
   /**
    * Get real-time pool statistics for yield estimation
    */
-  async getPoolStatistics(poolId: string = USDC_SUI_POOL_ID): Promise<{
+  async getPoolStatistics(poolId: string = getCetusSuiUsdcPoolId()): Promise<{
     tvl: number;
     volume24h: number;
     fees24h: number;

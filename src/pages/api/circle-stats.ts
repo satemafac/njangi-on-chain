@@ -1,7 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-
-const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID || '0x0d6163a7b5fe319bbd500294f226c88d3662c69af7661666e5abbf3b301f9e90';
-const SUI_TESTNET_RPC = 'https://fullnode.testnet.sui.io:443';
+import { getCurrentNetwork, getCurrentNetworkConfig } from '@/services/network-config';
 
 type ResponseData = {
   success: boolean;
@@ -10,6 +8,71 @@ type ResponseData = {
   };
   message?: string;
 };
+
+type JsonRpcResponse = {
+  result?: {
+    data?: Array<{ type?: string }>;
+  };
+  error?: unknown;
+};
+
+async function callSuiRpc(
+  rpcUrls: string[],
+  body: Record<string, unknown>,
+): Promise<JsonRpcResponse | null> {
+  let lastError: string | null = null;
+
+  for (const rpcUrl of rpcUrls) {
+    try {
+      const response = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+
+      const rawBody = await response.text();
+      const trimmedBody = rawBody.trim();
+      const contentType = response.headers.get('content-type') || 'unknown';
+
+      if (!response.ok) {
+        lastError = `HTTP ${response.status} from ${rpcUrl}`;
+        console.warn('[API] RPC request failed:', {
+          rpcUrl,
+          status: response.status,
+          contentType,
+        });
+        continue;
+      }
+
+      if (!trimmedBody || trimmedBody.startsWith('<')) {
+        lastError = `Non-JSON response from ${rpcUrl}`;
+        console.warn('[API] RPC returned non-JSON response:', {
+          rpcUrl,
+          contentType,
+          preview: trimmedBody.slice(0, 80),
+        });
+        continue;
+      }
+
+      return JSON.parse(trimmedBody) as JsonRpcResponse;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      console.warn('[API] RPC request threw an error:', {
+        rpcUrl,
+        error: lastError,
+      });
+    }
+  }
+
+  if (lastError) {
+    console.warn('[API] All RPC candidates failed:', lastError);
+  }
+
+  return null;
+}
 
 export default async function handler(
   req: NextApiRequest,
@@ -24,32 +87,44 @@ export default async function handler(
 
   try {
     let circleCount = 0;
+    const currentNetwork = getCurrentNetwork();
+    const networkConfig = getCurrentNetworkConfig();
+    const officialRpcUrl = currentNetwork === 'mainnet'
+      ? 'https://fullnode.mainnet.sui.io:443'
+      : 'https://fullnode.testnet.sui.io:443';
+    const rpcUrls = Array.from(new Set([
+      networkConfig.rpcUrl,
+      officialRpcUrl,
+    ].filter(Boolean)));
+    const packageId = networkConfig.packageId;
+
+    console.log('[API] circle-stats using network config:', {
+      network: currentNetwork,
+      rpcUrls,
+      packageId,
+    });
+
+    if (!packageId) {
+      throw new Error(`Missing package ID for ${currentNetwork}`);
+    }
 
     // Query specifically for CircleCreated events
     try {
-      const eventsResponse = await fetch(SUI_TESTNET_RPC, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'suix_queryEvents',
-          params: [
-            {
-              MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleCreated`
-            },
-            null,
-            null,
-            false
-          ]
-        }),
+      const eventsData = await callSuiRpc(rpcUrls, {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'suix_queryEvents',
+        params: [
+          {
+            MoveEventType: `${packageId}::njangi_circles::CircleCreated`
+          },
+          null,
+          null,
+          false
+        ]
       });
 
-      const eventsData = await eventsResponse.json();
-
-      if (eventsData.result && eventsData.result.data) {
+      if (eventsData?.result && eventsData.result.data) {
         circleCount = eventsData.result.data.length;
       }
     } catch (error) {
@@ -59,32 +134,24 @@ export default async function handler(
     // Fallback: If specific event query fails, try querying all events from njangi_circles module
     if (circleCount === 0) {
       try {
-        const eventsResponse = await fetch(SUI_TESTNET_RPC, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 1,
-            method: 'suix_queryEvents',
-            params: [
-              {
-                MoveModule: {
-                  package: PACKAGE_ID,
-                  module: 'njangi_circles'
-                }
-              },
-              null,
-              null,
-              false
-            ]
-          }),
+        const eventsData = await callSuiRpc(rpcUrls, {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'suix_queryEvents',
+          params: [
+            {
+              MoveModule: {
+                package: packageId,
+                module: 'njangi_circles'
+              }
+            },
+            null,
+            null,
+            false
+          ]
         });
 
-        const eventsData = await eventsResponse.json();
-
-        if (eventsData.result && eventsData.result.data) {
+        if (eventsData?.result && eventsData.result.data) {
           // Filter for CircleCreated events specifically
           const circleCreatedEvents = eventsData.result.data.filter((event: { type?: string }) => {
             return event.type && event.type.includes('CircleCreated');

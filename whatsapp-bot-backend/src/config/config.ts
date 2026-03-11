@@ -1,32 +1,13 @@
-/**
- * 🔧 Configuration Module
- * 
- * Loads and validates all environment variables
- * - Sui RPC endpoints
- * - WhatsApp Cloud API credentials
- * - zkLogin (Enoki) configuration
- * - Server settings
- */
+import { loadLocalEnvFile, resolveBotRuntimeEnvFromProcessEnv, type NetworkType } from './env';
 
-import dotenv from 'dotenv';
-import path from 'path';
-import fs from 'fs';
+const loadedEnvFile = loadLocalEnvFile();
 
-// Load environment variables from .env.local or .env
-// On Heroku, environment variables are passed directly via process.env
-// Skip dotenv loading in production - use Heroku's process.env directly
-if (process.env.NODE_ENV !== 'production') {
-  // Development: try to load from local .env file
-  const envPath = path.resolve(process.cwd(), '.env.local');
-  if (fs.existsSync(envPath)) {
-    console.log(`📋 Loading .env.local from: ${envPath}`);
-    dotenv.config({ path: envPath });
-  } else {
-    console.log(`📋 No .env.local found at: ${envPath}, using process.env`);
-  }
+if (loadedEnvFile) {
+  console.log(`📋 Loaded environment from: ${loadedEnvFile}`);
+} else if (process.env.NODE_ENV === 'production') {
+  console.log('📋 Production mode - using process.env directly');
 } else {
-  // Production (Heroku): Don't load from file, use Heroku's process.env directly
-  console.log('📋 Production mode - using Heroku environment variables directly');
+  console.log('📋 No root .env.local found - using current process.env');
 }
 
 // ============================================================
@@ -34,14 +15,22 @@ if (process.env.NODE_ENV !== 'production') {
 // ============================================================
 
 export interface SuiConfig {
+  currentNetwork: NetworkType;
   testnetRpcUrl: string;
   mainnetRpcUrl: string;
   testnetRpcAlt: string;
   mainnetRpcAlt: string;
   testnetPackageId: string;
   mainnetPackageId: string;
-  defaultPackageId: string;
-  whatsappLinksRegistryId: string;
+  testnetWhatsAppPackageId: string;
+  mainnetWhatsAppPackageId: string;
+  testnetWhatsAppRegistryId: string;
+  mainnetWhatsAppRegistryId: string;
+  currentRpcUrl: string;
+  currentRpcAlt: string;
+  currentPackageId: string;
+  currentWhatsAppPackageId: string;
+  currentWhatsAppRegistryId: string;
 }
 
 export interface WhatsAppConfig {
@@ -63,7 +52,7 @@ export interface ZkLoginConfig {
   issuerUrl: string;
   testnetEnoki: string;
   mainnetEnoki: string;
-  defaultEnoki: string;
+  currentEnoki: string;
   google: OAuthProvider;
   facebook: OAuthProvider;
   apple: OAuthProvider;
@@ -125,6 +114,25 @@ function validateBoolean(_varName: string, value: string | undefined, defaultVal
   return value.toLowerCase() === 'true';
 }
 
+function optionalUrl(value: string | undefined, fallback: string): string {
+  const candidate = value && value.trim() !== '' ? value : fallback;
+  try {
+    new URL(candidate);
+    return candidate;
+  } catch {
+    return fallback;
+  }
+}
+
+function optionalVar(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    if (value && value.trim() !== '') {
+      return value;
+    }
+  }
+  return '';
+}
+
 // ============================================================
 // Load Configuration
 // ============================================================
@@ -133,6 +141,9 @@ export function loadConfig(): Config {
   console.log('📋 Loading configuration from environment variables (Node env: ' + (process.env.NODE_ENV || 'development') + ')');
 
   try {
+    const resolvedEnv = resolveBotRuntimeEnvFromProcessEnv(process.env);
+    const currentSui = resolvedEnv.networks[resolvedEnv.currentNetwork];
+
     // App Configuration
     const app: AppConfig = {
       nodeEnv: (process.env.NODE_ENV || 'development') as 'development' | 'production' | 'test',
@@ -146,16 +157,22 @@ export function loadConfig(): Config {
 
     // Sui Configuration
     const sui: SuiConfig = {
-      testnetRpcUrl: validateUrl('NEXT_PUBLIC_TESTNET_RPC_URL', process.env.NEXT_PUBLIC_TESTNET_RPC_URL || ''),
-      mainnetRpcUrl: validateUrl('NEXT_PUBLIC_MAINNET_RPC_URL', process.env.NEXT_PUBLIC_MAINNET_RPC_URL || ''),
-      testnetRpcAlt: validateUrl('NEXT_PUBLIC_TESTNET_RPC_ALT', process.env.NEXT_PUBLIC_TESTNET_RPC_ALT || 'https://testnet-rpc-alt.sui.io'),
-      mainnetRpcAlt: validateUrl('NEXT_PUBLIC_MAINNET_RPC_ALT', process.env.NEXT_PUBLIC_MAINNET_RPC_ALT || 'https://mainnet-rpc-alt.sui.io'),
-      testnetPackageId: validateRequiredVar('NEXT_PUBLIC_TESTNET_PACKAGE_ID', process.env.NEXT_PUBLIC_TESTNET_PACKAGE_ID),
-      mainnetPackageId: validateRequiredVar('NEXT_PUBLIC_MAINNET_PACKAGE_ID', process.env.NEXT_PUBLIC_MAINNET_PACKAGE_ID),
-      defaultPackageId: validateRequiredVar('NEXT_PUBLIC_PACKAGE_ID', process.env.NEXT_PUBLIC_PACKAGE_ID),
-      // Use testnet registry by default, support legacy name for backward compatibility
-      whatsappLinksRegistryId: validateRequiredVar('NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID', 
-        process.env.NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID || process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID),
+      currentNetwork: resolvedEnv.currentNetwork,
+      testnetRpcUrl: validateUrl('NEXT_PUBLIC_TESTNET_RPC_URL', resolvedEnv.networks.testnet.rpcUrl),
+      mainnetRpcUrl: validateUrl('NEXT_PUBLIC_MAINNET_RPC_URL', resolvedEnv.networks.mainnet.rpcUrl),
+      testnetRpcAlt: validateUrl('NEXT_PUBLIC_TESTNET_RPC_ALT', resolvedEnv.networks.testnet.rpcAltUrl),
+      mainnetRpcAlt: validateUrl('NEXT_PUBLIC_MAINNET_RPC_ALT', resolvedEnv.networks.mainnet.rpcAltUrl),
+      testnetPackageId: resolvedEnv.networks.testnet.packageId,
+      mainnetPackageId: resolvedEnv.networks.mainnet.packageId,
+      testnetWhatsAppPackageId: resolvedEnv.networks.testnet.whatsappPackageId,
+      mainnetWhatsAppPackageId: resolvedEnv.networks.mainnet.whatsappPackageId,
+      testnetWhatsAppRegistryId: resolvedEnv.networks.testnet.whatsappRegistryId,
+      mainnetWhatsAppRegistryId: resolvedEnv.networks.mainnet.whatsappRegistryId,
+      currentRpcUrl: currentSui.rpcUrl,
+      currentRpcAlt: currentSui.rpcAltUrl,
+      currentPackageId: currentSui.packageId,
+      currentWhatsAppPackageId: currentSui.whatsappPackageId,
+      currentWhatsAppRegistryId: currentSui.whatsappRegistryId,
     };
 
     // WhatsApp Configuration
@@ -181,22 +198,25 @@ export function loadConfig(): Config {
     // zkLogin Configuration (Enoki)
     const zkLogin: ZkLoginConfig = {
       issuerUrl: process.env.ZKLOGIN_ISSUER_URL || 'https://accounts.google.com',
-      testnetEnoki: validateRequiredVar('ZKLOGIN_TESTNET_ENOKI_KEY', process.env.ZKLOGIN_TESTNET_ENOKI_KEY),
-      mainnetEnoki: validateRequiredVar('ZKLOGIN_MAINNET_ENOKI_KEY', process.env.ZKLOGIN_MAINNET_ENOKI_KEY),
-      defaultEnoki: validateRequiredVar('ZKLOGIN_DEFAULT_ENOKI_KEY', process.env.ZKLOGIN_DEFAULT_ENOKI_KEY),
+      testnetEnoki: resolvedEnv.networks.testnet.enokiApiKey,
+      mainnetEnoki: resolvedEnv.networks.mainnet.enokiApiKey,
+      currentEnoki: currentSui.enokiApiKey,
       google: {
-        clientId: validateRequiredVar('ZKLOGIN_GOOGLE_CLIENT_ID', process.env.ZKLOGIN_GOOGLE_CLIENT_ID),
-        clientSecret: process.env.ZKLOGIN_GOOGLE_CLIENT_SECRET || 'not-configured',
+        clientId: optionalVar(process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID, process.env.ZKLOGIN_GOOGLE_CLIENT_ID),
+        clientSecret: optionalVar(process.env.ZKLOGIN_GOOGLE_CLIENT_SECRET),
       },
       facebook: {
-        clientId: validateRequiredVar('ZKLOGIN_FACEBOOK_CLIENT_ID', process.env.ZKLOGIN_FACEBOOK_CLIENT_ID),
-        clientSecret: process.env.NEXT_PUBLIC_FACEBOOK_CLIENT_SECRET || process.env.ZKLOGIN_FACEBOOK_CLIENT_SECRET || 'not-configured',
+        clientId: optionalVar(process.env.NEXT_PUBLIC_FACEBOOK_CLIENT_ID, process.env.ZKLOGIN_FACEBOOK_CLIENT_ID),
+        clientSecret: optionalVar(process.env.ZKLOGIN_FACEBOOK_CLIENT_SECRET),
       },
       apple: {
-        clientId: validateRequiredVar('ZKLOGIN_APPLE_CLIENT_ID', process.env.ZKLOGIN_APPLE_CLIENT_ID),
-        clientSecret: process.env.ZKLOGIN_APPLE_CLIENT_SECRET || 'not-configured',
+        clientId: optionalVar(process.env.NEXT_PUBLIC_APPLE_CLIENT_ID, process.env.ZKLOGIN_APPLE_CLIENT_ID),
+        clientSecret: optionalVar(process.env.ZKLOGIN_APPLE_CLIENT_SECRET),
       },
-      redirectUrl: validateUrl('ZKLOGIN_REDIRECT_URL', process.env.ZKLOGIN_REDIRECT_URL || 'http://localhost:3000/api/auth/callback'),
+      redirectUrl: optionalUrl(
+        process.env.NEXT_PUBLIC_REDIRECT_URI || process.env.ZKLOGIN_REDIRECT_URL,
+        'http://localhost:3000/auth/callback',
+      ),
     };
 
     const config: Config = {
@@ -235,15 +255,16 @@ export function getConfig(): Config {
 export function validateConfig(config: Config): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
 
-  // Validate Sui
-  if (!config.sui.testnetPackageId || config.sui.testnetPackageId.length === 0) {
-    errors.push('Sui testnet package ID is not configured');
+  if (!config.sui.currentPackageId || config.sui.currentPackageId.length === 0) {
+    errors.push(`Sui package ID is not configured for ${config.sui.currentNetwork}`);
   }
-  if (!config.sui.mainnetPackageId || config.sui.mainnetPackageId.length === 0) {
-    errors.push('Sui mainnet package ID is not configured');
+
+  if (!config.sui.currentRpcUrl || config.sui.currentRpcUrl.length === 0) {
+    errors.push(`Sui RPC URL is not configured for ${config.sui.currentNetwork}`);
   }
-  if (!config.sui.defaultPackageId || config.sui.defaultPackageId.length === 0) {
-    errors.push('Sui default package ID is not configured');
+
+  if (!config.sui.currentWhatsAppRegistryId || config.sui.currentWhatsAppRegistryId.length === 0) {
+    errors.push(`WhatsApp registry ID is not configured for ${config.sui.currentNetwork}`);
   }
 
   // Validate WhatsApp
@@ -251,30 +272,12 @@ export function validateConfig(config: Config): { valid: boolean; errors: string
     errors.push('WhatsApp access token is not configured');
   }
 
-  // Validate zkLogin - Enoki keys
-  if (!config.zkLogin.testnetEnoki || config.zkLogin.testnetEnoki.length === 0) {
-    errors.push('Testnet Enoki key is not configured');
-  }
-  if (!config.zkLogin.mainnetEnoki || config.zkLogin.mainnetEnoki.length === 0) {
-    errors.push('Mainnet Enoki key is not configured');
-  }
-  if (!config.zkLogin.defaultEnoki || config.zkLogin.defaultEnoki.length === 0) {
-    errors.push('Default Enoki key is not configured');
-  }
-
-  // Validate OAuth providers
-  if (!config.zkLogin.google.clientId || config.zkLogin.google.clientId.length === 0) {
-    errors.push('Google OAuth client ID is not configured');
-  }
-  if (!config.zkLogin.facebook.clientId || config.zkLogin.facebook.clientId.length === 0) {
-    errors.push('Facebook OAuth client ID is not configured');
-  }
-  if (!config.zkLogin.apple.clientId || config.zkLogin.apple.clientId.length === 0) {
-    errors.push('Apple OAuth client ID is not configured');
-  }
-
   return {
     valid: errors.length === 0,
     errors,
   };
+}
+
+export function resetConfigForTests(): void {
+  configInstance = null;
 }

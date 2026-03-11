@@ -9,6 +9,7 @@
     "build:bot": "cd whatsapp-bot-backend && npm run build",
     "start": "next start -p $PORT",
     "test": "jest --runInBand",
+    "validate:env": "node scripts/validate-env.mjs",
     "lint": "next lint",
     "heroku-postbuild": "npm run build"
   },

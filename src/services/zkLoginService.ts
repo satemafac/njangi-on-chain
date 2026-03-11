@@ -3,7 +3,7 @@ import { Transaction as TransactionBlock } from '@mysten/sui/transactions';
 import { ExecuteTransactionRequestType } from '@mysten/sui/client';
 import { enokiZkLoginService } from './enokiZkLoginService';
 
-import { getCurrentRpcUrl } from './network-config';
+import { getCurrentRpcUrl, NetworkType } from './network-config';
 
 export type OAuthProvider = 'Google' | 'Facebook' | 'Apple';
 
@@ -84,8 +84,11 @@ export class ZkLoginService {
     return ZkLoginService.instance;
   }
 
-  public async beginLogin(provider: OAuthProvider = 'Google'): Promise<{ loginUrl: string, setupData: SetupData }> {
-    return enokiZkLoginService.beginLogin(provider);
+  public async beginLogin(
+    provider: OAuthProvider = 'Google',
+    network?: NetworkType
+  ): Promise<{ loginUrl: string, setupData: SetupData }> {
+    return enokiZkLoginService.beginLogin(provider, network);
   }
 
   public async handleCallback(token: string, setupData: SetupData): Promise<{ 

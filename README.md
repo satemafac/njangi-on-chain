@@ -99,6 +99,7 @@ cd move
 - **📦 [Deployment Guide](docs/deployment-guide.md)** - Complete deployment documentation
 - **⚡ [Quick Reference](move/DEPLOYMENT.md)** - Essential commands for deployment
 - **🏗️ [Move Contracts](move/README.md)** - Smart contract documentation
+- **🔧 [Environment Configuration](docs/environment.md)** - Canonical root env workflow, validation, and Heroku sync
 - **💳 [Coinbase Onramp Setup and Operations](docs/coinbase-onramp-setup-operations.md)** - Env setup, API route reference, troubleshooting
 - **✅ [Coinbase Onramp Staging and Rollout Checklist](docs/coinbase-onramp-staging-rollout-checklist.md)** - UAT scenarios, production checklist, rollback runbook
 
@@ -110,7 +111,7 @@ Stay tuned for details in a future release.
 ## Development Quick-Start
 ```bash
 # Compile smart contract
-cd move && sui move build
+cd move && sui move build --skip-fetch-latest-git-deps
 
 # Run Move unit tests
 sui move test -p .
@@ -122,4 +123,3 @@ Front-end, API and automated scripts live under `web/` and `scripts/` directorie
 - 📱 zkLogin authentication for seamless Web3 onboarding  
 - 🌐 Multicurrency support & automatic stablecoin swaps  
 - 🛡️ Formal verification of critical contract invariants
-

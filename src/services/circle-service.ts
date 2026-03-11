@@ -2,16 +2,10 @@ import { Transaction as TransactionBlock } from '@mysten/sui/transactions';
 import { SuiClient } from '@mysten/sui/client';
 import { bcs } from '@mysten/sui/bcs';
 import type { CircleFormData, CycleLength, WeekDay } from '../types/circle';
-import { getCurrentPackageId, getCurrentRpcUrl, getCurrentNetwork } from './network-config';
+import { getCurrentNetwork, getCurrentPackageId, getCurrentRpcUrl } from './network-config';
 
-// Get package ID using network-aware configuration with fallbacks
 export function getPackageId(): string {
-  try {
-    return getCurrentPackageId() || process.env.NEXT_PUBLIC_PACKAGE_ID || "0xd530bfd7511ac2d343646a8ca4e2e14ffb89e1ec69a38ff8fb99c415706d6154";
-  } catch {
-    // Fallback if network config is not available (e.g., during SSR)
-    return process.env.NEXT_PUBLIC_PACKAGE_ID || "0xd530bfd7511ac2d343646a8ca4e2e14ffb89e1ec69a38ff8fb99c415706d6154";
-  }
+  return getCurrentPackageId();
 }
 
 // Legacy constant for backward compatibility (will be dynamically resolved)
@@ -457,10 +451,17 @@ export async function batchFetchCircleObjects(
     maxConcurrent?: number;
     showContent?: boolean;
     showType?: boolean;
+    showOwner?: boolean;
     onProgress?: (fetched: number, total: number) => void;
   } = {}
 ): Promise<Map<string, Record<string, unknown>>> {
-  const { maxConcurrent = 3, showContent = true, showType = true, onProgress } = options;
+  const {
+    maxConcurrent = 3,
+    showContent = true,
+    showType = true,
+    showOwner = false,
+    onProgress,
+  } = options;
   
   const results = new Map<string, Record<string, unknown>>();
   const queue = [...circleIds];
@@ -474,15 +475,29 @@ export async function batchFetchCircleObjects(
       const circleId = queue.shift()!;
       
       const createPromise = async (): Promise<void> => {
-        try {
-          const obj = await client.getObject({
-            id: circleId,
-            options: { showContent, showType }
-          });
-          results.set(circleId, obj as Record<string, unknown>);
-        } catch (error) {
-          console.warn(`Failed to fetch circle ${circleId}:`, error);
-          results.set(circleId, {});
+        let retryCount = 0;
+        const maxRetries = 2;
+
+        while (retryCount < maxRetries) {
+          try {
+            const obj = await client.getObject({
+              id: circleId,
+              options: { showContent, showType, showOwner }
+            });
+            results.set(circleId, obj as Record<string, unknown>);
+            return;
+          } catch (error) {
+            retryCount++;
+            const errorMessage = error instanceof Error ? error.message : String(error);
+
+            if (retryCount >= maxRetries) {
+              console.warn(`Failed to fetch circle ${circleId} after ${maxRetries} attempts: ${errorMessage}`);
+              results.set(circleId, {});
+              return;
+            }
+
+            await new Promise(resolve => setTimeout(resolve, retryCount * 500));
+          }
         }
       };
       
@@ -781,4 +796,3 @@ export async function discoverUserPackagesInParallel(
   await Promise.all(queries);
   return Array.from(discoveredPackages);
 } 
-

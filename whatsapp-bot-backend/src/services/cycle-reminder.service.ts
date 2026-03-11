@@ -10,8 +10,6 @@ import { whatsappSender } from './whatsapp-sender.service';
 // 1. Members who haven't contributed before payout date
 // 2. Admins to trigger payouts if they haven't after payout date
 
-const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID || '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc';
-
 interface LinkedCircle {
   circleId: string;
   phoneNumber: string;
@@ -50,7 +48,7 @@ export class CycleReminderService {
 
   constructor() {
     const config = getConfig();
-    const rpcUrl = config.sui.testnetRpcUrl;
+    const rpcUrl = config.sui.currentRpcUrl;
     this.suiClient = new SuiClient({ url: rpcUrl });
 
     appLogger.info('CycleReminderService initialized', {
@@ -121,8 +119,7 @@ export class CycleReminderService {
    */
   private async getAllLinkedCircles(): Promise<LinkedCircle[]> {
     try {
-      const registryId = process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID || 
-        '0x9e203f7dd2d56b058d82fb4f1fafe135133245fef347d8de4967e2c1c78b9459';
+      const registryId = getConfig().sui.currentWhatsAppRegistryId;
 
       const registryObject = await this.suiClient.getObject({
         id: registryId,
@@ -691,7 +688,7 @@ export class CycleReminderService {
 
     try {
       // Derive package ID from circle object type
-      let packageId = PACKAGE_ID;
+      let packageId = getConfig().sui.currentPackageId;
       try {
         const circleObj = await this.suiClient.getObject({ id: circleId, options: { showType: true } });
         if (circleObj.data?.type) {
@@ -772,7 +769,7 @@ export class CycleReminderService {
   private async checkIfPayoutProcessed(circleId: string, cycle: number): Promise<boolean> {
     try {
       // Derive package ID from the circle object type
-      let packageId = PACKAGE_ID;
+      let packageId = getConfig().sui.currentPackageId;
       try {
         const circleObj = await this.suiClient.getObject({ id: circleId, options: { showType: true } });
         if (circleObj.data?.type) {
@@ -889,4 +886,3 @@ export class CycleReminderService {
 
 // Export singleton instance
 export const cycleReminderService = new CycleReminderService();
-

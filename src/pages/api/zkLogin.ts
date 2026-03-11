@@ -3,10 +3,6 @@ import { SetupData, AccountData, OAuthProvider } from '@/services/zkLoginService
 import { ZkLoginError } from '@/services/zkLoginClient';
 import { SuiClient } from '@mysten/sui/client';
 import { PACKAGE_ID, getCirclePackageId } from '../../services/circle-service';
-import { 
-  USDC_COIN_TYPE,
-  SUI_COIN_TYPE
-} from '../../services/constants';
 import { AggregatorClient, Env } from '@cetusprotocol/aggregator-sdk';
 import BN from 'bn.js';
 import { Transaction } from '@mysten/sui/transactions';
@@ -18,10 +14,16 @@ import {
   getCurrentCoinTypes, 
   getCurrentCetusConfig,
   getCurrentTokens,
+  getCurrentEmberConfig,
   setCurrentNetwork,
   NetworkType,
   getCurrentPackageId
 } from '@/services/network-config';
+import {
+  emberErrorResponse,
+  buildDeploySuccessResponse,
+  buildRedemptionSuccessResponse
+} from '@/lib/ember-operation-response';
 
 // Add at the top with other imports
 interface RPCError extends Error {
@@ -34,6 +36,8 @@ const PROCESSING_COOLDOWN = 30000; // 30 seconds between processing attempts for
 
 // Minimum slippage for aggregator transactions
 const MIN_AGGREGATOR_SLIPPAGE = 30; // 0.3% minimum slippage to ensure transaction success
+const SUI_COIN_TYPE = '0x2::sui::SUI';
+const USDC_COIN_TYPE = getCurrentCoinTypes().USDC;
 
 // Network-aware helper functions
 function getNetworkAggregatorRouter(): string {
@@ -196,6 +200,7 @@ const PROCESSING_SESSIONS = new Map<string, { startTime: number, promise: Promis
 
 // Add aggregator SDK helper
 let aggregatorSDK: AggregatorClient | null = null;
+let aggregatorSDKNetwork: NetworkType | null = null;
 
 // Get network-aware USDC coin types
 function getAlternateUsdcCoinTypes(): string[] {
@@ -235,10 +240,13 @@ function getDirectPoolAddresses(): Record<string, string[]> {
 
 // Initialize Aggregator SDK with network awareness
 async function getAggregatorSDK(): Promise<AggregatorClient> {
-  if (aggregatorSDK) return aggregatorSDK;
+  const network = getCurrentNetwork();
+
+  if (aggregatorSDK && aggregatorSDKNetwork === network) {
+    return aggregatorSDK;
+  }
   
   try {
-    const network = getCurrentNetwork();
     const sdkOptions = {
       rpcUrl: getNetworkRpcUrl(),
       aggregatorPackageId: getNetworkAggregatorRouter(),
@@ -246,6 +254,7 @@ async function getAggregatorSDK(): Promise<AggregatorClient> {
     };
     
     aggregatorSDK = new AggregatorClient(sdkOptions);
+    aggregatorSDKNetwork = network;
     console.log(`Aggregator SDK initialized successfully for ${network}`);
     return aggregatorSDK;
   } catch (error) {
@@ -257,15 +266,14 @@ async function getAggregatorSDK(): Promise<AggregatorClient> {
 // Function to get the JSON RPC URL
 function getJsonRpcUrl(): string {
   const networkRpcUrl = getNetworkRpcUrl();
-  const rpcUrl = process.env.SUI_RPC_URL || networkRpcUrl;
+  const rpcUrl = networkRpcUrl;
   
   // Validate the URL format
   try {
     new URL(rpcUrl);
     return rpcUrl;
   } catch (error) {
-    console.error('Invalid SUI_RPC_URL:', rpcUrl, 'Error:', error);
-    // Fallback to network default if environment variable is malformed
+    console.error('Invalid network RPC URL:', rpcUrl, 'Error:', error);
     console.log('Using network fallback RPC URL:', networkRpcUrl);
     return networkRpcUrl;
   }
@@ -280,10 +288,72 @@ function createSuiClient(): SuiClient {
   } catch (error) {
     console.error('Error creating SuiClient:', error);
     if (error instanceof Error && error.message.includes('Failed to parse URL')) {
-      console.error('❌ Failed to parse URL from SuiClient creation. URL:', getJsonRpcUrl());
+      console.error('❌ Failed to parse network RPC URL for SuiClient creation. URL:', getJsonRpcUrl());
     }
     throw error;
   }
+}
+
+function normalizeSerializedTransactionBytes(input: unknown): Uint8Array {
+  const isByte = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 255;
+
+  if (input instanceof Uint8Array) {
+    return input;
+  }
+
+  if (input instanceof ArrayBuffer) {
+    return new Uint8Array(input);
+  }
+
+  if (ArrayBuffer.isView(input)) {
+    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+  }
+
+  if (Array.isArray(input)) {
+    if (!input.every(isByte)) {
+      throw new Error('Serialized transaction array must contain only byte values.');
+    }
+    return Uint8Array.from(input);
+  }
+
+  if (typeof input === 'string') {
+    const trimmed = input.trim();
+    if (!trimmed) {
+      throw new Error('Serialized transaction payload is empty.');
+    }
+
+    if (/^0x[0-9a-fA-F]+$/.test(trimmed)) {
+      return Uint8Array.from(Buffer.from(trimmed.slice(2), 'hex'));
+    }
+
+    if (/^[0-9a-fA-F]+$/.test(trimmed) && trimmed.length % 2 === 0) {
+      return Uint8Array.from(Buffer.from(trimmed, 'hex'));
+    }
+
+    return Uint8Array.from(Buffer.from(trimmed, 'base64'));
+  }
+
+  if (input && typeof input === 'object') {
+    const candidate = input as Record<string, unknown>;
+
+    if (candidate.type === 'Buffer' && Array.isArray(candidate.data)) {
+      if (!candidate.data.every(isByte)) {
+        throw new Error('Serialized Buffer payload must contain only byte values.');
+      }
+      return Uint8Array.from(candidate.data);
+    }
+
+    if (typeof candidate.length === 'number' && Number.isInteger(candidate.length) && candidate.length >= 0) {
+      const values = Array.from({ length: candidate.length }, (_, index) => candidate[String(index)]);
+      if (!values.every(isByte)) {
+        throw new Error('Serialized transaction object must contain only byte values.');
+      }
+      return Uint8Array.from(values);
+    }
+  }
+
+  throw new Error('Unsupported serialized transaction payload.');
 }
 
 // When using swapAndDepositCetus, replace accessing the private suiClient directly with the proper API
@@ -376,6 +446,335 @@ function formatMicroUnits(amount: bigint): string {
   return (Number(amount) / 1_000_000).toFixed(6);
 }
 
+type RoutingCurrency = 'USDC' | 'SUI';
+
+type CurrencyResolution = {
+  currency: RoutingCurrency;
+  source: 'query.currency' | 'body.currency' | 'body.useUSDC' | 'default';
+};
+
+type CoinBalanceEntry = {
+  coinObjectId: string;
+  balance: string;
+};
+
+function getQueryValue(param: string | string[] | undefined): string | undefined {
+  if (Array.isArray(param)) {
+    return param[0];
+  }
+  return typeof param === 'string' ? param : undefined;
+}
+
+function normalizeCurrency(raw: unknown): RoutingCurrency | null {
+  if (typeof raw !== 'string') {
+    return null;
+  }
+  const upper = raw.trim().toUpperCase();
+  if (upper === 'USDC') return 'USDC';
+  if (upper === 'SUI') return 'SUI';
+  return null;
+}
+
+function resolveRequestCurrency(req: NextApiRequest): CurrencyResolution {
+  const queryCurrency = normalizeCurrency(getQueryValue(req.query.currency));
+  if (queryCurrency) {
+    return { currency: queryCurrency, source: 'query.currency' };
+  }
+
+  const body = req.body as { currency?: unknown; useUSDC?: unknown } | undefined;
+  const bodyCurrency = normalizeCurrency(body?.currency);
+  if (bodyCurrency) {
+    return { currency: bodyCurrency, source: 'body.currency' };
+  }
+
+  if (typeof body?.useUSDC === 'boolean') {
+    return {
+      currency: body.useUSDC ? 'USDC' : 'SUI',
+      source: 'body.useUSDC',
+    };
+  }
+
+  return { currency: 'USDC', source: 'default' };
+}
+
+function logCurrencySelection(action: string, resolution: CurrencyResolution, context: Record<string, unknown>) {
+  console.log(
+    '[currency-selection]',
+    JSON.stringify({
+      timestamp: new Date().toISOString(),
+      action,
+      selectedCurrency: resolution.currency,
+      source: resolution.source,
+      ...context,
+    })
+  );
+}
+
+function parsePositiveNumber(raw: unknown): number {
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function usdCentsToMicroUsdc(usdCents: number): bigint {
+  // 1 cent == 10,000 microUSDC
+  return BigInt(Math.floor(usdCents)) * BigInt(10_000);
+}
+
+async function getCircleConfigFields(suiClient: SuiClient, circleId: string): Promise<Record<string, unknown> | null> {
+  const dynamicFields = await suiClient.getDynamicFields({ parentId: circleId });
+
+  const configField = dynamicFields.data.find((field) => {
+    const objectType = field.objectType ?? '';
+    const nameType =
+      field.name && typeof field.name === 'object' && 'type' in field.name
+        ? String((field.name as { type?: unknown }).type ?? '')
+        : '';
+
+    return objectType.includes('CircleConfig') || nameType.includes('CircleConfig');
+  });
+
+  if (!configField) {
+    return null;
+  }
+
+  const configObject = await suiClient.getObject({
+    id: configField.objectId,
+    options: { showContent: true },
+  });
+
+  if (!configObject.data?.content || !('fields' in configObject.data.content)) {
+    return null;
+  }
+
+  const rootFields = configObject.data.content.fields as Record<string, unknown>;
+  const valueField = rootFields.value;
+  if (valueField && typeof valueField === 'object' && 'fields' in valueField) {
+    return (valueField as { fields: Record<string, unknown> }).fields;
+  }
+
+  return rootFields;
+}
+
+function getConfigUsdCents(configFields: Record<string, unknown> | null, preferredKeys: string[]): number {
+  if (!configFields) return 0;
+
+  for (const key of preferredKeys) {
+    const value = parsePositiveNumber(configFields[key]);
+    if (value > 0) return value;
+  }
+
+  return 0;
+}
+
+async function getAllCoinsByType(
+  suiClient: SuiClient,
+  owner: string,
+  coinType: string
+): Promise<CoinBalanceEntry[]> {
+  const allCoins: CoinBalanceEntry[] = [];
+  let cursor: string | null = null;
+
+  do {
+    const page = await suiClient.getCoins({
+      owner,
+      coinType,
+      cursor,
+    });
+
+    allCoins.push(
+      ...page.data.map((coin) => ({
+        coinObjectId: coin.coinObjectId,
+        balance: coin.balance,
+      }))
+    );
+
+    cursor = page.hasNextPage ? page.nextCursor ?? null : null;
+  } while (cursor);
+
+  return allCoins;
+}
+
+type EmberSourceAsset = 'SUI' | 'USDC' | 'USDT' | 'SUI_USDE';
+
+interface EmberDeployPayload {
+  circleId: string;
+  walletId: string;
+  sourceAsset: EmberSourceAsset;
+  sourceAmount: string;
+  targetCoinType: 'SUI_USDE';
+  slippageBps?: number;
+  emberVaultId?: string;
+  emberVaultPackageId?: string;
+  emberProtocolConfigId?: string;
+}
+
+interface EmberRedeemPayload {
+  circleId: string;
+  walletId: string;
+  receiptAmount: string;
+  receiptCoinType?: string;
+  emberVaultId?: string;
+  emberVaultPackageId?: string;
+  emberProtocolConfigId?: string;
+  receiver?: string;
+}
+
+function normalizeAddress(address: string): string {
+  const trimmed = address.trim().toLowerCase();
+  return trimmed.startsWith('0x') ? trimmed : `0x${trimmed}`;
+}
+
+function isValidObjectId(value: string): boolean {
+  if (!value || typeof value !== 'string') return false;
+  const normalized = value.startsWith('0x') ? value.slice(2) : value;
+  return normalized.length > 0 && /^[0-9a-fA-F]+$/.test(normalized);
+}
+
+function parseU64Amount(value: unknown, fieldName: string): bigint {
+  if (typeof value === 'bigint') {
+    if (value < 0n) throw new Error(`${fieldName} must be non-negative`);
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+      throw new Error(`${fieldName} must be a non-negative integer`);
+    }
+    return BigInt(value);
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!/^\d+$/.test(trimmed)) {
+      throw new Error(`${fieldName} must be an integer string`);
+    }
+    return BigInt(trimmed);
+  }
+
+  throw new Error(`${fieldName} is required`);
+}
+
+function extractMoveFields(content: unknown): Record<string, unknown> | null {
+  if (!content || typeof content !== 'object' || !('fields' in content)) {
+    return null;
+  }
+
+  const fields = (content as { fields: Record<string, unknown> }).fields;
+  const value = fields.value;
+  if (value && typeof value === 'object' && 'fields' in value) {
+    return (value as { fields: Record<string, unknown> }).fields;
+  }
+
+  return fields;
+}
+
+function extractIdLike(value: unknown): string | null {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') {
+    const maybeId = value as { id?: unknown };
+    if (typeof maybeId.id === 'string') return maybeId.id;
+    if (maybeId.id && typeof maybeId.id === 'object' && 'id' in maybeId.id) {
+      const nestedId = (maybeId.id as { id?: unknown }).id;
+      if (typeof nestedId === 'string') return nestedId;
+    }
+  }
+  return null;
+}
+
+async function getCircleAdminAddress(suiClient: SuiClient, circleId: string): Promise<string | null> {
+  const circle = await suiClient.getObject({
+    id: circleId,
+    options: { showContent: true }
+  });
+
+  if (!circle.data?.content) return null;
+  const fields = extractMoveFields(circle.data.content);
+  if (!fields) return null;
+
+  const admin = fields.admin;
+  if (typeof admin === 'string') {
+    return normalizeAddress(admin);
+  }
+  return null;
+}
+
+async function getWalletCircleAndAdmin(
+  suiClient: SuiClient,
+  walletId: string
+): Promise<{ circleId: string | null; admin: string | null }> {
+  const wallet = await suiClient.getObject({
+    id: walletId,
+    options: { showContent: true }
+  });
+
+  if (!wallet.data?.content) {
+    return { circleId: null, admin: null };
+  }
+
+  const fields = extractMoveFields(wallet.data.content);
+  if (!fields) {
+    return { circleId: null, admin: null };
+  }
+
+  const circleId = extractIdLike(fields.circle_id);
+  const admin = typeof fields.admin === 'string' ? normalizeAddress(fields.admin) : null;
+  return {
+    circleId: circleId ? normalizeAddress(circleId) : null,
+    admin
+  };
+}
+
+async function validateAdminWalletContext(
+  suiClient: SuiClient,
+  circleId: string,
+  walletId: string,
+  sender: string
+): Promise<{ valid: boolean; status: number; error?: string }> {
+  const normalizedSender = normalizeAddress(sender);
+  const normalizedCircleId = normalizeAddress(circleId);
+
+  const circleAdmin = await getCircleAdminAddress(suiClient, circleId);
+  if (!circleAdmin) {
+    return { valid: false, status: 400, error: 'Unable to resolve circle admin from on-chain object.' };
+  }
+  if (circleAdmin !== normalizedSender) {
+    return { valid: false, status: 403, error: 'Only the circle admin can perform this Ember action.' };
+  }
+
+  const walletContext = await getWalletCircleAndAdmin(suiClient, walletId);
+  if (!walletContext.circleId) {
+    return { valid: false, status: 400, error: 'Unable to resolve custody wallet context from on-chain object.' };
+  }
+  if (walletContext.circleId !== normalizedCircleId) {
+    return { valid: false, status: 400, error: 'Custody wallet does not belong to the provided circle.' };
+  }
+  if (walletContext.admin && walletContext.admin !== normalizedSender) {
+    return { valid: false, status: 403, error: 'Only the custody wallet admin can perform this Ember action.' };
+  }
+
+  return { valid: true, status: 200 };
+}
+
+function mapEmberAbortMessage(message: string): { status: number; error: string } | null {
+  if (message.includes('2004')) {
+    return { status: 400, error: 'Invalid Ember amount. Amount must be greater than zero.' };
+  }
+  if (message.includes('2006')) {
+    return { status: 400, error: 'Ember vault is paused.' };
+  }
+  if (message.includes('2008')) {
+    return { status: 403, error: 'Address is blacklisted in the Ember vault.' };
+  }
+  if (message.includes('2009')) {
+    return { status: 400, error: 'Requested redemption shares are below Ember minimum withdrawal shares.' };
+  }
+  if (message.includes('2016')) {
+    return { status: 400, error: 'Ember vault max TVL would be exceeded by this deposit.' };
+  }
+  return null;
+}
+
 const CLOCK_OBJECT_ID = "0x6"; // Sui system clock object ID
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -403,14 +802,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Generate new session ID and clear any existing sessions
         sessionId = crypto.randomUUID();
         setSessionCookie(res, sessionId);
+        const requestedNetwork: NetworkType =
+          network === 'testnet' || network === 'mainnet' ? network : getCurrentNetwork();
 
-        const { loginUrl, setupData: initialSetup } = await instance.beginLogin(provider as OAuthProvider);
+        const { loginUrl, setupData: initialSetup } = await instance.beginLogin(
+          provider as OAuthProvider,
+          requestedNetwork
+        );
         
         // Log the setup data being stored
         console.log('Storing initial setup:', {
           sessionId,
           provider: initialSetup.provider,
           maxEpoch: initialSetup.maxEpoch,
+          network: initialSetup.network,
           ephemeralPublicKey: instance.getPublicKeyFromPrivate(initialSetup.ephemeralPrivateKey)
         });
         
@@ -449,10 +854,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Get and validate setup data
           const savedSetup = validateSession(sessionId, 'handleCallback');
           
-          // Add network from request body if provided
-          if (network) {
-            (savedSetup as any).network = network;
-            console.log('📱 handleCallback: Network added to setupData:', network);
+          // Preserve the auth session network from beginLogin. Only use the callback
+          // request network as a fallback if the session did not already store one.
+          if (!savedSetup.network && (network === 'testnet' || network === 'mainnet')) {
+            const savedSetupWithNetwork = savedSetup as SetupData & {
+              account?: AccountData;
+              network?: NetworkType;
+            };
+            savedSetupWithNetwork.network = network;
+            console.log('📱 handleCallback: Backfilled missing session network from callback request:', network);
+          } else {
+            console.log('📱 handleCallback: Using existing session network:', savedSetup.network || 'not set');
           }
           
           // If we already have account data, return it immediately
@@ -1623,7 +2035,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   // Reinitialize the EnokiZkLoginService with the new network configuration
                   instance.initializeWithNetwork();
                 }
-              
+                
                 // Send transaction using zkLogin service with the extracted package ID
                 txResult = await instance.sendTransaction(
                   account,
@@ -1764,7 +2176,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res.status(400).json({ error: 'Account data is required' });
         }
 
-      // Note: Despite the name, this handler now uses Cetus instead of DeepBook for swaps on testnet
+      // Legacy compatibility route for historical swap automation experiments.
+      // This is not part of the active eSui-dollar Ember vault migration flow.
       case 'swapAndDepositCetus':
         if (!account) {
           return res.status(400).json({ error: 'Account data is required' });
@@ -1776,10 +2189,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         try {
           // Add circleId to the required parameters
-          const { walletId, suiAmount, slippage = 100, circleId } = req.body; 
+          const { walletId, suiAmount, slippage = 100, circleId, network: requestedNetwork } = req.body; 
           if (!walletId || !suiAmount || !circleId) {
             return res.status(400).json({ error: 'Wallet ID, Circle ID, and SUI amount are required' });
           }
+
+          const originalNetwork = getCurrentNetwork();
+          const shouldSwitchNetwork =
+            (requestedNetwork === 'testnet' || requestedNetwork === 'mainnet') &&
+            requestedNetwork !== originalNetwork;
+
+          if (shouldSwitchNetwork) {
+            console.log(
+              `Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for legacy Cetus swap`
+            );
+            setCurrentNetwork(requestedNetwork as NetworkType);
+            aggregatorSDK = null;
+            aggregatorSDKNetwork = null;
+            instance.initializeWithNetwork();
+          }
+
+          try {
+            const currentPackageId = getCurrentPackageId();
+            const currentCoinTypes = getCurrentCoinTypes();
+            const currentUsdcCoinType = currentCoinTypes.USDC;
 
           // Validate amount and convert from SUI to MIST (smallest unit, 1 SUI = 10^9 MIST)
           // Handle both string/number inputs and decimal values
@@ -1860,7 +2293,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             // Fallback to checking MemberActivated events if direct fetch fails
             if (!userDepositPaid) {
               const memberActivatedEvents = await suiClient.queryEvents({
-                query: { MoveEventType: `${PACKAGE_ID}::njangi_members::MemberActivated` },
+                query: { MoveEventType: `${currentPackageId}::njangi_members::MemberActivated` },
                 limit: 50
               });
               
@@ -1877,7 +2310,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             // Additional check for CustodyDeposited events with operation_type 3 (security deposit)
             if (!userDepositPaid) {
               const custodyEvents = await suiClient.queryEvents({
-                query: { MoveEventType: `${PACKAGE_ID}::njangi_custody::CustodyDeposited` },
+                query: { MoveEventType: `${currentPackageId}::njangi_custody::CustodyDeposited` },
                 limit: 50
               });
               
@@ -1927,7 +2360,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             // First try with the primary USDC type
             const initialRouteParams = {
               from: SUI_COIN_TYPE,
-              target: USDC_COIN_TYPE,
+              target: currentUsdcCoinType,
               amount: new BN(suiAmountMIST.toString()),
               byAmountIn: true,
             };
@@ -1937,10 +2370,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               
               // Check if we got valid routes
               if (routerData && routerData.routes && routerData.routes.length > 0) {
-                successfulCoinType = USDC_COIN_TYPE;
-                console.log(`Found routes using primary USDC coin type: ${USDC_COIN_TYPE}`);
+                successfulCoinType = currentUsdcCoinType;
+                console.log(`Found routes using primary USDC coin type: ${currentUsdcCoinType}`);
               } else {
-                console.log(`No routes found with primary USDC coin type: ${USDC_COIN_TYPE}`);
+                console.log(`No routes found with primary USDC coin type: ${currentUsdcCoinType}`);
               }
             } catch (primaryError) {
               console.error(`Error finding routes with primary USDC coin type: ${(primaryError as Error).message || 'unknown error'}`);
@@ -1952,7 +2385,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               
               for (const altCoinType of getAlternateUsdcCoinTypes()) {
                 // Skip the one we already tried
-                if (altCoinType === USDC_COIN_TYPE) continue;
+                if (altCoinType === currentUsdcCoinType) continue;
                 
                 try {
                   console.log(`Trying alternate USDC type: ${altCoinType}`);
@@ -1999,7 +2432,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 
                 // Try direct pool swap instead
                 try {
-                  const targetCoinType = USDC_COIN_TYPE;
+                  const targetCoinType = currentUsdcCoinType;
                   
                   // Try each valid pool in the direct pool list
                   let tried = 0;
@@ -2125,7 +2558,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             // If we got here, we have a valid route, so proceed with normal flow
             // Use the successful coin type in the deposit call
-            const targetCoinType = successfulCoinType || USDC_COIN_TYPE;
+            const targetCoinType = successfulCoinType || currentUsdcCoinType;
             
             console.log(`Found route with ${routerData.routes.length} paths and amountOut: ${routerData.amountOut.toString()}`);
             
@@ -2171,7 +2604,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   // User already paid security deposit, use contribute_stablecoin
                   console.log(`User has already paid security deposit, using contribute_stablecoin function`);
                   txb.moveCall({
-                    target: `${PACKAGE_ID}::njangi_circles::contribute_stablecoin`,
+                    target: `${currentPackageId}::njangi_circles::contribute_stablecoin`,
                     arguments: [
                       txb.object(circleId),
                       txb.object(walletId),
@@ -2184,7 +2617,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   // User has not paid security deposit, use member_deposit_security_deposit
                   console.log(`User has NOT paid security deposit, using member_deposit_security_deposit function`);
                   txb.moveCall({
-                    target: `${PACKAGE_ID}::njangi_circles::member_deposit_security_deposit`,
+                    target: `${currentPackageId}::njangi_circles::member_deposit_security_deposit`,
                     arguments: [
                       txb.object(circleId),
                       txb.object(walletId),
@@ -2253,6 +2686,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               requireRelogin: false
             });
           }
+          } finally {
+            if (shouldSwitchNetwork) {
+              console.log(`Restoring server network back to ${originalNetwork}`);
+              setCurrentNetwork(originalNetwork as NetworkType);
+              aggregatorSDK = null;
+              aggregatorSDKNetwork = null;
+              instance.initializeWithNetwork();
+            }
+          }
         } catch (err) {
           console.error('Swap and deposit transaction error:', err);
           if (err instanceof Error && 
@@ -2270,7 +2712,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
       case 'swapAndDepositDeepBook':
-        // Redirect to the new implementation
+        // Legacy compatibility alias only.
+        // This does not represent the Ember eSui-dollar migration flow.
         req.body.action = 'swapAndDepositCetus';
         return handler(req, res);
 
@@ -2414,23 +2857,771 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         break;
 
+      case 'deployToEmberVault':
+        if (!account) {
+          return res.status(400).json(
+            emberErrorResponse('deployToEmberVault', 'validation', 'Account data is required', 'EACCOUNT_REQUIRED')
+          );
+        }
+
+        if (!req.body.payload) {
+          return res.status(400).json(
+            emberErrorResponse('deployToEmberVault', 'validation', 'Missing required parameter: payload', 'EPAYLOAD_REQUIRED')
+          );
+        }
+
+        try {
+          const payload = req.body.payload as Partial<EmberDeployPayload>;
+          const {
+            circleId: deployCircleId,
+            walletId: deployWalletId,
+            sourceAsset,
+            sourceAmount,
+            targetCoinType,
+            emberVaultId: deployVaultIdFromPayload,
+            emberVaultPackageId: deployVaultPackageFromPayload,
+            emberProtocolConfigId: deployProtocolConfigFromPayload
+          } = payload;
+
+          if (!deployCircleId || !deployWalletId || !sourceAsset || !sourceAmount || !targetCoinType) {
+            return res.status(400).json(
+              emberErrorResponse(
+                'deployToEmberVault',
+                'validation',
+                'Missing required payload fields: circleId, walletId, sourceAsset, sourceAmount, targetCoinType',
+                'EINVALID_PAYLOAD'
+              )
+            );
+          }
+
+          if (!isValidObjectId(deployCircleId) || !isValidObjectId(deployWalletId)) {
+            return res.status(400).json(
+              emberErrorResponse(
+                'deployToEmberVault',
+                'validation',
+                'circleId and walletId must be valid object IDs.',
+                'EINVALID_OBJECT_ID'
+              )
+            );
+          }
+
+          if (targetCoinType !== 'SUI_USDE') {
+            return res.status(400).json(
+              emberErrorResponse(
+                'deployToEmberVault',
+                'validation',
+                'Only SUI_USDE targetCoinType is supported for Ember deploy.',
+                'EUNSUPPORTED_TARGET'
+              )
+            );
+          }
+
+          if (!['SUI', 'USDC', 'USDT', 'SUI_USDE'].includes(sourceAsset)) {
+            return res.status(400).json(
+              emberErrorResponse(
+                'deployToEmberVault',
+                'validation',
+                'Unsupported sourceAsset. Supported values: SUI, USDC, USDT, SUI_USDE.',
+                'EUNSUPPORTED_SOURCE'
+              )
+            );
+          }
+
+          const deployAmount = parseU64Amount(sourceAmount, 'sourceAmount');
+          if (deployAmount <= 0n) {
+            return res.status(400).json(
+              emberErrorResponse('deployToEmberVault', 'validation', 'sourceAmount must be greater than zero.', 'EINVALID_AMOUNT')
+            );
+          }
+
+          const maxU64 = (1n << 64n) - 1n;
+          if (deployAmount > maxU64) {
+            return res.status(400).json(
+              emberErrorResponse('deployToEmberVault', 'validation', 'sourceAmount exceeds u64 max value.', 'EAMOUNT_OVERFLOW')
+            );
+          }
+
+          const session = validateSession(sessionId, 'sendTransaction');
+          if (!session.account) {
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              ...emberErrorResponse(
+                'deployToEmberVault',
+                'auth',
+                'Invalid session: No account data found. Please authenticate first.',
+                'EINVALID_SESSION'
+              ),
+              requireRelogin: true,
+            });
+          }
+
+          if (
+            session.account.userAddr !== account.userAddr ||
+            session.ephemeralPrivateKey !== account.ephemeralPrivateKey
+          ) {
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ 
+              ...emberErrorResponse(
+                'deployToEmberVault',
+                'auth',
+                'Session mismatch: Please refresh your authentication',
+                'ESESSION_MISMATCH'
+              ),
+              requireRelogin: true,
+            });
+          }
+
+          const requestedNetwork = req.body.network;
+          const originalNetwork = getCurrentNetwork();
+          const shouldSwitchNetwork =
+            requestedNetwork &&
+            (requestedNetwork === 'mainnet' || requestedNetwork === 'testnet') &&
+            requestedNetwork !== originalNetwork;
+
+          try {
+            if (shouldSwitchNetwork) {
+              console.log(
+                `Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for Ember deploy`
+              );
+              setCurrentNetwork(requestedNetwork as NetworkType);
+              instance.initializeWithNetwork();
+            }
+
+            if (getCurrentNetwork() !== 'mainnet') {
+              return res.status(400).json(
+                emberErrorResponse(
+                  'deployToEmberVault',
+                  'network',
+                  'Ember deploy is currently mainnet-only. Switch network to mainnet and retry.',
+                  'EMAINNET_ONLY'
+                )
+              );
+            }
+
+            const emberConfig = getCurrentEmberConfig();
+            const coinTypes = getCurrentCoinTypes();
+            const tokens = getCurrentTokens();
+            const packageIdToUse = getCurrentPackageId();
+            const suiUsdeCoinType = coinTypes.SUI_USDE || tokens.SUI_USDE || '';
+            const usdtCoinType = tokens.USDT || '';
+            const emberVaultId = deployVaultIdFromPayload || emberConfig.suiUsdeVaultId || '';
+            const emberVaultPackageId = deployVaultPackageFromPayload || emberConfig.vaultPackage || '';
+            const emberProtocolConfigId = deployProtocolConfigFromPayload || emberConfig.protocolConfigId || '';
+            const emberReceiptCoinType = emberConfig.receiptCoinType || '';
+            const sourceCoinTypeByAsset: Record<EmberSourceAsset, string> = {
+              SUI: SUI_COIN_TYPE,
+              USDC: coinTypes.USDC,
+              USDT: usdtCoinType,
+              SUI_USDE: suiUsdeCoinType
+            };
+            const sourceCoinType = sourceCoinTypeByAsset[sourceAsset];
+
+            if (!suiUsdeCoinType || !emberReceiptCoinType || !emberVaultId || !emberVaultPackageId || !emberProtocolConfigId) {
+              return res.status(400).json(
+                emberErrorResponse(
+                  'deployToEmberVault',
+                  'config',
+                  'Missing Ember mainnet configuration. Expected SUI_USDE coin type, receipt coin type, vault ID, vault package, and protocol config ID.',
+                  'ECONFIG_MISSING'
+                )
+              );
+            }
+            if (!sourceCoinType) {
+              return res.status(400).json(
+                emberErrorResponse(
+                  'deployToEmberVault',
+                  'config',
+                  `Source asset ${sourceAsset} is not configured on the active network.`,
+                  'ESOURCE_NOT_CONFIGURED'
+                )
+              );
+            }
+
+            if (![emberVaultId, emberVaultPackageId, emberProtocolConfigId].every(isValidObjectId)) {
+              return res.status(400).json(
+                emberErrorResponse(
+                  'deployToEmberVault',
+                  'validation',
+                  'Invalid Ember object IDs. vault/package/protocolConfig must be valid object IDs.',
+                  'EINVALID_EMBER_IDS'
+                )
+              );
+            }
+
+            const effectiveSlippage = Math.max(
+              Number(payload.slippageBps ?? MIN_AGGREGATOR_SLIPPAGE),
+              MIN_AGGREGATOR_SLIPPAGE
+            );
+            let aggregator: AggregatorClient | null = null;
+            let routerData: Awaited<ReturnType<AggregatorClient['findRouters']>> | null = null;
+
+            if (sourceAsset !== 'SUI_USDE') {
+              aggregator = await getAggregatorSDK();
+              routerData = await aggregator.findRouters({
+                from: sourceCoinType,
+                target: suiUsdeCoinType,
+                amount: new BN(deployAmount.toString()),
+                byAmountIn: true,
+              });
+
+              if (
+                !routerData ||
+                !routerData.routes ||
+                routerData.routes.length === 0 ||
+                routerData.insufficientLiquidity
+              ) {
+                return res.status(400).json(
+                  emberErrorResponse(
+                    'deployToEmberVault',
+                    'route',
+                    `No valid swap route from ${sourceAsset} to SUI_USDE for the requested amount.`,
+                    'ENO_SWAP_ROUTE',
+                    { sourceAsset, targetCoinType: 'SUI_USDE' }
+                  )
+                );
+              }
+            }
+
+            const suiClient = createSuiClient();
+            const contextValidation = await validateAdminWalletContext(
+              suiClient,
+              deployCircleId,
+              deployWalletId,
+              session.account.userAddr
+            );
+            if (!contextValidation.valid) {
+              return res.status(contextValidation.status).json(
+                emberErrorResponse(
+                  'deployToEmberVault',
+                  'authorization',
+                  contextValidation.error || 'Invalid admin wallet context.',
+                  contextValidation.status === 403 ? 'EADMIN_REQUIRED' : 'EINVALID_CONTEXT'
+                )
+              );
+            }
+
+            const txResult = await instance.sendTransaction(
+              session.account,
+              async (txb: Transaction) => {
+                txb.setSender(session.account!.userAddr);
+
+                const withdrawnSourceCoin =
+                  sourceAsset === 'SUI'
+                    ? txb.moveCall({
+                        target: `${packageIdToUse}::njangi_custody::withdraw_from_dynamic_fields`,
+                        arguments: [txb.object(deployWalletId), txb.pure.u64(deployAmount)]
+                      })
+                    : txb.moveCall({
+                        target: `${packageIdToUse}::njangi_custody::withdraw_stablecoin`,
+                        typeArguments: [sourceCoinType],
+                        arguments: [
+                          txb.object(deployWalletId),
+                          txb.pure.u64(deployAmount),
+                          txb.pure.address(session.account!.userAddr),
+                          txb.object(CLOCK_OBJECT_ID)
+                        ]
+                      });
+
+                const swappedSuiUsdeCoin =
+                  sourceAsset === 'SUI_USDE'
+                    ? withdrawnSourceCoin
+                    : await (aggregator as AggregatorClient).routerSwap({
+                        routers: routerData as NonNullable<typeof routerData>,
+                        inputCoin: withdrawnSourceCoin,
+                        slippage: effectiveSlippage,
+                        txb
+                      });
+
+                const suiUsdeBalance = txb.moveCall({
+                  target: '0x2::coin::into_balance',
+                  typeArguments: [suiUsdeCoinType],
+                  arguments: [swappedSuiUsdeCoin]
+                });
+
+                const emberReceiptCoin = txb.moveCall({
+                  target: `${emberVaultPackageId}::vault::deposit_asset`,
+                  typeArguments: [suiUsdeCoinType, emberReceiptCoinType],
+                  arguments: [txb.object(emberVaultId), txb.object(emberProtocolConfigId), suiUsdeBalance]
+                });
+
+                txb.moveCall({
+                  target: `${packageIdToUse}::njangi_custody::admin_redeposit_allowlisted_ember_asset`,
+                  typeArguments: [emberReceiptCoinType],
+                  arguments: [txb.object(deployWalletId), emberReceiptCoin, txb.object(CLOCK_OBJECT_ID)]
+                });
+              },
+              { gasBudget: 250000000 }
+            );
+
+            return res.status(200).json(
+              buildDeploySuccessResponse({
+                digest: txResult.digest,
+                status: txResult.status,
+                gasUsed: txResult.gasUsed,
+                circleId: deployCircleId,
+                walletId: deployWalletId,
+                network: getCurrentNetwork(),
+                sourceAsset,
+                sourceCoinType,
+                targetCoinType,
+                sourceAmount: deployAmount.toString(),
+                swapExecuted: sourceAsset !== 'SUI_USDE',
+                estimatedSuiUsdeOut:
+                  routerData && routerData.amountOut ? routerData.amountOut.toString() : deployAmount.toString(),
+                slippageBps: sourceAsset !== 'SUI_USDE' ? effectiveSlippage : undefined,
+                vaultId: emberVaultId,
+                vaultPackageId: emberVaultPackageId,
+                protocolConfigId: emberProtocolConfigId,
+                receiptCoinType: emberReceiptCoinType
+              })
+            );
+          } finally {
+            if (shouldSwitchNetwork) {
+              console.log(`Restoring server network back to ${originalNetwork}`);
+              setCurrentNetwork(originalNetwork as NetworkType);
+              instance.initializeWithNetwork();
+            }
+          }
+        } catch (error) {
+          console.error('Error deploying to Ember vault:', error);
+
+          if (
+            error instanceof Error &&
+            (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired') ||
+              error.message.includes('re-authenticate'))
+          ) {
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({
+              ...emberErrorResponse(
+                'deployToEmberVault',
+                'auth',
+                'Your session has expired. Please login again.',
+                'ESESSION_EXPIRED'
+              ),
+              requireRelogin: true,
+            });
+          }
+
+          if (error instanceof Error) {
+            const emberMappedError = mapEmberAbortMessage(error.message);
+            if (emberMappedError) {
+              return res.status(emberMappedError.status).json(
+                emberErrorResponse(
+                  'deployToEmberVault',
+                  'transaction',
+                  emberMappedError.error,
+                  'EEMBER_MOVE_ABORT'
+                )
+              );
+            }
+
+            if (error.message.includes('ENotWalletOwner') || error.message.includes('ENotAdmin')) {
+              return res.status(403).json(
+                emberErrorResponse(
+                  'deployToEmberVault',
+                  'authorization',
+                  'Only the custody wallet admin can deploy to Ember.',
+                  'EADMIN_REQUIRED'
+                )
+              );
+            }
+            if (error.message.includes('EUnsupportedToken')) {
+              return res.status(400).json(
+                emberErrorResponse(
+                  'deployToEmberVault',
+                  'validation',
+                  'Unsupported token for Ember deposit path.',
+                  'EUNSUPPORTED_TOKEN'
+                )
+              );
+            }
+            if (error.message.includes('EInsufficientBalance')) {
+              return res.status(400).json(
+                emberErrorResponse(
+                  'deployToEmberVault',
+                  'transaction',
+                  'Insufficient custody balance for Ember deploy amount.',
+                  'EINSUFFICIENT_BALANCE'
+                )
+              );
+            }
+          }
+
+          return res.status(500).json({
+            ...emberErrorResponse(
+              'deployToEmberVault',
+              'transaction',
+              error instanceof Error ? error.message : 'Failed to deploy to Ember vault',
+              'EDEPLOY_FAILED'
+            ),
+            requireRelogin: false
+          });
+        }
+                break;
+
+      case 'requestEmberRedemption':
+        if (!account) {
+          return res.status(400).json(
+            emberErrorResponse('requestEmberRedemption', 'validation', 'Account data is required', 'EACCOUNT_REQUIRED')
+          );
+        }
+
+        if (!req.body.payload) {
+          return res.status(400).json(
+            emberErrorResponse('requestEmberRedemption', 'validation', 'Missing required parameter: payload', 'EPAYLOAD_REQUIRED')
+          );
+        }
+
+        try {
+          const payload = req.body.payload as Partial<EmberRedeemPayload>;
+          const {
+            circleId: redeemCircleId,
+            walletId: redeemWalletId,
+            receiptAmount,
+            receiptCoinType: receiptCoinTypeFromPayload,
+            emberVaultId: redeemVaultIdFromPayload,
+            emberVaultPackageId: redeemVaultPackageFromPayload,
+            emberProtocolConfigId: redeemProtocolConfigFromPayload,
+            receiver
+          } = payload;
+
+          if (!redeemCircleId || !redeemWalletId || !receiptAmount) {
+            return res.status(400).json(
+              emberErrorResponse(
+                'requestEmberRedemption',
+                'validation',
+                'Missing required payload fields: circleId, walletId, receiptAmount',
+                'EINVALID_PAYLOAD'
+              )
+            );
+          }
+
+          if (!isValidObjectId(redeemCircleId) || !isValidObjectId(redeemWalletId)) {
+            return res.status(400).json(
+              emberErrorResponse(
+                'requestEmberRedemption',
+                'validation',
+                'circleId and walletId must be valid object IDs.',
+                'EINVALID_OBJECT_ID'
+              )
+            );
+          }
+
+          const requestedReceiptAmount = parseU64Amount(receiptAmount, 'receiptAmount');
+          if (requestedReceiptAmount <= 0n) {
+            return res.status(400).json(
+              emberErrorResponse(
+                'requestEmberRedemption',
+                'validation',
+                'receiptAmount must be greater than zero.',
+                'EINVALID_AMOUNT'
+              )
+            );
+          }
+
+          const maxU64 = (1n << 64n) - 1n;
+          if (requestedReceiptAmount > maxU64) {
+            return res.status(400).json(
+              emberErrorResponse(
+                'requestEmberRedemption',
+                'validation',
+                'receiptAmount exceeds u64 max value.',
+                'EAMOUNT_OVERFLOW'
+              )
+            );
+          }
+
+          const session = validateSession(sessionId, 'sendTransaction');
+          if (!session.account) {
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({
+              ...emberErrorResponse(
+                'requestEmberRedemption',
+                'auth',
+                'Invalid session: No account data found. Please authenticate first.',
+                'EINVALID_SESSION'
+              ),
+              requireRelogin: true,
+            });
+          }
+
+          if (
+            session.account.userAddr !== account.userAddr ||
+            session.ephemeralPrivateKey !== account.ephemeralPrivateKey
+          ) {
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({
+              ...emberErrorResponse(
+                'requestEmberRedemption',
+                'auth',
+                'Session mismatch: Please refresh your authentication',
+                'ESESSION_MISMATCH'
+              ),
+              requireRelogin: true,
+            });
+          }
+
+          const requestedNetwork = req.body.network;
+          const originalNetwork = getCurrentNetwork();
+          const shouldSwitchNetwork =
+            requestedNetwork &&
+            (requestedNetwork === 'mainnet' || requestedNetwork === 'testnet') &&
+            requestedNetwork !== originalNetwork;
+
+          try {
+            if (shouldSwitchNetwork) {
+              console.log(
+                `Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for Ember redemption request`
+              );
+              setCurrentNetwork(requestedNetwork as NetworkType);
+              instance.initializeWithNetwork();
+            }
+
+            if (getCurrentNetwork() !== 'mainnet') {
+              return res.status(400).json(
+                emberErrorResponse(
+                  'requestEmberRedemption',
+                  'network',
+                  'Ember redemption request is currently mainnet-only. Switch network to mainnet and retry.',
+                  'EMAINNET_ONLY'
+                )
+              );
+            }
+
+            const emberConfig = getCurrentEmberConfig();
+            const coinTypes = getCurrentCoinTypes();
+            const tokens = getCurrentTokens();
+            const packageIdToUse = getCurrentPackageId();
+            const suiUsdeCoinType = coinTypes.SUI_USDE || tokens.SUI_USDE || '';
+            const emberVaultId = redeemVaultIdFromPayload || emberConfig.suiUsdeVaultId || '';
+            const emberVaultPackageId = redeemVaultPackageFromPayload || emberConfig.vaultPackage || '';
+            const emberProtocolConfigId = redeemProtocolConfigFromPayload || emberConfig.protocolConfigId || '';
+            const emberReceiptCoinType = receiptCoinTypeFromPayload || emberConfig.receiptCoinType || '';
+            const receiverAddress = receiver ? normalizeAddress(receiver) : normalizeAddress(session.account.userAddr);
+
+            if (
+              !suiUsdeCoinType ||
+              !emberReceiptCoinType ||
+              !emberVaultId ||
+              !emberVaultPackageId ||
+              !emberProtocolConfigId
+            ) {
+              return res.status(400).json(
+                emberErrorResponse(
+                  'requestEmberRedemption',
+                  'config',
+                  'Missing Ember mainnet configuration. Expected SUI_USDE coin type, receipt coin type, vault ID, vault package, and protocol config ID.',
+                  'ECONFIG_MISSING'
+                )
+              );
+            }
+
+            if (![emberVaultId, emberVaultPackageId, emberProtocolConfigId].every(isValidObjectId)) {
+              return res.status(400).json(
+                emberErrorResponse(
+                  'requestEmberRedemption',
+                  'validation',
+                  'Invalid Ember object IDs. vault/package/protocolConfig must be valid object IDs.',
+                  'EINVALID_EMBER_IDS'
+                )
+              );
+            }
+
+            if (!isValidObjectId(receiverAddress)) {
+              return res.status(400).json(
+                emberErrorResponse(
+                  'requestEmberRedemption',
+                  'validation',
+                  'receiver must be a valid Sui address.',
+                  'EINVALID_RECEIVER'
+                )
+              );
+            }
+
+            const suiClient = createSuiClient();
+            const contextValidation = await validateAdminWalletContext(
+              suiClient,
+              redeemCircleId,
+              redeemWalletId,
+              session.account.userAddr
+            );
+            if (!contextValidation.valid) {
+              return res.status(contextValidation.status).json(
+                emberErrorResponse(
+                  'requestEmberRedemption',
+                  'authorization',
+                  contextValidation.error || 'Invalid admin wallet context.',
+                  contextValidation.status === 403 ? 'EADMIN_REQUIRED' : 'EINVALID_CONTEXT'
+                )
+              );
+            }
+
+            const txResult = await instance.sendTransaction(
+              session.account,
+              (txb: Transaction) => {
+                txb.setSender(session.account!.userAddr);
+
+                const withdrawnReceiptCoin = txb.moveCall({
+                  target: `${packageIdToUse}::njangi_custody::withdraw_stablecoin`,
+                  typeArguments: [emberReceiptCoinType],
+                  arguments: [
+                    txb.object(redeemWalletId),
+                    txb.pure.u64(requestedReceiptAmount),
+                    txb.pure.address(session.account!.userAddr),
+                    txb.object(CLOCK_OBJECT_ID)
+                  ]
+                });
+
+                const receiptBalance = txb.moveCall({
+                  target: '0x2::coin::into_balance',
+                  typeArguments: [emberReceiptCoinType],
+                  arguments: [withdrawnReceiptCoin]
+                });
+
+                txb.moveCall({
+                  target: `${emberVaultPackageId}::vault::redeem_shares`,
+                  typeArguments: [suiUsdeCoinType, emberReceiptCoinType],
+                  arguments: [
+                    txb.object(emberVaultId),
+                    txb.object(emberProtocolConfigId),
+                    receiptBalance,
+                    txb.pure.address(receiverAddress),
+                    txb.object(CLOCK_OBJECT_ID)
+                  ]
+                });
+              },
+              { gasBudget: 250000000 }
+            );
+
+            return res.status(200).json(
+              buildRedemptionSuccessResponse({
+                digest: txResult.digest,
+                status: txResult.status,
+                gasUsed: txResult.gasUsed,
+                circleId: redeemCircleId,
+                walletId: redeemWalletId,
+                network: getCurrentNetwork(),
+                receiptAmount: requestedReceiptAmount.toString(),
+                receiptCoinType: emberReceiptCoinType,
+                vaultId: emberVaultId,
+                vaultPackageId: emberVaultPackageId,
+                protocolConfigId: emberProtocolConfigId,
+                receiver: receiverAddress
+              })
+            );
+          } finally {
+            if (shouldSwitchNetwork) {
+              console.log(`Restoring server network back to ${originalNetwork}`);
+              setCurrentNetwork(originalNetwork as NetworkType);
+              instance.initializeWithNetwork();
+            }
+          }
+        } catch (error) {
+          console.error('Error requesting Ember redemption:', error);
+
+          if (
+            error instanceof Error &&
+            (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired') ||
+              error.message.includes('re-authenticate'))
+          ) {
+            if (sessionId) sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({
+              ...emberErrorResponse(
+                'requestEmberRedemption',
+                'auth',
+                'Your session has expired. Please login again.',
+                'ESESSION_EXPIRED'
+              ),
+              requireRelogin: true,
+            });
+          }
+
+          if (error instanceof Error) {
+            const emberMappedError = mapEmberAbortMessage(error.message);
+            if (emberMappedError) {
+              return res.status(emberMappedError.status).json(
+                emberErrorResponse(
+                  'requestEmberRedemption',
+                  'transaction',
+                  emberMappedError.error,
+                  'EEMBER_MOVE_ABORT'
+                )
+              );
+            }
+
+            if (error.message.includes('ENotWalletOwner') || error.message.includes('ENotAdmin')) {
+              return res.status(403).json(
+                emberErrorResponse(
+                  'requestEmberRedemption',
+                  'authorization',
+                  'Only the custody wallet admin can request Ember redemption.',
+                  'EADMIN_REQUIRED'
+                )
+              );
+            }
+            if (error.message.includes('EUnsupportedToken')) {
+              return res.status(400).json(
+                emberErrorResponse(
+                  'requestEmberRedemption',
+                  'validation',
+                  'Unsupported receipt token for Ember redemption path.',
+                  'EUNSUPPORTED_TOKEN'
+                )
+              );
+            }
+            if (error.message.includes('EInsufficientBalance')) {
+              return res.status(400).json(
+                emberErrorResponse(
+                  'requestEmberRedemption',
+                  'transaction',
+                  'Insufficient Ember receipt balance for requested redemption.',
+                  'EINSUFFICIENT_BALANCE'
+                )
+              );
+            }
+          }
+
+          return res.status(500).json({
+            ...emberErrorResponse(
+              'requestEmberRedemption',
+              'transaction',
+              error instanceof Error ? error.message : 'Failed to request Ember redemption',
+              'EREDEMPTION_REQUEST_FAILED'
+            ),
+            requireRelogin: false
+          });
+        }
+        break;
+
       case 'paySecurityDeposit':
         if (!account) {
           return res.status(400).json({ error: 'Account data is required' });
         }
 
-        // Add circleId to the required parameters
-        if (!req.body.walletId || !req.body.depositAmount || !req.body.circleId) {
-          return res.status(400).json({ error: 'Missing required parameters: walletId, depositAmount, circleId' });
+        // depositAmount is optional in USDC mode (derived from config), but still used for SUI mode
+        if (!req.body.walletId || !req.body.circleId) {
+          return res.status(400).json({ error: 'Missing required parameters: walletId, circleId' });
         }
 
         try {
           // Ensure parameters are of the correct type
           const circleId = String(req.body.circleId); // Get circleId
           const walletId = String(req.body.walletId);
-          let depositAmount = typeof req.body.depositAmount === 'number' ? 
-            BigInt(Math.floor(req.body.depositAmount)) : 
-            BigInt(req.body.depositAmount);
+          const parsedDepositAmount =
+            req.body.depositAmount === undefined || req.body.depositAmount === null
+              ? BigInt(0)
+              : typeof req.body.depositAmount === 'number'
+                ? BigInt(Math.floor(req.body.depositAmount))
+                : BigInt(req.body.depositAmount);
+          let depositAmount = parsedDepositAmount;
 
           // Validate session with action context
           const session = validateSession(sessionId, 'sendTransaction');
@@ -2455,74 +3646,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
+          const currencyResolution = resolveRequestCurrency(req);
+          logCurrencySelection('paySecurityDeposit', currencyResolution, {
+            circleId,
+            walletId,
+            userAddr: session.account.userAddr,
+          });
+
           // Handle network parameter if provided by frontend
           const requestedNetwork = req.body.network;
           if (requestedNetwork && (requestedNetwork === 'testnet' || requestedNetwork === 'mainnet')) {
             console.log(`Frontend requested network: ${requestedNetwork}, current server network: ${getCurrentNetwork()}`);
-          }
-
-          console.log(`Creating SUI security deposit transaction for circle ${circleId}, wallet ${walletId}, amount ${depositAmount}`);
-          
-          // Let's verify the deposit amount matches what's required by the circle
-          try {
-            const suiClient = new SuiClient({ url: getJsonRpcUrl() });
-            
-            // Find the CircleConfig
-            const dynamicFields = await suiClient.getDynamicFields({
-              parentId: circleId
-            });
-            
-            console.log('Searching for CircleConfig to validate deposit amount...');
-            
-            let configFieldObjectId: string | null = null;
-            for (const field of dynamicFields.data) {
-              if (field.name && 
-                  typeof field.name === 'object' && 
-                  'type' in field.name && 
-                  field.name.type && 
-                  field.name.type.includes('vector<u8>') && 
-                  field.objectType && 
-                  field.objectType.includes('CircleConfig')) {
-                
-                configFieldObjectId = field.objectId;
-                console.log(`Found CircleConfig dynamic field: ${configFieldObjectId}`);
-                break;
-              }
-            }
-            
-            if (configFieldObjectId) {
-              const configObject = await suiClient.getObject({
-                id: configFieldObjectId,
-                options: { showContent: true }
-              });
-              
-              if (configObject.data?.content && 
-                  'fields' in configObject.data.content &&
-                  'value' in configObject.data.content.fields) {
-                
-                const valueField = configObject.data.content.fields.value;
-                if (typeof valueField === 'object' && 
-                    valueField !== null && 
-                    'fields' in valueField) {
-                  
-                  // Extract the exact security_deposit value we need to match
-                  const configFields = valueField.fields as Record<string, unknown>;
-                  const exactSecurityDeposit = Number(configFields.security_deposit || 0);
-                  
-                  console.log(`Found security_deposit in CircleConfig: ${exactSecurityDeposit}`);
-                  console.log(`Requested deposit amount: ${depositAmount}`);
-                  
-                  // Use the exact security_deposit value from the contract
-                  if (exactSecurityDeposit > 0 && depositAmount !== BigInt(exactSecurityDeposit)) {
-                    console.log(`Adjusting deposit amount from ${depositAmount} to ${exactSecurityDeposit}`);
-                    depositAmount = BigInt(exactSecurityDeposit);
-                  }
-                }
-              }
-            }
-          } catch (err) {
-            console.warn("Error verifying security deposit amount:", err);
-            // Continue with the original amount
           }
 
           // Execute the transaction with zkLogin and network switching
@@ -2542,31 +3676,111 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const circlePackageId = await getCirclePackageId(circleId, session.account!.userAddr);
             const packageIdToUse = circlePackageId || getCurrentPackageId();
             console.log(`Using package ID for paySecurityDeposit: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
+
+            const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+            if (currencyResolution.currency === 'USDC') {
+              const configFields = await getCircleConfigFields(suiClient, circleId);
+              const securityDepositUsdCents = getConfigUsdCents(configFields, ['security_deposit_usd']);
+
+              if (securityDepositUsdCents <= 0) {
+                return res.status(400).json({
+                  error: 'This circle has no USDC security deposit amount configured. Retry with ?currency=SUI for native SUI deposits.',
+                  code: 'EMissingUSDCSecurityDepositConfig',
+                });
+              }
+
+              const requiredUsdcAmount = usdCentsToMicroUsdc(securityDepositUsdCents);
+              const usdcCoins = await getAllCoinsByType(suiClient, session.account.userAddr, USDC_COIN_TYPE);
+              const totalUsdc = usdcCoins.reduce((sum, coin) => sum + BigInt(coin.balance), BigInt(0));
+
+              console.log(
+                `[paySecurityDeposit][USDC] required=${requiredUsdcAmount} available=${totalUsdc} coinCount=${usdcCoins.length}`
+              );
+
+              if (totalUsdc < requiredUsdcAmount) {
+                const shortfall = requiredUsdcAmount - totalUsdc;
+                return res.status(400).json({
+                  error: `Insufficient USDC balance for security deposit. Required ${formatMicroUnits(requiredUsdcAmount)} USDC, available ${formatMicroUnits(totalUsdc)} USDC. Add ${formatMicroUnits(shortfall)} USDC or retry with ?currency=SUI.`,
+                  code: 'EInsufficientUsdcBalance',
+                  currency: 'USDC',
+                  requiredMicroUsdc: requiredUsdcAmount.toString(),
+                  availableMicroUsdc: totalUsdc.toString(),
+                  shortfallMicroUsdc: shortfall.toString(),
+                });
+              }
+
+              usdcCoins.sort((a, b) => Number(BigInt(b.balance) - BigInt(a.balance)));
             
             txResult = await instance.sendTransaction(
               session.account,
-              (txb) => {
+                (txb: Transaction) => {
                 txb.setSender(session.account!.userAddr);
                 
-                // Split SUI from gas payment
-                const [depositCoin] = txb.splitCoins(txb.gas, [
-                  txb.pure.u64(depositAmount)
-                ]);
-                  
-                // Call the NEW entry function in njangi_circles with the resulting coin
+                  const primaryCoinId = usdcCoins[0].coinObjectId;
+                  const secondaryCoinIds = usdcCoins.slice(1).map((coin) => coin.coinObjectId);
+                  if (secondaryCoinIds.length > 0) {
+                    txb.mergeCoins(
+                      txb.object(primaryCoinId),
+                      secondaryCoinIds.map((coinId) => txb.object(coinId))
+                    );
+                  }
+
+                  const depositCoin = txb.splitCoins(
+                    txb.object(primaryCoinId),
+                    [txb.pure.u64(requiredUsdcAmount)]
+                  );
+
                 txb.moveCall({
                   target: `${packageIdToUse}::njangi_circles::member_deposit_security_deposit`,
+                    typeArguments: [USDC_COIN_TYPE],
                   arguments: [
-                    txb.object(circleId), // Pass circleId first
+                      txb.object(circleId),
                     txb.object(walletId),
                     depositCoin,
-                    txb.object("0x6"), // Clock object
+                      txb.object(CLOCK_OBJECT_ID),
                   ],
-                  typeArguments: [SUI_COIN_TYPE] // Specify SUI type argument
                 });
             },
-            { gasBudget: 100000000 } // Keep increased gas budget
-            );
+                { gasBudget: 120000000 }
+              );
+            } else {
+              const configFields = await getCircleConfigFields(suiClient, circleId);
+              const configuredSuiDeposit = parsePositiveNumber(configFields?.security_deposit);
+              if (configuredSuiDeposit > 0) {
+                const expectedDeposit = BigInt(Math.floor(configuredSuiDeposit));
+                if (depositAmount === BigInt(0) || depositAmount !== expectedDeposit) {
+                  console.log(`Adjusting SUI security deposit from ${depositAmount} to ${expectedDeposit} based on CircleConfig`);
+                  depositAmount = expectedDeposit;
+                }
+              }
+
+              if (depositAmount <= BigInt(0)) {
+                return res.status(400).json({
+                  error: 'Invalid SUI deposit amount. Provide a positive depositAmount or configure security_deposit in CircleConfig.',
+                  code: 'EInvalidSuiDepositAmount',
+                });
+              }
+
+              txResult = await instance.sendTransaction(
+                session.account,
+                (txb: Transaction) => {
+                  txb.setSender(session.account!.userAddr);
+                  const [depositCoin] = txb.splitCoins(txb.gas, [txb.pure.u64(depositAmount)]);
+
+                  txb.moveCall({
+                    target: `${packageIdToUse}::njangi_circles::member_deposit_security_deposit`,
+                    arguments: [
+                      txb.object(circleId),
+                      txb.object(walletId),
+                      depositCoin,
+                      txb.object(CLOCK_OBJECT_ID),
+                    ],
+                    typeArguments: [SUI_COIN_TYPE],
+                  });
+                },
+                { gasBudget: 100000000 }
+              );
+            }
           } finally {
             // Always restore the original network and reinitialize the service
             if (requestedNetwork && requestedNetwork !== originalNetwork) {
@@ -2611,6 +3825,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
             if (err.message.includes('EIncorrectDepositAmount')) {
               return res.status(400).json({ error: 'Incorrect security deposit amount provided. Please try again by refreshing the page.' });
+            }
+            if (err.message.toLowerCase().includes('insufficient usdc')) {
+              return res.status(400).json({
+                error: `${err.message} Retry with ?currency=SUI if you want native SUI deposit.`,
+                code: 'EInsufficientUsdcBalance',
+              });
             }
           }
 
@@ -2942,6 +4162,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         try {
+          const requestedNetwork =
+            req.body.network === 'testnet' || req.body.network === 'mainnet'
+              ? (req.body.network as NetworkType)
+              : undefined;
+
           // Validate session with action context
           const session = validateSession(sessionId, 'sendTransaction');
           
@@ -2966,13 +4191,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
           
           // Deserialize the transaction
-          const tx = Transaction.from(req.body.txb);
+          const txBytes = normalizeSerializedTransactionBytes(req.body.txb);
+          const tx = Transaction.from(txBytes);
           tx.setSender(session.account.userAddr);
           
           // Execute the transaction
           const txResult = await instance.sendTransaction(
             session.account,
-            () => tx
+            tx,
+            {},
+            requestedNetwork
           );
           
           return res.status(200).json({ 
@@ -3100,9 +4328,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             
             // Check for specific contract errors
             if (txError instanceof Error) {
-              if (txError.message.includes('ENotAdmin')) {
+              if (txError.message.includes('ENotAdmin') || txError.message.includes(', 7)')) {
                 return res.status(400).json({ 
-                  error: 'Cannot toggle auto-swap: Only the circle admin can modify this setting',
+                  error: 'Cannot change token mode: Only the circle admin can modify this setting',
+                  requireRelogin: false
+                });
+              }
+
+              if (
+                (txError.message.includes('MoveAbort') && txError.message.includes(', 58)')) ||
+                txError.message.includes('ECircleIsActive') ||
+                txError.message.includes(', 55)')
+              ) {
+                return res.status(400).json({
+                  error: 'Cannot change token mode during an active cycle',
+                  details: 'Token mode is locked until the current cycle is completed and payouts are done.',
                   requireRelogin: false
                 });
               }
@@ -3161,7 +4401,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
-          console.log(`Creating custody contribution transaction for circle ${circleId}, wallet ${walletId}`);
+          const currencyResolution = resolveRequestCurrency(req);
+          logCurrencySelection('contributeFromCustody', currencyResolution, {
+            circleId,
+            walletId,
+            userAddr: session.account.userAddr,
+          });
+
+          console.log(
+            `Creating ${currencyResolution.currency} contribution transaction for circle ${circleId}, wallet ${walletId}`
+          );
           
           // Handle network switching like other endpoints
           const originalNetwork = getCurrentNetwork();
@@ -3180,69 +4429,83 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const circlePackageId = await getCirclePackageId(circleId, session.account.userAddr);
             const packageIdToUse = circlePackageId || getCurrentPackageId();
             console.log(`[contributeFromCustody] Using package ID: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
-          
-          // Get contribution amount from circle object - improved version
-          let contributionAmount = 0;
-          try {
-            // Get contribution amount from circle object with proper error handling
-            const rpcUrl = getJsonRpcUrl();
-            if (!rpcUrl) {
-              console.warn("No JSON RPC URL available, skipping contribution amount fetch");
-            } else {
-              const client = new SuiClient({ url: rpcUrl });
-              
-              // IMPROVED: First try to fetch CircleConfig dynamic field directly
-              try {
-                const dynamicFields = await client.getDynamicFields({
-                  parentId: circleId as string
+
+            const client = new SuiClient({ url: getJsonRpcUrl() });
+            if (currencyResolution.currency === 'USDC') {
+              const configFields = await getCircleConfigFields(client, String(circleId));
+              const contributionUsdCents = getConfigUsdCents(configFields, [
+                'contribution_amount_usd',
+                'contribution_amount_local',
+              ]);
+
+              if (contributionUsdCents <= 0) {
+                return res.status(400).json({
+                  error: 'This circle has no USDC contribution amount configured. Retry with ?currency=SUI for native SUI contribution.',
+                  code: 'EMissingUSDCContributionConfig',
                 });
-                
-                console.log(`Found ${dynamicFields.data.length} dynamic fields for circle ${circleId}`);
-                
-                // Look for circle config field (this contains the exact required contribution amount)
-                let configField = dynamicFields.data.find(field => 
-                  field.name.type &&
-                  (field.name.type.includes('CircleConfig') || 
-                   field.objectType?.includes('CircleConfig'))
-                );
-                
-                if (!configField) {
-                  // Alternative search using more flexible pattern
-                  configField = dynamicFields.data.find(field =>
-                    field.objectType?.includes('njangi_circle_config')
-                  );
-                }
-                
-                if (configField) {
-                  console.log(`Found config field: ${configField.objectId}`);
-                  
-                  // Get the config object
-                  const configObject = await client.getObject({
-                    id: configField.objectId,
-                    options: { showContent: true }
-                  });
-                  
-                  if (configObject.data?.content && 'fields' in configObject.data.content) {
-                    const configFields = configObject.data.content.fields as Record<string, unknown>;
-                    console.log("Config fields:", JSON.stringify(configFields));
-                    
-                    // Navigate through the structure to find contribution_amount
-                    if (configFields.value && typeof configFields.value === 'object' 
-                        && configFields.value !== null && 'fields' in configFields.value) {
-                      const valueFields = configFields.value.fields as Record<string, unknown>;
-                      
-                      if (valueFields.contribution_amount && typeof valueFields.contribution_amount === 'string') {
-                        contributionAmount = Number(valueFields.contribution_amount);
-                        console.log(`Found exact contribution_amount from config: ${contributionAmount}`);
-                      }
-                    }
-                  }
-                }
-              } catch (dfError) {
-                console.warn("Error fetching dynamic fields:", dfError);
               }
-              
-              // Fallback to direct object fields if dynamic fields didn't work
+
+              const requiredUsdcAmount = usdCentsToMicroUsdc(contributionUsdCents);
+              const usdcCoins = await getAllCoinsByType(client, session.account.userAddr, USDC_COIN_TYPE);
+              const totalUsdc = usdcCoins.reduce((sum, coin) => sum + BigInt(coin.balance), BigInt(0));
+
+              console.log(
+                `[contributeFromCustody][USDC] required=${requiredUsdcAmount} available=${totalUsdc} coinCount=${usdcCoins.length}`
+              );
+
+              if (totalUsdc < requiredUsdcAmount) {
+                const shortfall = requiredUsdcAmount - totalUsdc;
+                return res.status(400).json({
+                  error: `Insufficient USDC balance for contribution. Required ${formatMicroUnits(requiredUsdcAmount)} USDC, available ${formatMicroUnits(totalUsdc)} USDC. Add ${formatMicroUnits(shortfall)} USDC or retry with ?currency=SUI.`,
+                  code: 'EInsufficientUsdcBalance',
+                  currency: 'USDC',
+                  requiredMicroUsdc: requiredUsdcAmount.toString(),
+                  availableMicroUsdc: totalUsdc.toString(),
+                  shortfallMicroUsdc: shortfall.toString(),
+                });
+              }
+
+              usdcCoins.sort((a, b) => Number(BigInt(b.balance) - BigInt(a.balance)));
+
+              txResult = await instance.sendTransaction(
+                session.account,
+                (txb: Transaction) => {
+                  txb.setSender(session.account!.userAddr);
+
+                  const primaryCoinId = usdcCoins[0].coinObjectId;
+                  const secondaryCoinIds = usdcCoins.slice(1).map((coin) => coin.coinObjectId);
+                  if (secondaryCoinIds.length > 0) {
+                    txb.mergeCoins(
+                      txb.object(primaryCoinId),
+                      secondaryCoinIds.map((coinId) => txb.object(coinId))
+                    );
+                  }
+
+                  const contributionCoin = txb.splitCoins(
+                    txb.object(primaryCoinId),
+                    [txb.pure.u64(requiredUsdcAmount)]
+                  );
+
+                  txb.moveCall({
+                    target: `${packageIdToUse}::njangi_circles::contribute_stablecoin`,
+                    typeArguments: [USDC_COIN_TYPE],
+                    arguments: [
+                      txb.object(circleId as string),
+                      txb.object(walletId as string),
+                      contributionCoin,
+                      txb.object(CLOCK_OBJECT_ID),
+                    ],
+                  });
+                },
+                { gasBudget: 120000000 }
+              );
+            } else {
+              // Keep existing SUI fallback path for explicit ?currency=SUI or useUSDC=false
+              let contributionAmount = 0;
+              try {
+                const configFields = await getCircleConfigFields(client, String(circleId));
+                contributionAmount = parsePositiveNumber(configFields?.contribution_amount);
+
               if (contributionAmount === 0) {
                 const circleObject = await client.getObject({
                   id: circleId as string,
@@ -3251,70 +4514,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 
                 if (circleObject.data?.content && 'fields' in circleObject.data.content) {
                   const circleFields = circleObject.data.content.fields as Record<string, unknown>;
-                  
-                  // Look in various places for the contribution amount
-                  if (circleFields.contribution_amount && typeof circleFields.contribution_amount === 'string') {
-                    contributionAmount = Number(circleFields.contribution_amount);
-                    console.log(`Found contribution_amount directly: ${contributionAmount}`);
-                  } else if (circleFields.config && typeof circleFields.config === 'object' && circleFields.config !== null) {
-                    // Try to get from config object
-                    const config = circleFields.config as Record<string, unknown>;
-                    if (config.fields && typeof config.fields === 'object' && config.fields !== null) {
-                      const configFields = config.fields as Record<string, unknown>;
-                      if (configFields.contribution_amount && typeof configFields.contribution_amount === 'string') {
-                        contributionAmount = Number(configFields.contribution_amount);
-                        console.log(`Found contribution_amount in config: ${contributionAmount}`);
-                      }
-                    }
+                    contributionAmount = parsePositiveNumber(circleFields.contribution_amount);
                   }
                 }
+              } catch (amountError) {
+                console.warn('[contributeFromCustody][SUI] Failed to resolve contribution amount from chain:', amountError);
               }
-            }
-          } catch (error) {
-            console.warn('Error getting contribution amount from circle:', error);
-          }
-          
-          // Use hardcoded amount only if we couldn't determine it from the contract
-          // and use a more descriptive warning message
+
           if (contributionAmount === 0) {
-            // This specific circle has 60240964 MIST as the required amount based on the config
-            console.warn('⚠️ Failed to get exact contribution amount from chain! Using fallback.');
-            
-            // Default fallback - but try to use a more reasonable default based on the circle
-            if (circleId === "0x55ed6612807a511af0c7fdba72cd6cf7fc9aa596dbd3a8aaab7bfa91e774ad60") {
-              contributionAmount = 60240964; // Exact amount from the config
-              console.log(`Using known contribution amount for this circle: ${contributionAmount}`);
-            } else {
-              // Default fallback (0.05 SUI)
+                console.warn('[contributeFromCustody][SUI] Using fallback contribution amount of 50000000 MIST');
               contributionAmount = 50000000;
-              console.log(`Using generic fallback contribution amount: ${contributionAmount}`);
-            }
           }
           
-          console.log(`Final contribution amount: ${contributionAmount} MIST (${contributionAmount / 1e9} SUI)`);
-          
-          // Execute the transaction
-          txResult = await instance.sendTransaction(
+              txResult = await instance.sendTransaction(
             session.account,
             (txb: Transaction) => {
               txb.setSender(session.account!.userAddr);
               
-              // Create a SUI coin with the exact contribution amount
               const contributionCoin = txb.splitCoins(txb.gas, [txb.pure.u64(BigInt(contributionAmount))]);
               
-              // Call the contribute function
               txb.moveCall({
                 target: `${packageIdToUse}::njangi_payments::contribute`,
                 arguments: [
                   txb.object(circleId as string),
                   txb.object(walletId as string),
                   contributionCoin,
-                  txb.object("0x6")  // Clock object
+                      txb.object(CLOCK_OBJECT_ID)
                 ]
               });
             },
             { gasBudget: 50000000 }
           );
+            }
           } finally {
             // Always restore the original network and reinitialize the service
             if (requestedNetwork && requestedNetwork !== originalNetwork) {
@@ -3345,12 +4576,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               requireRelogin: true
             });
           }
+
+          if (err instanceof Error && err.message.toLowerCase().includes('insufficient usdc')) {
+            return res.status(400).json({
+              error: `${err.message} Retry with ?currency=SUI if you want native SUI contribution.`,
+              code: 'EInsufficientUsdcBalance',
+            });
+          }
           
           return res.status(500).json({ 
             error: err instanceof Error ? err.message : 'Failed to process contribution'
           });
         }
-      }
+        }
 
       case 'executeSwapOnly':
         if (!account) {
@@ -3836,18 +5074,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const packageIdToUse = circlePackageId || getCurrentPackageId();
             console.log(`Using package ID for activateCircle: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
 
-            // Execute the activate circle transaction using ZkLoginService's sendTransaction method
+          // Execute the activate circle transaction using ZkLoginService's sendTransaction method
             txResult = await instance.sendTransaction(
-              session.account,
-              (txb: Transaction) => {
-                txb.moveCall({
-                  target: `${packageIdToUse}::njangi_circles::activate_circle`,
-                  arguments: [
-                    txb.object(circleId)
-                  ],
-                });
-              }
-            );
+            session.account,
+            (txb: Transaction) => {
+              txb.moveCall({
+                target: `${packageIdToUse}::njangi_circles::activate_circle`,
+                arguments: [
+                  txb.object(circleId)
+                ],
+              });
+            }
+          );
           } finally {
             // Always restore the original network and reinitialize the service
             if (requestedNetwork && requestedNetwork !== originalNetwork) {
@@ -3885,7 +5123,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             requireRelogin: error instanceof ZkLoginError ? error.requireRelogin : false
           });
         }
-      }
+        }
 
       case 'setRotationPosition': {
         // Extract parameters properly
@@ -3999,26 +5237,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const circlePackageId = await getCirclePackageId(circleId, account.userAddr);
             const packageIdToUse = circlePackageId || getCurrentPackageId();
             console.log(`Using package ID for reorderRotationPositions: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
-            
-            // Send the transaction using the service's sendTransaction method
+          
+          // Send the transaction using the service's sendTransaction method
             txResult = await instance.sendTransaction(
-              account,
-              (txb) => {
-                // Convert the addresses array to an array of arguments
+            account,
+            (txb) => {
+              // Convert the addresses array to an array of arguments
                 const addressArgs = newOrder.map((address: string) => 
-                  txb.pure.address(address.toLowerCase())
-                );
-                
-                // Build the transaction in this callback
-                txb.moveCall({
+                txb.pure.address(address.toLowerCase())
+              );
+              
+              // Build the transaction in this callback
+              txb.moveCall({
                   target: `${packageIdToUse}::njangi_circles::reorder_rotation_positions_entry`,
-                  arguments: [
-                    txb.object(circleId), // circle
-                    txb.makeMoveVec({ elements: addressArgs, type: 'address' }),
-                  ],
-                });
-              }
-            );
+                arguments: [
+                  txb.object(circleId), // circle
+                  txb.makeMoveVec({ elements: addressArgs, type: 'address' }),
+                ],
+              });
+            }
+          );
           } finally {
             // Always restore the original network and reinitialize the service
             if (requestedNetwork && requestedNetwork !== originalNetwork) {
@@ -5042,21 +6280,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const packageIdToUse = circlePackageId || getCurrentPackageId();
             console.log(`Using package ID for adminSetMaxMembers: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
 
-            // Send the transaction
+          // Send the transaction
             txResult = await instance.sendTransaction(
-              session.account,
-              (txb: Transaction) => {
-                txb.setSender(session.account!.userAddr);
-                txb.moveCall({
+            session.account,
+            (txb: Transaction) => {
+              txb.setSender(session.account!.userAddr);
+              txb.moveCall({
                   target: `${packageIdToUse}::njangi_circles::admin_set_max_members`,
-                  arguments: [
-                    txb.object(circleId),
-                    txb.pure.u64(newMaxMembers),
-                  ],
-                });
-              },
-              { gasBudget: 50000000 } // Standard gas budget should be sufficient
-            );
+                arguments: [
+                  txb.object(circleId),
+                  txb.pure.u64(newMaxMembers),
+                ],
+              });
+            },
+            { gasBudget: 50000000 } // Standard gas budget should be sufficient
+          );
           } finally {
             // Always restore the original network and reinitialize the service
             if (requestedNetwork && requestedNetwork !== originalNetwork) {
@@ -5159,6 +6397,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const dynamicPackageId = await getCirclePackageId(circleId, session.account.userAddr);
           const packageIdToUse = dynamicPackageId || PACKAGE_ID;
           console.log(`Using package ID ${packageIdToUse} for circle ${circleId} on ${getCurrentNetwork()}`);
+          const USDC_TYPE = getCurrentCoinTypes().USDC;
 
           // Send the transaction
           const txResult = await instance.sendTransaction(
@@ -5172,6 +6411,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   txb.object(req.body.walletId),
                   txb.object("0x6"), // Clock object
                 ],
+                typeArguments: [USDC_TYPE],
               });
             },
             { gasBudget: 100000000 } // Higher gas budget for payout operation
@@ -6141,6 +7381,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         break;
 
       case 'addCetusLiquidity':
+        // Legacy Cetus-based path retained for backward compatibility.
+        // Not used by the Ember suiUSDe admin flow.
         if (!account) {
           return res.status(400).json({ error: 'Account data is required' });
         }
@@ -6159,9 +7401,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           // Use the package ID for this specific circle (fallback to default if not provided)
           const targetPackageId = packageId || PACKAGE_ID;
-          console.log('Using package ID for yield configuration:', targetPackageId);
+          console.log('Using package ID for legacy yield configuration:', targetPackageId);
 
-          console.log(`Setting up real yield integration for circle ${yieldData.circle_id}:`, {
+          console.log(`Setting up legacy yield integration for circle ${yieldData.circle_id}:`, {
             suiAmount: yieldData.sui_amount,
             poolId: yieldData.pool_id,
             circleId: yieldData.circle_id,
@@ -6169,14 +7411,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             totalSecurityDeposits: yieldData.total_security_deposits
           });
 
-          console.log('Implementing real yield contract integration:', {
+          console.log('Implementing legacy yield contract integration:', {
             custodyWalletId: yieldData.custody_wallet_id,
             circleId: yieldData.circle_id,
             requiredAmount: '1 SUI'
           });
 
-          // STEP 1: Create yield configuration only (separate from processing)
-          // This matches the expected two-step flow: create config, then process deposits
+          // Legacy STEP 1: create legacy yield configuration (separate from processing).
+          // The active admin flow for eSui-dollar uses deployToEmberVault/requestEmberRedemption.
           const txResult = await instance.sendTransaction(
             account,
             (txb: Transaction) => {
@@ -6187,7 +7429,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 target: `${targetPackageId}::njangi_yield_integration::create_yield_config`,
                 arguments: [
                   txb.object(yieldData.circle_id), // circle: &Circle
-                  txb.pure.u8(0), // strategy: u8 (0 = Conservative, now using 100% Cetus)
+                  txb.pure.u8(0), // strategy: u8 (legacy compatibility value)
                   txb.pure.bool(true), // auto_compound: bool
                   txb.object(CLOCK_OBJECT_ID), // clock: &Clock
                 ]
@@ -6198,7 +7440,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             { gasBudget: 100_000_000 }
           );
 
-          console.log('Real yield integration transaction successful:', txResult);
+          console.log('Legacy yield integration transaction successful:', txResult);
           return res.status(200).json({
             digest: txResult.digest,
             status: txResult.status,
@@ -6207,18 +7449,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             step: 'yield_config_created',
             custodyWalletId: yieldData.custody_wallet_id,
             circleId: yieldData.circle_id,
-            yieldStrategy: 'Smart Contract Managed Cetus Integration (100% Cetus Protocol)',
-            message: `🎉 Yield configuration created successfully! Ready to process security deposits from dynamic fields.`,
-            nextStep: 'Click "Process Security Deposits" to withdraw funds from custody wallet and start earning yield on Cetus DEX.',
+            yieldStrategy: 'Legacy Compatibility Yield Path',
+            message: 'Legacy yield configuration created successfully.',
+            nextStep:
+              'For active eSui-dollar operations, use Deploy to Ember Vault and Request Redemption.',
             details: {
               configurationCreated: true,
               readyForProcessing: true,
-              cetusAllocation: '100%',
-              naviAllocation: '0%',
               autoCompound: true,
-              expectedAPY: '12-18% (Real Cetus trading fees)',
-              strategy: 'Smart Contract Managed DeFi Integration',
-              protocolUsed: 'Cetus DEX via Smart Contract',
+              strategy: 'Legacy compatibility contract path',
               pendingAmount: yieldData.sui_amount,
               custodyWalletId: yieldData.custody_wallet_id
             }
@@ -6255,16 +7494,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           // Use the package ID for this specific circle (fallback to default if not provided)
           const targetPackageId = packageId || PACKAGE_ID;
-          console.log('Using package ID for security deposit processing:', targetPackageId);
+          console.log('Using package ID for legacy security deposit processing:', targetPackageId);
 
-          console.log(`Processing security deposits for yield generation:`, {
+          console.log(`Processing security deposits via legacy yield path:`, {
             configId: yieldData.config_id,
             circleId: yieldData.circle_id,
             custodyWalletId: yieldData.custody_wallet_id,
             depositAmount: yieldData.deposit_amount
           });
 
-          // Process the actual security deposits for yield generation
+          // Legacy processing path retained for backward compatibility.
+          // The active eSui-dollar flow is Ember deposit + Ember redemption request.
           const txResult = await instance.sendTransaction(
             account,
             (txb: Transaction) => {
@@ -6291,12 +7531,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               // The YieldReceipt has `key, store` but not `drop`, so it must be transferred
               txb.transferObjects([yieldReceipt], account.userAddr);
 
-              console.log('Security deposit yield generation prepared');
+              console.log('Legacy security deposit processing prepared');
             },
             { gasBudget: 150_000_000 } // Higher budget for complex DeFi operations
           );
 
-          console.log('Security deposit yield generation successful:', txResult);
+          console.log('Legacy security deposit processing successful:', txResult);
           return res.status(200).json({
             digest: txResult.digest,
             status: txResult.status,
@@ -6307,14 +7547,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             custodyWalletId: yieldData.custody_wallet_id,
             circleId: yieldData.circle_id,
             depositAmount: yieldData.deposit_amount,
-            message: `🎉 Security deposits are now earning yield! Your deposits have been allocated to Cetus DEX and will start generating returns.`,
+            message: 'Legacy security-deposit processing completed.',
             yieldDetails: {
               depositsProcessed: true,
-              allocatedToCetus: true,
-              startedEarning: true,
-              expectedAPY: '12-18% (Cetus DEX fees)',
-              strategy: 'Cetus Liquidity Provision',
-              poolType: 'SUI/USDC LP'
+              strategy: 'Legacy compatibility contract path'
             }
           });
 

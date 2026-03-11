@@ -265,7 +265,8 @@ await whatsappService.sendMessage("+1234567890",
 
 ```env
 # Enoki Service (Primary)
-NEXT_PUBLIC_ENOKI=your_enoki_api_key
+NEXT_PUBLIC_ENOKI_TESTNET=your_testnet_enoki_api_key
+NEXT_PUBLIC_ENOKI_MAINNET=your_mainnet_enoki_api_key
 
 # WhatsApp Business API
 WHATSAPP_ACCESS_TOKEN=your_whatsapp_token

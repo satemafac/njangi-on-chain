@@ -7,7 +7,7 @@ import * as Select from '@radix-ui/react-select';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
-import { getCurrentRpcUrl, getCurrentPackageId, getCurrentNetwork } from '../services/network-config';
+import { getCurrentPackageId, getCurrentRpcUrl, getCurrentNetwork } from '../services/network-config';
 
 // Add batch optimization imports
 import { 
@@ -17,7 +17,7 @@ import {
 
 // Get package ID dynamically based on current network
 const getPackageId = () => {
-  return getCurrentPackageId() || process.env.NEXT_PUBLIC_PACKAGE_ID || '0x123';
+  return getCurrentPackageId();
 };
 
 // Add supported currencies directly here since they're not in price-service

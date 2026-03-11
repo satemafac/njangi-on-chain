@@ -30,6 +30,11 @@ module njangi::njangi_custody {
     const EInsufficientAmount: u64 = 53;
     const EInvalidPriceInfo: u64 = 54;
     const EInsufficientDepositValue: u64 = 55;
+    const EInvalidDecimalPrecision: u64 = 56;
+    const EDecimalConversionOverflow: u64 = 57;
+    const EPrecisionLoss: u64 = 58;
+    const ALLOWLISTED_MAINNET_SUI_USDE: vector<u8> = b"0x41d587e5336f1c86cad50d38a7136db99333bb9bda91cea4ba69115defeb1402::sui_usde::SUI_USDE";
+    const ALLOWLISTED_MAINNET_ESUIUSDE_RECEIPT: vector<u8> = b"0xc360f622a9e77bb774061c44c11915e3cfc4242488cd668652dbff39cf0cdd58::esuiusde::ESUIUSDE";
     
     // ----------------------------------------------------------
     // Local constants from core
@@ -39,6 +44,11 @@ module njangi::njangi_custody {
     const CUSTODY_OP_PAYOUT: u8 = 2;
     const CUSTODY_OP_STABLECOIN_DEPOSIT: u8 = 3;
     const MS_PER_DAY: u64 = 86_400_000;
+    const SUI_DECIMALS: u8 = 9;
+    const USDC_DECIMALS: u8 = 6;
+    const USD_CENTS_DECIMALS: u8 = 2;
+    const MAX_DECIMAL_SHIFT: u8 = 18;
+    const MAX_U64: u64 = 0xFFFF_FFFF_FFFF_FFFF;
     
     // ----------------------------------------------------------
     // Custody wallet linked to a circle for secure fund storage
@@ -349,17 +359,9 @@ module njangi::njangi_custody {
     // ----------------------------------------------------------
     public fun get_total_wallet_balance(wallet: &CustodyWallet): u64 {
         let main_balance = balance::value(&wallet.balance);
-        
-        // Check for SUI in dynamic fields
-        let coin_field = coin_field_name<SUI>();
-        let dynamic_balance = if (dynamic_object_field::exists_(&wallet.id, coin_field)) {
-            let coin = dynamic_object_field::borrow<String, Coin<SUI>>(&wallet.id, coin_field);
-            coin::value(coin)
-        } else {
-            0
-        };
-        
-        main_balance + dynamic_balance
+
+        // Include SUI in both legacy Coin-object storage and new Balance storage.
+        main_balance + get_stablecoin_balance<SUI>(wallet)
     }
     
     // ----------------------------------------------------------
@@ -440,6 +442,7 @@ module njangi::njangi_custody {
         
         // Wallet must be active
         assert!(wallet.is_active, EWalletNotActive);
+        assert!(amount > 0, EInsufficientAmount);
         
         // Check if wallet is time-locked
         if (option::is_some(&wallet.locked_until)) {
@@ -447,25 +450,12 @@ module njangi::njangi_custody {
             assert!(current_time >= lock_time, EFundsTimeLocked);
         };
         
-        // Look for SUI in the dynamic fields
-        let coin_field = coin_field_name<SUI>();
-        assert!(dynamic_object_field::exists_(&wallet.id, coin_field), EUnsupportedToken);
-        
         // Get previous balance for events
         let previous_balance = get_stablecoin_balance<SUI>(wallet);
         assert!(previous_balance >= amount, 12); // EInsufficientBalance
-        
-        // Remove the coin, split it, and store back the remainder
-        let mut stored_coin = dynamic_object_field::remove<String, Coin<SUI>>(&mut wallet.id, coin_field);
-        let coin_to_send = coin::split<SUI>(&mut stored_coin, amount, ctx);
-        
-        // If the remainder has value, store it back
-        if (coin::value(&stored_coin) > 0) {
-            dynamic_object_field::add(&mut wallet.id, coin_field, stored_coin);
-        } else {
-            // If no remaining value, destroy the empty coin
-            coin::destroy_zero(stored_coin);
-        };
+
+        // Withdraw using hybrid storage-aware logic.
+        let coin_to_send = withdraw_coin_from_storage<SUI>(wallet, amount, ctx);
         
         // Get new balance for events
         let new_balance = get_stablecoin_balance<SUI>(wallet);
@@ -506,28 +496,216 @@ module njangi::njangi_custody {
     // ----------------------------------------------------------
     // Stablecoin Storage Helpers Using Dynamic Fields
     // ----------------------------------------------------------
+
+    // Returns 10^shift while bounding the exponent to keep conversions safe.
+    fun decimal_scale(shift: u8): u64 {
+        assert!(shift <= MAX_DECIMAL_SHIFT, EInvalidDecimalPrecision);
+        let mut scale = 1;
+        let mut i: u8 = 0;
+        while (i < shift) {
+            assert!(scale <= MAX_U64 / 10, EDecimalConversionOverflow);
+            scale = scale * 10;
+            i = i + 1;
+        };
+        scale
+    }
+
+    // Convert an amount between decimal precisions.
+    public fun convert_amount(amount: u64, from_decimals: u8, to_decimals: u8): u64 {
+        assert!(from_decimals <= MAX_DECIMAL_SHIFT, EInvalidDecimalPrecision);
+        assert!(to_decimals <= MAX_DECIMAL_SHIFT, EInvalidDecimalPrecision);
+
+        if (from_decimals == to_decimals) {
+            return amount
+        };
+
+        if (from_decimals < to_decimals) {
+            let scale = decimal_scale(to_decimals - from_decimals);
+            assert!(amount <= MAX_U64 / scale, EDecimalConversionOverflow);
+            amount * scale
+        } else {
+            let scale = decimal_scale(from_decimals - to_decimals);
+            amount / scale
+        }
+    }
+
+    // Detect whether down-scaling will truncate remainder digits.
+    public fun has_precision_loss(amount: u64, from_decimals: u8, to_decimals: u8): bool {
+        assert!(from_decimals <= MAX_DECIMAL_SHIFT, EInvalidDecimalPrecision);
+        assert!(to_decimals <= MAX_DECIMAL_SHIFT, EInvalidDecimalPrecision);
+
+        if (from_decimals <= to_decimals) {
+            return false
+        };
+
+        let scale = decimal_scale(from_decimals - to_decimals);
+        amount % scale != 0
+    }
+
+    // Convert with strict validation; aborts if information would be truncated.
+    public fun convert_amount_exact(amount: u64, from_decimals: u8, to_decimals: u8): u64 {
+        assert!(!has_precision_loss(amount, from_decimals, to_decimals), EPrecisionLoss);
+        convert_amount(amount, from_decimals, to_decimals)
+    }
+
+    // Convert USD cents (2dp) to USDC micro-units (6dp).
+    public fun usd_cents_to_usdc_amount(usd_cents: u64): u64 {
+        convert_amount(usd_cents, USD_CENTS_DECIMALS, USDC_DECIMALS)
+    }
+
+    // Convert USDC micro-units (6dp) to USD cents (2dp).
+    public fun usdc_amount_to_usd_cents(usdc_amount: u64): u64 {
+        convert_amount(usdc_amount, USDC_DECIMALS, USD_CENTS_DECIMALS)
+    }
+
+    // Convert SUI mist (9dp) to USD cents (2dp) using price in USD cents per 1 SUI.
+    public fun sui_to_usd_cents(sui_amount: u64, sui_price_usd_cents: u64): u64 {
+        assert!(sui_price_usd_cents > 0, EInvalidPriceInfo);
+        assert!(sui_amount <= MAX_U64 / sui_price_usd_cents, EDecimalConversionOverflow);
+        let usd_numerator = sui_amount * sui_price_usd_cents;
+        usd_numerator / decimal_scale(SUI_DECIMALS)
+    }
+
+    // Convert USD cents (2dp) to SUI mist (9dp) using price in USD cents per 1 SUI.
+    public fun usd_cents_to_sui(usd_cents: u64, sui_price_usd_cents: u64): u64 {
+        assert!(sui_price_usd_cents > 0, EInvalidPriceInfo);
+        let sui_scale = decimal_scale(SUI_DECIMALS);
+        assert!(usd_cents <= MAX_U64 / sui_scale, EDecimalConversionOverflow);
+        let sui_numerator = usd_cents * sui_scale;
+        sui_numerator / sui_price_usd_cents
+    }
+
+    // Indicates whether SUI->USD conversion will truncate fractional cents.
+    public fun has_rounding_in_sui_to_usd_cents(sui_amount: u64, sui_price_usd_cents: u64): bool {
+        assert!(sui_price_usd_cents > 0, EInvalidPriceInfo);
+        assert!(sui_amount <= MAX_U64 / sui_price_usd_cents, EDecimalConversionOverflow);
+        let usd_numerator = sui_amount * sui_price_usd_cents;
+        let usd_scale = decimal_scale(SUI_DECIMALS);
+        usd_numerator % usd_scale != 0
+    }
+
+    // Indicates whether USD->SUI conversion will truncate fractional mist units.
+    public fun has_rounding_in_usd_cents_to_sui(usd_cents: u64, sui_price_usd_cents: u64): bool {
+        assert!(sui_price_usd_cents > 0, EInvalidPriceInfo);
+        let sui_scale = decimal_scale(SUI_DECIMALS);
+        assert!(usd_cents <= MAX_U64 / sui_scale, EDecimalConversionOverflow);
+        let sui_numerator = usd_cents * sui_scale;
+        sui_numerator % sui_price_usd_cents != 0
+    }
     
     // Generate a key for storing coin objects
     fun coin_field_name<CoinType>(): String {
-        // For Sui explorer compatibility, use the standard field name
+        // Legacy key used by dynamic_object_field<Coin<T>> storage.
         string::utf8(b"coin_objects")
+    }
+
+    // Generate a type-specific key for dynamic_field<String, Balance<CoinType>> storage.
+    fun balance_field_name<CoinType>(): String {
+        let type_name_str = type_name::into_string(type_name::get<CoinType>());
+        string::utf8(ascii::into_bytes(type_name_str))
     }
     
     // Check if a stablecoin balance exists
     public fun has_stablecoin_balance<CoinType>(wallet: &CustodyWallet): bool {
-        let field_name = coin_field_name<CoinType>();
-        dynamic_object_field::exists_(&wallet.id, field_name)
+        let legacy_field = coin_field_name<CoinType>();
+        let balance_field = balance_field_name<CoinType>();
+        dynamic_object_field::exists_(&wallet.id, legacy_field) || dynamic_field::exists_(&wallet.id, balance_field)
     }
     
     // Get a stablecoin balance from stored coins
     public fun get_stablecoin_balance<CoinType>(wallet: &CustodyWallet): u64 {
-        let field_name = coin_field_name<CoinType>();
-        if (!dynamic_object_field::exists_(&wallet.id, field_name)) {
-            return 0
+        // New storage path: dynamic_field<String, Balance<CoinType>>
+        let balance_field = balance_field_name<CoinType>();
+        let dynamic_balance = if (dynamic_field::exists_(&wallet.id, balance_field)) {
+            let stored_balance = dynamic_field::borrow<String, Balance<CoinType>>(&wallet.id, balance_field);
+            balance::value(stored_balance)
+        } else {
+            0
         };
-        
-        let coin = dynamic_object_field::borrow<String, Coin<CoinType>>(&wallet.id, field_name);
-        coin::value(coin)
+
+        // Legacy storage path: dynamic_object_field<String, Coin<CoinType>>
+        let legacy_field = coin_field_name<CoinType>();
+        let legacy_balance = if (dynamic_object_field::exists_(&wallet.id, legacy_field)) {
+            let coin = dynamic_object_field::borrow<String, Coin<CoinType>>(&wallet.id, legacy_field);
+            coin::value(coin)
+        } else {
+            0
+        };
+
+        dynamic_balance + legacy_balance
+    }
+
+    // Store a Coin<CoinType> as Balance<CoinType> under a typed dynamic field key.
+    fun store_coin_balance<CoinType>(
+        wallet: &mut CustodyWallet,
+        coin_to_store: Coin<CoinType>
+    ) {
+        let field_name = balance_field_name<CoinType>();
+        let incoming_balance = coin::into_balance(coin_to_store);
+
+        if (dynamic_field::exists_(&wallet.id, field_name)) {
+            let existing_balance = dynamic_field::borrow_mut<String, Balance<CoinType>>(&mut wallet.id, field_name);
+            balance::join(existing_balance, incoming_balance);
+        } else {
+            dynamic_field::add<String, Balance<CoinType>>(&mut wallet.id, field_name, incoming_balance);
+            register_stablecoin_type<CoinType>(wallet);
+        };
+    }
+
+    // Withdraw from new Balance dynamic fields first, then from legacy Coin object fields.
+    fun withdraw_coin_from_storage<CoinType>(
+        wallet: &mut CustodyWallet,
+        amount: u64,
+        ctx: &mut TxContext
+    ): Coin<CoinType> {
+        assert!(amount > 0, EInsufficientAmount);
+        let has_legacy_storage = dynamic_object_field::exists_(&wallet.id, coin_field_name<CoinType>());
+        let has_balance_storage = dynamic_field::exists_(&wallet.id, balance_field_name<CoinType>());
+        assert!(has_legacy_storage || has_balance_storage, EUnsupportedToken);
+
+        let mut amount_left = amount;
+        let mut payout_balance = balance::zero<CoinType>();
+
+        if (has_balance_storage) {
+            let balance_key = balance_field_name<CoinType>();
+            let stored_balance = dynamic_field::borrow_mut<String, Balance<CoinType>>(&mut wallet.id, balance_key);
+            let available_balance = balance::value(stored_balance);
+            let amount_from_balance = if (available_balance >= amount_left) { amount_left } else { available_balance };
+
+            if (amount_from_balance > 0) {
+                let split_balance = balance::split(stored_balance, amount_from_balance);
+                balance::join(&mut payout_balance, split_balance);
+                amount_left = amount_left - amount_from_balance;
+            };
+
+            if (balance::value(stored_balance) == 0) {
+                let zero_balance = dynamic_field::remove<String, Balance<CoinType>>(
+                    &mut wallet.id,
+                    balance_field_name<CoinType>()
+                );
+                balance::destroy_zero(zero_balance);
+            };
+        };
+
+        if (amount_left > 0) {
+            assert!(dynamic_object_field::exists_(&wallet.id, coin_field_name<CoinType>()), 12);
+            let mut stored_coin = dynamic_object_field::remove<String, Coin<CoinType>>(
+                &mut wallet.id,
+                coin_field_name<CoinType>()
+            );
+            assert!(coin::value(&stored_coin) >= amount_left, 12);
+
+            let legacy_piece = coin::split<CoinType>(&mut stored_coin, amount_left, ctx);
+            balance::join(&mut payout_balance, coin::into_balance(legacy_piece));
+
+            if (coin::value(&stored_coin) > 0) {
+                dynamic_object_field::add(&mut wallet.id, coin_field_name<CoinType>(), stored_coin);
+            } else {
+                coin::destroy_zero(stored_coin);
+            };
+        };
+
+        coin::from_balance(payout_balance, ctx)
     }
     
     // Track coin type metadata
@@ -635,6 +813,7 @@ module njangi::njangi_custody {
         let current_time = clock::timestamp_ms(clock);
 
         assert!(wallet.is_active, EWalletNotActive);
+        assert!(amount > 0, EInsufficientAmount);
 
         // Get the coin type name
         let coin_type_name = type_name::into_string(type_name::get<CoinType>());
@@ -652,21 +831,9 @@ module njangi::njangi_custody {
         // Ensure the deposit meets the required amount
         assert!(usd_value >= required_amount, EInsufficientDepositValue);
 
-        // Register the coin type if not already registered
+        // Store as dynamic_field<String, Balance<CoinType>> using coin::into_balance.
         let previous_balance = get_stablecoin_balance<CoinType>(wallet);
-        let coin_type_field = coin_field_name<CoinType>();
-
-        if (dynamic_object_field::exists_(&wallet.id, coin_type_field)) {
-            let mut existing_coin = dynamic_object_field::remove<String, Coin<CoinType>>(
-                &mut wallet.id, 
-                coin_type_field
-            );
-            coin::join(&mut existing_coin, stablecoin);
-            dynamic_object_field::add(&mut wallet.id, coin_type_field, existing_coin);
-        } else {
-            dynamic_object_field::add(&mut wallet.id, coin_type_field, stablecoin);
-            register_stablecoin_type<CoinType>(wallet);
-        };
+        store_coin_balance<CoinType>(wallet, stablecoin);
 
         let new_balance = get_stablecoin_balance<CoinType>(wallet);
 
@@ -736,6 +903,7 @@ module njangi::njangi_custody {
         
         // Wallet must be active
         assert!(wallet.is_active, EWalletNotActive);
+        assert!(amount > 0, EInsufficientAmount);
         
         // Check if wallet is time-locked
         if (option::is_some(&wallet.locked_until)) {
@@ -743,25 +911,12 @@ module njangi::njangi_custody {
             assert!(current_time >= lock_time, EFundsTimeLocked);
         };
         
-        // Check if we have this stablecoin type and sufficient balance
-        let field_name = coin_field_name<CoinType>();
-        assert!(dynamic_object_field::exists_(&wallet.id, field_name), EUnsupportedToken);
-        
         // Get previous balance for events
         let previous_balance = get_stablecoin_balance<CoinType>(wallet);
         assert!(previous_balance >= amount, 12); // EInsufficientBalance
-        
-        // Remove the coin, split it, and store back the remainder
-        let mut stored_coin = dynamic_object_field::remove<String, Coin<CoinType>>(&mut wallet.id, field_name);
-        let coin_to_send = coin::split<CoinType>(&mut stored_coin, amount, ctx);
-        
-        // If the remainder has value, store it back
-        if (coin::value(&stored_coin) > 0) {
-            dynamic_object_field::add(&mut wallet.id, field_name, stored_coin);
-        } else {
-            // If no remaining value, destroy the empty coin
-            coin::destroy_zero(stored_coin);
-        };
+
+        // Withdraw using hybrid storage-aware logic.
+        let coin_to_send = withdraw_coin_from_storage<CoinType>(wallet, amount, ctx);
         
         // Get new balance for events
         let new_balance = get_stablecoin_balance<CoinType>(wallet);
@@ -788,6 +943,51 @@ module njangi::njangi_custody {
         });
         
         coin_to_send
+    }
+
+    // ----------------------------------------------------------
+    // Admin-only allowlisted redeposit path for Ember lifecycle assets
+    // ----------------------------------------------------------
+    public fun admin_redeposit_allowlisted_ember_asset<CoinType>(
+        wallet: &mut CustodyWallet,
+        redeposit_coin: Coin<CoinType>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        let amount = coin::value(&redeposit_coin);
+        let current_time = clock::timestamp_ms(clock);
+
+        // Only admin can perform managed redeposit into custody.
+        assert!(sender == wallet.admin, ENotWalletOwner);
+        assert!(wallet.is_active, EWalletNotActive);
+        assert!(amount > 0, EInsufficientAmount);
+        assert!(is_allowlisted_ember_redeposit_type<CoinType>(), EUnsupportedToken);
+
+        let previous_balance = get_stablecoin_balance<CoinType>(wallet);
+        store_coin_balance<CoinType>(wallet, redeposit_coin);
+        let new_balance = get_stablecoin_balance<CoinType>(wallet);
+        let coin_type_ascii = type_name::into_string(type_name::get<CoinType>());
+        let coin_type_str = string::utf8(ascii::into_bytes(coin_type_ascii));
+
+        let txn = create_transaction(
+            core::custody_op_stablecoin_deposit(),
+            sender,
+            amount,
+            current_time
+        );
+        vector::push_back(&mut wallet.transaction_history, txn);
+
+        event::emit(CoinDeposited {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            coin_type: coin_type_str,
+            amount,
+            member: sender,
+            previous_balance,
+            new_balance,
+            timestamp: current_time,
+        });
     }
     
     // ----------------------------------------------------------
@@ -839,22 +1039,11 @@ module njangi::njangi_custody {
         let current_time = clock::timestamp_ms(clock);
 
         assert!(wallet.is_active, EWalletNotActive);
+        assert!(amount > 0, EInsufficientAmount);
 
-        // Register the coin type if not already registered
+        // Store as dynamic_field<String, Balance<CoinType>> using coin::into_balance.
         let previous_balance = get_stablecoin_balance<CoinType>(wallet);
-        let coin_type_field = coin_field_name<CoinType>();
-
-        if (dynamic_object_field::exists_(&wallet.id, coin_type_field)) {
-            let mut existing_coin = dynamic_object_field::remove<String, Coin<CoinType>>(
-                &mut wallet.id,
-                coin_type_field
-            );
-            coin::join(&mut existing_coin, stablecoin);
-            dynamic_object_field::add(&mut wallet.id, coin_type_field, existing_coin);
-        } else {
-            dynamic_object_field::add(&mut wallet.id, coin_type_field, stablecoin);
-            register_stablecoin_type<CoinType>(wallet);
-        };
+        store_coin_balance<CoinType>(wallet, stablecoin);
 
         let new_balance = get_stablecoin_balance<CoinType>(wallet);
 
@@ -909,22 +1098,11 @@ module njangi::njangi_custody {
         let current_time = clock::timestamp_ms(clock);
 
         assert!(wallet.is_active, EWalletNotActive);
+        assert!(amount > 0, EInsufficientAmount);
 
-        // Register the coin type if not already registered
+        // Store as dynamic_field<String, Balance<CoinType>> using coin::into_balance.
         let previous_balance = get_stablecoin_balance<CoinType>(wallet);
-        let coin_type_field = coin_field_name<CoinType>();
-
-        if (dynamic_object_field::exists_(&wallet.id, coin_type_field)) {
-            let mut existing_coin = dynamic_object_field::remove<String, Coin<CoinType>>(
-                &mut wallet.id,
-                coin_type_field
-            );
-            coin::join(&mut existing_coin, contribution_coin);
-            dynamic_object_field::add(&mut wallet.id, coin_type_field, existing_coin);
-        } else {
-            dynamic_object_field::add(&mut wallet.id, coin_type_field, contribution_coin);
-            register_stablecoin_type<CoinType>(wallet);
-        };
+        store_coin_balance<CoinType>(wallet, contribution_coin);
 
         let new_balance = get_stablecoin_balance<CoinType>(wallet);
 
@@ -985,13 +1163,22 @@ module njangi::njangi_custody {
             return false
         };
         
-        // Simply check if the "coin_objects" dynamic field exists
-        // If types are registered and this field exists, then there's a stablecoin
+        // Legacy check: old dynamic_object_field key.
         let coin_objects_key = string::utf8(b"coin_objects");
         if (dynamic_object_field::exists_(&wallet.id, coin_objects_key)) {
             return true
         };
-        
+
+        // New check: typed dynamic_field<String, Balance<CoinType>> keys.
+        let mut i = 0;
+        while (i < len) {
+            let coin_type_key = *vector::borrow(&stablecoin_types, i);
+            if (dynamic_field::exists_(&wallet.id, coin_type_key)) {
+                return true
+            };
+            i = i + 1;
+        };
+
         // Check for SUI in dynamic fields as a fallback
         // This is kept for backward compatibility
         let sui_dynamic_field = get_stablecoin_balance<SUI>(wallet);
@@ -1000,5 +1187,50 @@ module njangi::njangi_custody {
         };
         
         false
+    }
+
+    fun is_allowlisted_ember_redeposit_type<CoinType>(): bool {
+        let coin_type = type_name::into_string(type_name::get<CoinType>());
+        let type_bytes = ascii::into_bytes(coin_type);
+        type_bytes == ALLOWLISTED_MAINNET_SUI_USDE ||
+            type_bytes == ALLOWLISTED_MAINNET_ESUIUSDE_RECEIPT
+    }
+
+    #[test]
+    fun test_convert_amount_between_usd_cents_and_usdc() {
+        // $40.62 -> 40_620_000 microUSDC
+        assert!(usd_cents_to_usdc_amount(4062) == 40620000, 9001);
+        assert!(usdc_amount_to_usd_cents(40620000) == 4062, 9002);
+    }
+
+    #[test]
+    fun test_convert_amount_generic_paths() {
+        // 2dp -> 6dp
+        assert!(convert_amount(1, 2, 6) == 10000, 9003);
+        // 9dp -> 6dp truncates lower precision
+        assert!(convert_amount(1000000001, 9, 6) == 1000000, 9004);
+    }
+
+    #[test]
+    fun test_precision_loss_detection_and_exact_conversion() {
+        assert!(has_precision_loss(1000000001, 9, 6), 9005);
+        assert!(!has_precision_loss(1000000000, 9, 6), 9006);
+        assert!(convert_amount_exact(1000000000, 9, 6) == 1000000, 9007);
+    }
+
+    #[test]
+    fun test_sui_price_based_conversion_helpers() {
+        // price = $2.50 per SUI, represented as 250 cents
+        let one_sui_mist = 1000000000;
+        assert!(sui_to_usd_cents(one_sui_mist, 250) == 250, 9008);
+        assert!(usd_cents_to_sui(250, 250) == one_sui_mist, 9009);
+    }
+
+    #[test]
+    fun test_rounding_detection_for_sui_price_conversions() {
+        // 1 mist at $2.50/SUI cannot represent full cents exactly
+        assert!(has_rounding_in_sui_to_usd_cents(1, 250), 9010);
+        // $1 at $2.50/SUI yields exact 0.4 SUI in mist units
+        assert!(!has_rounding_in_usd_cents_to_sui(100, 250), 9011);
     }
 } 

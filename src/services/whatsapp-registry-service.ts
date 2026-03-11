@@ -9,10 +9,11 @@
  * Instead of manually tracking, we query the transaction history of the deployment coin to find all created registries.
  */
 
-import { getCurrentNetwork, getNetworkConfig } from './network-config';
+import { getCurrentNetwork, getWhatsAppConfigForNetwork } from './network-config';
+import { getPublicEnvForNetwork, type NetworkType } from '@/config/public-env';
 import { SuiClient } from '@mysten/sui/client';
 
-export type NetworkType = 'testnet' | 'mainnet';
+export type { NetworkType } from '@/config/public-env';
 
 export interface WhatsAppRegistryConfig {
   packageId: string;
@@ -26,38 +27,37 @@ export interface WhatsAppRegistryConfig {
  * Add new entries when deploying updated contracts
  * Each network can have multiple registries from different package versions
  */
-const WHATSAPP_REGISTRIES: Record<NetworkType, WhatsAppRegistryConfig[]> = {
-  testnet: [
-    {
-      packageId: '0x2ee55011e9d3c27a2743f83fb9f4498de8cdb6078cc175bec03362326f9ec1a1',
-      registryObjectId: '0xc4f2bfc4e0022cef04e71ce7f9aecf9b3dfc3dc13085f15e2dbf5e4ace1bde12',
-      description: 'Previous testnet package (before unlink fix)',
-      deprecated: true,
-    },
-    {
-      // Current testnet - Priority: env vars > hardcoded fallback
-      // If env vars are set, they WILL be used instead of the hardcoded values below
-      packageId: process.env.NEXT_PUBLIC_TESTNET_WHATSAPP_PACKAGE_ID 
-        || process.env.NEXT_PUBLIC_WHATSAPP_PACKAGE_ID 
-        || '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc', // Fallback only if env vars missing
-      registryObjectId: process.env.NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID 
-        || process.env.NEXT_PUBLIC_WHATSAPP_REGISTRY_ID 
-        || process.env.SUI_WHATSAPP_LINKS_REGISTRY_ID 
-        || '0x9e203f7dd2d56b058d82fb4f1fafe135133245fef347d8de4967e2c1c78b9459', // Fallback only if env vars missing
-      description: 'Current testnet deployment (with unlink fix)',
-      deprecated: false,
-    },
-  ],
-  mainnet: [
-    {
-      // Current mainnet
-      packageId: process.env.NEXT_PUBLIC_MAINNET_WHATSAPP_PACKAGE_ID || '',
-      registryObjectId: process.env.NEXT_PUBLIC_MAINNET_WHATSAPP_REGISTRY_ID || '',
-      description: 'Current mainnet deployment',
-      deprecated: false,
-    },
-  ],
-};
+function buildRegistryCatalog(): Record<NetworkType, WhatsAppRegistryConfig[]> {
+  const testnetCurrent = getWhatsAppConfigForNetwork('testnet');
+  const mainnetCurrent = getWhatsAppConfigForNetwork('mainnet');
+
+  return {
+    testnet: [
+      {
+        packageId: '0x2ee55011e9d3c27a2743f83fb9f4498de8cdb6078cc175bec03362326f9ec1a1',
+        registryObjectId: '0xc4f2bfc4e0022cef04e71ce7f9aecf9b3dfc3dc13085f15e2dbf5e4ace1bde12',
+        description: 'Previous testnet package (before unlink fix)',
+        deprecated: true,
+      },
+      {
+        packageId: testnetCurrent.packageId,
+        registryObjectId: testnetCurrent.registryObjectId,
+        description: 'Current testnet deployment',
+        deprecated: false,
+      },
+    ],
+    mainnet: [
+      {
+        packageId: mainnetCurrent.packageId,
+        registryObjectId: mainnetCurrent.registryObjectId,
+        description: 'Current mainnet deployment',
+        deprecated: false,
+      },
+    ],
+  };
+}
+
+let WHATSAPP_REGISTRIES: Record<NetworkType, WhatsAppRegistryConfig[]> = buildRegistryCatalog();
 
 /**
  * Configuration for deployment coins per network
@@ -65,8 +65,8 @@ const WHATSAPP_REGISTRIES: Record<NetworkType, WhatsAppRegistryConfig[]> = {
  * We query their transaction history to discover all created registries
  */
 const DEPLOYMENT_COINS: Record<NetworkType, string> = {
-  testnet: process.env.NEXT_PUBLIC_TESTNET_DEPLOYMENT_COIN || '0x0649a5b68500d73a7fb57bf2b4e9983562da1af970b7fd6fe24e247b7c9c7ed5',
-  mainnet: process.env.NEXT_PUBLIC_MAINNET_DEPLOYMENT_COIN || '',
+  testnet: getPublicEnvForNetwork('testnet').deploymentCoin,
+  mainnet: getPublicEnvForNetwork('mainnet').deploymentCoin,
 };
 
 /**
@@ -82,8 +82,7 @@ export async function discoverWhatsAppRegistries(network: NetworkType): Promise<
   }
 
   try {
-    const networkConfig = getNetworkConfig(network);
-    const suiClient = new SuiClient({ url: networkConfig.rpcUrl });
+    const suiClient = new SuiClient({ url: getPublicEnvForNetwork(network).rpcUrl });
     
     console.log(`🔍 Discovering WhatsApp registries for ${network} from coin ${deploymentCoin.slice(0, 10)}...`);
     

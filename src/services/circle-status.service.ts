@@ -5,6 +5,8 @@
  */
 
 import { SuiClient } from '@mysten/sui/client';
+import { getConfiguredNetworkFromEnv, type NetworkType } from '@/config/public-env';
+import { getNetworkConfig } from './network-config';
 
 export interface CircleStatusData {
   name: string;
@@ -43,11 +45,9 @@ export interface CircleStatusData {
  * @param network - Optional network override. If not provided, uses getCurrentNetwork()
  */
 export async function getCircleStatus(circleId: string, network?: 'testnet' | 'mainnet'): Promise<CircleStatusData | null> {
-  // Use the provided network or fall back to the app's current network setting
-  const targetNetwork = network || (process.env.NEXT_PUBLIC_SUI_NETWORK as 'testnet' | 'mainnet') || 'testnet';
-  const rpcUrl = targetNetwork === 'testnet' 
-    ? (process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://fullnode.testnet.sui.io:443')
-    : (process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://fullnode.mainnet.sui.io:443');
+  const targetNetwork: NetworkType = network || getConfiguredNetworkFromEnv();
+  const networkConfig = getNetworkConfig(targetNetwork);
+  const rpcUrl = networkConfig.rpcUrl;
   console.log('[CircleStatus] Fetching status for circle:', circleId, 'using RPC:', rpcUrl, 'network:', targetNetwork);
   
   try {
@@ -81,8 +81,7 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
     // Instead of using getCirclePackageId which queries wrong network,
     // extract package ID directly from the circle object type
     // Fall back to env variable if extraction fails
-    const defaultPackageId = process.env.NEXT_PUBLIC_PACKAGE_ID || '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc';
-    let packageId = defaultPackageId;
+    let packageId = networkConfig.packageId;
     
     if (objectData.data?.type) {
       const match = objectData.data.type.match(/^(0x[a-f0-9]+)::/);
@@ -655,4 +654,3 @@ https://njangionchain.com/circle/${circleId}`;
 
   return message;
 }
-

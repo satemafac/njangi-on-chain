@@ -11,6 +11,8 @@ module njangi::njangi_payments {
     use std::option::{Self, Option};
     use std::string::{Self, String};
     use std::vector;
+    use std::type_name;
+    use std::ascii;
     
     use njangi::njangi_core as core;
     use njangi::njangi_circles::{Self as circles, Circle};
@@ -38,6 +40,8 @@ module njangi::njangi_payments {
     const EMilestoneAlreadyVerified: u64 = 35;
     const EMilestonePrerequisiteNotMet: u64 = 36;
     const EUnsupportedToken: u64 = 37;
+    const EAmountOverflow: u64 = 38;
+    const MAX_U64: u64 = 0xFFFF_FFFF_FFFF_FFFF;
     
     // ----------------------------------------------------------
     // Events
@@ -70,6 +74,16 @@ module njangi::njangi_payments {
         member_count: u64,
         payout_amount: u64,
         payout_reason: String,
+    }
+
+    // Audit event for payout currency routing decisions.
+    public struct PayoutCurrencySelected has copy, drop {
+        circle_id: ID,
+        recipient: address,
+        selected_currency: String,
+        required_amount: u64,
+        available_amount: u64,
+        timestamp: u64,
     }
     
     public struct AuctionStarted has copy, drop {
@@ -126,6 +140,19 @@ module njangi::njangi_payments {
         recipient: address,
         amount: u64
     }
+
+    // Multiply two u64 values with explicit overflow protection.
+    fun safe_mul(a: u64, b: u64): u64 {
+        if (a == 0 || b == 0) {
+            return 0
+        };
+        assert!(a <= MAX_U64 / b, EAmountOverflow);
+        a * b
+    }
+
+    fun coin_type_label<CoinType>(): String {
+        string::utf8(ascii::into_bytes(type_name::into_string(type_name::get<CoinType>())))
+    }
     
     // ----------------------------------------------------------
     // Contribute SUI to the circle
@@ -144,11 +171,12 @@ module njangi::njangi_payments {
         // Circle must be active to accept contributions
         assert!(circles::is_circle_active(circle), 54);
         
-        let contribution_amount = circles::get_contribution_amount(circle);
+        let contribution_amount_raw = circles::get_contribution_amount_raw(circle);
+        let contribution_amount_usd_cents = circles::get_contribution_amount_usd(circle);
         let payment_amount = coin::value(&payment);
         
-        // Must be at least the `contribution_amount`
-        assert!(payment_amount >= contribution_amount, 1);
+        // Must be at least the required SUI contribution (raw 9dp amount).
+        assert!(payment_amount >= contribution_amount_raw, 1);
         // Verify custody wallet belongs to this circle
         assert!(custody::get_circle_id(wallet) == circles::get_id(circle), 46);
 
@@ -162,11 +190,10 @@ module njangi::njangi_payments {
 
         // Update stats AFTER the funds are deposited
         let member_mut = circles::get_member_mut(circle, sender);
-        members::record_contribution(member_mut, contribution_amount, clock::timestamp_ms(clock));
+        members::record_contribution(member_mut, contribution_amount_raw, clock::timestamp_ms(clock));
 
-        // Track this contribution in the current cycle's counter
-        // Use actual payment amount (which is already in raw format with 9 decimals)
-        circles::add_to_contributions_this_cycle(circle, payment_amount);
+        // Track cycle progress in USD cents, independent from payment rail.
+        circles::add_to_contributions_this_cycle(circle, contribution_amount_usd_cents);
 
         event::emit(ContributionMade {
             circle_id: circles::get_id(circle),
@@ -184,7 +211,7 @@ module njangi::njangi_payments {
     // ----------------------------------------------------------
     // Internal function to trigger automatic payout when all members have contributed
     // ----------------------------------------------------------
-    fun trigger_automatic_payout(
+    fun trigger_automatic_payout<CoinType>(
         circle: &mut Circle,
         wallet: &mut CustodyWallet,
         clock: &Clock,
@@ -212,98 +239,112 @@ module njangi::njangi_payments {
         };
         
         // ------- WALLET ANALYSIS AND PAYOUT CALCULATION -------
-        // Get both SUI and USD amounts for proper calculation and checks
         let circle_id = circles::get_id(circle);
-        
-        // Check if we have stablecoin contributions first
-        let has_stablecoins = custody::has_any_stablecoin_balance(wallet);
-        
-        // Count active members to ensure we use the correct member count
         let member_count = circles::get_member_count(circle);
-        
-        // Get contribution amounts
         let contribution_amount_raw = circles::get_contribution_amount_raw(circle);
         let contribution_amount_readable = circles::get_contribution_amount(circle);
-        let contribution_amount_local = circles::get_contribution_amount_local(circle);
-        
-        // Calculate how many members are contributing (minus the recipient)
-        let contributing_member_count = if (member_count > 0) { member_count - 1 } else { 0 };
-        
-        // Calculate required SUI amount for a full payout
-        let required_sui_amount = contribution_amount_raw * contributing_member_count;
-        
-        // Get actual SUI balance - use get_raw_balance to only check main balance
-        let sui_balance = custody::get_raw_balance(wallet);
-        
-        // Determine if we should use stablecoin or SUI for payout
-        // We use stablecoins IF:
-        // 1. We have stablecoins available AND
-        // 2. (We don't have enough SUI OR the circle is configured to prefer stablecoins)
-        let mut payout_in_stablecoin = false;
-        
-        if (has_stablecoins && (sui_balance < required_sui_amount)) {
-            // We've detected that there's insufficient SUI but stablecoins are available
-            // Set a special flag to indicate this
-            payout_in_stablecoin = true;
-            
-            // If we're going to use stablecoins, we need to abort this function with
-            // a specific error code (100) that tells the client to call admin_trigger_usdc_payout instead
-            // This prevents attempting an SUI withdrawal that will fail
-            if (payout_in_stablecoin) {
-                // Return error code 100 = Use stablecoins instead
-                abort 100
-            }
-        };
-        
-        // For payout to member, we still use all members (the traditional approach)
-        // The recipient gets the full payout as normal (all members' contributions)
-        let mut payout_amount = contribution_amount_raw * member_count;
-        
+        let contribution_amount_usd = circles::get_contribution_amount_usd(circle);
+
         // ------- SAFEGUARDS & ASSERTIONS -------
-        // Check if we have a valid contribution amount
         assert!(contribution_amount_raw > 0, 59); // Raw contribution amount must be positive
-        // We no longer need this check as raw values are more reliable for small amounts
-        // assert!(contribution_amount_readable > 0, 60); // Readable amount must be positive
         assert!(member_count > 0, 62); // Must have at least one member
-        assert!(payout_amount > 0, EInvalidPayoutAmount); // Final payout must be positive
-        
-        // At this point, we know we're using SUI (not stablecoins) - check if wallet has sufficient balance
-        // NOTE: Using get_raw_balance which only checks the main balance, not security deposits in dynamic fields
-        assert!(sui_balance > 0, EInsufficientTreasuryBalance);
-        
-        // Use whatever balance we have for the payout, but only use the main balance
-        payout_amount = sui_balance;
-        
-        // Emit debug info for troubleshooting
+
+        // USDC-first: required payout amount in stablecoin micro-units (6dp).
+        let stablecoin_per_member = custody::usd_cents_to_usdc_amount(contribution_amount_usd);
+        let stablecoin_payout_amount = safe_mul(stablecoin_per_member, member_count);
+        let stablecoin_balance = custody::get_stablecoin_balance<CoinType>(wallet);
+
+        if (stablecoin_payout_amount > 0 && stablecoin_balance >= stablecoin_payout_amount) {
+            event::emit(PayoutCurrencySelected {
+                circle_id,
+                recipient,
+                selected_currency: coin_type_label<CoinType>(),
+                required_amount: stablecoin_payout_amount,
+                available_amount: stablecoin_balance,
+                timestamp: clock::timestamp_ms(clock),
+            });
+
+            event::emit(PayoutDebugInfo {
+                wallet_balance: stablecoin_balance,
+                contribution_amount: stablecoin_per_member,
+                member_count,
+                payout_amount: stablecoin_payout_amount,
+                payout_reason: string::utf8(b"Using USDC-first payout path"),
+            });
+
+            let member_mut = circles::get_member_mut(circle, recipient);
+            members::set_received_payout(member_mut, true);
+
+            let stablecoin = custody::withdraw_stablecoin<CoinType>(
+                wallet,
+                stablecoin_payout_amount,
+                recipient,
+                clock,
+                ctx
+            );
+            transfer::public_transfer(stablecoin, recipient);
+
+            circles::reset_contributions_this_cycle(circle);
+            circles::advance_rotation_position_and_cycle(circle, recipient, clock);
+
+            let human_readable_payout = contribution_amount_readable * member_count;
+            event::emit(PayoutProcessed {
+                circle_id,
+                recipient,
+                amount: human_readable_payout,
+                cycle: circles::get_current_cycle(circle),
+                payout_type: circles::get_goal_type(circle),
+            });
+            return
+        };
+
+        // Fallback to SUI when USDC is insufficient.
+        let payout_amount = safe_mul(contribution_amount_raw, member_count);
+        assert!(payout_amount > 0, EInvalidPayoutAmount);
+        let sui_balance = custody::get_raw_balance(wallet);
+
+        if (sui_balance < payout_amount) {
+            event::emit(PayoutCurrencySelected {
+                circle_id,
+                recipient,
+                selected_currency: string::utf8(b"both_insufficient"),
+                required_amount: payout_amount,
+                available_amount: sui_balance,
+                timestamp: clock::timestamp_ms(clock),
+            });
+            abort EInsufficientTreasuryBalance
+        };
+
+        event::emit(PayoutCurrencySelected {
+            circle_id,
+            recipient,
+            selected_currency: string::utf8(b"sui"),
+            required_amount: payout_amount,
+            available_amount: sui_balance,
+            timestamp: clock::timestamp_ms(clock),
+        });
+
         event::emit(PayoutDebugInfo {
-            wallet_balance: sui_balance, // Always report SUI balance
+            wallet_balance: sui_balance,
             contribution_amount: contribution_amount_raw,
             member_count,
             payout_amount,
-            payout_reason: string::utf8(b"Using SUI contributions")
+            payout_reason: string::utf8(b"USDC shortfall, using SUI fallback")
         });
-        
-        // ------- EXECUTE THE PAYOUT -------
-        // Mark member as paid before making payment (to prevent reentrancy)
+
+        // ------- EXECUTE THE SUI FALLBACK PAYOUT -------
         let member_mut = circles::get_member_mut(circle, recipient);
         members::set_received_payout(member_mut, true);
-        
-        // Process SUI payout from custody wallet (original logic)
+
         let payout_coin = custody::withdraw(wallet, payout_amount, ctx);
-        
-        // Transfer the payout to the recipient
         transfer::public_transfer(payout_coin, recipient);
-        
-        // Reset the contributions counter for this cycle
+
         circles::reset_contributions_this_cycle(circle);
-        
-        // Update rotation position and cycle if needed
         circles::advance_rotation_position_and_cycle(circle, recipient, clock);
-        
-        // Emit payout event with human-readable amount for UI display
+
         let human_readable_payout = contribution_amount_readable * member_count;
         event::emit(PayoutProcessed {
-            circle_id: circle_id,
+            circle_id,
             recipient,
             amount: human_readable_payout,
             cycle: circles::get_current_cycle(circle),
@@ -740,7 +781,7 @@ module njangi::njangi_payments {
     // 3. Calculates appropriate payout amount 
     // 4. Executes the payout and updates cycle/rotation state
     // ----------------------------------------------------------
-    public entry fun admin_trigger_payout(
+    public entry fun admin_trigger_payout<CoinType>(
         circle: &mut Circle,
         wallet: &mut CustodyWallet,
         clock: &Clock,
@@ -757,9 +798,8 @@ module njangi::njangi_payments {
         // Check if all members have contributed for this cycle
         assert!(circles::has_all_members_contributed(circle), 56); 
         
-        // Call the same function that automatic payout uses to maintain consistent logic
-        // We catch any error 100 (use stablecoins) and propagate it
-        trigger_automatic_payout(circle, wallet, clock, ctx);
+        // USDC-first routing is selected by passing USDC as CoinType.
+        trigger_automatic_payout<CoinType>(circle, wallet, clock, ctx);
     }
     
     // ----------------------------------------------------------
@@ -895,10 +935,9 @@ module njangi::njangi_payments {
         let contribution_amount_usd = circles::get_contribution_amount_usd(circle);
         let member_count = circles::get_member_count(circle);
         
-        // Convert USD cents to coin micro-units
-        // For 6-decimal coins like USDC: 1 cent = 10,000 micro-units
-        let stablecoin_unit_per_cent = 10000;
-        let theoretical_payout_amount = contribution_amount_usd * stablecoin_unit_per_cent * member_count;
+        // Convert USD cents (2dp) to USDC micro-units (6dp) and multiply by member count.
+        let contribution_amount_micro = custody::usd_cents_to_usdc_amount(contribution_amount_usd);
+        let theoretical_payout_amount = safe_mul(contribution_amount_micro, member_count);
         
         // Verify sufficient stablecoin balance
         let total_stablecoin_balance = custody::get_stablecoin_balance<CoinType>(wallet);
@@ -909,7 +948,8 @@ module njangi::njangi_payments {
         
         // Calculate security deposit amount in USDC
         let security_deposit_usd = circles::get_security_deposit_usd(circle);
-        let security_deposit_amount = security_deposit_usd * stablecoin_unit_per_cent * member_count;
+        let security_deposit_micro = custody::usd_cents_to_usdc_amount(security_deposit_usd);
+        let security_deposit_amount = safe_mul(security_deposit_micro, member_count);
         
         // The available balance for payout is the total balance minus the security deposits
         let mut available_balance = total_stablecoin_balance;
