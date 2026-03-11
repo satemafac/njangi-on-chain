@@ -87,6 +87,8 @@ export interface SetupData {
   randomness: string;
   ephemeralPrivateKey: string;
   network?: 'testnet' | 'mainnet';  // Network selected on the frontend
+  origin?: string;
+  redirectUri?: string;
 }
 
 export interface AccountData {
@@ -167,7 +169,8 @@ export class EnokiZkLoginService {
 
   public async beginLogin(
     provider: OAuthProvider = 'Google',
-    targetNetwork?: NetworkType
+    targetNetwork?: NetworkType,
+    requestOrigin?: string,
   ): Promise<{ loginUrl: string, setupData: SetupData }> {
     if (
       !GOOGLE_CLIENT_ID || 
@@ -181,11 +184,14 @@ export class EnokiZkLoginService {
     const effectiveNetwork = targetNetwork ?? getCurrentNetwork();
     const networkConfig = getNetworkConfig(effectiveNetwork);
     this.initializeWithNetwork(effectiveNetwork);
+    const resolvedOrigin = this.resolveAuthOrigin(requestOrigin);
+    const resolvedRedirectUri = this.resolveRedirectUri(resolvedOrigin);
 
     console.log('🌍 beginLogin: Using network configuration', {
       network: effectiveNetwork,
       rpcUrl: networkConfig.rpcUrl,
       packageId: networkConfig.packageId,
+      redirectUri: resolvedRedirectUri,
     });
 
     // Create a nonce
@@ -202,6 +208,8 @@ export class EnokiZkLoginService {
       randomness: randomness.toString(),
       ephemeralPrivateKey: ephemeralKeyPair.getSecretKey(),
       network: effectiveNetwork,
+      origin: resolvedOrigin,
+      redirectUri: resolvedRedirectUri,
     };
 
     // Create OAuth URL based on provider
@@ -210,7 +218,7 @@ export class EnokiZkLoginService {
       const params = new URLSearchParams({
         nonce: nonce,
         client_id: GOOGLE_CLIENT_ID,
-        redirect_uri: REDIRECT_URI,
+        redirect_uri: resolvedRedirectUri,
         response_type: 'id_token',
         response_mode: 'fragment',
         scope: 'openid profile email',
@@ -220,7 +228,7 @@ export class EnokiZkLoginService {
     } else if (provider === 'Facebook') {
       const params = new URLSearchParams({
         client_id: FACEBOOK_CLIENT_ID,
-        redirect_uri: REDIRECT_URI,
+        redirect_uri: resolvedRedirectUri,
         response_type: 'id_token',
         response_mode: 'fragment',
         scope: 'openid email public_profile',
@@ -229,7 +237,7 @@ export class EnokiZkLoginService {
       loginUrl = `${FACEBOOK_OAUTH_URL}?${params.toString()}`;
     } else { // Apple
       // Apple uses form_post, so it needs to redirect to our API endpoint
-      const appleRedirectUri = REDIRECT_URI.replace('/callback', '/api/auth/callback');
+      const appleRedirectUri = resolvedRedirectUri.replace('/auth/callback', '/api/auth/callback');
       const params = new URLSearchParams({
         client_id: APPLE_CLIENT_ID,
         redirect_uri: appleRedirectUri,
@@ -242,6 +250,42 @@ export class EnokiZkLoginService {
     }
 
     return { loginUrl, setupData };
+  }
+
+  private resolveAuthOrigin(requestOrigin?: string): string {
+    const candidate = requestOrigin?.trim() || '';
+    if (candidate) {
+      try {
+        const parsed = new URL(candidate);
+        return parsed.origin;
+      } catch (error) {
+        console.warn('Ignoring invalid request origin for login redirect:', candidate, error);
+      }
+    }
+
+    const envRedirectUri = REDIRECT_URI?.trim();
+    if (envRedirectUri) {
+      try {
+        return new URL(envRedirectUri).origin;
+      } catch (error) {
+        console.warn('Ignoring invalid NEXT_PUBLIC_REDIRECT_URI while resolving auth origin:', envRedirectUri, error);
+      }
+    }
+
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL?.trim();
+    if (baseUrl) {
+      try {
+        return new URL(baseUrl).origin;
+      } catch (error) {
+        console.warn('Ignoring invalid NEXT_PUBLIC_BASE_URL while resolving auth origin:', baseUrl, error);
+      }
+    }
+
+    return 'http://localhost:3000';
+  }
+
+  private resolveRedirectUri(requestOrigin?: string): string {
+    return `${this.resolveAuthOrigin(requestOrigin)}/auth/callback`;
   }
 
   /**

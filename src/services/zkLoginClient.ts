@@ -161,12 +161,13 @@ export class ZkLoginClient {
 
   public async beginLogin(provider: OAuthProvider = 'Google'): Promise<{ loginUrl: string }> {
     const network = getCurrentNetwork();
+    const origin = typeof window !== 'undefined' ? window.location.origin : undefined;
     console.log('🌍 ZkLoginClient.beginLogin: Starting login on network:', network);
 
     const response = await fetch('/api/zkLogin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'beginLogin', provider, network })
+      body: JSON.stringify({ action: 'beginLogin', provider, network, origin })
     });
 
     if (!response.ok) {

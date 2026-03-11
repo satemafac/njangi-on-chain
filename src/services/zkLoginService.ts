@@ -26,6 +26,8 @@ export interface SetupData {
   randomness: string;
   ephemeralPrivateKey: string;
   network?: 'testnet' | 'mainnet';  // Network selected on the frontend
+  origin?: string;
+  redirectUri?: string;
 }
 
 export interface AccountData {
@@ -86,9 +88,10 @@ export class ZkLoginService {
 
   public async beginLogin(
     provider: OAuthProvider = 'Google',
-    network?: NetworkType
+    network?: NetworkType,
+    origin?: string,
   ): Promise<{ loginUrl: string, setupData: SetupData }> {
-    return enokiZkLoginService.beginLogin(provider, network);
+    return enokiZkLoginService.beginLogin(provider, network, origin);
   }
 
   public async handleCallback(token: string, setupData: SetupData): Promise<{ 

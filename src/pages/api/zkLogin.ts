@@ -515,6 +515,29 @@ function parsePositiveNumber(raw: unknown): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
+function resolveRequestOrigin(req: NextApiRequest, explicitOrigin?: unknown): string | undefined {
+  if (typeof explicitOrigin === 'string' && explicitOrigin.trim() !== '') {
+    try {
+      return new URL(explicitOrigin).origin;
+    } catch (error) {
+      console.warn('Ignoring invalid explicit auth origin:', explicitOrigin, error);
+    }
+  }
+
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  const forwardedHost = req.headers['x-forwarded-host'];
+  const host = req.headers.host;
+  const proto = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
+  const resolvedHost = Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost || host;
+
+  if (!resolvedHost) {
+    return undefined;
+  }
+
+  const resolvedProto = proto || (resolvedHost.includes('localhost') ? 'http' : 'https');
+  return `${resolvedProto}://${resolvedHost}`;
+}
+
 function usdCentsToMicroUsdc(usdCents: number): bigint {
   // 1 cent == 10,000 microUSDC
   return BigInt(Math.floor(usdCents)) * BigInt(10_000);
@@ -783,7 +806,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { action, jwt, account, provider, circleData, circleId, newMaxMembers, network } = req.body; // Add newMaxMembers and network
+    const { action, jwt, account, provider, circleData, circleId, newMaxMembers, network, origin } = req.body; // Add newMaxMembers and network
     let sessionId = req.cookies['session-id'];
 
     // Always log the current session state for debugging
@@ -804,10 +827,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         setSessionCookie(res, sessionId);
         const requestedNetwork: NetworkType =
           network === 'testnet' || network === 'mainnet' ? network : getCurrentNetwork();
+        const requestOrigin = resolveRequestOrigin(req, origin);
 
         const { loginUrl, setupData: initialSetup } = await instance.beginLogin(
           provider as OAuthProvider,
-          requestedNetwork
+          requestedNetwork,
+          requestOrigin,
         );
         
         // Log the setup data being stored
