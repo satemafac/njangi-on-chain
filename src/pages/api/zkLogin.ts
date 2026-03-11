@@ -24,6 +24,7 @@ import {
   buildDeploySuccessResponse,
   buildRedemptionSuccessResponse
 } from '@/lib/ember-operation-response';
+import { getCanonicalBaseOrigin, normalizeOrigin, preferCanonicalOrigin } from '@/lib/canonical-host';
 
 // Add at the top with other imports
 interface RPCError extends Error {
@@ -517,11 +518,12 @@ function parsePositiveNumber(raw: unknown): number {
 
 function resolveRequestOrigin(req: NextApiRequest, explicitOrigin?: unknown): string | undefined {
   if (typeof explicitOrigin === 'string' && explicitOrigin.trim() !== '') {
-    try {
-      return new URL(explicitOrigin).origin;
-    } catch (error) {
-      console.warn('Ignoring invalid explicit auth origin:', explicitOrigin, error);
+    const resolvedExplicitOrigin = preferCanonicalOrigin(explicitOrigin);
+    if (resolvedExplicitOrigin) {
+      return resolvedExplicitOrigin;
     }
+
+    console.warn('Ignoring invalid explicit auth origin:', explicitOrigin);
   }
 
   const forwardedProto = req.headers['x-forwarded-proto'];
@@ -531,11 +533,11 @@ function resolveRequestOrigin(req: NextApiRequest, explicitOrigin?: unknown): st
   const resolvedHost = Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost || host;
 
   if (!resolvedHost) {
-    return undefined;
+    return getCanonicalBaseOrigin() ?? undefined;
   }
 
   const resolvedProto = proto || (resolvedHost.includes('localhost') ? 'http' : 'https');
-  return `${resolvedProto}://${resolvedHost}`;
+  return preferCanonicalOrigin(`${resolvedProto}://${resolvedHost}`) ?? normalizeOrigin(`${resolvedProto}://${resolvedHost}`) ?? getCanonicalBaseOrigin() ?? undefined;
 }
 
 function usdCentsToMicroUsdc(usdCents: number): bigint {

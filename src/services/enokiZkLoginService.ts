@@ -21,6 +21,7 @@ import {
   getNetworkConfig,
   NetworkType,
 } from './network-config';
+import { getCanonicalBaseOrigin, preferCanonicalOrigin } from '@/lib/canonical-host';
 
 // Dynamic RPC URL based on network configuration
 function getNetworkRpcUrl(): string {
@@ -253,32 +254,26 @@ export class EnokiZkLoginService {
   }
 
   private resolveAuthOrigin(requestOrigin?: string): string {
-    const candidate = requestOrigin?.trim() || '';
-    if (candidate) {
-      try {
-        const parsed = new URL(candidate);
-        return parsed.origin;
-      } catch (error) {
-        console.warn('Ignoring invalid request origin for login redirect:', candidate, error);
+    const preferredOrigin = preferCanonicalOrigin(requestOrigin);
+    if (preferredOrigin) {
+      if (requestOrigin && preferredOrigin !== requestOrigin.trim()) {
+        console.log('Redirecting auth flow to canonical public origin:', preferredOrigin);
       }
+      return preferredOrigin;
     }
 
     const envRedirectUri = REDIRECT_URI?.trim();
     if (envRedirectUri) {
       try {
-        return new URL(envRedirectUri).origin;
+        return preferCanonicalOrigin(new URL(envRedirectUri).origin) ?? new URL(envRedirectUri).origin;
       } catch (error) {
         console.warn('Ignoring invalid NEXT_PUBLIC_REDIRECT_URI while resolving auth origin:', envRedirectUri, error);
       }
     }
 
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL?.trim();
-    if (baseUrl) {
-      try {
-        return new URL(baseUrl).origin;
-      } catch (error) {
-        console.warn('Ignoring invalid NEXT_PUBLIC_BASE_URL while resolving auth origin:', baseUrl, error);
-      }
+    const canonicalOrigin = getCanonicalBaseOrigin();
+    if (canonicalOrigin) {
+      return canonicalOrigin;
     }
 
     return 'http://localhost:3000';
