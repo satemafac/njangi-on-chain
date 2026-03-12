@@ -471,9 +471,6 @@ export class CircleLinkListenerService {
         appLogger.warn('Could not fetch circle name for unlink notification', { circleId });
       }
 
-      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
-
-      // Use WhatsApp template for sending outside 24-hour window
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
         type: 'template',
@@ -484,8 +481,15 @@ export class CircleLinkListenerService {
             {
               type: 'body',
               parameters: [
-                { type: 'text', parameter_name: 'circle_name', text: circleName },
-                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
+                { type: 'text', text: circleName },
+              ],
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                { type: 'text', text: `${circleId}/manage` },
               ],
             },
           ],
@@ -700,14 +704,6 @@ export class CircleLinkListenerService {
   ): Promise<void> {
     try {
       const shortMember = `${memberAddress.slice(0, 6)}...${memberAddress.slice(-4)}`;
-      
-      // Use WhatsApp template for sending outside 24-hour window
-      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
-      const joinDate = new Date().toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-      });
 
       // Fetch circle data for member count and position
       let memberCount = '1';
@@ -818,14 +814,17 @@ export class CircleLinkListenerService {
             {
               type: 'body',
               parameters: [
-                { type: 'text', parameter_name: 'circle_name', text: fetchedCircleName },
-                { type: 'text', parameter_name: 'member_name', text: memberName || 'New Member' },
-                { type: 'text', parameter_name: 'member_address', text: shortMember },
-                { type: 'text', parameter_name: 'position_number', text: positionNumber },
-                { type: 'text', parameter_name: 'join_date', text: joinDate },
-                { type: 'text', parameter_name: 'member_count', text: memberCount },
-                { type: 'text', parameter_name: 'max_members', text: maxMembers },
-                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
+                { type: 'text', text: fetchedCircleName },
+                { type: 'text', text: memberName || 'New Member' },
+                { type: 'text', text: shortMember },
+              ],
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                { type: 'text', text: circleId },
               ],
             },
           ],
@@ -984,7 +983,6 @@ export class CircleLinkListenerService {
         ? `${memberName} (${shortMember})`
         : shortMember;
       
-      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
       const depositDate = new Date().toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
@@ -1021,7 +1019,6 @@ export class CircleLinkListenerService {
         deposit_date: depositDate,
         deposit_count: depositCount,
         total_members: totalMembers,
-        circle_url: circleUrl,
       };
 
       appLogger.info('📤 Sending deposit_received template', params);
@@ -1036,13 +1033,20 @@ export class CircleLinkListenerService {
             {
               type: 'body',
               parameters: [
-                { type: 'text', parameter_name: 'circle_name', text: params.circle_name },
-                { type: 'text', parameter_name: 'member_name', text: params.member_name },
-                { type: 'text', parameter_name: 'deposit_amount', text: params.deposit_amount },
-                { type: 'text', parameter_name: 'deposit_date', text: params.deposit_date },
-                { type: 'text', parameter_name: 'deposit_count', text: params.deposit_count },
-                { type: 'text', parameter_name: 'total_members', text: params.total_members },
-                { type: 'text', parameter_name: 'circle_url', text: params.circle_url },
+                { type: 'text', text: params.member_name },
+                { type: 'text', text: params.circle_name },
+                { type: 'text', text: params.deposit_amount },
+                { type: 'text', text: params.deposit_date },
+                { type: 'text', text: params.deposit_count },
+                { type: 'text', text: params.total_members },
+              ],
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                { type: 'text', text: circleId },
               ],
             },
           ],
@@ -1239,8 +1243,6 @@ export class CircleLinkListenerService {
     memberName?: string | null
   ): Promise<void> {
     try {
-      const shortMember = `${memberAddress.slice(0, 6)}...${memberAddress.slice(-4)}`;
-      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
       const returnDate = new Date().toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
@@ -1274,11 +1276,17 @@ export class CircleLinkListenerService {
             {
               type: 'body',
               parameters: [
-                { type: 'text', parameter_name: 'circle_name', text: circleName },
-                { type: 'text', parameter_name: 'deposit_amount', text: depositAmount },
-                { type: 'text', parameter_name: 'return_date', text: returnDate },
-                { type: 'text', parameter_name: 'member_name', text: memberName || shortMember },
-                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
+                { type: 'text', text: circleName },
+                { type: 'text', text: depositAmount },
+                { type: 'text', text: returnDate },
+              ],
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                { type: 'text', text: circleId },
               ],
             },
           ],
@@ -1446,18 +1454,11 @@ export class CircleLinkListenerService {
         ? `${memberName} (${shortMember})`
         : shortMember;
       
-      // Use WhatsApp template for sending outside 24-hour window
-      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
-      const contribDate = new Date().toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-      });
-
       // Fetch circle data for template parameters
       let circleName = 'Your Circle';
       let paidCount = '1';
       let totalMembers = '1';
+      let beneficiaryDisplay = 'Recipient';
       
       try {
         const circleObj = await this.suiClient.getObject({ 
@@ -1470,27 +1471,37 @@ export class CircleLinkListenerService {
           circleName = fields.name || 'Your Circle';
           totalMembers = String(fields.member_count || fields.rotation_order?.length || 1);
           
-          // Get actual paid count from contributions dynamic field or events
           const currentCycle = parseInt(cycle) || 1;
           paidCount = await this.getContributionCount(circleId, currentCycle);
+
+          const currentPosition = Number(fields.current_position || 0);
+          const rotationOrder = fields.rotation_order || [];
+          if (rotationOrder.length > currentPosition) {
+            const beneficiaryAddr = rotationOrder[currentPosition];
+            if (beneficiaryAddr) {
+              const shortBeneficiary = `${beneficiaryAddr.slice(0, 6)}...${beneficiaryAddr.slice(-4)}`;
+              const beneficiaryInfo = await this.lookupMemberName(circleId, beneficiaryAddr);
+              beneficiaryDisplay = beneficiaryInfo?.userName || shortBeneficiary;
+            }
+          }
         }
       } catch (e) {
         appLogger.warn('Could not fetch circle data for contribution notification', { circleId });
       }
 
-      // Ensure all parameters are non-null strings
+      const remaining = String(Math.max(0, Number(totalMembers) - Number(paidCount)));
+
       const params = {
         circle_name: circleName || 'Circle',
         cycle_number: String(cycle || '1'),
         contributor_name: memberName || memberDisplay || 'Member',
         contrib_amount: `${amount} SUI`,
-        contrib_date: contribDate,
         paid_count: paidCount || '1',
         total_members: totalMembers || '1',
-        circle_url: circleUrl,
+        remaining,
+        beneficiary: beneficiaryDisplay,
       };
 
-      // Log the parameters we're sending for debugging
       appLogger.info('📤 Sending contribution_received template', params);
 
       const result = await whatsappSender.sendMessage({
@@ -1503,14 +1514,22 @@ export class CircleLinkListenerService {
             {
               type: 'body',
               parameters: [
-                { type: 'text', parameter_name: 'circle_name', text: params.circle_name },
-                { type: 'text', parameter_name: 'cycle_number', text: params.cycle_number },
-                { type: 'text', parameter_name: 'contributor_name', text: params.contributor_name },
-                { type: 'text', parameter_name: 'contrib_amount', text: params.contrib_amount },
-                { type: 'text', parameter_name: 'contrib_date', text: params.contrib_date },
-                { type: 'text', parameter_name: 'paid_count', text: params.paid_count },
-                { type: 'text', parameter_name: 'total_members', text: params.total_members },
-                { type: 'text', parameter_name: 'circle_url', text: params.circle_url },
+                { type: 'text', text: params.circle_name },
+                { type: 'text', text: params.cycle_number },
+                { type: 'text', text: params.contributor_name },
+                { type: 'text', text: params.contrib_amount },
+                { type: 'text', text: params.paid_count },
+                { type: 'text', text: params.total_members },
+                { type: 'text', text: params.remaining },
+                { type: 'text', text: params.beneficiary },
+              ],
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                { type: 'text', text: circleId },
               ],
             },
           ],
@@ -1726,8 +1745,6 @@ export class CircleLinkListenerService {
     try {
       const shortMember = `${memberAddress.slice(0, 6)}...${memberAddress.slice(-4)}`;
       
-      // Use WhatsApp template for sending outside 24-hour window
-      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
       const removalDate = new Date().toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
@@ -1747,11 +1764,18 @@ export class CircleLinkListenerService {
             {
               type: 'body',
               parameters: [
-                { type: 'text', parameter_name: 'circle_name', text: circleName },
-                { type: 'text', parameter_name: 'member_name', text: memberName || 'Member' },
-                { type: 'text', parameter_name: 'member_address', text: shortMember },
-                { type: 'text', parameter_name: 'removal_date', text: removalDate },
-                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
+                { type: 'text', text: memberName || 'Member' },
+                { type: 'text', text: shortMember },
+                { type: 'text', text: circleName },
+                { type: 'text', text: removalDate },
+              ],
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                { type: 'text', text: circleId },
               ],
             },
           ],
@@ -1970,7 +1994,6 @@ export class CircleLinkListenerService {
         appLogger.warn('Could not fetch circle name for order change notification', { circleId });
       }
 
-      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
       const updateDate = new Date().toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
@@ -1988,10 +2011,17 @@ export class CircleLinkListenerService {
             {
               type: 'body',
               parameters: [
-                { type: 'text', parameter_name: 'circle_name', text: circleName },
-                { type: 'text', parameter_name: 'member_count', text: memberCount },
-                { type: 'text', parameter_name: 'update_date', text: updateDate },
-                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
+                { type: 'text', text: circleName },
+                { type: 'text', text: memberCount },
+                { type: 'text', text: updateDate },
+              ],
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                { type: 'text', text: circleId },
               ],
             },
           ],
@@ -2164,8 +2194,6 @@ export class CircleLinkListenerService {
         appLogger.warn('Could not fetch circle data for activation notification', { circleId });
       }
 
-      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
-
       // Use WhatsApp template for sending outside 24-hour window
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
@@ -2177,11 +2205,18 @@ export class CircleLinkListenerService {
             {
               type: 'body',
               parameters: [
-                { type: 'text', parameter_name: 'circle_name', text: circleName },
-                { type: 'text', parameter_name: 'member_count', text: memberCount },
-                { type: 'text', parameter_name: 'contribution_amount', text: contributionAmount },
-                { type: 'text', parameter_name: 'first_payout_date', text: firstPayoutDate },
-                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
+                { type: 'text', text: circleName },
+                { type: 'text', text: memberCount },
+                { type: 'text', text: contributionAmount },
+                { type: 'text', text: firstPayoutDate },
+              ],
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                { type: 'text', text: circleId },
               ],
             },
           ],
@@ -2371,7 +2406,6 @@ export class CircleLinkListenerService {
         day: 'numeric',
         year: 'numeric',
       });
-      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
 
       // Fetch circle name
       let circleName = 'Your Circle';
@@ -2400,12 +2434,19 @@ export class CircleLinkListenerService {
             {
               type: 'body',
               parameters: [
-                { type: 'text', parameter_name: 'circle_name', text: circleName },
-                { type: 'text', parameter_name: 'recipient_name', text: recipientName || shortRecipient },
-                { type: 'text', parameter_name: 'payout_amount', text: amountFormatted },
-                { type: 'text', parameter_name: 'cycle_number', text: cycle },
-                { type: 'text', parameter_name: 'payout_date', text: payoutDate },
-                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
+                { type: 'text', text: circleName },
+                { type: 'text', text: cycle },
+                { type: 'text', text: recipientName || shortRecipient },
+                { type: 'text', text: amountFormatted },
+                { type: 'text', text: payoutDate },
+              ],
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                { type: 'text', text: circleId },
               ],
             },
           ],
@@ -2448,7 +2489,6 @@ export class CircleLinkListenerService {
     try {
       const shortRecipient = `${recipientAddress.slice(0, 6)}...${recipientAddress.slice(-4)}`;
       const amountFormatted = `${(Number(amount) / 1e9).toFixed(4)} SUI`;
-      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
 
       // Fetch circle name and payout frequency to calculate next cycle date
       let circleName = 'Your Circle';
@@ -2491,12 +2531,19 @@ export class CircleLinkListenerService {
             {
               type: 'body',
               parameters: [
-                { type: 'text', parameter_name: 'circle_name', text: circleName },
-                { type: 'text', parameter_name: 'cycle_number', text: cycle },
-                { type: 'text', parameter_name: 'recipient_name', text: recipientName || shortRecipient },
-                { type: 'text', parameter_name: 'payout_amount', text: amountFormatted },
-                { type: 'text', parameter_name: 'next_cycle_date', text: nextCycleDate },
-                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
+                { type: 'text', text: circleName },
+                { type: 'text', text: cycle },
+                { type: 'text', text: recipientName || shortRecipient },
+                { type: 'text', text: amountFormatted },
+                { type: 'text', text: nextCycleDate },
+              ],
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                { type: 'text', text: circleId },
               ],
             },
           ],
@@ -2587,9 +2634,6 @@ export class CircleLinkListenerService {
     circleId: string
   ): Promise<void> {
     try {
-      // Build the circle URL to pass to the template
-      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
-      
       // Fetch circle name from blockchain
       let circleName = 'Your Circle';
       try {
@@ -2606,7 +2650,6 @@ export class CircleLinkListenerService {
         appLogger.warn('Could not fetch circle name for link confirmation', { circleId });
       }
       
-      // Send the "circle_link" template with circle_name and circle_url parameters
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
         type: 'template',
@@ -2621,13 +2664,18 @@ export class CircleLinkListenerService {
               parameters: [
                 {
                   type: 'text',
-                  parameter_name: 'circle_name',
                   text: circleName,
                 },
+              ],
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
                 {
                   type: 'text',
-                  parameter_name: 'circle_url',
-                  text: circleUrl,
+                  text: circleId,
                 },
               ],
             },

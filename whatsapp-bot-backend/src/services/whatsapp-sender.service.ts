@@ -18,10 +18,11 @@ export interface WhatsAppTemplate {
     code: string;
   };
   components?: Array<{
-    type: 'body' | 'header' | 'footer';
+    type: 'body' | 'header' | 'footer' | 'button';
+    sub_type?: 'url' | 'quick_reply';
+    index?: string;
     parameters?: Array<{
       type: 'text' | 'image' | 'document' | 'video';
-      parameter_name?: string;  // Required for named template variables
       text?: string;
       image?: { link: string };
       document?: { link: string };

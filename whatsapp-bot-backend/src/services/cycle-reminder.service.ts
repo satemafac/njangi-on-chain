@@ -400,26 +400,20 @@ export class CycleReminderService {
         })
         .join('\n');
 
-      // Use WhatsApp templates for sending outside 24-hour window
-      // Template names: contribution_overdue (late) or contribution_reminder (on-time)
-      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
-      
       const templateName = isLate ? 'contribution_overdue' : 'contribution_reminder_payout';
       const templateParams = isLate 
         ? [
-            { type: 'text' as const, parameter_name: 'circle_name', text: circleData.name },
-            { type: 'text' as const, parameter_name: 'cycle_number', text: String(circleData.currentCycle) },
-            { type: 'text' as const, parameter_name: 'hours_overdue', text: String(hoursOverdue) },
-            { type: 'text' as const, parameter_name: 'pending_members', text: pendingList },
-            { type: 'text' as const, parameter_name: 'circle_url', text: circleUrl },
+            { type: 'text' as const, text: circleData.name },
+            { type: 'text' as const, text: String(circleData.currentCycle) },
+            { type: 'text' as const, text: String(hoursOverdue) },
+            { type: 'text' as const, text: pendingList },
           ]
         : [
-            { type: 'text' as const, parameter_name: 'circle_name', text: circleData.name },
-            { type: 'text' as const, parameter_name: 'cycle_number', text: String(circleData.currentCycle) },
-            { type: 'text' as const, parameter_name: 'payout_date', text: payoutDate },
-            { type: 'text' as const, parameter_name: 'hours_remaining', text: String(hoursLeft) },
-            { type: 'text' as const, parameter_name: 'pending_members', text: pendingList },
-            { type: 'text' as const, parameter_name: 'circle_url', text: circleUrl },
+            { type: 'text' as const, text: circleData.name },
+            { type: 'text' as const, text: String(circleData.currentCycle) },
+            { type: 'text' as const, text: payoutDate },
+            { type: 'text' as const, text: String(hoursLeft) },
+            { type: 'text' as const, text: pendingList },
           ];
 
       const result = await whatsappSender.sendMessage({
@@ -432,6 +426,14 @@ export class CycleReminderService {
             {
               type: 'body',
               parameters: templateParams,
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                { type: 'text', text: circleId },
+              ],
             },
           ],
         },
@@ -509,9 +511,6 @@ export class CycleReminderService {
         ? `${beneficiary.slice(0, 6)}...${beneficiary.slice(-4)}`
         : 'Unknown';
 
-      // Use WhatsApp template for sending outside 24-hour window
-      const circleUrl = `https://njangionchain.com/circle/${circleId}/manage`;
-      
       // Calculate payout amount (contribution × member count)
       const memberCount = circleData.memberCount || circleData.rotationOrder.length || 1;
       const payoutAmount = circleData.contributionAmount 
@@ -528,12 +527,19 @@ export class CycleReminderService {
             {
               type: 'body',
               parameters: [
-                { type: 'text', parameter_name: 'circle_name', text: circleData.name },
-                { type: 'text', parameter_name: 'cycle_number', text: String(circleData.currentCycle) },
-                { type: 'text', parameter_name: 'hours_overdue', text: String(hoursSincePayout) },
-                { type: 'text', parameter_name: 'beneficiary_name', text: shortBeneficiary },
-                { type: 'text', parameter_name: 'payout_amount', text: payoutAmount },
-                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
+                { type: 'text', text: circleData.name },
+                { type: 'text', text: String(circleData.currentCycle) },
+                { type: 'text', text: String(hoursSincePayout) },
+                { type: 'text', text: shortBeneficiary },
+                { type: 'text', text: payoutAmount },
+              ],
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                { type: 'text', text: circleId },
               ],
             },
           ],
@@ -628,8 +634,6 @@ export class CycleReminderService {
         minute: '2-digit',
       });
 
-      const circleUrl = `https://njangionchain.com/circle/${circleId}`;
-
       // Use WhatsApp template for sending outside 24-hour window
       const result = await whatsappSender.sendMessage({
         to: adminPhone,
@@ -641,13 +645,20 @@ export class CycleReminderService {
             {
               type: 'body',
               parameters: [
-                { type: 'text', parameter_name: 'circle_name', text: circleData.name },
-                { type: 'text', parameter_name: 'member_name', text: beneficiaryName },
-                { type: 'text', parameter_name: 'wallet_id', text: shortBeneficiary },
-                { type: 'text', parameter_name: 'cycle_number', text: String(circleData.currentCycle) },
-                { type: 'text', parameter_name: 'payout_amount', text: payoutAmount },
-                { type: 'text', parameter_name: 'payout_date', text: payoutDate },
-                { type: 'text', parameter_name: 'circle_url', text: circleUrl },
+                { type: 'text', text: circleData.name },
+                { type: 'text', text: beneficiaryName },
+                { type: 'text', text: shortBeneficiary },
+                { type: 'text', text: String(circleData.currentCycle) },
+                { type: 'text', text: payoutAmount },
+                { type: 'text', text: payoutDate },
+              ],
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                { type: 'text', text: circleId },
               ],
             },
           ],
