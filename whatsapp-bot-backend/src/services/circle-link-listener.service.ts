@@ -607,6 +607,8 @@ export class CircleLinkListenerService {
     circleId: string
   ): Promise<void> {
     try {
+      const baseUrl = (process.env.FRONTEND_URL || 'https://njangionchain.com').replace(/\/$/, '');
+
       // Fetch circle name
       let circleName = 'Your Circle';
       try {
@@ -622,9 +624,15 @@ export class CircleLinkListenerService {
         appLogger.warn('Could not fetch circle name for unlink notification', { circleId });
       }
 
+      const fallbackText =
+        `Circle disconnected.\n` +
+        `${circleName} is no longer linked to this WhatsApp number.\n` +
+        `Reconnect here: ${baseUrl}/circle/${circleId}/manage`;
+
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
         type: 'template',
+        fallbackText,
         template: {
           name: 'circle_unlink',
           language: { code: 'en' },
@@ -2894,6 +2902,8 @@ export class CircleLinkListenerService {
     circleId: string
   ): Promise<void> {
     try {
+      const baseUrl = (process.env.FRONTEND_URL || 'https://njangionchain.com').replace(/\/$/, '');
+
       // Fetch circle name from blockchain
       let circleName = 'Your Circle';
       try {
@@ -2909,10 +2919,16 @@ export class CircleLinkListenerService {
       } catch (e) {
         appLogger.warn('Could not fetch circle name for link confirmation', { circleId });
       }
+
+      const fallbackText =
+        `Circle connected.\n` +
+        `${circleName} is now linked to this WhatsApp number.\n` +
+        `Open circle: ${baseUrl}/circle/${circleId}`;
       
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
         type: 'template',
+        fallbackText,
         template: {
           name: 'circle_link',
           language: {
