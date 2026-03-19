@@ -69,6 +69,10 @@ export class CircleLinkListenerService {
       return 'USDT';
     }
 
+    if (upper === 'STABLECOIN' || upper.endsWith('::STABLECOIN')) {
+      return 'Stablecoin';
+    }
+
     const lastSegment = normalized.split('::').filter(Boolean).pop();
     return lastSegment ? lastSegment.toUpperCase() : upper;
   }
@@ -83,13 +87,58 @@ export class CircleLinkListenerService {
     }
 
     const currencyLabel = this.getCoinLabelFromType(coinType);
-    const decimals = currencyLabel === 'USDC' || currencyLabel === 'USDT' ? 6 : 9;
+    const decimals =
+      currencyLabel === 'USDC' || currencyLabel === 'USDT' || currencyLabel === 'Stablecoin'
+        ? 6
+        : 9;
     const fractionDigits = currencyLabel === 'SUI' ? 4 : 2;
 
     return {
       amountFormatted: (amountValue / Math.pow(10, decimals)).toFixed(fractionDigits),
       currencyLabel,
     };
+  }
+
+  private async resolveCoinTypeFromTransaction(
+    txDigest: string | undefined,
+    circleId: string,
+    memberAddress: string,
+    amount: string | number
+  ): Promise<string | null> {
+    if (!txDigest) {
+      return null;
+    }
+
+    try {
+      const transactionBlock = await this.suiClient.getTransactionBlock({
+        digest: txDigest,
+        options: { showEvents: true },
+      });
+
+      const matchingCoinEvent = transactionBlock.events?.find((candidate: any) => {
+        if (typeof candidate?.type !== 'string' || !candidate.type.endsWith('::njangi_custody::CoinDeposited')) {
+          return false;
+        }
+
+        const candidateJson = candidate.parsedJson as any;
+        return (
+          candidateJson?.circle_id === circleId &&
+          candidateJson?.member === memberAddress &&
+          this.parseNumericEventField(candidateJson?.amount) === this.parseNumericEventField(amount)
+        );
+      });
+
+      const coinType = (matchingCoinEvent?.parsedJson as any)?.coin_type;
+      return typeof coinType === 'string' && coinType.trim() !== '' ? coinType : null;
+    } catch (error) {
+      appLogger.warn('Could not resolve deposit coin type from transaction', {
+        txDigest: txDigest.slice(0, 10),
+        circleId: circleId.slice(0, 10),
+        member: memberAddress.slice(0, 10),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
   }
 
   /**
@@ -1018,6 +1067,7 @@ export class CircleLinkListenerService {
   private async handleSecurityDepositEvent(event: any): Promise<void> {
     try {
       const parsedJson = event.parsedJson as any;
+      const txDigest = event.id?.txDigest;
 
       if (!parsedJson) {
         appLogger.warn('CustodyDeposited event has no parsedJson');
@@ -1041,6 +1091,7 @@ export class CircleLinkListenerService {
         circleId: circle_id?.slice(0, 10),
         member: memberAddress.slice(0, 10),
         amount,
+        txDigest: txDigest?.slice(0, 10),
       });
 
       // Get phone number for the linked circle
@@ -1053,9 +1104,24 @@ export class CircleLinkListenerService {
         return;
       }
 
-      // Format amount (convert from MIST to SUI)
-      const amountSui = Number(amount) / 1e9;
-      const amountFormatted = amountSui.toFixed(4);
+      const coinType = await this.resolveCoinTypeFromTransaction(
+        txDigest,
+        circle_id,
+        memberAddress,
+        amount
+      );
+      const formattedDeposit = this.formatTokenAmount(amount, coinType);
+
+      if (!formattedDeposit) {
+        appLogger.warn('Security deposit amount could not be parsed', {
+          circleId: circle_id?.slice(0, 10),
+          member: memberAddress.slice(0, 10),
+          amount,
+          coinType: coinType || 'unknown',
+          txDigest: txDigest?.slice(0, 10),
+        });
+        return;
+      }
 
       // Look up member name
       const memberInfo = await this.lookupMemberName(circle_id, memberAddress);
@@ -1066,7 +1132,8 @@ export class CircleLinkListenerService {
         phoneNumber,
         circle_id,
         memberAddress,
-        amountFormatted,
+        formattedDeposit.amountFormatted,
+        formattedDeposit.currencyLabel,
         memberName
       );
     } catch (error) {
@@ -1085,6 +1152,7 @@ export class CircleLinkListenerService {
     circleId: string,
     memberAddress: string,
     amount: string,
+    currencyLabel: string,
     memberName?: string | null
   ): Promise<void> {
     try {
@@ -1125,17 +1193,23 @@ export class CircleLinkListenerService {
       const params = {
         circle_name: circleName || 'Circle',
         member_name: memberName || memberDisplay || 'Member',
-        deposit_amount: `${amount} SUI`,
+        deposit_amount: `${amount} ${currencyLabel}`,
         deposit_date: depositDate,
         deposit_count: depositCount,
         total_members: totalMembers,
       };
+
+      const fallbackText =
+        `Security deposit received for ${params.circle_name}.\n` +
+        `${params.member_name} paid ${params.deposit_amount} on ${params.deposit_date}.\n` +
+        `Deposits: ${params.deposit_count}/${params.total_members}.`;
 
       appLogger.info('📤 Sending deposit_received template', params);
 
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
         type: 'template',
+        fallbackText,
         template: {
           name: 'deposit_received',
           language: { code: 'en' },
@@ -1168,7 +1242,7 @@ export class CircleLinkListenerService {
           phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
           circleId: circleId.slice(0, 10) + '...',
           member: memberAddress.slice(0, 10) + '...',
-          amount,
+          amount: `${amount} ${currencyLabel}`,
           messageId: result.messageId,
         });
       } else {
@@ -1667,11 +1741,17 @@ export class CircleLinkListenerService {
         beneficiary: beneficiaryDisplay,
       };
 
+      const fallbackText =
+        `Contribution received in ${params.circle_name}.\n` +
+        `Cycle ${params.cycle_number}: ${params.contributor_name} paid ${params.contrib_amount}.\n` +
+        `Paid: ${params.paid_count}/${params.total_members}. Remaining: ${params.remaining}. Beneficiary: ${params.beneficiary}.`;
+
       appLogger.info('📤 Sending contribution_received template', params);
 
       const result = await whatsappSender.sendMessage({
         to: phoneNumber,
         type: 'template',
+        fallbackText,
         template: {
           name: 'recieve_contribution',
           language: { code: 'en' },

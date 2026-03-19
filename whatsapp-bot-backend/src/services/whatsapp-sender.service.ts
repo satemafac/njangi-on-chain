@@ -59,6 +59,7 @@ export interface SendMessageRequest {
   type: 'template' | 'text' | 'image' | 'document' | 'video';
   template?: WhatsAppTemplate;
   text?: string;
+  fallbackText?: string;
   media?: {
     type: 'image' | 'document' | 'video';
     url: string;
@@ -207,6 +208,38 @@ export class WhatsAppSenderService {
           error: errorMessage,
           duration,
         });
+      }
+
+      if (
+        request.type === 'template' &&
+        request.fallbackText &&
+        this.shouldAttemptTextFallback(errorMessage)
+      ) {
+        appLogger.warn('Template send rejected; attempting text fallback', {
+          to: request.to,
+          templateName: request.template?.name,
+          error: errorMessage,
+        });
+
+        const fallbackResult = await this.sendMessage({
+          to: request.to,
+          type: 'text',
+          text: request.fallbackText,
+        });
+
+        if (fallbackResult.success) {
+          return {
+            ...fallbackResult,
+            status: fallbackResult.status || 'sent_via_text_fallback',
+          };
+        }
+
+        return {
+          success: false,
+          to: request.to,
+          error: `${errorMessage}; text fallback failed: ${fallbackResult.error || 'unknown error'}`,
+          timestamp: Date.now(),
+        };
       }
 
       return {
@@ -448,6 +481,18 @@ export class WhatsAppSenderService {
     return retryablePatterns.some((pattern) =>
       error.toLowerCase().includes(pattern.toLowerCase())
     );
+  }
+
+  /**
+   * Determine if a template error should fall back to a session text message
+   */
+  private shouldAttemptTextFallback(error: string | undefined): boolean {
+    if (!error) {
+      return false;
+    }
+
+    const normalized = error.toLowerCase();
+    return normalized.includes('131037') || normalized.includes('display name approval');
   }
 
   // ==================== METRICS & MONITORING ====================
