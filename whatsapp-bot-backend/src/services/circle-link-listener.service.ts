@@ -30,6 +30,26 @@ export class CircleLinkListenerService {
     });
   }
 
+  private parseNumericEventField(value: string | number | null | undefined): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+
+    if (typeof value === 'string' && value.trim() !== '') {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    return null;
+  }
+
+  private matchesNumericEventField(
+    value: string | number | null | undefined,
+    expected: number
+  ): boolean {
+    return this.parseNumericEventField(value) === expected;
+  }
+
   /**
    * Discover package IDs from the registry and linked circles
    * This ensures we query events from the correct packages regardless of deployments
@@ -933,7 +953,7 @@ export class CircleLinkListenerService {
 
           // Only process security deposits (operation_type 3)
           const parsedJson = event.parsedJson as any;
-          if (parsedJson?.operation_type !== 3) {
+          if (!this.matchesNumericEventField(parsedJson?.operation_type, 3)) {
             continue; // Skip contributions (type 1) and other operations
           }
 
@@ -1161,7 +1181,10 @@ export class CircleLinkListenerService {
       let count = 0;
       for (const event of events.data) {
         const parsedJson = event.parsedJson as any;
-        if (parsedJson?.circle_id === circleId && parsedJson?.operation_type === 3) {
+        if (
+          parsedJson?.circle_id === circleId &&
+          this.matchesNumericEventField(parsedJson?.operation_type, 3)
+        ) {
           count++;
         }
       }
@@ -1629,28 +1652,43 @@ export class CircleLinkListenerService {
       
       const packageId = circleObj.data.type.split('::')[0];
       
-      // Query ContributionMade events for this circle
-      const events = await this.suiClient.queryEvents({
-        query: {
-          MoveEventType: `${packageId}::njangi_circles::ContributionMade`,
-        },
-        limit: 100,
-        order: 'descending',
-      });
+      const [suiContributionEvents, stablecoinContributionEvents] = await Promise.all([
+        this.suiClient.queryEvents({
+          query: {
+            MoveEventType: `${packageId}::njangi_payments::ContributionMade`,
+          },
+          limit: 100,
+          order: 'descending',
+        }),
+        this.suiClient.queryEvents({
+          query: {
+            MoveEventType: `${packageId}::njangi_circles::StablecoinContributionMade`,
+          },
+          limit: 100,
+          order: 'descending',
+        }),
+      ]);
 
-      if (!events.data || events.data.length === 0) {
+      const events = [
+        ...(suiContributionEvents.data || []),
+        ...(stablecoinContributionEvents.data || []),
+      ];
+
+      if (events.length === 0) {
         return '1'; // At least this contribution
       }
 
       // Count contributions for this circle and cycle
       let count = 0;
-      for (const event of events.data) {
+      for (const event of events) {
         const parsedJson = event.parsedJson as any;
-        if (parsedJson?.circle_id === circleId) {
-          const eventCycle = parseInt(parsedJson.cycle || '1', 10);
-          if (eventCycle === cycle) {
-            count++;
-          }
+        if (parsedJson?.circle_id !== circleId) {
+          continue;
+        }
+
+        const eventCycle = this.parseNumericEventField(parsedJson?.cycle);
+        if (eventCycle === cycle) {
+          count++;
         }
       }
 

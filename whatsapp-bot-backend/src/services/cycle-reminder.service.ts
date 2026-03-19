@@ -708,27 +708,39 @@ export class CycleReminderService {
         }
       } catch { /* use default */ }
       
-      appLogger.info('🔍 Checking ContributionMade events', {
+      appLogger.info('🔍 Checking contribution events', {
         circleId: circleId.slice(0, 10),
         cycle: circleData.currentCycle,
         packageId: packageId.slice(0, 12),
       });
       
-      // Get contribution events for current cycle
-      const contributionEvents = await this.suiClient.queryEvents({
-        query: { MoveEventType: `${packageId}::njangi_payments::ContributionMade` },
-        limit: 200,
-      });
+      const [suiContributionEvents, stablecoinContributionEvents] = await Promise.all([
+        this.suiClient.queryEvents({
+          query: { MoveEventType: `${packageId}::njangi_payments::ContributionMade` },
+          limit: 200,
+        }),
+        this.suiClient.queryEvents({
+          query: { MoveEventType: `${packageId}::njangi_circles::StablecoinContributionMade` },
+          limit: 200,
+        }),
+      ]);
+
+      const contributionEvents = [
+        ...(suiContributionEvents.data || []),
+        ...(stablecoinContributionEvents.data || []),
+      ];
       
       appLogger.info('📊 Contribution events query result', {
         circleId: circleId.slice(0, 10),
-        eventsFound: contributionEvents.data.length,
+        suiEventsFound: suiContributionEvents.data.length,
+        stablecoinEventsFound: stablecoinContributionEvents.data.length,
+        eventsFound: contributionEvents.length,
       });
 
       // Find who contributed for this circle and cycle
       const contributedAddresses = new Set<string>();
 
-      for (const event of contributionEvents.data) {
+      for (const event of contributionEvents) {
         const parsed = event.parsedJson as {
           circle_id?: string;
           member?: string;
