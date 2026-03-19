@@ -360,7 +360,9 @@ export class CircleLinkListenerService {
 
       // Look up the phone number from the registry
       // The link should still exist but with enabled=false
-      const phoneNumber = await this.getPhoneNumberForCircle(circle_id);
+      const phoneNumber = await this.getPhoneNumberForCircle(circle_id, {
+        includeDisabled: true,
+      });
 
       if (!phoneNumber) {
         appLogger.warn('Could not find phone number for unlinked circle', {
@@ -401,8 +403,12 @@ export class CircleLinkListenerService {
    * Look up the phone number associated with a circle from the registry
    * This works even for disabled links (after unlink)
    */
-  private async getPhoneNumberForCircle(circleId: string): Promise<string | null> {
+  private async getPhoneNumberForCircle(
+    circleId: string,
+    options: { includeDisabled?: boolean } = {}
+  ): Promise<string | null> {
     try {
+      const { includeDisabled = false } = options;
       const registryId = getConfig().sui.currentWhatsAppRegistryId;
 
       const registryObject = await this.suiClient.getObject({
@@ -418,32 +424,66 @@ export class CircleLinkListenerService {
       const registryFields = (registryObject.data.content as any).fields;
       const links = registryFields?.links || [];
 
-      // Find the link for this circle (may be enabled or disabled)
-      for (const link of links) {
+      let latestDisabledPhoneNumber: string | null = null;
+      let latestDisabledIndex = -1;
+
+      // Search from newest to oldest so duplicate links prefer the latest record.
+      for (let index = links.length - 1; index >= 0; index--) {
+        const link = links[index];
         const fields = link.fields || link;
         const linkCircleId = fields.circle_id;
-        const adminPhoneNumber = fields.admin_phone_number;
+        const adminPhoneNumberRaw = fields.admin_phone_number;
+        const adminPhoneNumber =
+          typeof adminPhoneNumberRaw === 'string'
+            ? adminPhoneNumberRaw
+            : adminPhoneNumberRaw?.value;
 
-        if (linkCircleId === circleId && adminPhoneNumber) {
-          appLogger.info('Found phone number for circle', {
+        if (linkCircleId !== circleId || !adminPhoneNumber) {
+          continue;
+        }
+
+        if (fields.enabled === true) {
+          appLogger.info('Found active phone number for circle', {
             circleId: circleId.slice(0, 10),
             phoneNumber: adminPhoneNumber.slice(0, 5) + '...',
-            enabled: fields.enabled,
+            enabled: true,
+            linkIndex: index,
           });
           return adminPhoneNumber;
         }
+
+        if (includeDisabled && latestDisabledPhoneNumber === null) {
+          latestDisabledPhoneNumber = adminPhoneNumber;
+          latestDisabledIndex = index;
+        }
       }
 
-      appLogger.warn('No link found for circle in registry', {
+      if (includeDisabled && latestDisabledPhoneNumber) {
+        appLogger.info('Found disabled phone number for circle', {
+          circleId: circleId.slice(0, 10),
+          phoneNumber: latestDisabledPhoneNumber.slice(0, 5) + '...',
+          enabled: false,
+          linkIndex: latestDisabledIndex,
+        });
+        return latestDisabledPhoneNumber;
+      }
+
+      appLogger.warn(
+        includeDisabled
+          ? 'No link found for circle in registry'
+          : 'No active link found for circle in registry',
+        {
         circleId: circleId.slice(0, 10),
         totalLinks: links.length,
-      });
+        }
+      );
       return null;
     } catch (error) {
-      appLogger.error('Error looking up phone number for circle', {
-        error: error instanceof Error ? error.message : String(error),
-        circleId,
-      });
+      appLogger.error(
+        'Error looking up phone number for circle',
+        error instanceof Error ? error : new Error(String(error)),
+        { circleId }
+      );
       return null;
     }
   }
@@ -922,15 +962,22 @@ export class CircleLinkListenerService {
         return;
       }
 
-      const {
-        circle_id,
-        depositor,
-        amount,
-      } = parsedJson;
+      const { circle_id, amount } = parsedJson;
+      const memberAddress = parsedJson.member || parsedJson.depositor;
+
+      if (!circle_id || !memberAddress || amount === undefined || amount === null) {
+        appLogger.warn('CustodyDeposited event missing required fields', {
+          circleId: circle_id?.slice?.(0, 10),
+          hasMember: Boolean(memberAddress),
+          hasAmount: amount !== undefined && amount !== null,
+          parsedKeys: Object.keys(parsedJson),
+        });
+        return;
+      }
 
       appLogger.info('Security deposit event detected', {
         circleId: circle_id?.slice(0, 10),
-        depositor: depositor?.slice(0, 10),
+        member: memberAddress.slice(0, 10),
         amount,
       });
 
@@ -949,21 +996,22 @@ export class CircleLinkListenerService {
       const amountFormatted = amountSui.toFixed(4);
 
       // Look up member name
-      const memberInfo = await this.lookupMemberName(circle_id, depositor);
+      const memberInfo = await this.lookupMemberName(circle_id, memberAddress);
       const memberName = memberInfo?.userName || null;
 
       // Send security deposit notification
       await this.sendSecurityDepositNotification(
         phoneNumber,
         circle_id,
-        depositor,
+        memberAddress,
         amountFormatted,
         memberName
       );
     } catch (error) {
-      appLogger.error('Error handling security deposit event', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      appLogger.error(
+        'Error handling security deposit event',
+        error instanceof Error ? error : new Error(String(error))
+      );
     }
   }
 
@@ -1068,9 +1116,15 @@ export class CircleLinkListenerService {
         });
       }
     } catch (error) {
-      appLogger.error('Error sending security deposit notification', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      appLogger.error(
+        'Error sending security deposit notification',
+        error instanceof Error ? error : new Error(String(error)),
+        {
+          circleId: circleId.slice(0, 10),
+          phoneNumber: phoneNumber.slice(0, 5) + '...',
+          member: memberAddress.slice(0, 10),
+        }
+      );
     }
   }
 

@@ -107,14 +107,34 @@ export const appLogger = {
     logger.warn(message, { correlationId: context?.correlationId, ...context });
   },
 
-  error: (message: string, error?: Error | any, context?: LogContext) => {
+  error: (message: string, errorOrContext?: Error | any, context?: LogContext) => {
+    const hasExplicitContext = context !== undefined;
+    const treatSecondArgAsContext =
+      !hasExplicitContext &&
+      errorOrContext !== null &&
+      typeof errorOrContext === 'object' &&
+      !(errorOrContext instanceof Error);
+
+    const error = treatSecondArgAsContext ? undefined : errorOrContext;
+    const resolvedContext = treatSecondArgAsContext
+      ? (errorOrContext as LogContext)
+      : context;
+
     const errorDetails = {
-      correlationId: context?.correlationId,
-      errorName: error?.name,
-      errorMessage: error?.message,
-      errorCode: error?.code,
-      stack: error?.stack,
-      ...context,
+      correlationId: resolvedContext?.correlationId,
+      errorName: error instanceof Error ? error.name : undefined,
+      errorMessage:
+        error instanceof Error
+          ? error.message
+          : typeof error === 'string'
+            ? error
+            : undefined,
+      errorCode:
+        error instanceof Error
+          ? (error as Error & { code?: string | number }).code
+          : undefined,
+      stack: error instanceof Error ? error.stack : undefined,
+      ...resolvedContext,
     };
     logger.error(message, errorDetails);
   },
