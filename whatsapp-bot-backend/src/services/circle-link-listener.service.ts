@@ -50,6 +50,48 @@ export class CircleLinkListenerService {
     return this.parseNumericEventField(value) === expected;
   }
 
+  private getCoinLabelFromType(coinType: string | null | undefined): string {
+    const normalized = coinType?.trim();
+    if (!normalized) {
+      return 'SUI';
+    }
+
+    const upper = normalized.toUpperCase();
+    if (upper === 'SUI' || upper.endsWith('::SUI')) {
+      return 'SUI';
+    }
+
+    if (upper.includes('USDC')) {
+      return 'USDC';
+    }
+
+    if (upper.includes('USDT')) {
+      return 'USDT';
+    }
+
+    const lastSegment = normalized.split('::').filter(Boolean).pop();
+    return lastSegment ? lastSegment.toUpperCase() : upper;
+  }
+
+  private formatTokenAmount(
+    rawAmount: string | number | null | undefined,
+    coinType?: string | null
+  ): { amountFormatted: string; currencyLabel: string } | null {
+    const amountValue = this.parseNumericEventField(rawAmount);
+    if (amountValue === null) {
+      return null;
+    }
+
+    const currencyLabel = this.getCoinLabelFromType(coinType);
+    const decimals = currencyLabel === 'USDC' || currencyLabel === 'USDT' ? 6 : 9;
+    const fractionDigits = currencyLabel === 'SUI' ? 4 : 2;
+
+    return {
+      amountFormatted: (amountValue / Math.pow(10, decimals)).toFixed(fractionDigits),
+      currencyLabel,
+    };
+  }
+
   /**
    * Discover package IDs from the registry and linked circles
    * This ensures we query events from the correct packages regardless of deployments
@@ -1393,7 +1435,7 @@ export class CircleLinkListenerService {
   }
 
   /**
-   * Check for ContributionMade events (cycle contributions)
+   * Check for contribution events (SUI and stablecoin cycle contributions)
    */
   private async checkForContributionEvents(): Promise<void> {
     const packageIds = this.getPackageIds();
@@ -1402,20 +1444,49 @@ export class CircleLinkListenerService {
     }
 
     for (const packageId of packageIds) {
-      try {
-        const events = await this.suiClient.queryEvents({
-          query: {
-            MoveEventType: `${packageId}::njangi_payments::ContributionMade`,
-          },
-          limit: 50,
-          order: 'descending',
-        });
+      const contributionEventTypes = [
+        {
+          label: 'ContributionMade',
+          moveEventType: `${packageId}::njangi_payments::ContributionMade`,
+        },
+        {
+          label: 'StablecoinContributionMade',
+          moveEventType: `${packageId}::njangi_circles::StablecoinContributionMade`,
+        },
+      ];
 
-        if (!events.data || events.data.length === 0) {
+      const queryResults = await Promise.allSettled(
+        contributionEventTypes.map(({ moveEventType }) =>
+          this.suiClient.queryEvents({
+            query: { MoveEventType: moveEventType },
+            limit: 50,
+            order: 'descending',
+          })
+        )
+      );
+
+      const events: any[] = [];
+      for (const [index, result] of queryResults.entries()) {
+        if (result.status === 'fulfilled') {
+          events.push(...(result.value.data || []));
           continue;
         }
 
-        for (const event of events.data) {
+        appLogger.error(`Error checking for ${contributionEventTypes[index].label} events`, {
+          error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+          packageId: packageId.slice(0, 15) + '...',
+          moveEventType: contributionEventTypes[index].moveEventType,
+        });
+      }
+
+      if (events.length === 0) {
+        continue;
+      }
+
+      events.sort((a, b) => Number(b.timestampMs || '0') - Number(a.timestampMs || '0'));
+
+      try {
+        for (const event of events) {
           const eventId = event.id.txDigest + ':' + event.id.eventSeq;
           const eventTimestampMs = parseInt(event.timestampMs || '0', 10);
 
@@ -1434,7 +1505,7 @@ export class CircleLinkListenerService {
           await this.handleContributionEvent(event);
         }
       } catch (error) {
-        appLogger.error('Error checking for ContributionMade events', {
+        appLogger.error('Error processing contribution events', {
           error: error instanceof Error ? error.message : String(error),
           packageId: packageId.slice(0, 15) + '...',
         });
@@ -1443,7 +1514,7 @@ export class CircleLinkListenerService {
   }
 
   /**
-   * Handle a ContributionMade event - notify admin when member makes a cycle contribution
+   * Handle a contribution event - notify admin when member makes a cycle contribution
    */
   private async handleContributionEvent(event: any): Promise<void> {
     try {
@@ -1466,13 +1537,19 @@ export class CircleLinkListenerService {
         member,
         amount,
         cycle,
+        coin_type,
       } = parsedJson;
+      const cycleValue = this.parseNumericEventField(cycle);
+      const eventName = typeof event.type === 'string'
+        ? event.type.split('::').pop() || 'ContributionMade'
+        : 'ContributionMade';
 
-      appLogger.info('ContributionMade event detected', {
+      appLogger.info(`${eventName} event detected`, {
         circleId: circle_id?.slice(0, 10),
         member: member?.slice(0, 10),
         amount,
-        cycle,
+        cycle: cycleValue ?? cycle,
+        coinType: coin_type || 'SUI',
         txDigest: txDigest?.slice(0, 10),
       });
 
@@ -1491,8 +1568,17 @@ export class CircleLinkListenerService {
         return;
       }
 
-      // Format amount (assuming it's in smallest units, need to divide by 1e9 for SUI)
-      const amountFormatted = (Number(amount) / 1e9).toFixed(4);
+      const formattedContribution = this.formatTokenAmount(amount, coin_type);
+      if (!formattedContribution) {
+        appLogger.warn('Contribution event amount could not be parsed', {
+          circleId: circle_id?.slice(0, 10),
+          member: member?.slice(0, 10),
+          amount,
+          coinType: coin_type || 'SUI',
+          txDigest: txDigest?.slice(0, 10),
+        });
+        return;
+      }
 
       // Look up the member's name from the join requests database
       const memberInfo = await this.lookupMemberName(circle_id, member);
@@ -1503,8 +1589,9 @@ export class CircleLinkListenerService {
         phoneNumber,
         circle_id,
         member,
-        amountFormatted,
-        cycle,
+        formattedContribution.amountFormatted,
+        formattedContribution.currencyLabel,
+        String(cycleValue ?? cycle ?? '1'),
         memberName
       );
     } catch (error) {
@@ -1522,6 +1609,7 @@ export class CircleLinkListenerService {
     circleId: string,
     memberAddress: string,
     amount: string,
+    currencyLabel: string,
     cycle: string,
     memberName?: string | null
   ): Promise<void> {
@@ -1572,7 +1660,7 @@ export class CircleLinkListenerService {
         circle_name: circleName || 'Circle',
         cycle_number: String(cycle || '1'),
         contributor_name: memberName || memberDisplay || 'Member',
-        contrib_amount: `${amount} SUI`,
+        contrib_amount: `${amount} ${currencyLabel}`,
         paid_count: paidCount || '1',
         total_members: totalMembers || '1',
         remaining,
@@ -1618,7 +1706,7 @@ export class CircleLinkListenerService {
           phoneNumber: phoneNumber.replace(/./g, '*').slice(0, 5) + '...',
           circleId: circleId.slice(0, 10) + '...',
           member: memberAddress.slice(0, 10) + '...',
-          amount,
+          amount: `${amount} ${currencyLabel}`,
           cycle,
           messageId: result.messageId,
         });
