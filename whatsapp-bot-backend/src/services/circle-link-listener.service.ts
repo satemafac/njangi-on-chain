@@ -99,6 +99,23 @@ export class CircleLinkListenerService {
     };
   }
 
+  private getCircleMemberTotal(fields: any, fallback: number = 1): string {
+    const candidates = [
+      this.parseNumericEventField(fields?.current_members),
+      this.parseNumericEventField(fields?.members?.fields?.size),
+      this.parseNumericEventField(fields?.member_count),
+      Array.isArray(fields?.rotation_order) ? fields.rotation_order.length : null,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0) {
+        return String(candidate);
+      }
+    }
+
+    return String(fallback);
+  }
+
   private async resolveCoinTypeFromTransaction(
     txDigest: string | undefined,
     circleId: string,
@@ -1189,7 +1206,7 @@ export class CircleLinkListenerService {
         if (circleObj.data?.content?.dataType === 'moveObject') {
           const fields = (circleObj.data.content as any).fields;
           circleName = fields.name || 'Your Circle';
-          totalMembers = String(fields.member_count || fields.rotation_order?.length || 1);
+          totalMembers = this.getCircleMemberTotal(fields, 1);
           
           // Get deposit count from events
           depositCount = await this.getSecurityDepositCount(circleId);
@@ -1716,7 +1733,7 @@ export class CircleLinkListenerService {
         if (circleObj.data?.content?.dataType === 'moveObject') {
           const fields = (circleObj.data.content as any).fields;
           circleName = fields.name || 'Your Circle';
-          totalMembers = String(fields.member_count || fields.rotation_order?.length || 1);
+          totalMembers = this.getCircleMemberTotal(fields, 1);
           
           const currentCycle = parseInt(cycle) || 1;
           paidCount = await this.getContributionCount(circleId, currentCycle);
@@ -2443,7 +2460,7 @@ export class CircleLinkListenerService {
         if (circleObj.data?.content?.dataType === 'moveObject') {
           const fields = (circleObj.data.content as any).fields;
           circleName = fields.name || 'Your Circle';
-          memberCount = String(fields.member_count || fields.rotation_order?.length || 0);
+          memberCount = this.getCircleMemberTotal(fields, 0);
           
           if (fields.contribution_amount) {
             contributionAmount = `${(Number(fields.contribution_amount) / 1e9).toFixed(4)} SUI`;
@@ -2619,7 +2636,7 @@ export class CircleLinkListenerService {
         
         if (circleObj.data?.content?.dataType === 'moveObject') {
           const fields = (circleObj.data.content as any).fields;
-          const memberCount = Number(fields.member_count || fields.rotation_order?.length || 0);
+          const memberCount = Number(this.getCircleMemberTotal(fields, 0));
           const currentCycle = Number(cycle);
           
           // If cycle number equals member count, the full rotation is complete
