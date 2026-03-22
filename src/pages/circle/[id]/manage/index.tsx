@@ -544,7 +544,7 @@ const getJsonRpcUrl = (): string => {
 export default function ManageCircle() {
   const router = useRouter();
   const { id } = router.query;
-  const { isAuthenticated, userAddress, account } = useAuth();
+  const { isAuthenticated, isLoading: authLoading, userAddress, account } = useAuth();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
   const [circlePackageId, setCirclePackageId] = useState<string>(PACKAGE_ID); // Track the package ID for this circle
@@ -685,11 +685,15 @@ export default function ManageCircle() {
   }, [recommendedEmberSource, emberSourceBalances, emberSourceAsset]);
 
   useEffect(() => {
-    if (!isAuthenticated) {
-      router.push('/');
+    if (authLoading) {
       return;
     }
-  }, [isAuthenticated, router]);
+
+    if (!isAuthenticated) {
+      router.replace('/');
+      return;
+    }
+  }, [authLoading, isAuthenticated, router]);
 
   useEffect(() => {
     setLoading(true);
@@ -3926,7 +3930,7 @@ export default function ManageCircle() {
     return made;
   }, [contributionStatus, circle, loadingContributions]);
 
-  if (!isAuthenticated || !account) {
+  if (authLoading || !isAuthenticated || !account) {
     return null;
   }
 

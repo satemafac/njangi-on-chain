@@ -46,7 +46,7 @@ interface CircleCreatedEvent {
 export default function CircleDetails() {
   const router = useRouter();
   const { id } = router.query;
-  const { isAuthenticated, userAddress, account } = useAuth();
+  const { isAuthenticated, isLoading: authLoading, userAddress, account } = useAuth();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
   const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
@@ -55,16 +55,20 @@ export default function CircleDetails() {
   const [, setMembershipVerified] = useState<boolean | null>(null);
 
   useEffect(() => {
+    if (authLoading) {
+      return;
+    }
+
     if (!isAuthenticated && id) {
       // Redirect to home with returnUrl so user comes back after login
       const returnUrl = encodeURIComponent(`/circle/${id}`);
-      router.push(`/?returnUrl=${returnUrl}`);
+      router.replace(`/?returnUrl=${returnUrl}`);
       return;
     }
-  }, [isAuthenticated, router, id]);
+  }, [authLoading, isAuthenticated, router, id]);
 
   // Verify user membership before showing circle details
-  const verifyMembership = async () => {
+  const verifyMembership = async (): Promise<boolean | null> => {
     if (!id || !userAddress) return false;
     
     try {
@@ -160,27 +164,32 @@ export default function CircleDetails() {
       
     } catch (error) {
       console.error('[Membership] Error verifying membership:', error);
-      return false;
+      return null;
     }
   };
 
   useEffect(() => {
     // Fetch circle details when ID is available
+    if (authLoading || !router.isReady || !id || !userAddress) {
+      return;
+    }
+
     if (id && userAddress) {
       // First verify membership, then fetch details
       verifyMembership().then(isMember => {
-        setMembershipVerified(isMember);
-        if (isMember) {
-          fetchCircleDetails();
-        } else {
+        setMembershipVerified(isMember ?? null);
+        if (isMember === false) {
           setLoading(false);
           toast.error('You are no longer a member of this circle');
-          router.push('/dashboard');
+          router.replace('/dashboard');
+          return;
         }
+
+        fetchCircleDetails();
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, userAddress]);
+  }, [authLoading, id, router.isReady, userAddress]);
 
   useEffect(() => {
     // Fetch SUI price
@@ -842,7 +851,7 @@ export default function CircleDetails() {
     }
   };
 
-  if (!isAuthenticated || !account) {
+  if (authLoading || !isAuthenticated || !account) {
     return null;
   }
 

@@ -648,7 +648,7 @@ const ContributionProgress: React.FC<{
 export default function ContributeToCircle() {
   const router = useRouter();
   const { id } = router.query;
-  const { isAuthenticated, userAddress, account } = useAuth();
+  const { isAuthenticated, isLoading: authLoading, userAddress, account } = useAuth();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -746,11 +746,15 @@ export default function ContributeToCircle() {
   const isSuiCircleModeEnabled = Boolean(circle?.autoSwapEnabled);
 
   useEffect(() => {
-    if (!isAuthenticated) {
-      router.push('/');
+    if (authLoading) {
       return;
     }
-  }, [isAuthenticated, router]);
+
+    if (!isAuthenticated) {
+      router.replace('/');
+      return;
+    }
+  }, [authLoading, isAuthenticated, router]);
 
   // Circle-wide token mode is admin-managed; force tab to match active mode.
   useEffect(() => {
@@ -892,7 +896,7 @@ export default function ContributeToCircle() {
   };
 
   // Verify user membership before allowing access to contribute page
-  const verifyMembership = async (): Promise<boolean> => {
+  const verifyMembership = async (): Promise<boolean | null> => {
     if (!id || !userAddress) return false;
     
     try {
@@ -988,7 +992,7 @@ export default function ContributeToCircle() {
       
     } catch (error) {
       console.error('[Membership] Error verifying membership:', error);
-      return false;
+      return null;
     }
   };
 
@@ -1012,18 +1016,23 @@ export default function ContributeToCircle() {
 
   useEffect(() => {
     // Verify membership and fetch circle details when ID is available
+    if (authLoading || !router.isReady || !id || !userAddress) {
+      return;
+    }
+
     if (id && userAddress) {
       verifyMembership().then(isMember => {
-        if (isMember) {
-      fetchCircleDetails();
-        } else {
+        if (isMember === false) {
           setLoading(false);
           toast.error('You are no longer a member of this circle');
-          router.push('/dashboard');
+          router.replace('/dashboard');
+          return;
         }
+
+        fetchCircleDetails();
       });
     }
-  }, [id, userAddress]);
+  }, [authLoading, id, router, router.isReady, userAddress]);
 
   // Add effect to fetch user balance and deposit status when circle data is loaded
   useEffect(() => {
@@ -4575,7 +4584,7 @@ export default function ContributeToCircle() {
     );
   };
 
-  if (!isAuthenticated || !account) {
+  if (authLoading || !isAuthenticated || !account) {
     return null;
   }
 
