@@ -1,11 +1,18 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
+import { Instrument_Serif } from 'next/font/google';
 import { useAuth } from '@/contexts/AuthContext';
 import { Bell, User, Menu, X } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useRouter } from 'next/router';
 import type { JoinRequest } from '@/services/database-service';
+
+const wordmarkFont = Instrument_Serif({
+  subsets: ['latin'],
+  weight: '400',
+  display: 'swap',
+});
 
 export const Navbar: React.FC = () => {
   const { logout, account } = useAuth();
@@ -249,87 +256,96 @@ export const Navbar: React.FC = () => {
   }, [router.pathname]);
 
   return (
-    <nav className="bg-white shadow-sm sticky top-0 z-40">
-      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
-        <div className="flex justify-between h-14 sm:h-16">
-          <div className="flex items-center">
-            <Link href="/dashboard" className="flex items-center">
+    <nav className="sticky top-0 z-40 border-b border-stone-200/80 bg-[#f6f3ee]/90 backdrop-blur-xl">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        <div className="flex h-[60px] items-center justify-between gap-4 sm:h-16">
+          <div className="flex min-w-0 items-center">
+            <Link href="/dashboard" className="group flex min-w-0 items-center gap-2.5 sm:gap-3">
               {!logoError ? (
-                <Image
-                  src="/njangi-on-chain-logo.png"
-                  alt="Njangi on-chain"
-                  width={64}
-                  height={64}
-                  className="mr-2 sm:mr-3 w-12 h-12 sm:w-16 sm:h-16 object-contain"
-                  priority
-                  unoptimized
-                  onError={(e) => {
-                    console.error('Logo failed to load:', e);
-                    setLogoError(true);
-                  }}
-                  onLoad={() => {
-                    console.log('Logo loaded successfully');
-                  }}
-                />
+                <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-stone-200 bg-white shadow-[0_12px_30px_-22px_rgba(15,23,42,0.42)] sm:h-10 sm:w-10">
+                  <Image
+                    src="/njangi-on-chain-logo.png"
+                    alt="Njangi on-chain"
+                    width={80}
+                    height={80}
+                    className="h-full w-full scale-[2.2] object-contain transition-transform duration-300 group-hover:scale-[2.28]"
+                    priority
+                    unoptimized
+                    onError={(e) => {
+                      console.error('Logo failed to load:', e);
+                      setLogoError(true);
+                    }}
+                    onLoad={() => {
+                      console.log('Logo loaded successfully');
+                    }}
+                  />
+                </div>
               ) : (
-                <div className="mr-2 sm:mr-3 w-12 h-12 sm:w-16 sm:h-16 bg-blue-100 flex items-center justify-center rounded">
-                  <span className="text-blue-600 font-bold text-xs">N</span>
+                <div className="flex h-9 w-9 items-center justify-center rounded-full border border-stone-200 bg-stone-100 sm:h-10 sm:w-10">
+                  <span className={`${wordmarkFont.className} text-xs text-slate-700 sm:text-sm`}>N</span>
                 </div>
               )}
-              <h1 className="text-base sm:text-xl font-semibold text-blue-600">Njangi on-chain</h1>
+              <div className="min-w-0 pb-0.5">
+                <span
+                  className={`${wordmarkFont.className} block truncate text-[1.32rem] leading-[0.86] tracking-[-0.05em] text-slate-950 sm:text-[1.58rem]`}
+                >
+                  Njangi
+                </span>
+                <span className="mt-0.5 block truncate text-[10px] font-semibold uppercase tracking-[0.34em] text-slate-500 sm:text-[11px]">
+                  On-chain
+                </span>
+              </div>
             </Link>
           </div>
-          
-          {/* Mobile menu button */}
+
           {account && (
-            <div className="flex md:hidden items-center">
+            <div className="flex items-center md:hidden">
               <button
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                className="p-2 rounded-md text-gray-600 hover:text-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-stone-200 bg-white text-slate-600 transition hover:border-stone-300 hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-stone-300 focus:ring-offset-2"
               >
                 <span className="sr-only">{mobileMenuOpen ? 'Close menu' : 'Open menu'}</span>
                 {mobileMenuOpen ? (
-                  <X className="block h-6 w-6" aria-hidden="true" />
+                  <X className="block h-5 w-5" aria-hidden="true" />
                 ) : (
-                  <Menu className="block h-6 w-6" aria-hidden="true" />
+                  <Menu className="block h-5 w-5" aria-hidden="true" />
                 )}
               </button>
             </div>
           )}
-          
-          {/* Desktop nav items */}
+
           {account && (
-            <div className="hidden md:flex items-center space-x-4">
-              {/* User Profile Picture */}
+            <div className="hidden items-center gap-3 md:flex">
               <Tooltip.Provider>
                 <Tooltip.Root>
                   <Tooltip.Trigger asChild>
-                    <div 
-                      className="w-8 h-8 rounded-full overflow-hidden cursor-pointer hover:ring-2 hover:ring-blue-300 transition-all"
+                    <button
+                      type="button"
+                      className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-stone-200 bg-white transition hover:border-stone-300 hover:bg-stone-50"
                       onClick={() => router.push('/dashboard')}
                     >
                       {account.picture ? (
                         <Image
                           src={account.picture}
                           alt="Profile"
-                          width={32}
-                          height={32}
-                          className="object-cover"
+                          width={40}
+                          height={40}
+                          className="h-full w-full object-cover"
                           priority={true}
                           onError={() => {
                             console.error('Error loading profile picture');
                           }}
                         />
                       ) : (
-                        <div className="w-full h-full bg-blue-100 flex items-center justify-center">
-                          <User className="w-5 h-5 text-blue-600" />
+                        <div className="flex h-full w-full items-center justify-center bg-stone-100">
+                          <User className="h-4 w-4 text-slate-600" />
                         </div>
                       )}
-                    </div>
+                    </button>
                   </Tooltip.Trigger>
                   <Tooltip.Portal>
                     <Tooltip.Content
-                      className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                      className="rounded bg-gray-800 px-2 py-1 text-xs text-white"
                       sideOffset={5}
                     >
                       {account.name || 'My Profile'}
@@ -339,58 +355,62 @@ export const Navbar: React.FC = () => {
                 </Tooltip.Root>
               </Tooltip.Provider>
 
-              {/* Notifications Panel */}
               <div className="relative" ref={notificationsRef}>
                 <button
                   onClick={() => setShowNotifications(!showNotifications)}
-                  className="relative p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors duration-200"
+                  className="relative inline-flex h-10 w-10 items-center justify-center rounded-full border border-stone-200 bg-white text-slate-600 transition hover:border-stone-300 hover:bg-stone-50"
                 >
-                  <Bell className={`w-6 h-6 ${loading ? 'animate-pulse' : ''}`} />
+                  <Bell className={`h-5 w-5 ${loading ? 'animate-pulse' : ''}`} />
                   {pendingRequests.length > 0 && (
-                    <span className="absolute top-0 right-0 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white transform translate-x-1/2 -translate-y-1/2 bg-red-600 rounded-full">
+                    <span className="absolute right-0 top-0 inline-flex h-5 min-w-[1.25rem] -translate-y-1/3 translate-x-1/4 items-center justify-center rounded-full bg-red-600 px-1 text-[11px] font-bold leading-none text-white">
                       {pendingRequests.length}
                     </span>
                   )}
                 </button>
 
-                {/* Notifications Dropdown */}
                 {showNotifications && (
-                  <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-lg shadow-lg ring-1 ring-black ring-opacity-5 z-45">
-                    <div className="p-3 sm:p-4 border-b border-gray-100 flex justify-between items-center">
+                  <div className="absolute right-0 z-50 mt-3 w-80 overflow-hidden rounded-[24px] border border-stone-200 bg-white shadow-[0_24px_60px_-32px_rgba(15,23,42,0.35)] sm:w-96">
+                    <div className="flex items-center justify-between border-b border-stone-200 px-4 py-4">
                       <div>
-                        <h3 className="text-base sm:text-lg font-medium text-gray-900">Notifications</h3>
-                        <p className="text-xs sm:text-sm text-gray-500">Join requests for your circles</p>
+                        <h3 className="text-base font-semibold text-slate-950">Notifications</h3>
+                        <p className="text-xs text-slate-500 sm:text-sm">Join requests for your circles</p>
                       </div>
-                      <div className="flex items-center space-x-1">
-                        {/* Clear All Button */}
+                      <div className="flex items-center gap-1">
                         {pendingRequests.length > 0 && (
-                          <button 
+                          <button
                             onClick={clearAllNotifications}
                             disabled={loading}
-                            className={`p-2 rounded-full transition-colors text-xs ${loading ? 'text-gray-400' : 'text-red-500 hover:text-red-700 hover:bg-red-50'}`}
+                            className={`inline-flex h-9 w-9 items-center justify-center rounded-full transition-colors ${
+                              loading
+                                ? 'text-stone-300'
+                                : 'text-red-500 hover:bg-red-50 hover:text-red-600'
+                            }`}
                             title="Clear all notifications"
                           >
-                            <svg 
-                              className="w-4 h-4" 
-                              fill="none" 
-                              stroke="currentColor" 
+                            <svg
+                              className="h-4 w-4"
+                              fill="none"
+                              stroke="currentColor"
                               viewBox="0 0 24 24"
                             >
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1-1H8a1 1 0 00-1 1v3M4 7h16" />
                             </svg>
                           </button>
                         )}
-                        {/* Refresh Button */}
-                        <button 
+                        <button
                           onClick={() => fetchPendingRequests()}
                           disabled={loading}
-                          className={`p-2 rounded-full transition-colors ${loading ? 'text-gray-400' : 'text-gray-500 hover:text-blue-600 hover:bg-blue-50'}`}
+                          className={`inline-flex h-9 w-9 items-center justify-center rounded-full transition-colors ${
+                            loading
+                              ? 'text-stone-300'
+                              : 'text-slate-500 hover:bg-stone-100 hover:text-slate-700'
+                          }`}
                           title="Refresh notifications"
                         >
-                          <svg 
-                            className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} 
-                            fill="none" 
-                            stroke="currentColor" 
+                          <svg
+                            className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`}
+                            fill="none"
+                            stroke="currentColor"
                             viewBox="0 0 24 24"
                           >
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -400,67 +420,69 @@ export const Navbar: React.FC = () => {
                     </div>
                     <div className="max-h-96 overflow-y-auto">
                       {loading ? (
-                        <div className="p-4 text-center text-gray-500">
-                          <svg className="animate-spin h-5 w-5 mx-auto mb-2 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <div className="p-5 text-center text-slate-500">
+                          <svg className="mx-auto mb-2 h-5 w-5 animate-spin text-slate-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                           </svg>
                           <span className="text-sm">Loading notifications...</span>
                         </div>
                       ) : fetchError ? (
-                        <div className="p-4 text-center text-red-500">
+                        <div className="p-5 text-center text-red-500">
                           <div className="text-sm">{fetchError}</div>
-                          <button 
+                          <button
                             onClick={() => {
                               retryCount.current = 0;
                               setFetchError(null);
                               fetchPendingRequests();
                             }}
-                            className="mt-2 text-xs bg-red-100 hover:bg-red-200 text-red-700 px-2 py-1 rounded"
+                            className="mt-3 inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100"
                           >
                             Retry
                           </button>
                         </div>
                       ) : pendingRequests.length > 0 ? (
-                        <div className="divide-y divide-gray-100">
+                        <div className="divide-y divide-stone-200">
                           {pendingRequests.map((request) => (
-                            <div 
+                            <div
                               key={`${request.circle_id}-${request.user_address}`}
-                              className="cursor-pointer p-3 sm:p-4 hover:bg-gray-50 dark:hover:bg-blue-800/20"
+                              className="cursor-pointer p-4 transition-colors hover:bg-stone-50"
                               onClick={() => {
                                 router.push(`/circle/${request.circle_id}`);
                                 setShowNotifications(false);
                               }}
                             >
                               <div className="flex items-start">
-                                <Image
-                                  src="/njangi-on-chain-logo.png"
-                                  alt="Circle Logo"
-                                  width={48}
-                                  height={48}
-                                  className="rounded-full w-10 h-10 sm:w-12 sm:h-12 object-contain"
-                                />
+                                <div className="flex h-11 w-11 items-center justify-center rounded-full border border-stone-200 bg-stone-50">
+                                  <Image
+                                    src="/njangi-on-chain-logo.png"
+                                    alt="Circle Logo"
+                                    width={48}
+                                    height={48}
+                                    className="h-8 w-8 object-contain"
+                                  />
+                                </div>
                                 <div className="ml-3">
-                                  <p className="font-medium text-xs sm:text-sm text-gray-900">
-                                    <span className="font-semibold text-blue-600">{request.user_name}</span> wants to join
-                                    <span className="font-bold text-gray-800"> {request.circle_name}</span>
+                                  <p className="text-xs font-medium text-slate-900 sm:text-sm">
+                                    <span className="font-semibold text-slate-950">{request.user_name}</span> wants to join
+                                    <span className="font-semibold text-slate-700"> {request.circle_name}</span>
                                   </p>
-                                  <div className="mt-1 sm:mt-2 text-xs text-gray-500">
+                                  <div className="mt-2 text-xs text-slate-500">
                                     {new Date(request.created_at || 0).toLocaleDateString('en-US', {
                                       year: 'numeric',
                                       month: 'short',
                                       day: 'numeric',
                                     })}
                                   </div>
-                                  
-                                  <div className="mt-2 flex space-x-2">
+
+                                  <div className="mt-3 flex">
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         router.push(`/circle/${request.circle_id}/manage`);
                                         setShowNotifications(false);
                                       }}
-                                      className="px-3 py-1 text-xs rounded font-medium bg-blue-100 text-blue-700 hover:bg-blue-200"
+                                      className="inline-flex items-center justify-center rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-stone-300 hover:bg-stone-100"
                                     >
                                       Review
                                     </button>
@@ -471,7 +493,7 @@ export const Navbar: React.FC = () => {
                           ))}
                         </div>
                       ) : (
-                        <div className="p-4 text-center text-gray-500 text-xs sm:text-sm">
+                        <div className="p-5 text-center text-xs text-slate-500 sm:text-sm">
                           No pending join requests
                         </div>
                       )}
@@ -480,34 +502,32 @@ export const Navbar: React.FC = () => {
                 )}
               </div>
 
-              {/* Sign Out Button */}
               <Tooltip.Provider>
                 <Tooltip.Root>
                   <Tooltip.Trigger asChild>
                     <button
                       onClick={logout}
-                      className="group relative inline-flex items-center justify-center px-3 sm:px-4 py-1.5 sm:py-2 bg-white border border-gray-200 rounded-full shadow-sm text-xs sm:text-sm font-medium text-gray-700 hover:bg-gray-50 hover:border-red-100 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-all duration-200"
+                      className="inline-flex items-center justify-center rounded-full border border-stone-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:border-stone-300 hover:bg-stone-50 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-stone-300 focus:ring-offset-2"
                     >
-                      <span className="absolute inset-0 rounded-full bg-gradient-to-r from-red-50 to-red-50 opacity-0 group-hover:opacity-100 transition-opacity duration-200"></span>
-                      <svg 
-                        className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1 sm:mr-2 text-gray-400 group-hover:text-red-500 transition-colors duration-200" 
-                        fill="none" 
-                        stroke="currentColor" 
+                      <svg
+                        className="mr-2 h-4 w-4 text-slate-400 transition-colors"
+                        fill="none"
+                        stroke="currentColor"
                         viewBox="0 0 24 24"
                       >
-                        <path 
-                          strokeLinecap="round" 
-                          strokeLinejoin="round" 
-                          strokeWidth="2" 
-                          d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" 
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="2"
+                          d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
                         />
                       </svg>
-                      <span className="relative">Sign Out</span>
+                      Sign Out
                     </button>
                   </Tooltip.Trigger>
                   <Tooltip.Portal>
                     <Tooltip.Content
-                      className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
+                      className="rounded bg-gray-800 px-2 py-1 text-xs text-white"
                       sideOffset={5}
                     >
                       Sign out of your account
@@ -519,86 +539,80 @@ export const Navbar: React.FC = () => {
             </div>
           )}
         </div>
-        
-        {/* Mobile menu, show/hide based on menu state */}
+
         {mobileMenuOpen && account && (
-          <div className="md:hidden">
-            <div className="pt-2 pb-4 space-y-2 px-2 border-t border-gray-200">
-              {/* Mobile User Profile */}
-              <div 
-                className="flex items-center space-x-3 px-3 py-2 rounded-md hover:bg-blue-50"
+          <div className="border-t border-stone-200/80 pb-4 pt-3 md:hidden">
+            <div className="space-y-2">
+              <button
+                type="button"
+                className="flex w-full items-center gap-3 rounded-[20px] border border-stone-200 bg-white px-4 py-3 text-left shadow-[0_14px_30px_-28px_rgba(15,23,42,0.35)] transition hover:bg-stone-50"
                 onClick={() => {
                   router.push('/dashboard');
                   setMobileMenuOpen(false);
                 }}
               >
-                <div className="flex-shrink-0 w-9 h-9 rounded-full overflow-hidden bg-blue-100">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-full border border-stone-200 bg-stone-100">
                   {account.picture ? (
                     <Image
                       src={account.picture}
                       alt="Profile"
-                      width={36}
-                      height={36}
-                      className="object-cover"
+                      width={40}
+                      height={40}
+                      className="h-full w-full object-cover"
                       priority={true}
                     />
                   ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <User className="w-5 h-5 text-blue-600" />
-                    </div>
+                    <User className="h-4 w-4 text-slate-600" />
                   )}
                 </div>
                 <div className="flex flex-col">
-                  <span className="text-sm font-medium text-gray-900">{account.name || 'My Account'}</span>
-                  <span className="text-xs text-gray-500">View dashboard</span>
+                  <span className="text-sm font-medium text-slate-950">{account.name || 'My Account'}</span>
+                  <span className="text-xs text-slate-500">View dashboard</span>
                 </div>
-              </div>
-              
-              {/* Mobile Notifications */}
-              <div
-                className="flex items-center justify-between px-3 py-2 rounded-md hover:bg-blue-50"
+              </button>
+
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-[20px] border border-stone-200 bg-white px-4 py-3 text-left shadow-[0_14px_30px_-28px_rgba(15,23,42,0.35)] transition hover:bg-stone-50"
                 onClick={(e) => {
                   e.preventDefault();
-                  // Toggle a focused mobile view of notifications or navigate to a dedicated page
                   if (pendingRequests.length > 0) {
-                    // Navigate to first circle with pending requests
                     router.push(`/circle/${pendingRequests[0].circle_id}/manage`);
                     setMobileMenuOpen(false);
                   }
                 }}
               >
-                <div className="flex items-center space-x-3">
-                  <div className="relative flex-shrink-0 rounded-full p-1 bg-gray-100">
-                    <Bell className="w-5 h-5 text-gray-600" />
+                <div className="flex items-center gap-3">
+                  <div className="relative flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border border-stone-200 bg-stone-100">
+                    <Bell className="h-4 w-4 text-slate-600" />
                     {pendingRequests.length > 0 && (
-                      <span className="absolute top-0 right-0 block h-4 w-4 rounded-full bg-red-600 text-white text-xs font-bold flex items-center justify-center transform translate-x-1/4 -translate-y-1/4">
+                      <span className="absolute right-0 top-0 flex h-4 w-4 translate-x-1/4 -translate-y-1/4 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white">
                         {pendingRequests.length}
                       </span>
                     )}
                   </div>
-                  <span className="text-sm font-medium text-gray-900">Notifications</span>
+                  <span className="text-sm font-medium text-slate-950">Notifications</span>
                 </div>
-                <span className="text-xs font-medium text-blue-600">
+                <span className="text-xs font-medium text-slate-500">
                   {pendingRequests.length ? `${pendingRequests.length} new` : 'None'}
                 </span>
-              </div>
-              
-              {/* Mobile Sign Out */}
+              </button>
+
               <button
                 onClick={logout}
-                className="w-full flex items-center px-3 py-2 text-sm font-medium text-gray-900 hover:text-red-600 rounded-md hover:bg-red-50"
+                className="inline-flex w-full items-center rounded-[20px] border border-stone-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 transition hover:bg-stone-50 hover:text-red-600"
               >
-                <svg 
-                  className="mr-3 h-5 w-5 text-gray-400" 
-                  fill="none" 
-                  stroke="currentColor" 
+                <svg
+                  className="mr-3 h-4 w-4 text-slate-400"
+                  fill="none"
+                  stroke="currentColor"
                   viewBox="0 0 24 24"
                 >
-                  <path 
-                    strokeLinecap="round" 
-                    strokeLinejoin="round" 
-                    strokeWidth="2" 
-                    d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" 
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
                   />
                 </svg>
                 Sign Out

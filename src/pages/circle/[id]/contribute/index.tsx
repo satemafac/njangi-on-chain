@@ -664,11 +664,11 @@ const ContributionProgress: React.FC<{
   
   // Determine status color based on progress
   const getStatusColor = () => {
-    if (isPaused) return 'text-amber-500'; // Amber for paused state
-    if (progressPercentage === 100) return 'text-green-500';
-    if (progressPercentage > 60) return 'text-blue-500';
-    if (progressPercentage > 30) return 'text-yellow-500';
-    return 'text-gray-500';
+    if (isPaused) return 'text-amber-500';
+    if (progressPercentage === 100) return 'text-emerald-500';
+    if (progressPercentage > 60) return 'text-slate-900';
+    if (progressPercentage > 30) return 'text-slate-700';
+    return 'text-stone-400';
   };
   
   // Helper to format wallet address for display
@@ -680,26 +680,23 @@ const ContributionProgress: React.FC<{
 
   return (
     <div className={`flex flex-col items-center ${className}`}>
-      {/* Title has been removed from here */}
-      <div className="relative w-36 h-36">
-        {/* Background circle (gray/inactive) */}
+      <div className="relative h-36 w-36">
         <svg className="w-full h-full" viewBox="0 0 100 100">
           <circle
             cx="50"
             cy="50"
             r="45"
             fill="none"
-            stroke="#e5e7eb"
+            stroke="#e7e5e4"
             strokeWidth="8"
           />
-          
-          {/* Progress circle */}
+
           <circle
             cx="50"
             cy="50"
             r="45"
             fill="none"
-            stroke={isPaused ? '#f59e0b' : progressPercentage === 100 ? '#10B981' : '#3B82F6'}
+            stroke={isPaused ? '#d97706' : progressPercentage === 100 ? '#10B981' : '#0f172a'}
             strokeWidth="8"
             strokeDasharray={`${progressPercentage * 2.83} 283`}
             strokeDashoffset="0"
@@ -707,11 +704,9 @@ const ContributionProgress: React.FC<{
             strokeLinecap="round"
             className="transition-all duration-500 ease-in-out"
           />
-          
-          {/* Center content - conditional rendering */}
+
           {isPaused ? (
             <>
-              {/* Pause icon for paused state - move up slightly */}
               <g transform="translate(50, 42)" className="fill-amber-500">
                 <rect x="-10" y="-15" width="7" height="30" rx="2" />
                 <rect x="3" y="-15" width="7" height="30" rx="2" />
@@ -721,14 +716,13 @@ const ContributionProgress: React.FC<{
                 y="75" 
                 textAnchor="middle" 
                 dominantBaseline="middle"
-                className="text-gray-500 text-xs fill-current"
+                className="fill-current text-xs text-slate-500"
               >
                 Cycle
               </text>
             </>
           ) : (
             <>
-              {/* Percentage text for normal state */}
               <text 
                 x="50" 
                 y="50" 
@@ -743,17 +737,15 @@ const ContributionProgress: React.FC<{
                 y="65" 
                 textAnchor="middle" 
                 dominantBaseline="middle"
-                className="text-gray-500 text-xs fill-current"
+                className="fill-current text-xs text-slate-500"
               >
                 Complete
               </text>
             </>
           )}
         </svg>
-        
-        {/* Member sectors around the circle */}
+
         {(() => {
-          // Filter out the recipient for dot visualization around the circle
           const membersForDots = progressData.currentRecipientAddress && !isPaused
             ? progressData.memberList.filter(member => member !== progressData.currentRecipientAddress)
             : progressData.memberList;
@@ -764,17 +756,16 @@ const ContributionProgress: React.FC<{
           const x = 50 + 55 * Math.cos(angle);
           const y = 50 + 55 * Math.sin(angle);
           const hasContributed = progressData.contributedMembers.has(memberAddr);
-            // Recipient is filtered out, so dotColor is simpler
             const dotColor = isPaused 
-              ? 'bg-amber-300' // Amber for paused state
+              ? 'bg-amber-300'
               : hasContributed 
-                ? 'bg-green-500' 
-                : 'bg-gray-300';
+                ? 'bg-emerald-500' 
+                : 'bg-stone-300';
           
           return (
-              <div key={memberAddr} className="group"> {/* Use memberAddr for key due to filtering */}
+              <div key={memberAddr} className="group">
               <div 
-                className={`absolute w-3 h-3 rounded-full transform -translate-x-1/2 -translate-y-1/2 border border-white 
+                className={`absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 transform rounded-full border border-white 
                     ${dotColor} 
                   hover:scale-125 transition-all duration-200`}
                 style={{ 
@@ -782,7 +773,6 @@ const ContributionProgress: React.FC<{
                   top: `${y}%`,
                 }}
               />
-              {/* Tooltip that appears on hover */}
               <div 
                 className="absolute hidden group-hover:block bg-gray-900 text-white text-xs rounded p-2 z-10"
                 style={{ 
@@ -804,20 +794,19 @@ const ContributionProgress: React.FC<{
             </div>
           );
           });
-        })()}
+      })()}
       </div>
       
       <div className="mt-4 text-center">
-        <p className="text-sm font-medium">
+        <p className="text-sm font-medium text-slate-900">
           {isLoading ? "Loading..." : `${contributedCount} of ${expectedContributors} expected contributors`}
         </p>
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-slate-500">
           {isPaused ? `Cycle ${currentCycle} Completed - Pending Next Cycle` : `Current Cycle Contributions`}
         </p>
       </div>
-      
-      {/* Add legend to identify members */}
-      <div className="mt-3 grid grid-cols-1 gap-2 text-xs w-full max-w-xs">
+
+      <div className="mt-3 grid w-full max-w-xs grid-cols-1 gap-2 text-xs">
         {progressData.memberList.map((memberAddr, index) => {
           const hasContributed = progressData.contributedMembers.has(memberAddr);
           const isRecipient = !isPaused && memberAddr === progressData.currentRecipientAddress;
@@ -833,23 +822,23 @@ const ContributionProgress: React.FC<{
           const statusColorClass = isPaused 
             ? 'text-amber-600 font-medium' 
             : isRecipient 
-              ? 'text-blue-600 font-medium' 
+              ? 'text-sky-700 font-medium' 
               : hasContributed 
-                ? 'text-green-600 font-medium' 
-                : 'text-gray-500';
+                ? 'text-emerald-700 font-medium' 
+                : 'text-slate-500';
                 
           const dotColorClass = isPaused 
             ? 'bg-amber-300' 
             : isRecipient 
-              ? 'bg-blue-500' 
+              ? 'bg-sky-500' 
               : hasContributed 
-                ? 'bg-green-500' 
-                : 'bg-gray-300';
+                ? 'bg-emerald-500' 
+                : 'bg-stone-300';
 
           return (
-            <div key={index} className="flex items-center justify-between">
+            <div key={index} className="flex items-center justify-between rounded-full border border-stone-200 bg-white px-3 py-2">
               <div className="flex items-center">
-                <div className={`w-3 h-3 mr-2 rounded-full ${dotColorClass}`}></div>
+                <div className={`mr-2 h-3 w-3 rounded-full ${dotColorClass}`}></div>
                 <span className="font-mono">{formatAddress(memberAddr)}</span>
               </div>
               <span className={`${statusColorClass} ml-4`}>
@@ -3751,6 +3740,32 @@ export default function ContributeToCircle() {
     }
   };
 
+  const pageSurfaceClass =
+    'rounded-[32px] border border-stone-200 bg-white shadow-[0_24px_70px_-42px_rgba(15,23,42,0.32)]';
+  const sectionCardClass =
+    'rounded-[28px] border border-stone-200 bg-white px-5 py-5 sm:px-6 sm:py-6 shadow-[0_18px_50px_-38px_rgba(15,23,42,0.24)]';
+  const mutedPanelClass = 'rounded-[24px] border border-stone-200 bg-stone-50/80 p-4 sm:p-5';
+  const warningPanelClass = 'rounded-[24px] border border-amber-200 bg-amber-50/75 p-4 sm:p-5';
+  const successPanelClass = 'rounded-[24px] border border-emerald-200 bg-emerald-50/70 p-4 sm:p-5';
+  const infoPanelClass = 'rounded-[24px] border border-sky-200 bg-sky-50/65 p-4 sm:p-5';
+  const sectionTitleClass = 'text-xl font-semibold tracking-tight text-slate-950';
+  const sectionEyebrowClass = 'text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500';
+  const primaryActionClass =
+    'inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+  const secondaryActionClass =
+    'inline-flex items-center justify-center rounded-full border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:border-stone-400 hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-stone-300 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+  const subtleTagClass =
+    'inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-3 py-1.5 text-sm font-medium text-slate-600';
+  const circleStatusLabel = circle?.pausedAfterCycle ? 'Paused' : circle?.isActive ? 'Active' : 'Inactive';
+  const paymentStatusLabel = !userDepositPaid
+    ? 'Deposit required'
+    : userHasContributed
+      ? 'Contributed'
+      : isCurrentRecipient
+        ? 'Recipient'
+        : 'Ready';
+  const circleModeLabel = isSuiCircleModeEnabled ? 'SUI' : 'USDC';
+
   // Update the renderContributionOptions function to show a message when user is the current recipient
   const renderContributionOptions = () => {
     const paymentLabel = userDepositPaid ? 'Contribution' : 'Security Deposit';
@@ -3815,121 +3830,117 @@ export default function ContributeToCircle() {
     );
 
     return (
-      <div className="pt-6 border-t border-gray-200 px-2">
-        <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-medium text-gray-900 border-l-4 border-blue-500 pl-3">Make Contribution</h3>
-           
-           {/* Add refresh button */}
-           <button
-             onClick={handleRefreshContributionStatus}
-             className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 py-1 px-2 rounded flex items-center transition-colors"
-           >
-             <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-             </svg>
-             Refresh Status
-           </button>
-         </div>
-
-        <div className="mb-4">
-          <p className="mb-2 text-sm font-medium text-gray-700">Circle Token Mode</p>
-          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
-            <button
-              type="button"
-              onClick={() => {
-                if (isSuiCircleModeEnabled) {
-                  toast.error('Circle is currently in SUI mode. USDC is unavailable while SUI mode is active.');
-                  return;
-                }
-                setCurrencyTabIndex(0);
-              }}
-              disabled={isSuiCircleModeEnabled}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                currencyTabIndex === 0
-                  ? 'bg-emerald-600 text-white'
-                  : isSuiCircleModeEnabled
-                    ? 'text-gray-400 cursor-not-allowed'
-                    : 'text-gray-600 hover:bg-gray-100'
-              }`}
-            >
-              USDC Mode
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (!isSuiCircleModeEnabled) {
-                  toast.error('SUI mode is disabled by the circle admin.');
-                  return;
-                }
-                console.log(
-                  '[analytics] sui_circle_mode_selected',
-                  JSON.stringify({
-                    circleId: circle?.id,
-                    userAddress,
-                    timestamp: new Date().toISOString(),
-                  })
-                );
-                setCurrencyTabIndex(1);
-              }}
-              disabled={!isSuiCircleModeEnabled}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                currencyTabIndex === 1
-                  ? 'bg-blue-600 text-white'
-                  : isSuiCircleModeEnabled
-                    ? 'text-gray-600 hover:bg-gray-100'
-                    : 'text-gray-400 cursor-not-allowed'
-              }`}
-            >
-              SUI Mode
-            </button>
-          </div>
-          <p className="mt-2 text-xs text-gray-500">
-            Token mode is admin-managed. {isSuiCircleModeEnabled ? 'This circle is in SUI mode for all active-cycle contributions and payouts.' : 'This circle is in USDC mode.'}
-          </p>
-        </div>
-        
-        {/* Admin-managed token policy notice */}
-        {circle && (
-          <div className={`mb-4 p-3 rounded border ${isSuiCircleModeEnabled ? 'bg-blue-50 border-blue-200' : 'bg-emerald-50 border-emerald-200'}`}>
-            <p className={`text-sm ${isSuiCircleModeEnabled ? 'text-blue-700' : 'text-emerald-700'}`}>
-              {isSuiCircleModeEnabled ? (
-                <>
-                  <strong>SUI mode enabled:</strong> Once active, all member contributions and payouts are processed in SUI.
-                </>
-              ) : (
-                <>
-                  <strong>USDC mode enabled:</strong> Contributions and payouts are routed in USDC.
-                </>
-              )}
+      <div className={sectionCardClass}>
+        <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className={sectionEyebrowClass}>Payment</p>
+            <h3 className={`${sectionTitleClass} mt-2`}>Make Contribution</h3>
+            <p className="mt-2 text-sm leading-6 text-slate-500">
+              Review the current payment step, choose the allowed token mode, and complete this cycle&apos;s action.
             </p>
           </div>
-        )}
+          <button
+            onClick={handleRefreshContributionStatus}
+            className={`${secondaryActionClass} px-3 py-2 text-xs sm:text-sm`}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="mr-2 h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Refresh Status
+          </button>
+        </div>
+
+        <div className={`${mutedPanelClass} mb-4`}>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className={sectionEyebrowClass}>Token Mode</p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className={subtleTagClass}>Circle mode: {circleModeLabel}</span>
+                <span className={subtleTagClass}>Selected payment: {selectedPaymentCurrency}</span>
+              </div>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-500">
+                Token mode is admin-managed. {isSuiCircleModeEnabled ? 'This circle currently routes active-cycle payments in SUI.' : 'This circle currently routes active-cycle payments in USDC.'}
+              </p>
+            </div>
+            <div className="inline-flex rounded-full border border-stone-200 bg-white p-1 shadow-sm">
+              <button
+                type="button"
+                onClick={() => {
+                  if (isSuiCircleModeEnabled) {
+                    toast.error('Circle is currently in SUI mode. USDC is unavailable while SUI mode is active.');
+                    return;
+                  }
+                  setCurrencyTabIndex(0);
+                }}
+                disabled={isSuiCircleModeEnabled}
+                className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+                  currencyTabIndex === 0
+                    ? 'bg-slate-950 text-white'
+                    : isSuiCircleModeEnabled
+                      ? 'cursor-not-allowed text-stone-400'
+                      : 'text-slate-600 hover:bg-stone-100'
+                }`}
+              >
+                USDC
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isSuiCircleModeEnabled) {
+                    toast.error('SUI mode is disabled by the circle admin.');
+                    return;
+                  }
+                  console.log(
+                    '[analytics] sui_circle_mode_selected',
+                    JSON.stringify({
+                      circleId: circle?.id,
+                      userAddress,
+                      timestamp: new Date().toISOString(),
+                    })
+                  );
+                  setCurrencyTabIndex(1);
+                }}
+                disabled={!isSuiCircleModeEnabled}
+                className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+                  currencyTabIndex === 1
+                    ? 'bg-slate-950 text-white'
+                    : isSuiCircleModeEnabled
+                      ? 'text-slate-600 hover:bg-stone-100'
+                      : 'cursor-not-allowed text-stone-400'
+                }`}
+              >
+                SUI
+              </button>
+            </div>
+          </div>
+        </div>
 
         {/* Add prominent message for cycle paused state */}
         {circle?.pausedAfterCycle && (
-          <div className="mb-4 p-4 bg-amber-50 rounded-lg border-2 border-amber-300">
+          <div className={`${warningPanelClass} mb-4`}>
             <div className="flex items-start space-x-3">
-              <div className="bg-amber-100 p-1.5 rounded-full flex-shrink-0 mt-0.5">
+              <div className="mt-0.5 flex-shrink-0 rounded-full bg-amber-100 p-1.5">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
               </div>
               <div>
-                <h4 className="text-lg font-medium text-amber-800">Cycle Paused</h4>
-                <p className="mt-1 text-amber-700">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700">Cycle State</p>
+                <h4 className="mt-2 text-lg font-semibold text-amber-950">Cycle Paused</h4>
+                <p className="mt-2 text-sm leading-6 text-amber-900/80">
                   Cycle {currentCycle} has been completed, and the circle is now paused. New contributions are disabled until the admin resumes the circle to start the next cycle.
                 </p>
                 {!userDepositPaid && !securityDepositReturnedDuringPause && (
-                  <p className="mt-2 text-amber-700 font-medium">
+                  <p className="mt-3 text-sm font-medium text-amber-900">
                     You can still pay your security deposit while the circle is paused to prepare for the next cycle.
                   </p>
                 )}
                 {!userDepositPaid && securityDepositReturnedDuringPause && (
-                  <p className="mt-2 text-amber-700 font-medium">
+                  <p className="mt-3 text-sm font-medium text-amber-900">
                     Your security deposit has been returned. You&apos;ll need to wait for the admin to resume the cycle before paying a new deposit.
                   </p>
                 )}
-                <p className="mt-2 text-sm text-amber-600">
+                <p className="mt-3 text-sm text-amber-800">
                   <span className="font-medium">Note:</span> When the admin resumes the circle, all members will need to pay a new security deposit for the next cycle.
                 </p>
               </div>
@@ -3939,16 +3950,17 @@ export default function ContributeToCircle() {
 
         {/* Show message if user is current recipient - only show if not paused */}
         {isCurrentRecipient && !circle?.pausedAfterCycle && (
-          <div className="mb-4 p-4 bg-green-50 rounded-lg border-2 border-green-200">
+          <div className={`${successPanelClass} mb-4`}>
             <div className="flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
-              <div className="bg-green-100 p-1.5 rounded-full flex-shrink-0 self-start">
+              <div className="self-start rounded-full bg-emerald-100 p-1.5">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </div>
               <div className="flex-1">
-                <h4 className="font-medium text-green-800">You are the recipient for this cycle!</h4>
-                <p className="text-sm text-green-700 mt-1">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">Current Role</p>
+                <h4 className="mt-2 font-semibold text-emerald-950">You are the recipient for this cycle</h4>
+                <p className="mt-2 text-sm leading-6 text-emerald-900/80">
                   You don&apos;t need to make a contribution for the current cycle because you are the member receiving the payout. Enjoy your payout!
                 </p>
               </div>
@@ -3958,16 +3970,17 @@ export default function ContributeToCircle() {
 
         {/* Show message if user has already contributed - only show if not paused */}
         {userHasContributed && !circle?.pausedAfterCycle && (
-          <div className="mb-4 p-4 bg-green-50 rounded-lg border-2 border-green-200">
+          <div className={`${successPanelClass} mb-4`}>
             <div className="flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
-              <div className="bg-green-100 p-1.5 rounded-full flex-shrink-0 self-start">
+              <div className="self-start rounded-full bg-emerald-100 p-1.5">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
               </div>
               <div className="flex-1">
-                <h4 className="font-medium text-green-800">You already contributed for this cycle</h4>
-                <p className="text-sm text-green-700 mt-1">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">Current Role</p>
+                <h4 className="mt-2 font-semibold text-emerald-950">You already contributed for this cycle</h4>
+                <p className="mt-2 text-sm leading-6 text-emerald-900/80">
                   Your contribution for cycle {currentCycle} has been recorded. You&apos;ll be able to contribute again in the next cycle.
                 </p>
               </div>
@@ -3977,16 +3990,17 @@ export default function ContributeToCircle() {
 
         {/* Show a dedicated SUI payment card when the circle is in SUI mode */}
         {showSuiDirectPayCard && (
-          <div className="mb-4 p-4 bg-blue-50 rounded-lg border-2 border-blue-200">
+          <div className={`${infoPanelClass} mb-4`}>
             <div className="flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
-              <div className="bg-blue-100 p-1.5 rounded-full flex-shrink-0 self-start">
+              <div className="self-start rounded-full bg-sky-100 p-1.5">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
               </div>
               <div className="flex-1">
-                <h4 className="font-medium text-blue-800">Pay in SUI from your wallet</h4>
-                <p className="text-sm text-blue-700 mt-1">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">Wallet Payment</p>
+                <h4 className="mt-2 font-semibold text-sky-950">Pay in SUI from your wallet</h4>
+                <p className="mt-2 text-sm leading-6 text-sky-900/80">
                   You have <span className="font-medium">{userBalance?.toFixed(4)} SUI</span> available.
                   This payment needs about <span className="font-medium">{currentSuiPaymentAmount.toFixed(4)} SUI</span> including slippage and gas.
                 </p>
@@ -4001,7 +4015,7 @@ export default function ContributeToCircle() {
                       isProcessing ||
                       isPayingDeposit
                     }
-                    className="w-full sm:w-auto px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+                    className={`${primaryActionClass} w-full sm:w-auto`}
                   >
                     {(isProcessing || isPayingDeposit) ? (
                       <span className="flex items-center">
@@ -4036,16 +4050,17 @@ export default function ContributeToCircle() {
 
         {/* Show direct USDC deposit option if user has sufficient USDC balance */}
         {showDirectDepositOption && userUsdcBalance !== null && selectedPaymentCurrency === 'USDC' && (
-          <div className="mb-4 p-4 bg-emerald-50 rounded-lg border-2 border-emerald-200">
+          <div className={`${successPanelClass} mb-4`}>
             <div className="flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
-              <div className="bg-emerald-100 p-1.5 rounded-full flex-shrink-0 self-start">
+              <div className="self-start rounded-full bg-emerald-100 p-1.5">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </div>
               <div className="flex-1">
-                <h4 className="font-medium text-emerald-800">Use USDC from your wallet</h4>
-                <p className="text-sm text-emerald-700 mt-1">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">Wallet Payment</p>
+                <h4 className="mt-2 font-semibold text-emerald-950">Use USDC from your wallet</h4>
+                <p className="mt-2 text-sm leading-6 text-emerald-900/80">
                   You have <span className="font-medium">
                     {convertedUserUsdcBalanceDisplay ? `${convertedUserUsdcBalanceDisplay} (approx. ${formatUSD(userUsdcBalance)})` : `${formatUSD(userUsdcBalance)} USDC`}
                   </span> in your wallet.
@@ -4057,7 +4072,7 @@ export default function ContributeToCircle() {
                     disabled={userDepositPaid && (!circle?.isActive || circle?.pausedAfterCycle || userHasContributed || isCurrentRecipient) ||
                             (!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause) || 
                             (!userDepositPaid && (circle?.securityDepositUsd || 0) <= 0)}
-                    className="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+                    className={`${primaryActionClass} w-full sm:w-auto`}
                   >
                     {directDepositProcessing ? (
                       <span className="flex items-center">
@@ -4087,27 +4102,28 @@ export default function ContributeToCircle() {
 
         {/* Auto-assist: convert SUI -> USDC and immediately submit the active USDC payment */}
         {showUsdcSwapAssist && (
-            <div className="mb-4 p-4 bg-indigo-50 rounded-lg border-2 border-indigo-200">
+            <div className={`${mutedPanelClass} mb-4`}>
               <div className="flex items-start space-x-3">
-                <div className="bg-indigo-100 p-1.5 rounded-full flex-shrink-0 mt-0.5">
+                <div className="mt-0.5 flex-shrink-0 rounded-full bg-stone-200 p-1.5">
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                   </svg>
                 </div>
                 <div className="flex-1">
-                  <h4 className="font-medium text-indigo-900">Convert SUI to USDC &amp; Pay</h4>
-                  <p className="text-sm text-indigo-700 mt-1">
+                  <p className={sectionEyebrowClass}>Auto Assist</p>
+                  <h4 className="mt-2 font-semibold text-slate-950">Convert SUI to USDC and pay</h4>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
                     One click swaps only the missing USDC first, then submits your {paymentLabel.toLowerCase()} once the swap confirms.
                   </p>
-                  <p className="text-xs text-indigo-700 mt-2">
+                  <p className="mt-2 text-xs text-slate-600">
                     Estimated SUI input: <span className="font-semibold">{getOneClickSwapAmountSui().toFixed(4)} SUI</span> for{' '}
                     <span className="font-semibold">{formatUSD(currentUsdcShortfall)} USDC</span> shortfall.
                   </p>
                   {isOneClickSwapQuoteLoading && (
-                    <p className="mt-2 text-xs text-indigo-700">Refreshing live Cetus quote...</p>
+                    <p className="mt-2 text-xs text-slate-600">Refreshing live Cetus quote...</p>
                   )}
                   {oneClickSwapQuote && (
-                    <p className="mt-2 text-xs text-indigo-700">
+                    <p className="mt-2 text-xs text-slate-600">
                       Live quote price impact: <span className="font-semibold">{oneClickSwapQuote.priceImpact.toFixed(2)}%</span>
                     </p>
                   )}
@@ -4124,7 +4140,7 @@ export default function ContributeToCircle() {
                       !hasSufficientSuiForOneClickSwap() ||
                       isProcessing
                     }
-                    className="mt-3 w-full sm:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+                    className={`${primaryActionClass} mt-3 w-full sm:w-auto`}
                   >
                     {isOneClickSwapProcessing ? 'Converting & Paying...' : `Convert SUI to USDC, Then Pay ${paymentLabel}`}
                   </button>
@@ -4136,7 +4152,7 @@ export default function ContributeToCircle() {
                   )}
 
                   {oneClickSwapDigest && (
-                    <p className="mt-2 text-xs text-indigo-700 break-all">
+                    <p className="mt-2 break-all text-xs text-slate-600">
                       Tracking transaction: {oneClickSwapDigest}
                     </p>
                   )}
@@ -4151,31 +4167,32 @@ export default function ContributeToCircle() {
 
         {/* Auto-assist: convert USDC -> SUI when the circle requires SUI and the wallet is short on native balance */}
         {showSuiSwapAssist && (
-          <div className="mb-4 p-4 bg-cyan-50 rounded-lg border-2 border-cyan-200">
+          <div className={`${mutedPanelClass} mb-4`}>
             <div className="flex items-start space-x-3">
-              <div className="bg-cyan-100 p-1.5 rounded-full flex-shrink-0 mt-0.5">
+              <div className="mt-0.5 flex-shrink-0 rounded-full bg-stone-200 p-1.5">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-cyan-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
               </div>
               <div className="flex-1">
-                <h4 className="font-medium text-cyan-900">Convert USDC to SUI for this payment</h4>
-                <p className="text-sm text-cyan-800 mt-1">
+                <p className={sectionEyebrowClass}>Auto Assist</p>
+                <h4 className="mt-2 font-semibold text-slate-950">Convert USDC to SUI for this payment</h4>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
                   Your wallet is short on SUI. This conversion tops up the payment gap and keeps a small reserve for swap execution.
                 </p>
-                <p className="text-xs text-cyan-800 mt-2">
+                <p className="mt-2 text-xs text-slate-600">
                   Estimated conversion: <span className="font-semibold">{formatUSD(estimatedUsdcNeededForSuiSwap)} USDC</span> into
                   approximately <span className="font-semibold"> {quotedSuiOutputForAssistSwap.toFixed(4)} SUI</span>.
                 </p>
-                <p className="mt-2 text-xs text-cyan-700">
+                <p className="mt-2 text-xs text-slate-600">
                   This target includes <span className="font-semibold">{TOKEN_ASSIST_SWAP_GAS_RESERVE_SUI.toFixed(4)} SUI</span> reserved for swap gas
                   and <span className="font-semibold"> {tokenAssistExecutionBufferSui.toFixed(4)} SUI</span> as an execution buffer.
                 </p>
                 {isTokenAssistQuoteLoading && (
-                  <p className="mt-2 text-xs text-cyan-700">Refreshing live Cetus quote...</p>
+                  <p className="mt-2 text-xs text-slate-600">Refreshing live Cetus quote...</p>
                 )}
                 {tokenAssistQuote && (
-                  <p className="mt-2 text-xs text-cyan-700">
+                  <p className="mt-2 text-xs text-slate-600">
                     Live quote price impact: <span className="font-semibold">{tokenAssistQuote.priceImpact.toFixed(2)}%</span>
                   </p>
                 )}
@@ -4192,13 +4209,13 @@ export default function ContributeToCircle() {
                     isPayingDeposit ||
                     !!tokenAssistQuoteError
                   }
-                  className="mt-3 w-full sm:w-auto px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+                  className={`${primaryActionClass} mt-3 w-full sm:w-auto`}
                 >
                   {isTokenAssistSwapProcessing ? 'Converting...' : 'Convert USDC to SUI'}
                 </button>
 
                 {tokenAssistSwapDigest && (
-                  <p className="mt-2 text-xs text-cyan-800 break-all">
+                  <p className="mt-2 break-all text-xs text-slate-600">
                     Swap submitted: {tokenAssistSwapDigest}
                   </p>
                 )}
@@ -4213,11 +4230,12 @@ export default function ContributeToCircle() {
 
         {/* Buy assist: if neither token can cover the payment, reuse the dashboard onramp flow inline */}
         {circle && lacksBothTokensForCurrentPayment && (
-          <div className="mb-4 p-4 bg-slate-50 rounded-lg border-2 border-slate-200">
+          <div className={`${mutedPanelClass} mb-4`}>
             <div className="flex flex-col gap-3">
               <div>
-                <h4 className="font-medium text-slate-900">Top up your wallet to continue</h4>
-                <p className="text-sm text-slate-700 mt-1">
+                <p className={sectionEyebrowClass}>Top Up</p>
+                <h4 className="mt-2 font-semibold text-slate-950">Top up your wallet to continue</h4>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
                   You do not have enough {selectedPaymentCurrency} or convertible balance to cover this {paymentLabel.toLowerCase()} right now.
                 </p>
               </div>
@@ -4225,14 +4243,14 @@ export default function ContributeToCircle() {
                 <button
                   type="button"
                   onClick={() => openBuyFlow(onrampTargetCurrency)}
-                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium rounded-md shadow-sm transition-colors"
+                  className={primaryActionClass}
                 >
                   Buy {selectedPaymentCurrency}
                 </button>
                 <button
                   type="button"
                   onClick={handleRefreshContributionStatus}
-                  className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 text-sm font-medium rounded-md border border-slate-300 transition-colors"
+                  className={secondaryActionClass}
                 >
                   Refresh Status
                 </button>
@@ -4276,7 +4294,7 @@ export default function ContributeToCircle() {
                   <button
                     type="button"
                     onClick={handleMoonPayFallbackClick}
-                    className="mt-3 inline-flex w-full items-center justify-center rounded-md border border-slate-300 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100"
+                    className={`${secondaryActionClass} mt-3 w-full`}
                   >
                     {isMoonPayEnabled ? 'Use MoonPay Instead' : 'MoonPay Coming Soon'}
                   </button>
@@ -4290,7 +4308,7 @@ export default function ContributeToCircle() {
         {ENABLE_SWAP_AND_DEPOSIT_FORM && circle ? (
           <>
             {(!circle.isActive || circle.pausedAfterCycle) && (
-              <div className="mb-4 p-3 bg-amber-50 rounded-lg border border-amber-200">
+              <div className={`${warningPanelClass} mb-4`}>
                 <p className="text-sm text-amber-700 font-medium">
                   {!circle.isActive ? "This circle is not active yet" : "This circle is paused after cycle completion"}
                 </p>
@@ -4324,11 +4342,11 @@ export default function ContributeToCircle() {
         ) : (
           <>
           {!showPrimaryWalletActionCard && (
-          <div className="bg-gray-50 p-6 rounded-lg shadow-sm">
+          <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-6">
             <div className="mb-6">
-              <p className="text-sm text-gray-600 mb-2">You are about to contribute:</p>
+              <p className="mb-2 text-sm text-slate-600">You are about to contribute:</p>
               <div className="flex items-center">
-                <span className="bg-blue-100 text-blue-800 text-xl font-semibold rounded-lg py-2 px-4">
+                <span className="rounded-full border border-stone-200 bg-white px-4 py-2 text-xl font-semibold text-slate-950">
                   {formatUsdCentsAsUsdc(circle?.contributionAmountUsd || 0)} ({getValidContributionAmount().toFixed(4)} SUI)
                 </span>
               </div>
@@ -4449,7 +4467,7 @@ export default function ContributeToCircle() {
                              (selectedPaymentCurrency === 'SUI' && userBalance !== null && userBalance < getRequiredDepositAmount()) ||
                              (selectedPaymentCurrency === 'USDC' && userUsdcBalance !== null && userUsdcBalance < requiredSecurityDepositUsdc) ||
                              (circle.pausedAfterCycle && securityDepositReturnedDuringPause)}
-                    className="w-full py-3 px-4 rounded-lg shadow-sm text-sm font-bold text-white bg-amber-500 hover:bg-amber-600 transition-all disabled:opacity-70 disabled:cursor-not-allowed"
+                    className={`${primaryActionClass} w-full`}
                   >
                     {isPayingDeposit ? (
                       <span className="flex items-center justify-center">
@@ -4535,7 +4553,7 @@ export default function ContributeToCircle() {
                       (circle?.pausedAfterCycle && userDepositPaid) ||
                       userHasContributed ||
                       isCurrentRecipient} // Disable if user is current recipient or circle is paused
-              className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all disabled:opacity-70 disabled:cursor-not-allowed`}
+              className={`${primaryActionClass} w-full`}
             >
               {isProcessing ? 'Processing...' : 
                isCurrentRecipient ? 'You Are the Current Recipient' : 
@@ -4599,7 +4617,7 @@ export default function ContributeToCircle() {
             </div>
           )}
 
-          <p className="text-xs text-center text-gray-500">
+          <p className="text-center text-xs text-slate-500">
             By contributing, you agree to the circle&apos;s terms and conditions.
           </p>
           </>
@@ -4613,291 +4631,351 @@ export default function ContributeToCircle() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        <div className="px-4 py-6 sm:px-0">
-          <div className="mb-6">
-            <button
-              onClick={() => router.push('/dashboard')}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm text-sm text-gray-700 font-medium"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              Back to Dashboard
-            </button>
+    <div className="min-h-screen bg-[#f6f3ee] text-slate-950 [background-image:radial-gradient(circle_at_top_left,_rgba(255,255,255,0.92),_transparent_30%),radial-gradient(circle_at_top_right,_rgba(226,232,240,0.7),_transparent_26%)]">
+      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+          <button
+            onClick={() => router.push('/dashboard')}
+            className={secondaryActionClass}
+          >
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to Dashboard
+          </button>
+          <div className="text-right">
+            <p className={sectionEyebrowClass}>Circle Payment</p>
+            <h1 className="mt-1 text-lg font-semibold text-slate-950 sm:text-xl">Contribute</h1>
           </div>
+        </div>
 
-          <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100">
-            <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
-              <h2 className="text-2xl font-bold text-gray-900 mb-6">
-                {!loading && circle ? `Contribute to ${circle.name}` : 'Contribute to Circle'}
-              </h2>
-              
-              {loading ? (
-                <div className="py-8 flex justify-center">
-                  <svg className="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
+        <div className={`${pageSurfaceClass} overflow-hidden`}>
+          <div className="border-b border-stone-200 px-6 py-6 sm:px-8 sm:py-8">
+            <div className="flex flex-col gap-6">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className={sectionEyebrowClass}>Contribution Workspace</p>
+                  <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">
+                    {!loading && circle ? `Contribute to ${circle.name}` : 'Contribute to Circle'}
+                  </h2>
+                  <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
+                    Review wallet readiness, circle requirements, and the current cycle state before submitting your payment.
+                  </p>
                 </div>
-              ) : circle ? (
-                <div className="py-4 space-y-8">
-                  {/* User Wallet Information */}
-                  <div className="px-2">
-                    <div className="flex justify-between items-center mb-4">
-                      <h3 className="text-lg font-medium text-gray-900 border-l-4 border-green-500 pl-3">Your Wallet</h3>
-                      <button
-                        onClick={() => fetchUserWalletInfo()}
-                        disabled={fetchingBalance}
-                        className="text-xs bg-green-50 hover:bg-green-100 text-green-600 py-1 px-2 rounded flex items-center transition-colors disabled:opacity-50"
-                      >
-                        {fetchingBalance ? (
-                          <span className="flex items-center">
-                            <svg className="animate-spin -ml-1 mr-1 h-3 w-3 text-green-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                            Refreshing...
-                          </span>
-                        ) : (
-                          <span className="flex items-center">
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                            </svg>
-                            Refresh Balance
-                          </span>
-                        )}
-                      </button>
-                    </div>
-                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg shadow-sm border border-blue-100">
-                      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-3 sm:space-y-0">
-                        <div>
-                          <p className="text-sm text-gray-600 mb-1">Available Balance:</p>
-                          {fetchingBalance || totalSuiEquivalentDisplay === null ? (
-                            <div className="animate-pulse h-6 w-48 bg-gray-200 rounded"></div>
-                          ) : (
-                            <div className="text-lg font-semibold text-blue-700">
-                              {totalSuiEquivalentDisplay !== null ? totalSuiEquivalentDisplay : 'Unable to fetch balance'}
-                            </div>
-                          )}
-                        </div>
-                        <div className="sm:text-right">
-                          <p className="text-sm text-gray-600 mb-1">Wallet Address:</p>
-                          <p className="text-sm font-mono bg-white px-2 py-1 rounded border border-gray-200 break-all sm:break-normal">
-                            {userAddress ? `${userAddress.substring(0, 6)}...${userAddress.substring(userAddress.length - 4)}` : ''}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
+                {!loading && circle && (
+                  <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
+                    <span className={subtleTagClass}>{circleStatusLabel}</span>
+                    <span className={subtleTagClass}>{paymentStatusLabel}</span>
+                    <span className={subtleTagClass}>Mode {circleModeLabel}</span>
                   </div>
+                )}
+              </div>
 
-                  {/* Circle Details */}
-                  <div className="px-2">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Details</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Circle Name</p>
-                        <p className="text-lg font-medium">{circle.name}</p>
-                      </div>
-                      
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
-                        <CurrencyDisplay localAmount={circle.contributionAmountLocal} sui={circle.contributionAmount} currencyType={circle.currencyType} />
-                      </div>
-
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Security Deposit Required</p>
-                        <CurrencyDisplay localAmount={circle.securityDepositLocal} sui={circle.securityDeposit} currencyType={circle.currencyType} />
-                      </div>
-
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Security Deposit Status</p>
-                        {fetchingBalance ? (
-                          <div className="animate-pulse h-6 w-32 bg-gray-200 rounded"></div>
-                        ) : (
-                          <div className="flex items-center">
-                            {userDepositPaid ? (
-                              <>
-                                <span className="h-4 w-4 rounded-full bg-green-500 mr-2"></span>
-                                <span className="text-green-700 font-medium">Paid</span>
-                              </>
-                            ) : (
-                              <>
-                                <span className="h-4 w-4 rounded-full bg-amber-500 mr-2"></span>
-                                <span className="text-amber-700 font-medium">Not Paid</span>
-                              </>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      
-                      {/* Add Contribution Progress visualization here, above wallet balances */}
-                      {circle && circle.isActive && (
-                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm md:col-span-2 mb-6">
-                          <div className="flex justify-between items-center mb-4">
-                            <h3 className="text-lg font-medium text-gray-800 text-center">
-                              <div className="flex flex-col sm:flex-row sm:items-center">
-                                <span>
-                                  {circle?.pausedAfterCycle 
-                                    ? `Cycle ${currentCycle} Completed - Pending Next Cycle`
-                                    : `Contributions Made Cycle ${currentCycle}`}
-                                </span>
-                                {totalMembersInRotation && typeof currentPositionInCycle === 'number' && currentPositionInCycle >= 0 && !circle?.pausedAfterCycle && (
-                                  <span className="text-sm text-gray-600 mt-1 sm:mt-0 sm:ml-1">
-                                    (Position {currentPositionInCycle + 1} of {totalMembersInRotation})
-                                  </span>
-                                )}
-                              </div>
-                            </h3>
-                            <button
-                              onClick={() => {
-                                // Refresh cycle data
-                                fetchCircleDetails();
-                                checkUserContribution();
-                                checkIfUserIsCurrentRecipient();
-                                // Add toast to show it's refreshing
-                                toast.success("Refreshing contribution status...");
-                              }}
-                              className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 py-1 px-2 rounded flex items-center transition-colors"
-                            >
-                              <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                              </svg>
-                              Refresh Status
-                            </button>
-                          </div>
-                          <div className="flex justify-center">
-                            <ContributionProgress 
-                              circleId={circle.id} 
-                              maxMembers={circle.maxMembers || 5} 
-                              currentCycle={currentCycle} 
-                              currentRecipientAddress={cycleRecipientAddress} // Pass the recipient address
-                              isPaused={circle.pausedAfterCycle} // Add isPaused prop
-                              circlePackageId={circlePackageId} // Pass the circlePackageId prop
-                              refreshKey={contributionRefreshKey}
-                            />
-                          </div>
-                        </div>
-                      )}
-                      
-                      {/* Unified Custody Wallet Balance Display */}
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm md:col-span-2">
-                        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-2 sm:space-y-0 mb-3">
-                          <p className="text-sm font-medium text-gray-700">Custody Wallet Balances</p>
-                          <button 
-                            onClick={refreshData}
-                            disabled={loadingStablecoinBalance || fetchingSuiBalance}
-                            className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-600 py-1 px-2 rounded flex items-center justify-center sm:justify-start transition-colors disabled:opacity-50"
-                          >
-                            {/* Refresh button content (unchanged) */}
-                            {loadingStablecoinBalance || fetchingSuiBalance ? (
-                              <span className="flex items-center">
-                                <svg className="animate-spin -ml-1 mr-1 h-3 w-3 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                </svg>
-                                Refreshing...
-                              </span>
-                            ) : (
-                              <span className="flex items-center">
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                                </svg>
-                                Refresh All Balances
-                              </span>
-                            )}
-                          </button>
-                        </div>
-
-                        {/* SUI Balance Section */}
-                        {(fetchingSuiBalance || custodySuiBalance !== null) && (
-                        <div className="mb-4 border-b border-gray-200 pb-4">
-                          <p className="text-xs text-gray-500 mb-1 font-medium">SUI</p>
-                          {fetchingSuiBalance ? (
-                            <div className="animate-pulse h-6 w-32 bg-gray-200 rounded mb-2"></div>
-                          ) : (
-                            <div className="flex items-center mb-2">
-                              <span className="text-lg font-medium text-blue-700">
-                                {custodySuiBalance !== null ? `${custodySuiBalance.toFixed(4)} SUI` : "-"}
-                              </span>
-                              <span className="ml-2 px-2 py-1 bg-gray-100 text-gray-600 text-xs font-medium rounded-full">
-                                Total
-                              </span>
-                            </div>
-                          )}
-                          {(custodySuiBalance !== null && custodySuiBalance > 0) && (
-                            <div className="space-y-1 pl-2">
-                              <div className="flex flex-wrap items-center gap-1">
-                                <div className="w-3 h-3 bg-amber-300 rounded-sm mr-1"></div>
-                                <span className="text-sm text-gray-700">
-                                  {suiSecurityDepositBalance !== null ? suiSecurityDepositBalance.toFixed(6) : '0.00'} SUI
-                                </span>
-                                <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs font-medium rounded-full">Security Deposits</span>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-1">
-                                <div className="w-3 h-3 bg-green-300 rounded-sm mr-1"></div>
-                                <span className="text-sm text-gray-700">
-                                  {suiContributionBalance !== null ? suiContributionBalance.toFixed(6) : '0.00'} SUI
-                                </span>
-                                <span className="px-1.5 py-0.5 bg-green-100 text-green-800 text-xs font-medium rounded-full">Available for Contributions</span>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                        )}
-
-                        {/* USDC Balance Section */}
-                        {(loadingStablecoinBalance || custodyStablecoinBalance !== null) && (
-                        <div className="mb-2">
-                          <p className="text-xs text-gray-500 mb-1 font-medium">USDC</p>
-                          {loadingStablecoinBalance ? (
-                            <div className="animate-pulse h-6 w-32 bg-gray-200 rounded mb-2"></div>
-                          ) : (
-                            <div className="flex items-center mb-2">
-                              <span className="text-lg font-medium text-indigo-700">
-                                {custodyUsdcTotalLocalDisplay !== null ? custodyUsdcTotalLocalDisplay : custodyStablecoinBalance !== null ? `${formatUSD(custodyStablecoinBalance)} USDC` : "-"}
-                              </span>
-                              <span className="ml-2 px-2 py-1 bg-gray-100 text-gray-600 text-xs font-medium rounded-full">
-                                Total
-                              </span>
-                            </div>
-                          )}
-                          {(custodyStablecoinBalance !== null && custodyStablecoinBalance > 0) && (
-                            <div className="space-y-1 pl-2">
-                              <div className="flex flex-wrap items-center gap-1">
-                                <div className="w-3 h-3 bg-amber-300 rounded-sm mr-1"></div>
-                                <span className="text-sm text-gray-700">
-                                  {custodyUsdcSecurityDepositLocalDisplay !== null ? custodyUsdcSecurityDepositLocalDisplay : securityDepositBalance !== null ? `${formatUSD(securityDepositBalance)} USDC` : "-"}
-                                </span>
-                                <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs font-medium rounded-full">Security Deposits</span>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-1">
-                                <div className="w-3 h-3 bg-green-300 rounded-sm mr-1"></div>
-                                <span className="text-sm text-gray-700">
-                                  {custodyUsdcContributionLocalDisplay !== null ? custodyUsdcContributionLocalDisplay : contributionBalance !== null ? `${formatUSD(contributionBalance)} USDC` : "-"}
-                                </span>
-                                <span className="px-1.5 py-0.5 bg-green-100 text-green-800 text-xs font-medium rounded-full">Available for Contributions</span>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                        )}
-
-                        {/* Message if no balances found */} 
-                        {!fetchingSuiBalance && custodySuiBalance === null && !loadingStablecoinBalance && custodyStablecoinBalance === null && (
-                          <p className="text-sm text-gray-500 text-center py-4">Could not fetch custody wallet balances.</p>
-                        )}
-                      </div>
+              {!loading && circle && (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className={mutedPanelClass}>
+                    <p className={sectionEyebrowClass}>Contribution</p>
+                    <div className="mt-3 text-lg font-semibold text-slate-950">
+                      <CurrencyDisplay
+                        localAmount={circle.contributionAmountLocal}
+                        sui={circle.contributionAmount}
+                        currencyType={circle.currencyType}
+                      />
                     </div>
+                    <p className="mt-2 text-sm text-slate-500">Required per active cycle.</p>
                   </div>
-                  
-                  {renderContributionOptions()}
-                </div>
-              ) : (
-                <div className="py-8 text-center">
-                  <p className="text-gray-500">Circle not found</p>
+                  <div className={mutedPanelClass}>
+                    <p className={sectionEyebrowClass}>Deposit</p>
+                    <div className="mt-3 text-lg font-semibold text-slate-950">
+                      <CurrencyDisplay
+                        localAmount={circle.securityDepositLocal}
+                        sui={circle.securityDeposit}
+                        currencyType={circle.currencyType}
+                      />
+                    </div>
+                    <p className="mt-2 text-sm text-slate-500">
+                      {userDepositPaid ? 'Security deposit already paid.' : 'Required before contributing.'}
+                    </p>
+                  </div>
+                  <div className={mutedPanelClass}>
+                    <p className={sectionEyebrowClass}>Cycle</p>
+                    <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
+                      {currentCycle > 0 ? `Cycle ${currentCycle}` : 'Setup'}
+                    </p>
+                    <p className="mt-2 text-sm text-slate-500">
+                      {circle.pausedAfterCycle ? 'Cycle completed and awaiting resume.' : circle.isActive ? 'Payments are open for the current cycle.' : 'Waiting for activation.'}
+                    </p>
+                  </div>
+                  <div className={mutedPanelClass}>
+                    <p className={sectionEyebrowClass}>Selected Mode</p>
+                    <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
+                      {selectedPaymentCurrency}
+                    </p>
+                    <p className="mt-2 text-sm text-slate-500">You can only use modes allowed by the circle admin.</p>
+                  </div>
                 </div>
               )}
             </div>
+
+            {loading ? (
+              <div className="px-6 py-12 text-center sm:px-8">
+                <svg className="mx-auto h-8 w-8 animate-spin text-slate-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              </div>
+            ) : circle ? (
+              <div className="space-y-6 bg-stone-50/60 px-4 py-6 sm:px-6 sm:py-8">
+                <div className={sectionCardClass}>
+                  <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className={sectionEyebrowClass}>Wallet</p>
+                      <h3 className={`${sectionTitleClass} mt-2`}>Your Wallet</h3>
+                      <p className="mt-2 text-sm leading-6 text-slate-500">
+                        Confirm available balance and the connected address before you submit a deposit or contribution.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => fetchUserWalletInfo()}
+                      disabled={fetchingBalance}
+                      className={`${secondaryActionClass} px-3 py-2 text-xs sm:text-sm`}
+                    >
+                      {fetchingBalance ? (
+                        <span className="flex items-center">
+                          <svg className="mr-2 h-3.5 w-3.5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Refreshing...
+                        </span>
+                      ) : (
+                        <>
+                          <svg xmlns="http://www.w3.org/2000/svg" className="mr-2 h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                          Refresh Balance
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <div className={mutedPanelClass}>
+                      <p className={sectionEyebrowClass}>Available Balance</p>
+                      {fetchingBalance || totalSuiEquivalentDisplay === null ? (
+                        <div className="mt-3 h-7 w-44 animate-pulse rounded bg-stone-200"></div>
+                      ) : (
+                        <p className="mt-3 text-lg font-semibold text-slate-950">{totalSuiEquivalentDisplay}</p>
+                      )}
+                    </div>
+                    <div className={mutedPanelClass}>
+                      <p className={sectionEyebrowClass}>Wallet Address</p>
+                      <p className="mt-3 break-all font-mono text-sm text-slate-700">
+                        {userAddress ? `${userAddress.substring(0, 6)}...${userAddress.substring(userAddress.length - 4)}` : ''}
+                      </p>
+                    </div>
+                    <div className={mutedPanelClass}>
+                      <p className={sectionEyebrowClass}>Payment Readiness</p>
+                      <p className="mt-3 text-lg font-semibold text-slate-950">{paymentStatusLabel}</p>
+                      <p className="mt-2 text-sm text-slate-500">
+                        {!userDepositPaid ? 'Deposit still required.' : userHasContributed ? 'This cycle is already complete for you.' : isCurrentRecipient ? 'No payment required this cycle.' : 'You can continue with payment.'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className={sectionCardClass}>
+                  <div className="mb-5">
+                    <p className={sectionEyebrowClass}>Circle Overview</p>
+                    <h3 className={`${sectionTitleClass} mt-2`}>Circle Details</h3>
+                    <p className="mt-2 text-sm leading-6 text-slate-500">
+                      Contribution rules, current cycle progress, and live custody balances for this circle.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className={mutedPanelClass}>
+                      <p className={sectionEyebrowClass}>Circle Name</p>
+                      <p className="mt-3 text-lg font-semibold text-slate-950">{circle.name}</p>
+                    </div>
+
+                    <div className={mutedPanelClass}>
+                      <p className={sectionEyebrowClass}>Contribution Amount</p>
+                      <div className="mt-3 text-lg font-semibold text-slate-950">
+                        <CurrencyDisplay localAmount={circle.contributionAmountLocal} sui={circle.contributionAmount} currencyType={circle.currencyType} />
+                      </div>
+                    </div>
+
+                    <div className={mutedPanelClass}>
+                      <p className={sectionEyebrowClass}>Security Deposit</p>
+                      <div className="mt-3 text-lg font-semibold text-slate-950">
+                        <CurrencyDisplay localAmount={circle.securityDepositLocal} sui={circle.securityDeposit} currencyType={circle.currencyType} />
+                      </div>
+                    </div>
+
+                    <div className={mutedPanelClass}>
+                      <p className={sectionEyebrowClass}>Deposit Status</p>
+                      {fetchingBalance ? (
+                        <div className="mt-3 h-6 w-28 animate-pulse rounded bg-stone-200"></div>
+                      ) : (
+                        <div className="mt-3 flex items-center gap-3">
+                          <span className={`h-2.5 w-2.5 rounded-full ${userDepositPaid ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
+                          <span className={`font-medium ${userDepositPaid ? 'text-emerald-700' : 'text-amber-700'}`}>
+                            {userDepositPaid ? 'Paid' : 'Not Paid'}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    {circle && circle.isActive && (
+                      <div className={`${mutedPanelClass} md:col-span-2`}>
+                        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <p className={sectionEyebrowClass}>Cycle Progress</p>
+                            <h4 className="mt-2 text-lg font-semibold text-slate-950">
+                              {circle?.pausedAfterCycle
+                                ? `Cycle ${currentCycle} Completed`
+                                : `Contributions Made Cycle ${currentCycle}`}
+                            </h4>
+                            {totalMembersInRotation && typeof currentPositionInCycle === 'number' && currentPositionInCycle >= 0 && !circle?.pausedAfterCycle && (
+                              <p className="mt-1 text-sm text-slate-500">
+                                Position {currentPositionInCycle + 1} of {totalMembersInRotation}
+                              </p>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => {
+                              fetchCircleDetails();
+                              checkUserContribution();
+                              checkIfUserIsCurrentRecipient();
+                              toast.success('Refreshing contribution status...');
+                            }}
+                            className={`${secondaryActionClass} px-3 py-2 text-xs sm:text-sm`}
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="mr-2 h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            Refresh Status
+                          </button>
+                        </div>
+                        <div className="flex justify-center">
+                          <ContributionProgress
+                            circleId={circle.id}
+                            maxMembers={circle.maxMembers || 5}
+                            currentCycle={currentCycle}
+                            currentRecipientAddress={cycleRecipientAddress}
+                            isPaused={circle.pausedAfterCycle}
+                            circlePackageId={circlePackageId}
+                            refreshKey={contributionRefreshKey}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <div className={`${mutedPanelClass} md:col-span-2`}>
+                      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className={sectionEyebrowClass}>Custody Balances</p>
+                          <h4 className="mt-2 text-lg font-semibold text-slate-950">Custody Wallet Balances</h4>
+                        </div>
+                        <button
+                          onClick={refreshData}
+                          disabled={loadingStablecoinBalance || fetchingSuiBalance}
+                          className={`${secondaryActionClass} px-3 py-2 text-xs sm:text-sm`}
+                        >
+                          {loadingStablecoinBalance || fetchingSuiBalance ? (
+                            <span className="flex items-center">
+                              <svg className="mr-2 h-3.5 w-3.5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                              </svg>
+                              Refreshing...
+                            </span>
+                          ) : (
+                            <>
+                              <svg xmlns="http://www.w3.org/2000/svg" className="mr-2 h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                              Refresh All Balances
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                        {(fetchingSuiBalance || custodySuiBalance !== null) && (
+                          <div className="rounded-[20px] border border-stone-200 bg-white p-4">
+                            <p className={sectionEyebrowClass}>SUI</p>
+                            {fetchingSuiBalance ? (
+                              <div className="mt-3 h-6 w-32 animate-pulse rounded bg-stone-200"></div>
+                            ) : (
+                              <div className="mt-3 flex items-center gap-2">
+                                <span className="text-lg font-semibold text-slate-950">
+                                  {custodySuiBalance !== null ? `${custodySuiBalance.toFixed(4)} SUI` : '-'}
+                                </span>
+                                <span className={subtleTagClass}>Total</span>
+                              </div>
+                            )}
+                            {(custodySuiBalance !== null && custodySuiBalance > 0) && (
+                              <div className="mt-4 space-y-2">
+                                <div className="flex flex-wrap items-center gap-2 text-sm text-slate-700">
+                                  <div className="h-3 w-3 rounded-sm bg-amber-300"></div>
+                                  <span>{suiSecurityDepositBalance !== null ? suiSecurityDepositBalance.toFixed(6) : '0.00'} SUI</span>
+                                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Security Deposits</span>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 text-sm text-slate-700">
+                                  <div className="h-3 w-3 rounded-sm bg-emerald-300"></div>
+                                  <span>{suiContributionBalance !== null ? suiContributionBalance.toFixed(6) : '0.00'} SUI</span>
+                                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">Available for Contributions</span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {(loadingStablecoinBalance || custodyStablecoinBalance !== null) && (
+                          <div className="rounded-[20px] border border-stone-200 bg-white p-4">
+                            <p className={sectionEyebrowClass}>USDC</p>
+                            {loadingStablecoinBalance ? (
+                              <div className="mt-3 h-6 w-32 animate-pulse rounded bg-stone-200"></div>
+                            ) : (
+                              <div className="mt-3 flex items-center gap-2">
+                                <span className="text-lg font-semibold text-slate-950">
+                                  {custodyUsdcTotalLocalDisplay !== null ? custodyUsdcTotalLocalDisplay : custodyStablecoinBalance !== null ? `${formatUSD(custodyStablecoinBalance)} USDC` : '-'}
+                                </span>
+                                <span className={subtleTagClass}>Total</span>
+                              </div>
+                            )}
+                            {(custodyStablecoinBalance !== null && custodyStablecoinBalance > 0) && (
+                              <div className="mt-4 space-y-2">
+                                <div className="flex flex-wrap items-center gap-2 text-sm text-slate-700">
+                                  <div className="h-3 w-3 rounded-sm bg-amber-300"></div>
+                                  <span>{custodyUsdcSecurityDepositLocalDisplay !== null ? custodyUsdcSecurityDepositLocalDisplay : securityDepositBalance !== null ? `${formatUSD(securityDepositBalance)} USDC` : '-'}</span>
+                                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Security Deposits</span>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 text-sm text-slate-700">
+                                  <div className="h-3 w-3 rounded-sm bg-emerald-300"></div>
+                                  <span>{custodyUsdcContributionLocalDisplay !== null ? custodyUsdcContributionLocalDisplay : contributionBalance !== null ? `${formatUSD(contributionBalance)} USDC` : '-'}</span>
+                                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">Available for Contributions</span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {!fetchingSuiBalance && custodySuiBalance === null && !loadingStablecoinBalance && custodyStablecoinBalance === null && (
+                        <p className="py-4 text-center text-sm text-slate-500">Could not fetch custody wallet balances.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {renderContributionOptions()}
+              </div>
+            ) : (
+              <div className="px-6 py-10 text-center sm:px-8">
+                <p className="text-slate-500">Circle not found</p>
+              </div>
+            )}
           </div>
         </div>
       </main>

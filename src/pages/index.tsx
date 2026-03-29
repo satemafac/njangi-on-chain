@@ -1,14 +1,29 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import Head from 'next/head';
+import Image from 'next/image';
+import Link from 'next/link';
 import { useRouter } from 'next/router';
+import * as Dialog from '@radix-ui/react-dialog';
+import { Instrument_Serif, Manrope } from 'next/font/google';
+import {
+  ArrowRight,
+  BadgeCheck,
+  ChevronDown,
+  CircleDot,
+  Coins,
+  Globe2,
+  Mail,
+  Shield,
+  type LucideIcon,
+  Users,
+  Wallet,
+  Waypoints,
+  X,
+} from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { LoginButton } from '../components/LoginButton';
-import Link from 'next/link';
-import Head from 'next/head';
-import * as Dialog from '@radix-ui/react-dialog';
-import { X } from 'lucide-react';
 import { getNetworkConfig, setCurrentNetwork } from '../services/network-config';
 
-// Global type declaration for network config
 declare global {
   interface Window {
     CURRENT_NETWORK_CONFIG?: {
@@ -25,21 +40,212 @@ declare global {
   }
 }
 
+const wordmarkFont = Instrument_Serif({
+  subsets: ['latin'],
+  weight: '400',
+  display: 'swap',
+});
+
+const bodyFont = Manrope({
+  subsets: ['latin'],
+  display: 'swap',
+});
+
+const CULTURAL_NAMES = [
+  'Adaji',
+  'Ajoh',
+  'Asue',
+  'Arisan',
+  'Cadena',
+  'Chama',
+  'Chit Funds',
+  'Cundina',
+  'Equb',
+  'Esusu',
+  'Hagbad',
+  'Hui',
+  'Idir',
+  'Iqub',
+  'Kikoba',
+  'Mujin',
+  'Njangi',
+  'Paluwagan',
+  'Pandero',
+  'ROSCA',
+  'Samity',
+  'Sou-sou',
+  'Stokvel',
+  'Tanda',
+  'Tontine',
+];
+
+const FEATURE_CARDS: Array<{
+  icon: LucideIcon;
+  title: string;
+  description: string;
+}> = [
+  {
+    icon: Shield,
+    title: 'Shared visibility',
+    description:
+      'Contributions, payout order, and status changes are visible to the people running the circle, not buried in personal messages.',
+  },
+  {
+    icon: Wallet,
+    title: 'Self-custodied settlement',
+    description:
+      'Members contribute and receive payouts directly to their own wallet addresses with no platform-held balance.',
+  },
+  {
+    icon: Globe2,
+    title: 'Borderless participation',
+    description:
+      'Diaspora groups and distributed communities can stay coordinated without relying on one geography or one banking rail.',
+  },
+  {
+    icon: Users,
+    title: 'Cultural continuity',
+    description:
+      'The social rhythm of a savings circle stays intact while the operational friction becomes calmer and easier to trust.',
+  },
+];
+
+const WORKFLOW_STEPS = [
+  {
+    number: '01',
+    title: 'Sign in with a familiar account',
+    description:
+      'Use Google, Facebook, or Apple with zkLogin. Members do not need a separate crypto onboarding flow to get started.',
+  },
+  {
+    number: '02',
+    title: 'Set the circle structure once',
+    description:
+      'Define members, contribution amounts, and payout order in one place so expectations stay clear for everyone involved.',
+  },
+  {
+    number: '03',
+    title: 'Run contributions with less ambiguity',
+    description:
+      'Track upcoming turns, completed contributions, and wallet activity without relying on spreadsheets or verbal follow-up.',
+  },
+];
+
+const COMPARISON_ROWS = [
+  {
+    label: 'Membership',
+    traditional: 'Relationship-based and manually coordinated',
+    onchain: 'Invites, approvals, and member roles in one shared system',
+    fintech: 'Institution-owned accounts for individuals',
+  },
+  {
+    label: 'Visibility',
+    traditional: 'Personal notes, chat history, and memory',
+    onchain: 'A shared, auditable record of each contribution and turn',
+    fintech: 'Platform ledger, not a group view',
+  },
+  {
+    label: 'Settlement',
+    traditional: 'Cash or fragmented bank transfers',
+    onchain: 'Direct wallet settlement in supported on-chain assets',
+    fintech: 'Custodial balances and domestic rails',
+  },
+  {
+    label: 'Access',
+    traditional: 'Local or in-person participation',
+    onchain: 'Borderless participation with social sign-in',
+    fintech: 'Country, product, or provider restrictions',
+  },
+  {
+    label: 'Control',
+    traditional: 'Organizer-driven coordination',
+    onchain: 'Member oversight with smart-contract rules',
+    fintech: 'Provider controlled custody and policies',
+  },
+  {
+    label: 'Cultural fit',
+    traditional: 'Strong tradition, low operational tooling',
+    onchain: 'Tradition preserved with clearer operational guardrails',
+    fintech: 'Generic financial workflows',
+  },
+];
+
+const COMPARISON_CARDS = [
+  {
+    title: 'Traditional circle',
+    tone: 'border-[#d8d1c5] bg-white text-[#4b5565]',
+    items: [
+      'Relationship-based coordination',
+      'Cash or manual transfer collection',
+      'Strong social trust, lighter operational tooling',
+      'Limited visibility outside organizers and chat threads',
+    ],
+  },
+  {
+    title: 'Njangi On-Chain',
+    tone: 'border-[#cfd7e3] bg-[#f3f6fb] text-[#334155]',
+    items: [
+      'Shared visibility for turns, contributions, and approvals',
+      'Direct wallet settlement with self-custody',
+      'Social sign-in through zkLogin',
+      'A calmer operating layer for distributed communities',
+    ],
+  },
+  {
+    title: 'Banks and fintech apps',
+    tone: 'border-[#d8d1c5] bg-white text-[#4b5565]',
+    items: [
+      'Built around individual accounts',
+      'Provider-controlled custody and rules',
+      'Geographic and product restrictions',
+      'Little support for culturally specific circle workflows',
+    ],
+  },
+];
+
+const FAQ_ITEMS = [
+  {
+    id: 'what-is-njangi',
+    question: 'What is a Njangi?',
+    answer:
+      'A Njangi is a rotating community savings structure where members contribute on a shared schedule and each member receives the pooled amount in turn. Similar systems exist globally under many different names.',
+  },
+  {
+    id: 'why-onchain',
+    question: 'Why put a savings circle on-chain?',
+    answer:
+      'The point is not novelty. The point is clarity. On-chain records make contributions, payout order, and settlement easier to verify, especially when members are distributed across cities or countries.',
+  },
+  {
+    id: 'do-i-need-crypto',
+    question: 'Do members need deep crypto experience?',
+    answer:
+      'No. zkLogin lowers the onboarding burden by letting members start with a familiar social account while still receiving a wallet tied to the selected network.',
+  },
+  {
+    id: 'network-switching',
+    question: 'What happens when I switch between testnet and mainnet?',
+    answer:
+      'Your wallet address changes because each network has its own state. The app clears the current session so the selected environment stays clean and consistent.',
+  },
+];
+
+const socialLinkClass =
+  'text-sm font-medium text-[#556070] transition-colors duration-200 hover:text-[#171923]';
+
 export default function Home() {
   const router = useRouter();
   const { account } = useAuth();
-  const [openFaqItems, setOpenFaqItems] = useState<{[key: string]: boolean}>({});
-  
-  // Mainnet signup state
+  const [openFaqItems, setOpenFaqItems] = useState<Record<string, boolean>>({
+    'what-is-njangi': true,
+  });
+
   const [signupEmail, setSignupEmail] = useState('');
   const [isSignupLoading, setIsSignupLoading] = useState(false);
   const [signupMessage, setSignupMessage] = useState('');
   const [showSignupSuccess, setShowSignupSuccess] = useState(false);
-  
-  // Live stats state
   const [circleCount, setCircleCount] = useState<number | null>(null);
 
-  // Network configuration - memoized to prevent unnecessary re-renders
   const NETWORK_CONFIG = useMemo(() => {
     const testnet = getNetworkConfig('testnet');
     const mainnet = getNetworkConfig('mainnet');
@@ -70,97 +276,72 @@ export default function Home() {
     };
   }, []);
 
-  // Network state
   const [network, setNetwork] = useState<'testnet' | 'mainnet'>('testnet');
-
-  // Network switching modal state
   const [isNetworkSwitchModalOpen, setIsNetworkSwitchModalOpen] = useState(false);
   const [pendingNetwork, setPendingNetwork] = useState<'testnet' | 'mainnet' | null>(null);
 
-  const culturalNames = [
-    "Adaji", "Ajoh", "Asue", "Arisan", "Cadena", "Chama", "ChitFunds", "Cundina",
-    "Equb", "Esusu", "Family-Lottery", "Hagbad", "Hui", "Idir", "Iqub", "Keyes",
-    "Kibata", "Kikoba", "Micro-Credit", "Mujin", "Njangi", "Paluwagan", "Pandero",
-    "Pari", "ROSCA", "Round", "Samity", "SittuDanawa", "Sou-sou", "Pardner",
-    "Stokvel", "Tanda", "Tontine"
-  ];
-
   const toggleFaqItem = (id: string) => {
-    setOpenFaqItems(prev => ({
+    setOpenFaqItems((prev) => ({
       ...prev,
-      [id]: !prev[id]
+      [id]: !prev[id],
     }));
   };
 
-
-  // Network switching function
   const switchNetwork = useCallback((newNetwork: 'testnet' | 'mainnet') => {
     setPendingNetwork(newNetwork);
     setIsNetworkSwitchModalOpen(true);
   }, []);
 
-  // Confirm network switch
   const confirmNetworkSwitch = useCallback(() => {
     if (!pendingNetwork) return;
 
     const config = NETWORK_CONFIG[pendingNetwork];
-    
-    // Update network configuration
+
     setNetwork(pendingNetwork);
-    
-    // Persist network choice
+
     if (typeof window !== 'undefined') {
       localStorage.setItem('sui-network', pendingNetwork);
     }
-    
-    // Update the network configuration service
+
     setCurrentNetwork(pendingNetwork);
-    
-    // Store network config globally for Enoki service
+
     if (typeof window !== 'undefined') {
       window.CURRENT_NETWORK_CONFIG = config;
     }
-    
-    // Clear zkLogin session data as it's network-specific
+
     if (typeof window !== 'undefined') {
-      const zkLoginKeys = Object.keys(localStorage).filter(key => 
-        key.includes('zklogin') || key.includes('enoki')
+      const zkLoginKeys = Object.keys(localStorage).filter(
+        (key) => key.includes('zklogin') || key.includes('enoki')
       );
-      zkLoginKeys.forEach(key => localStorage.removeItem(key));
+      zkLoginKeys.forEach((key) => localStorage.removeItem(key));
     }
-    
-    // Close modal and reset pending network
+
     setIsNetworkSwitchModalOpen(false);
     setPendingNetwork(null);
-    
-    // Force page reload to ensure clean state with new network
+
     setTimeout(() => {
       window.location.reload();
     }, 500);
-  }, [pendingNetwork, NETWORK_CONFIG]);
+  }, [NETWORK_CONFIG, pendingNetwork]);
 
-  // Cancel network switch
   const cancelNetworkSwitch = useCallback(() => {
     setIsNetworkSwitchModalOpen(false);
     setPendingNetwork(null);
   }, []);
 
-  // Fetch live circle count from blockchain
   useEffect(() => {
     const fetchCircleCount = async () => {
       try {
         const response = await fetch('/api/circle-stats');
         const data = await response.json();
-        
+
         if (data.success && data.data?.circleCount !== undefined) {
           setCircleCount(data.data.circleCount);
         } else {
-          // Fallback if API fails
           setCircleCount(3);
         }
       } catch (error) {
         console.error('Error fetching circle count:', error);
-        // Fallback to a reasonable number if API fails
         setCircleCount(3);
       }
     };
@@ -168,10 +349,9 @@ export default function Home() {
     fetchCircleCount();
   }, []);
 
-  // Handle mainnet signup form submission
   const handleMainnetSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!signupEmail.trim()) {
       setSignupMessage('Please enter your email address');
       return;
@@ -189,18 +369,17 @@ export default function Home() {
         body: JSON.stringify({
           email: signupEmail.trim(),
           userAddress: account?.userAddr,
-          signupSource: 'homepage'
+          signupSource: 'homepage',
         }),
       });
 
       const data = await response.json();
 
       if (data.success) {
-        setSignupMessage(data.message || 'Successfully signed up!');
+        setSignupMessage(data.message || 'Successfully signed up.');
         setShowSignupSuccess(true);
         setSignupEmail('');
-        
-        // Hide success message after 5 seconds
+
         setTimeout(() => {
           setShowSignupSuccess(false);
           setSignupMessage('');
@@ -216,44 +395,37 @@ export default function Home() {
     }
   };
 
-  // Initialize network preference from localStorage
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const savedNetwork = localStorage.getItem('sui-network') as 'testnet' | 'mainnet' | null;
-      
+      const savedNetwork = localStorage.getItem('sui-network') as
+        | 'testnet'
+        | 'mainnet'
+        | null;
+
       if (savedNetwork && savedNetwork !== network && NETWORK_CONFIG[savedNetwork]) {
         const config = NETWORK_CONFIG[savedNetwork];
         setNetwork(savedNetwork);
-        
-        // Update the network configuration service
         setCurrentNetwork(savedNetwork);
-        
-        // Store network config globally for Enoki service
         window.CURRENT_NETWORK_CONFIG = config;
-        
         console.log(`Loaded network preference: ${savedNetwork}`);
       } else {
-        // Set default network config
         setCurrentNetwork(network);
         window.CURRENT_NETWORK_CONFIG = NETWORK_CONFIG[network];
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run only once on mount - intentionally excluding dependencies
+  }, []);
 
-  // Update global network config when network changes
   useEffect(() => {
     if (typeof window !== 'undefined') {
       window.CURRENT_NETWORK_CONFIG = NETWORK_CONFIG[network];
     }
-  }, [network, NETWORK_CONFIG]);
+  }, [NETWORK_CONFIG, network]);
 
-  // Store returnUrl in localStorage for redirect after login
   useEffect(() => {
     const { returnUrl } = router.query;
     if (returnUrl && typeof returnUrl === 'string') {
       const decodedUrl = decodeURIComponent(returnUrl);
-      // Only store if it's a valid internal path
       if (decodedUrl.startsWith('/')) {
         localStorage.setItem('redirectAfterLogin', decodedUrl);
         console.log('Stored redirect URL:', decodedUrl);
@@ -263,7 +435,6 @@ export default function Home() {
 
   useEffect(() => {
     if (account) {
-      // Check for stored redirect URL
       const redirectUrl = localStorage.getItem('redirectAfterLogin');
       if (redirectUrl) {
         localStorage.removeItem('redirectAfterLogin');
@@ -275,951 +446,879 @@ export default function Home() {
     }
   }, [account, router]);
 
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com';
+  const currentNetworkName = NETWORK_CONFIG[network].networkName;
+
+  const proofItems = [
+    {
+      label: 'Live circles',
+      value: circleCount !== null ? `${circleCount}+` : 'Syncing',
+    },
+    {
+      label: 'Supported assets',
+      value: '6+',
+    },
+    {
+      label: 'Current environment',
+      value: currentNetworkName,
+    },
+  ];
+
+  const previewStats = [
+    {
+      label: 'Members in view',
+      value: '12',
+      caption: 'Roles, approvals, and turns tracked in one place',
+    },
+    {
+      label: 'Next payout',
+      value: '4 days',
+      caption: 'Schedule clarity without spreadsheet follow-up',
+    },
+    {
+      label: 'Payment modes',
+      value: 'Direct + swap',
+      caption: 'Contribute from what members already hold',
+    },
+    {
+      label: 'History',
+      value: 'Auditable',
+      caption: 'Every state change leaves a visible trail',
+    },
+  ];
+
+  const launchNotes = [
+    'Current experience is optimized for testnet exploration and live workflow validation.',
+    'Early subscribers get the clearest signal on mainnet readiness and rollout timing.',
+    'You will only hear from us when there is something materially useful to share.',
+  ];
+
+  const sectionEyebrowClass =
+    'text-[11px] font-semibold uppercase tracking-[0.28em] text-[#717784]';
+  const sectionTitleClass =
+    'mt-4 text-3xl font-semibold tracking-[-0.04em] text-[#171923] sm:text-4xl md:text-[2.75rem] md:leading-[1.05]';
+  const sectionBodyClass =
+    'mt-4 max-w-2xl text-base leading-7 text-[#596170] sm:text-lg';
+  const shellCardClass =
+    'rounded-[30px] border border-[#ddd5c9] bg-white/88 shadow-[0_30px_90px_-62px_rgba(15,23,42,0.42)] backdrop-blur';
+  const mutedCardClass = 'rounded-[24px] border border-[#e9e1d6] bg-[#fbfaf7]';
+
   return (
     <>
       <Head>
-        {/* Primary Meta Tags */}
-        <title>Njangi On-Chain - Secure Blockchain Savings Circles | Sui zkLogin</title>
-        <meta name="title" content="Njangi On-Chain - Secure Blockchain Savings Circles | Sui zkLogin" />
-        <meta name="description" content="Join the world's first blockchain-based Njangi platform. Create secure, transparent savings circles with zkLogin authentication on Sui blockchain. Supporting 6+ currencies including USDC, USDT, SUI, and BTC." />
-        <meta name="keywords" content="Njangi, ROSCA, Tontine, blockchain savings, Sui blockchain, zkLogin, cryptocurrency savings, DeFi, community savings, stablecoin, USDC, USDT, BTC" />
+        <title>Njangi On-Chain | Secure Community Savings Circles on Sui</title>
+        <meta
+          name="title"
+          content="Njangi On-Chain | Secure Community Savings Circles on Sui"
+        />
+        <meta
+          name="description"
+          content="Run culturally grounded savings circles with clearer rules, auditable contributions, and low-friction onboarding through zkLogin on Sui."
+        />
+        <meta
+          name="keywords"
+          content="Njangi, ROSCA, Tontine, blockchain savings, Sui blockchain, zkLogin, community savings, USDC, USDT, SUI, BTC"
+        />
         <meta name="robots" content="index, follow" />
         <meta name="language" content="English" />
         <meta name="author" content="Njangi On-Chain" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        
-        {/* Open Graph / Facebook */}
+
         <meta property="og:type" content="website" />
-        <meta property="og:url" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`} />
-        <meta property="og:title" content="Njangi On-Chain - Secure Blockchain Savings Circles" />
-        <meta property="og:description" content="Empowering communities with secure, transparent, and culturally rich savings circles. Built on Sui blockchain with zkLogin for seamless authentication." />
-        <meta property="og:image" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/njangi-on-chain-logo.png`} />
+        <meta property="og:url" content={`${baseUrl}/`} />
+        <meta
+          property="og:title"
+          content="Njangi On-Chain | Secure Community Savings Circles"
+        />
+        <meta
+          property="og:description"
+          content="A calmer, more accountable way to run community savings circles with zkLogin onboarding and transparent on-chain coordination."
+        />
+        <meta property="og:image" content={`${baseUrl}/njangi-on-chain-logo.png`} />
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
         <meta property="og:site_name" content="Njangi On-Chain" />
         <meta property="og:locale" content="en_US" />
-        
-        {/* Twitter */}
+
         <meta property="twitter:card" content="summary_large_image" />
-        <meta property="twitter:url" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`} />
-        <meta property="twitter:title" content="Njangi On-Chain - Secure Blockchain Savings Circles" />
-        <meta property="twitter:description" content="Empowering communities with secure, transparent, and culturally rich savings circles. Built on Sui blockchain with zkLogin for seamless authentication." />
-        <meta property="twitter:image" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/njangi-on-chain-logo.png`} />
+        <meta property="twitter:url" content={`${baseUrl}/`} />
+        <meta
+          property="twitter:title"
+          content="Njangi On-Chain | Secure Community Savings Circles"
+        />
+        <meta
+          property="twitter:description"
+          content="Run savings circles with transparent structure, cultural continuity, and low-friction social sign-in on Sui."
+        />
+        <meta property="twitter:image" content={`${baseUrl}/njangi-on-chain-logo.png`} />
         <meta property="twitter:site" content="@njangi_on_chain" />
         <meta property="twitter:creator" content="@njangi_on_chain" />
-        
-        {/* Additional Meta Tags */}
-        <meta name="theme-color" content="#2563eb" />
+
+        <meta name="theme-color" content="#f6f3ee" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="Njangi On-Chain" />
-        
-        {/* Canonical URL */}
-        <link rel="canonical" href={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`} />
-        
-        {/* Google Fonts */}
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Exo+2:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-        
-        <meta name="theme-color" content="#2563eb" />
-        
-        {/* Structured Data */}
+
+        <link rel="canonical" href={`${baseUrl}/`} />
+
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{
             __html: JSON.stringify({
-              "@context": "https://schema.org",
-              "@type": "WebApplication",
-              "name": "Njangi On-Chain",
-              "description": "Secure, transparent savings circles on Sui blockchain",
-              "url": `${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`,
-              "applicationCategory": "FinanceApplication",
-              "operatingSystem": "Web",
-              "offers": {
-                "@type": "Offer",
-                "price": "0",
-                "priceCurrency": "USD"
+              '@context': 'https://schema.org',
+              '@type': 'WebApplication',
+              name: 'Njangi On-Chain',
+              description: 'Secure, transparent savings circles on Sui blockchain',
+              url: `${baseUrl}/`,
+              applicationCategory: 'FinanceApplication',
+              operatingSystem: 'Web',
+              offers: {
+                '@type': 'Offer',
+                price: '0',
+                priceCurrency: 'USD',
               },
-              "publisher": {
-                "@type": "Organization",
-                "name": "Njangi On-Chain",
-                "url": `${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`,
-                "logo": {
-                  "@type": "ImageObject",
-                  "url": `${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/njangi-on-chain-logo.png`,
-                  "width": 512,
-                  "height": 512
+              publisher: {
+                '@type': 'Organization',
+                name: 'Njangi On-Chain',
+                url: `${baseUrl}/`,
+                logo: {
+                  '@type': 'ImageObject',
+                  url: `${baseUrl}/njangi-on-chain-logo.png`,
+                  width: 512,
+                  height: 512,
                 },
-                "sameAs": [
-                  "https://x.com/njangi_on_chain",
-                  "https://www.instagram.com/njangionchain"
-                ]
+                sameAs: [
+                  'https://x.com/njangi_on_chain',
+                  'https://www.instagram.com/njangionchain',
+                ],
               },
-              "featureList": [
-                "Unlimited Savings Groups",
-                "Decentralized Payments",
-                "Provably Fair Order",
-                "zkLogin Authentication",
-                "Multi-currency Support",
-                "Smart Contract Security"
+              featureList: [
+                'Shared circle visibility',
+                'Direct on-chain settlement',
+                'zkLogin authentication',
+                'Multi-asset support',
+                'Smart contract transparency',
               ],
-              "supportedPaymentMethod": [
-                "Cryptocurrency",
-                "USDC",
-                "USDT", 
-                "SUI",
-                "Bitcoin"
-              ]
-            })
+              supportedPaymentMethod: [
+                'Cryptocurrency',
+                'USDC',
+                'USDT',
+                'SUI',
+                'Bitcoin',
+              ],
+            }),
           }}
         />
-        
-        {/* Additional Organization Schema for Google */}
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{
             __html: JSON.stringify({
-              "@context": "https://schema.org",
-              "@type": "Organization",
-              "name": "Njangi On-Chain",
-              "alternateName": "Njangi",
-              "url": `${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`,
-              "logo": `${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/njangi-on-chain-logo.png`,
-              "description": "The world's first blockchain-based Njangi platform for secure community savings circles",
-              "foundingDate": "2024",
-              "industry": "Financial Technology",
-              "sameAs": [
-                "https://x.com/njangi_on_chain",
-                "https://www.instagram.com/njangionchain"
+              '@context': 'https://schema.org',
+              '@type': 'Organization',
+              name: 'Njangi On-Chain',
+              alternateName: 'Njangi',
+              url: `${baseUrl}/`,
+              logo: `${baseUrl}/njangi-on-chain-logo.png`,
+              description:
+                'A blockchain-native operating layer for community savings circles',
+              foundingDate: '2024',
+              industry: 'Financial Technology',
+              sameAs: [
+                'https://x.com/njangi_on_chain',
+                'https://www.instagram.com/njangionchain',
               ],
-              "contactPoint": {
-                "@type": "ContactPoint",
-                "email": "njangionchain@gmail.com",
-                "contactType": "Customer Service"
-              }
-            })
+              contactPoint: {
+                '@type': 'ContactPoint',
+                email: 'njangionchain@gmail.com',
+                contactType: 'Customer Service',
+              },
+            }),
           }}
         />
       </Head>
-      
-    <div className="min-h-screen bg-gray-50">
-      {/* Network Switch Confirmation Modal */}
-      <Dialog.Root open={isNetworkSwitchModalOpen} onOpenChange={setIsNetworkSwitchModalOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="bg-black bg-opacity-50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50" />
-          <Dialog.Content className="data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border border-gray-200 bg-white p-6 shadow-lg duration-200 rounded-lg">
-            <div className="flex flex-col space-y-2 text-center sm:text-left">
-              <Dialog.Title className="text-lg font-semibold text-gray-900">
-                Switch to {pendingNetwork ? NETWORK_CONFIG[pendingNetwork].networkName : ''}?
-              </Dialog.Title>
-              <div className="text-sm text-gray-500 space-y-3">
-                <div>Switching networks will:</div>
-                <ul className="list-disc list-inside space-y-1 text-sm text-gray-600">
-                  <li>Generate a different wallet address for the same account</li>
-                  <li>Clear your current session and require re-authentication</li>
-                  <li>Show circles and balances from the selected network only</li>
-                </ul>
-                <div className="text-sm text-amber-600 font-medium">
-                  ⚠️ Your wallet address will be different on {pendingNetwork ? NETWORK_CONFIG[pendingNetwork].networkName.toLowerCase() : ''}
-                </div>
-              </div>
-            </div>
-            <div className="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2">
-              <button
-                onClick={cancelNetworkSwitch}
-                className="inline-flex h-10 items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 mt-3 sm:mt-0 sm:w-auto"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmNetworkSwitch}
-                className="inline-flex h-10 items-center justify-center rounded-md border border-transparent bg-amber-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 sm:w-auto"
-              >
-                Switch to {pendingNetwork ? NETWORK_CONFIG[pendingNetwork].networkName : ''}
-              </button>
-            </div>
-            <Dialog.Close asChild>
-              <button 
-                onClick={cancelNetworkSwitch}
-                className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-white transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2"
-              >
-                <X className="h-4 w-4" />
-                <span className="sr-only">Close</span>
-              </button>
-            </Dialog.Close>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
 
+      <div
+        className={`${bodyFont.className} relative min-h-screen overflow-hidden bg-[#f6f3ee] text-[#171923]`}
+      >
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-[680px] bg-[radial-gradient(circle_at_top_left,_rgba(108,122,147,0.18),_transparent_36%),radial-gradient(circle_at_85%_10%,_rgba(218,204,178,0.34),_transparent_26%),linear-gradient(180deg,_rgba(255,255,255,0.58)_0%,_rgba(246,243,238,0)_72%)]" />
 
-      {/* Floating Glass Network Toggle Switch */}
-      <div className="fixed top-4 right-4 sm:top-6 sm:right-6 z-40">
-        <div className="relative">
-          {/* Glass Container */}
-          <div className="relative bg-white/10 backdrop-blur-2xl border border-white/20 rounded-3xl p-1.5 shadow-2xl hover:shadow-3xl transition-all duration-500 hover:bg-white/15 group">
-            {/* Inner glow effect */}
-            <div className="absolute inset-0 rounded-3xl bg-gradient-to-r from-white/5 to-white/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-            
-            <div className="relative flex items-center">
-              {/* Glass Background Track */}
-              <div className="relative flex bg-black/5 backdrop-blur-sm rounded-2xl overflow-hidden border border-white/10">
-                {/* Floating Glass Indicator */}
-                <div className={`absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] bg-white/20 backdrop-blur-xl border border-white/30 rounded-xl shadow-lg transition-all duration-500 ease-out ${
-                  network === 'testnet' 
-                    ? 'left-0.5' 
-                    : 'left-[calc(50%+1px)]'
-                }`}>
-                  {/* Active indicator glow */}
-                  <div className={`absolute inset-0 rounded-xl transition-all duration-500 ${
-                    network === 'testnet' 
-                      ? 'bg-gradient-to-r from-blue-400/30 to-blue-500/30 shadow-blue-500/20' 
-                      : 'bg-gradient-to-r from-emerald-400/30 to-green-500/30 shadow-emerald-500/20'
-                  } shadow-lg`} />
-                </div>
-                
-                {/* Testnet Button */}
-                <button
-                  onClick={() => switchNetwork('testnet')}
-                  className={`relative z-20 px-4 py-3 sm:px-5 sm:py-3.5 text-xs sm:text-sm font-bold transition-all duration-500 ease-out hover:scale-105 active:scale-95 ${
-                    network === 'testnet' 
-                      ? 'text-white drop-shadow-sm' 
-                      : 'text-white/70 hover:text-white/90'
-                  }`}
-                >
-                  <div className="flex items-center space-x-2">
-                    <div className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full transition-all duration-500 ${
-                      network === 'testnet' 
-                        ? 'bg-blue-300 shadow-lg shadow-blue-400/50 animate-pulse' 
-                        : 'bg-white/40 hover:bg-white/60'
-                    }`} />
-                    <span className="hidden sm:inline font-semibold tracking-wide">Testnet</span>
-                    <span className="sm:hidden font-semibold">Test</span>
-                  </div>
-                </button>
-                
-                {/* Mainnet Button */}
-                <button
-                  onClick={() => switchNetwork('mainnet')}
-                  className={`relative z-20 px-4 py-3 sm:px-5 sm:py-3.5 text-xs sm:text-sm font-bold transition-all duration-500 ease-out hover:scale-105 active:scale-95 ${
-                    network === 'mainnet' 
-                      ? 'text-white drop-shadow-sm' 
-                      : 'text-white/70 hover:text-white/90'
-                  }`}
-                >
-                  <div className="flex items-center space-x-2">
-                    <div className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full transition-all duration-500 ${
-                      network === 'mainnet' 
-                        ? 'bg-emerald-300 shadow-lg shadow-emerald-400/50 animate-pulse' 
-                        : 'bg-white/40 hover:bg-white/60'
-                    }`} />
-                    <span className="hidden sm:inline font-semibold tracking-wide">Mainnet</span>
-                    <span className="sm:hidden font-semibold">Main</span>
-                  </div>
-                </button>
-              </div>
-            </div>
-          </div>
-          
-          {/* Glass Status Tooltip */}
-          <div className={`hidden sm:block absolute -bottom-1 left-1/2 transform -translate-x-1/2 translate-y-full 
-                          px-4 py-2 rounded-xl text-xs font-semibold transition-all duration-500 backdrop-blur-2xl border shadow-xl
-                          ${network === 'mainnet' 
-                            ? 'bg-emerald-500/20 text-white border-emerald-300/30 shadow-emerald-500/20' 
-                            : 'bg-blue-500/20 text-white border-blue-300/30 shadow-blue-500/20'
-                          }`}>
-            <div className="flex items-center space-x-2">
-              <div className={`w-2 h-2 rounded-full animate-pulse shadow-md ${
-                network === 'mainnet' ? 'bg-emerald-400' : 'bg-blue-400'
-              }`} />
-              <span className="tracking-wider">Live on {NETWORK_CONFIG[network].networkName}</span>
-            </div>
-            {/* Glass Tooltip Arrow */}
-            <div className={`absolute -top-1.5 left-1/2 transform -translate-x-1/2 w-3 h-3 rotate-45 backdrop-blur-2xl border-l border-t
-                            ${network === 'mainnet' 
-                              ? 'bg-emerald-500/20 border-emerald-300/30' 
-                              : 'bg-blue-500/20 border-blue-300/30'
-                            }`} />
-          </div>
-        </div>
-      </div>
-      {/* Cultural Names Sliding Banner */}
-      <div className="bg-gradient-to-r from-blue-600 via-blue-700 to-blue-600 text-white py-3 overflow-hidden relative">
-        <div className="absolute inset-0 bg-black bg-opacity-10"></div>
-        <div className="relative">
-          <style jsx>{`
-            @keyframes slide {
-              0% {
-                transform: translateX(0);
-              }
-              100% {
-                transform: translateX(-50%);
-              }
-            }
-            .sliding-banner {
-              animation: slide 80s linear infinite;
-              display: flex;
-              width: max-content;
-            }
-            .sliding-banner:hover {
-              animation-play-state: paused;
-            }
-            @media (max-width: 768px) {
-              .sliding-banner {
-                animation: slide 150s linear infinite;
-              }
-            }
-          `}</style>
-          <div className="sliding-banner whitespace-nowrap">
-            {/* Multiple sets for seamless loop on all screen sizes */}
-            {Array.from({ length: 4 }, (_, setIndex) => (
-              <span key={`set-${setIndex}`} className="inline-flex items-center space-x-6 mr-6">
-                {culturalNames.map((name, index) => (
-                  <span key={`${setIndex}-${index}`} className="inline-flex items-center">
-                    <span className="w-2 h-2 bg-blue-200 rounded-full mr-3"></span>
-                    <span className="text-sm font-medium">{name}</span>
-                  </span>
-                ))}
-                {/* Add the slogan with special styling */}
-                <span className="inline-flex items-center bg-white bg-opacity-25 rounded-full px-4 py-1 border border-white border-opacity-40 backdrop-blur-sm">
-                  <span className="w-1.5 h-1.5 bg-yellow-300 rounded-full mr-3 animate-pulse"></span>
-                  <span className="text-xs font-medium text-yellow-50 uppercase" style={{ fontFamily: "'Orbitron', 'Exo 2', monospace", fontWeight: '500', letterSpacing: '2px' }}>Life Is Njangi</span>
-                </span>
-              </span>
-            ))}
-          </div>
-        </div>
-        {/* Gradient fade edges */}
-        <div className="absolute top-0 left-0 w-12 sm:w-20 h-full bg-gradient-to-r from-blue-600 to-transparent z-10"></div>
-        <div className="absolute top-0 right-0 w-12 sm:w-20 h-full bg-gradient-to-l from-blue-600 to-transparent z-10"></div>
-      </div>
-
-      {/* Hero Section */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="py-12 md:py-20">
-          <div className="text-center">
-            <div className="flex justify-center mb-8">
-              <img
-                src="/njangi-on-chain-logo.png"
-                alt="Njangi on-chain"
-                width={120}
-                height={120}
-                className="w-30 h-30"
-              />
-            </div>
-            <h1 className="text-4xl tracking-tight font-extrabold text-gray-900 sm:text-5xl md:text-6xl">
-              <span className="block">Welcome to</span>
-              <span className="block text-blue-600">Njangi On-Chain</span>
-            </h1>
-            
-            {/* Stylish Slogan */}
-            <div className="mt-6 mb-4">
-              <div className="inline-flex items-center">
-                <div className="h-px bg-gradient-to-r from-transparent via-blue-300 to-transparent w-20 sm:w-32"></div>
-                <span className="px-10 py-1 text-xs sm:text-sm font-medium text-blue-700 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-full border border-blue-100 shadow-sm mx-4 uppercase" style={{ fontFamily: "'Orbitron', 'Exo 2', monospace", fontWeight: '600', letterSpacing: '4px', lineHeight: '1.3' }}>
-                  Life Is Njangi
-                </span>
-                <div className="h-px bg-gradient-to-r from-transparent via-blue-300 to-transparent w-20 sm:w-32"></div>
-              </div>
-            </div>
-            
-            <p className="mt-3 max-w-md mx-auto text-base text-gray-500 sm:text-lg md:mt-5 md:text-xl md:max-w-3xl">
-              Empowering communities with secure, transparent, and culturally rich savings circles.
-              Built on Sui blockchain with zkLogin for seamless authentication.
-            </p>
-            
-            <div className="mt-10">
-              <LoginButton />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Feature Cards */}
-      <div className="mt-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-1 gap-8 md:grid-cols-3">
-            <div className="text-center">
-              <div className="flex items-center justify-center h-12 w-12 rounded-md bg-blue-500 text-white mx-auto">
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                </svg>
-              </div>
-              <h3 className="mt-4 text-lg font-medium text-gray-900">Secure</h3>
-              <p className="mt-2 text-base text-gray-500">
-                Built on Sui blockchain with zkLogin authentication for maximum security.
-              </p>
-            </div>
-
-            <div className="text-center">
-              <div className="flex items-center justify-center h-12 w-12 rounded-md bg-blue-500 text-white mx-auto">
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                </svg>
-              </div>
-              <h3 className="mt-4 text-lg font-medium text-gray-900">Community-Driven</h3>
-              <p className="mt-2 text-base text-gray-500">
-                Preserving cultural traditions while modernizing community savings.
-              </p>
-            </div>
-
-            <div className="text-center">
-              <div className="flex items-center justify-center h-12 w-12 rounded-md bg-blue-500 text-white mx-auto">
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <h3 className="mt-4 text-lg font-medium text-gray-900">Transparent</h3>
-              <p className="mt-2 text-base text-gray-500">
-                Full transparency and automated management of savings circles.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Everything You Need Section */}
-      <div className="bg-white py-16">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center">
-            <h2 className="text-3xl font-extrabold text-gray-900 sm:text-4xl">
-              Everything you need to manage your Njangi on the blockchain
-            </h2>
-            <p className="mt-4 text-lg text-gray-500">
-              For the first time, bringing the traditional Njangi to the decentralized world
-            </p>
-          </div>
-          
-          <div className="mt-16 grid grid-cols-1 gap-8 md:grid-cols-2 lg:grid-cols-3">
-            <div className="bg-gray-50 rounded-lg p-6 shadow-sm">
-              <div className="flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 text-blue-600 mb-4">
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                </svg>
-              </div>
-              <h3 className="text-lg font-medium text-gray-900">Unlimited Groups</h3>
-              <p className="mt-2 text-gray-500">Create and manage unlimited number of Groups of any size with on-chain security.</p>
-            </div>
-            
-            <div className="bg-gray-50 rounded-lg p-6 shadow-sm">
-              <div className="flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 text-blue-600 mb-4">
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
-                </svg>
-              </div>
-              <h3 className="text-lg font-medium text-gray-900">Decentralized Payments</h3>
-              <p className="mt-2 text-gray-500">Pay or get paid directly through Sui blockchain with full transparency and no intermediaries.</p>
-            </div>
-            
-            <div className="bg-gray-50 rounded-lg p-6 shadow-sm">
-              <div className="flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 text-blue-600 mb-4">
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
-                </svg>
-              </div>
-              <h3 className="text-lg font-medium text-gray-900">Provably Fair Order</h3>
-              <p className="mt-2 text-gray-500">Smart contract-enforced random payout order that&apos;s transparent and tamper-proof.</p>
-            </div>
-            
-            <div className="bg-gray-50 rounded-lg p-6 shadow-sm">
-              <div className="flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 text-blue-600 mb-4">
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                </svg>
-              </div>
-              <h3 className="text-lg font-medium text-gray-900">Automatic Reminders</h3>
-              <p className="mt-2 text-gray-500">Get reminded about payment due dates through smart contract events and notifications.</p>
-            </div>
-            
-            <div className="bg-gray-50 rounded-lg p-6 shadow-sm">
-              <div className="flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 text-blue-600 mb-4">
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                </svg>
-              </div>
-              <h3 className="text-lg font-medium text-gray-900">zkLogin Authentication</h3>
-              <p className="mt-2 text-gray-500">Login with your favorite social accounts while maintaining crypto-level security through zero-knowledge proofs.</p>
-            </div>
-            
-            <div className="bg-gray-50 rounded-lg p-6 shadow-sm">
-              <div className="flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 text-blue-600 mb-4">
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                </svg>
-              </div>
-              <h3 className="text-lg font-medium text-gray-900">100% Secure and Trustless</h3>
-              <p className="mt-2 text-gray-500">All transactions are secured by Sui blockchain with full verification and auditability.</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Comparison Table Section */}
-      <div className="bg-gray-50 py-16">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center mb-12">
-            <h2 className="text-3xl font-extrabold text-gray-900 sm:text-4xl">
-              Why Choose Njangi On-Chain?
-            </h2>
-            <p className="mt-4 text-lg text-gray-500 max-w-3xl mx-auto">
-              See how we combine the best of traditional community savings with modern blockchain technology,
-              outperforming both offline methods and traditional banking systems.
-            </p>
-          </div>
-
-          {/* Desktop Table */}
-          <div className="hidden lg:block">
-            <div className="overflow-hidden shadow-lg rounded-lg">
-              <table className="min-w-full bg-white">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900 uppercase tracking-wider">
-                      Features
-                    </th>
-                    <th className="px-6 py-4 text-center text-sm font-semibold text-red-600 uppercase tracking-wider">
-                      Traditional Njangi
-                    </th>
-                    <th className="px-6 py-4 text-center text-sm font-semibold text-blue-600 uppercase tracking-wider bg-blue-50">
-                      Njangi On-Chain
-                    </th>
-                    <th className="px-6 py-4 text-center text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                      Banks & Fintech Apps
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  <tr>
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Community Focus</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">✓ Strong community bonds</td>
-                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Community + Technology</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">Individual accounts only</td>
-                  </tr>
-                  <tr className="bg-gray-50">
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Global Accessibility</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">Local meetings required</td>
-                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Worldwide borderless</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">Country restrictions</td>
-                  </tr>
-                  <tr>
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Transparency</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">Limited to group</td>
-                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Full blockchain transparency</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">Corporate controlled</td>
-                  </tr>
-                  <tr className="bg-gray-50">
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Cultural Preservation</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">✓ Traditional values</td>
-                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Cultural heritage preserved</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">Generic products</td>
-                  </tr>
-                  <tr>
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Fees & Costs</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">No fees (trust-based)</td>
-                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Minimal blockchain fees</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">High account/transfer fees</td>
-                  </tr>
-                  <tr className="bg-gray-50">
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Control & Ownership</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">Community managed</td>
-                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Self-custody & control</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">Bank controls funds</td>
-                  </tr>
-                  <tr>
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Interest & Returns</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">No interest earned</td>
-                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Potential crypto appreciation</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">Low savings rates</td>
-                  </tr>
-                  <tr className="bg-gray-50">
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Security</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">Social trust dependent</td>
-                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Cryptographic guarantees</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">Corporate security risks</td>
-                  </tr>
-                  <tr>
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">Setup Complexity</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">Simple social setup</td>
-                    <td className="px-6 py-4 text-center text-sm text-blue-600 bg-blue-50 font-medium">✓ Social login (zkLogin)</td>
-                    <td className="px-6 py-4 text-center text-sm text-gray-500">Complex KYC/documentation</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Mobile Cards */}
-          <div className="lg:hidden space-y-6">
-            <div className="bg-white rounded-lg shadow-md p-6 border-l-4 border-red-500">
-              <h3 className="text-lg font-semibold text-red-600 mb-4">Traditional Njangi</h3>
-              <ul className="space-y-2 text-sm text-gray-600">
-                <li>• ✓ Strong community bonds</li>
-                <li>• Local meetings required</li>
-                <li>• Limited to group transparency</li>
-                <li>• ✓ Traditional values preserved</li>
-                <li>• No fees (trust-based)</li>
-                <li>• Social trust dependent</li>
-              </ul>
-            </div>
-
-            <div className="bg-blue-50 rounded-lg shadow-md p-6 border-l-4 border-blue-500">
-              <h3 className="text-lg font-semibold text-blue-600 mb-4">✨ Njangi On-Chain</h3>
-              <ul className="space-y-2 text-sm text-blue-700 font-medium">
-                <li>• ✓ Community + Modern technology</li>
-                <li>• ✓ Worldwide borderless access</li>
-                <li>• ✓ Full blockchain transparency</li>
-                <li>• ✓ Cultural heritage preserved</li>
-                <li>• ✓ Minimal blockchain fees</li>
-                <li>• ✓ Self-custody & control</li>
-                <li>• ✓ Potential crypto appreciation</li>
-                <li>• ✓ Social login with zkLogin</li>
-              </ul>
-            </div>
-
-            <div className="bg-white rounded-lg shadow-md p-6 border-l-4 border-gray-400">
-              <h3 className="text-lg font-semibold text-gray-600 mb-4">Banks & Fintech Apps</h3>
-              <ul className="space-y-2 text-sm text-gray-600">
-                <li>• Individual accounts only</li>
-                <li>• Country restrictions</li>
-                <li>• Corporate controlled transparency</li>
-                <li>• Generic financial products</li>
-                <li>• High account/transfer fees</li>
-                <li>• Bank controls your funds</li>
-                <li>• Complex KYC/documentation</li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* How It Works Section */}
-      <div className="bg-blue-50 py-16">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center">
-            <h2 className="text-3xl font-extrabold text-gray-900 sm:text-4xl">
-              How It Works
-            </h2>
-            <p className="mt-4 text-lg text-gray-500">
-              Using Njangi On-Chain is as easy as A-B-C
-            </p>
-          </div>
-          
-          <div className="mt-16 grid grid-cols-1 gap-8 md:grid-cols-3">
-            <div className="text-center">
-              <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-blue-100 text-blue-600 text-2xl font-bold">
-                A
-              </div>
-              <h3 className="mt-4 text-lg font-medium text-gray-900">Login with zkLogin</h3>
-              <p className="mt-2 text-gray-500">
-                Use your Google, Facebook, or other social accounts to log in securely with zero-knowledge proofs.
-              </p>
-            </div>
-            
-            <div className="text-center">
-              <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-blue-100 text-blue-600 text-2xl font-bold">
-                B
-              </div>
-              <h3 className="mt-4 text-lg font-medium text-gray-900">Create or Join a Group</h3>
-              <p className="mt-2 text-gray-500">
-                Create your own Njangi group or join an existing one by connecting with members.
-              </p>
-            </div>
-            
-            <div className="text-center">
-              <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-blue-100 text-blue-600 text-2xl font-bold">
-                C
-              </div>
-              <h3 className="mt-4 text-lg font-medium text-gray-900">Manage On-Chain</h3>
-              <p className="mt-2 text-gray-500">
-                Let smart contracts handle contributions, payouts, and order management with full transparency.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Stats Section */}
-      <div className="bg-white py-16">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center px-4 py-2 rounded-full bg-green-100 text-green-800 text-sm font-medium mb-4">
-              <span className="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></span>
-              Live Statistics from Sui Blockchain
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-2 gap-8 md:grid-cols-4">
-            <div className="text-center">
-              <div className="flex justify-center mb-2">
-                <svg className="h-12 w-12 text-blue-600" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM11 19.93c-3.94-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
-                </svg>
-              </div>
-              <span className="block mt-2 text-lg text-gray-500">Worldwide Borderless</span>
-            </div>
-            
-            <div className="text-center">
-              <span className="block text-4xl font-extrabold text-blue-600">6+</span>
-              <span className="block mt-2 text-lg text-gray-500">Currencies</span>
-            </div>
-            
-            <div className="text-center">
-              <div className="flex items-center justify-center mb-1">
-                <span className="text-4xl font-extrabold text-blue-600">
-                  {circleCount !== null ? `${circleCount}+` : '...'}
-                </span>
-                {circleCount !== null && (
-                  <span className="ml-2 w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                )}
-              </div>
-              <span className="block mt-2 text-lg text-gray-500">Circles Created</span>
-            </div>
-            
-            <div className="text-center">
-              <span className="block text-4xl font-extrabold text-blue-600">100%</span>
-              <span className="block mt-2 text-lg text-gray-500">Auditable</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Simple Mainnet Launch Signup */}
-      <div className="bg-gradient-to-r from-blue-600 to-blue-700 py-16">
-        <div className="max-w-4xl mx-auto text-center px-4 sm:px-6 lg:px-8">
-          <div className="inline-flex items-center px-4 py-2 rounded-full bg-white bg-opacity-20 text-white text-sm font-medium mb-6">
-            <span className="w-2 h-2 bg-green-400 rounded-full mr-2 animate-pulse"></span>
-            Currently on Testnet
-          </div>
-          
-          <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold text-white mb-4">
-            🚀 Mainnet Launch Coming Soon!
-          </h2>
-          <p className="text-xl text-blue-100 mb-8 max-w-2xl mx-auto">
-            Be the first to know when Njangi On-Chain launches on Sui Mainnet. Get 
-            early access and exclusive benefits for early adopters.
-          </p>
-
-          {/* Simple Signup Form */}
-          <div className="max-w-lg mx-auto">
-            <form onSubmit={handleMainnetSignup} className="flex flex-col sm:flex-row gap-3">
-              <input
-                type="email"
-                placeholder="Enter your email address"
-                value={signupEmail}
-                onChange={(e) => setSignupEmail(e.target.value)}
-                required
-                className="flex-1 px-6 py-4 rounded-lg bg-white bg-opacity-90 text-gray-900 placeholder-gray-500 border-0 focus:ring-2 focus:ring-white focus:bg-white transition-all duration-200 text-lg"
-                disabled={isSignupLoading}
-              />
-              <button
-                type="submit"
-                disabled={isSignupLoading}
-                className="px-8 py-4 bg-white text-blue-700 font-bold rounded-lg hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed text-lg whitespace-nowrap"
-              >
-                {isSignupLoading ? 'Signing up...' : 'Notify Me'}
-              </button>
-            </form>
-
-            {/* Success/Error Messages */}
-            {signupMessage && (
-              <div className={`mt-4 p-3 rounded-lg ${
-                showSignupSuccess 
-                  ? 'bg-green-500 bg-opacity-20 text-green-100 border border-green-400' 
-                  : 'bg-red-500 bg-opacity-20 text-red-100 border border-red-400'
-              }`}>
-                <div className="flex items-center justify-center">
-                  {showSignupSuccess ? (
-                    <svg className="h-5 w-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                    </svg>
-                  ) : (
-                    <svg className="h-5 w-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                    </svg>
-                  )}
-                  <span className="text-sm font-medium">{signupMessage}</span>
-                </div>
-              </div>
-            )}
-
-            <p className="mt-4 text-sm text-blue-200">
-              🎁 Early subscribers get exclusive benefits and priority access
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* FAQ Section Preview */}
-      <div className="bg-gray-50 py-16">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center mb-12">
-            <h2 className="text-3xl font-extrabold text-gray-900 sm:text-4xl">
-              Frequently Asked Questions
-            </h2>
-            <p className="mt-4 text-lg text-gray-500">
-              Common questions about Njangi On-Chain
-            </p>
-          </div>
-          
-          <div className="space-y-6">
-            <div className="bg-white shadow overflow-hidden rounded-lg">
-              <button 
-                className="w-full px-6 py-4 text-left"
-                onClick={() => toggleFaqItem('what-is-njangi')}
-                aria-expanded={openFaqItems['what-is-njangi']}
-              >
-                <div className="flex justify-between items-center">
-                  <span className="text-lg font-medium text-gray-900">What is a Njangi?</span>
-                  <svg 
-                    className={`h-5 w-5 text-gray-500 transform ${openFaqItems['what-is-njangi'] ? 'rotate-180' : ''} transition-transform duration-200`} 
-                    fill="none" 
-                    viewBox="0 0 24 24" 
-                    stroke="currentColor"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
-              </button>
-              <div 
-                className={`px-6 pb-4 ${openFaqItems['what-is-njangi'] ? 'block' : 'hidden'}`}
-              >
-                <p className="text-gray-500">
-                  A Njangi is a community-based savings system where members contribute funds together in a rotation for the equal benefit of every member. Our platform brings this cultural tradition to the blockchain.
-                </p>
-              </div>
-            </div>
-            
-            <div className="bg-white shadow overflow-hidden rounded-lg">
-              <button 
-                className="w-full px-6 py-4 text-left"
-                onClick={() => toggleFaqItem('how-different')}
-                aria-expanded={openFaqItems['how-different']}
-              >
-                <div className="flex justify-between items-center">
-                  <span className="text-lg font-medium text-gray-900">How is Njangi On-Chain different?</span>
-                  <svg 
-                    className={`h-5 w-5 text-gray-500 transform ${openFaqItems['how-different'] ? 'rotate-180' : ''} transition-transform duration-200`} 
-                    fill="none" 
-                    viewBox="0 0 24 24" 
-                    stroke="currentColor"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
-              </button>
-              <div 
-                className={`px-6 pb-4 ${openFaqItems['how-different'] ? 'block' : 'hidden'}`}
-              >
-                <p className="text-gray-500">
-                  Unlike traditional Njangi systems, our platform uses Sui blockchain to provide transparent, secure, and automated management of savings circles with cryptographic guarantees and full auditability.
-                </p>
-              </div>
-            </div>
-            
-            <div className="text-center mt-8">
-              <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <Link href="/learn" className="text-blue-600 hover:text-blue-800 font-medium">
-                  Learn About Savings Circles →
-                </Link>
-                <Link href="/faq" className="text-blue-600 hover:text-blue-800 font-medium">
-                  View all FAQs
-                </Link>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Cultural Names Section */}
-      <div className="bg-white py-16">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <h2 className="text-3xl font-extrabold text-gray-900 text-center mb-8 sm:text-4xl">
-            One Global Movement, Countless Cultural Expressions
-          </h2>
-          <p className="text-center text-lg text-gray-600 mb-8 max-w-3xl mx-auto">
-            From Njangi in Cameroon to Tontine in France, ROSCA in economics, and Chama in Kenya - 
-            discover how communities worldwide practice collective savings.
-          </p>
-          <div className="flex flex-wrap justify-center gap-3">
-            {culturalNames.map((name, index) => (
-              <span key={index} className="bg-blue-50 text-blue-700 border border-blue-200 px-4 py-2 rounded-full text-sm font-medium hover:bg-blue-100 transition-colors">
-                {name}
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Call to Action Section */}
-      <div className="bg-gradient-to-r from-blue-600 to-blue-700 py-16">
-        <div className="max-w-4xl mx-auto text-center px-4 sm:px-6 lg:px-8">
-          <h2 className="text-3xl font-extrabold text-white sm:text-4xl">
-            Ready to Start Your Njangi Journey?
-          </h2>
-          <p className="mt-4 text-xl text-blue-100">
-            Join thousands of users worldwide who are already saving together securely on the blockchain.
-          </p>
-          <div className="mt-8 flex flex-col sm:flex-row gap-4 justify-center items-center">
-            <LoginButton />
-            <Link 
-              href="/learn" 
-              className="border-2 border-white text-white px-8 py-3 rounded-lg font-semibold hover:bg-white hover:text-blue-600 transition-colors"
+        <Dialog.Root
+          open={isNetworkSwitchModalOpen}
+          onOpenChange={setIsNetworkSwitchModalOpen}
+        >
+          <Dialog.Portal>
+            <Dialog.Overlay className="fixed inset-0 z-50 bg-[#14161c]/45 backdrop-blur-sm" />
+            <Dialog.Content
+              className={`fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 -translate-y-1/2 rounded-[28px] border border-[#dfd6ca] bg-[#fbfaf7] p-6 shadow-[0_28px_80px_-40px_rgba(15,23,42,0.45)] sm:p-7 ${bodyFont.className}`}
             >
-              Learn How It Works
-            </Link>
-          </div>
-          <p className="mt-4 text-sm text-blue-200">
-            Get started in less than 2 minutes with your social account • No crypto experience required
-          </p>
-        </div>
-      </div>
+              <div className="pr-10">
+                <Dialog.Title className="text-xl font-semibold tracking-[-0.03em] text-[#171923]">
+                  Switch to{' '}
+                  {pendingNetwork ? NETWORK_CONFIG[pendingNetwork].networkName : ''}?
+                </Dialog.Title>
+                <Dialog.Description className="mt-3 text-sm leading-6 text-[#5d6674]">
+                  Network environments use different wallet addresses. Switching
+                  clears the active zkLogin session so balances, circles, and
+                  history stay aligned to the environment you selected.
+                </Dialog.Description>
+              </div>
 
-      {/* Footer with Social Links */}
-      <footer className="bg-gray-900 text-white py-6">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between">
-            <div className="flex items-center mb-4 md:mb-0">
-              <img
-                src="/njangi-on-chain-logo.png"
-                alt="Njangi on-chain"
-                width={40}
-                height={40}
-                className="mr-3 w-10 h-10"
-              />
-              <div>
-                <span className="text-lg font-semibold">Njangi On-Chain</span>
-                <p className="text-xs text-gray-400 mt-1">
-                  Life Is Njangi • Empowering communities with secure, transparent savings on Sui blockchain.
+              <div className={`${mutedCardClass} mt-6 p-4`}>
+                <ul className="space-y-2 text-sm leading-6 text-[#4b5565]">
+                  <li>Generate a different wallet address for the same account.</li>
+                  <li>Require a fresh sign-in before continuing.</li>
+                  <li>Show circles and balances from the selected network only.</li>
+                </ul>
+                <p className="mt-4 text-sm font-medium text-[#8a5a21]">
+                  The wallet you use on{' '}
+                  {pendingNetwork
+                    ? NETWORK_CONFIG[pendingNetwork].networkName.toLowerCase()
+                    : 'the selected network'}{' '}
+                  is separate from the other environment.
                 </p>
               </div>
+
+              <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={cancelNetworkSwitch}
+                  className="rounded-full border border-[#d5ccbf] bg-white px-5 py-3 text-sm font-semibold text-[#334155] transition-colors duration-200 hover:bg-[#f6f3ee]"
+                >
+                  Stay here
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmNetworkSwitch}
+                  className="rounded-full bg-[#1d2533] px-5 py-3 text-sm font-semibold text-white transition-colors duration-200 hover:bg-[#101723]"
+                >
+                  Switch to{' '}
+                  {pendingNetwork ? NETWORK_CONFIG[pendingNetwork].networkName : ''}
+                </button>
+              </div>
+
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  onClick={cancelNetworkSwitch}
+                  className="absolute right-5 top-5 rounded-full border border-[#e5ddd2] bg-white p-2 text-[#667085] transition-colors duration-200 hover:text-[#171923]"
+                >
+                  <X className="h-4 w-4" />
+                  <span className="sr-only">Close</span>
+                </button>
+              </Dialog.Close>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+
+        <div className="relative">
+          <header className="border-b border-[#e6ddd1]/90">
+            <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
+              <Link href="/" className="flex min-w-0 items-center gap-4">
+                <span className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[#dfd7cb] bg-white shadow-[0_18px_40px_-34px_rgba(15,23,42,0.4)]">
+                  <Image
+                    src="/njangi-on-chain-logo.png"
+                    alt="Njangi On-Chain"
+                    width={80}
+                    height={80}
+                    className="h-full w-full scale-[2.25] object-contain"
+                    priority
+                    unoptimized
+                  />
+                </span>
+                <span className="min-w-0">
+                  <span
+                    className={`${wordmarkFont.className} block truncate text-[2rem] leading-none tracking-[-0.05em] text-[#111827] sm:text-[2.25rem]`}
+                  >
+                    Njangi
+                  </span>
+                  <span className="mt-1 block truncate pl-1 text-[0.72rem] font-semibold uppercase tracking-[0.42em] text-[#65748b]">
+                    On-chain
+                  </span>
+                </span>
+              </Link>
+
+              <div className="flex flex-col gap-3 sm:items-end">
+                <nav className="flex flex-wrap items-center gap-5 text-sm font-medium text-[#556070]">
+                  <Link href="/learn" className={socialLinkClass}>
+                    Learn
+                  </Link>
+                  <Link href="/faq" className={socialLinkClass}>
+                    FAQ
+                  </Link>
+                  <Link href="#launch" className={socialLinkClass}>
+                    Mainnet updates
+                  </Link>
+                </nav>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="inline-flex items-center rounded-full border border-[#d7cec1] bg-white/85 p-1 shadow-[0_16px_36px_-30px_rgba(15,23,42,0.4)]">
+                    <button
+                      type="button"
+                      onClick={() => switchNetwork('testnet')}
+                      className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors duration-200 ${
+                        network === 'testnet'
+                          ? 'bg-[#1d2533] text-white'
+                          : 'text-[#5d6674] hover:text-[#171923]'
+                      }`}
+                    >
+                      Testnet
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => switchNetwork('mainnet')}
+                      className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors duration-200 ${
+                        network === 'mainnet'
+                          ? 'bg-[#1d2533] text-white'
+                          : 'text-[#5d6674] hover:text-[#171923]'
+                      }`}
+                    >
+                      Mainnet
+                    </button>
+                  </div>
+
+                  <div className="inline-flex items-center gap-2 rounded-full border border-[#e3dbcf] bg-[#f9f6f0] px-3 py-2 text-sm text-[#5b6572]">
+                    <CircleDot className="h-4 w-4 text-[#6b7b92]" />
+                    Viewing {currentNetworkName}
+                  </div>
+                </div>
+              </div>
             </div>
-            
-            <div className="flex items-center space-x-1">
-              <span className="text-sm font-medium mr-3">Connect With Us:</span>
-              <a href="https://x.com/njangi_on_chain" target="_blank" rel="noopener noreferrer" className="p-2 hover:text-blue-400 transition-colors">
-                <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current">
-                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"></path>
-                </svg>
-              </a>
-              <a href="https://www.instagram.com/njangionchain" target="_blank" rel="noopener noreferrer" className="p-2 hover:text-pink-400 transition-colors">
-                <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current">
-                  <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z" />
-                </svg>
-              </a>
-              <a href="mailto:njangionchain@gmail.com" className="p-2 hover:text-blue-400 transition-colors">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-5 w-5 fill-current">
-                  <path d="M1.5 8.67v8.58a3 3 0 003 3h15a3 3 0 003-3V8.67l-8.928 5.493a3 3 0 01-3.144 0L1.5 8.67z" />
-                  <path d="M22.5 6.908V6.75a3 3 0 00-3-3h-15a3 3 0 00-3 3v.158l9.714 5.978a1.5 1.5 0 001.572 0L22.5 6.908z" />
-                </svg>
-              </a>
+          </header>
+
+          <main>
+            <section className="px-4 pb-18 pt-14 sm:px-6 sm:pt-18 lg:px-8 lg:pb-24 lg:pt-20">
+              <div className="mx-auto max-w-7xl">
+                <div className="grid gap-12 lg:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)] lg:items-start">
+                  <div className="max-w-2xl">
+                    <span className={sectionEyebrowClass}>
+                      Community savings, rebuilt with restraint
+                    </span>
+                    <h1 className="mt-5 text-[2.9rem] font-semibold leading-[0.94] tracking-[-0.055em] text-[#171923] sm:text-[4.1rem] md:text-[4.7rem]">
+                      A more accountable home for the savings circle your
+                      community already trusts.
+                    </h1>
+                    <p className="mt-6 max-w-xl text-lg leading-8 text-[#56606f] sm:text-xl">
+                      Njangi On-Chain preserves the social logic of traditional
+                      circles while giving members clearer schedules, auditable
+                      contributions, and low-friction access through zkLogin on
+                      Sui.
+                    </p>
+
+                    <div className={`${shellCardClass} mt-9 p-5 sm:p-6`}>
+                      <p className="text-sm font-semibold uppercase tracking-[0.22em] text-[#6f7887]">
+                        Start with a familiar identity
+                      </p>
+                      <p className="mt-3 max-w-2xl text-sm leading-6 text-[#5f6674] sm:text-base">
+                        Sign in with a social account. Wallet creation happens in
+                        the background so members can start with less operational
+                        friction.
+                      </p>
+                      <LoginButton variant="landing" className="mt-5" />
+                      <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-[#667085]">
+                        <span className="inline-flex items-center gap-2">
+                          <BadgeCheck className="h-4 w-4 text-[#71839a]" />
+                          No seed phrase required to begin
+                        </span>
+                        <span className="inline-flex items-center gap-2">
+                          <BadgeCheck className="h-4 w-4 text-[#71839a]" />
+                          Built for member-run circles, not generic accounts
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="mt-7 flex flex-wrap items-center gap-4">
+                      <Link
+                        href="/learn"
+                        className="inline-flex items-center gap-2 rounded-full border border-[#d7cec1] bg-white px-5 py-3 text-sm font-semibold text-[#1f2937] shadow-[0_16px_40px_-32px_rgba(15,23,42,0.45)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#fbfaf7]"
+                      >
+                        Explore how it works
+                        <ArrowRight className="h-4 w-4" />
+                      </Link>
+                      <Link
+                        href="#launch"
+                        className="inline-flex items-center gap-2 text-sm font-semibold text-[#556070] transition-colors duration-200 hover:text-[#171923]"
+                      >
+                        Join the mainnet release list
+                        <ArrowRight className="h-4 w-4" />
+                      </Link>
+                    </div>
+
+                    <div className="mt-10 grid gap-4 sm:grid-cols-3">
+                      {proofItems.map((item) => (
+                        <div key={item.label} className={`${mutedCardClass} p-4`}>
+                          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[#7a818e]">
+                            {item.label}
+                          </p>
+                          <p className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
+                            {item.value}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className={`${shellCardClass} p-6 sm:p-7`}>
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[#717784]">
+                          Circle operations
+                        </p>
+                        <h2 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
+                          Less noise. More clarity for members.
+                        </h2>
+                      </div>
+                      <div className="rounded-full border border-[#d6dde8] bg-[#f3f6fb] px-3 py-2 text-sm font-medium text-[#51627b]">
+                        Live on {currentNetworkName}
+                      </div>
+                    </div>
+
+                    <div className="mt-6 grid gap-3 sm:grid-cols-2">
+                      {previewStats.map((stat) => (
+                        <div key={stat.label} className={`${mutedCardClass} p-4`}>
+                          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[#7a818e]">
+                            {stat.label}
+                          </p>
+                          <p className="mt-3 text-xl font-semibold tracking-[-0.04em] text-[#171923]">
+                            {stat.value}
+                          </p>
+                          <p className="mt-2 text-sm leading-6 text-[#626b78]">
+                            {stat.caption}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className={`${mutedCardClass} mt-4 p-5`}>
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-[#1f2937]">
+                          A typical cycle snapshot
+                        </p>
+                        <span className="text-xs font-medium uppercase tracking-[0.2em] text-[#768090]">
+                          Synced
+                        </span>
+                      </div>
+                      <div className="mt-4 space-y-3">
+                        <div className="flex items-start gap-3 rounded-2xl border border-[#ebe3d7] bg-white px-4 py-3">
+                          <Coins className="mt-0.5 h-4 w-4 text-[#7385a0]" />
+                          <div>
+                            <p className="text-sm font-semibold text-[#1f2937]">
+                              Contribution due
+                            </p>
+                            <p className="mt-1 text-sm leading-6 text-[#5d6674]">
+                              Members see the amount, deadline, and payment path
+                              without waiting for a reminder thread.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-3 rounded-2xl border border-[#ebe3d7] bg-white px-4 py-3">
+                          <Waypoints className="mt-0.5 h-4 w-4 text-[#7385a0]" />
+                          <div>
+                            <p className="text-sm font-semibold text-[#1f2937]">
+                              Payout order
+                            </p>
+                            <p className="mt-1 text-sm leading-6 text-[#5d6674]">
+                              Rotation rules stay visible, reducing ambiguity
+                              around who is next and when the handoff happens.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-3 rounded-2xl border border-[#ebe3d7] bg-white px-4 py-3">
+                          <Shield className="mt-0.5 h-4 w-4 text-[#7385a0]" />
+                          <div>
+                            <p className="text-sm font-semibold text-[#1f2937]">
+                              Audit trail
+                            </p>
+                            <p className="mt-1 text-sm leading-6 text-[#5d6674]">
+                              Approvals, contributions, and state changes stay
+                              visible to the circle instead of living in one
+                              organizer&apos;s notes.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="px-4 py-18 sm:px-6 lg:px-8 lg:py-24">
+              <div className="mx-auto max-w-7xl">
+                <div className="max-w-2xl">
+                  <span className={sectionEyebrowClass}>
+                    What becomes easier to trust
+                  </span>
+                  <h2 className={sectionTitleClass}>
+                    The platform removes ambiguity without stripping out the
+                    community.
+                  </h2>
+                  <p className={sectionBodyClass}>
+                    The goal is not to make a savings circle feel like a trading
+                    product. The goal is to make it easier for members to know
+                    what is happening, when it is happening, and where funds are
+                    moving.
+                  </p>
+                </div>
+
+                <div className="mt-12 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  {FEATURE_CARDS.map(({ icon: Icon, title, description }) => (
+                    <div key={title} className={`${shellCardClass} p-6`}>
+                      <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[#e4dbcf] bg-[#f8f5ef] text-[#66748b]">
+                        <Icon className="h-5 w-5" />
+                      </div>
+                      <h3 className="mt-6 text-xl font-semibold tracking-[-0.03em] text-[#171923]">
+                        {title}
+                      </h3>
+                      <p className="mt-3 text-sm leading-6 text-[#5f6674] sm:text-base">
+                        {description}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            <section className="px-4 py-18 sm:px-6 lg:px-8 lg:py-24">
+              <div className="mx-auto max-w-7xl">
+                <div className="grid gap-10 lg:grid-cols-[0.92fr_1.08fr] lg:items-start">
+                  <div>
+                    <span className={sectionEyebrowClass}>Operational flow</span>
+                    <h2 className={sectionTitleClass}>
+                      A circle still feels familiar. The tooling just stops
+                      getting in the way.
+                    </h2>
+                    <p className={sectionBodyClass}>
+                      Njangi On-Chain is built for communities that already know
+                      how to save together. It adds clearer structure, not a new
+                      social model.
+                    </p>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-3">
+                    {WORKFLOW_STEPS.map((step) => (
+                      <div key={step.number} className={`${shellCardClass} p-6`}>
+                        <p className="text-sm font-semibold uppercase tracking-[0.24em] text-[#7a818e]">
+                          {step.number}
+                        </p>
+                        <h3 className="mt-5 text-lg font-semibold tracking-[-0.03em] text-[#171923]">
+                          {step.title}
+                        </h3>
+                        <p className="mt-3 text-sm leading-6 text-[#5f6674]">
+                          {step.description}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="px-4 py-18 sm:px-6 lg:px-8 lg:py-24">
+              <div className="mx-auto max-w-7xl">
+                <div className="max-w-3xl">
+                  <span className={sectionEyebrowClass}>Why this shape matters</span>
+                  <h2 className={sectionTitleClass}>
+                    Positioned between informal coordination and generic fintech.
+                  </h2>
+                  <p className={sectionBodyClass}>
+                    Traditional circles carry social strength. Modern financial
+                    apps carry infrastructure. Njangi On-Chain is designed to
+                    keep the first while borrowing only the useful parts of the
+                    second.
+                  </p>
+                </div>
+
+                <div className={`${shellCardClass} mt-12 hidden overflow-hidden lg:block`}>
+                  <div className="grid grid-cols-[0.9fr_1fr_1.05fr_1fr] border-b border-[#ece4d8] bg-[#fbfaf7]">
+                    <div className="px-6 py-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#7a818e]">
+                      Operating lens
+                    </div>
+                    <div className="px-6 py-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#7a818e]">
+                      Traditional circle
+                    </div>
+                    <div className="bg-[#f3f6fb] px-6 py-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#51627b]">
+                      Njangi On-Chain
+                    </div>
+                    <div className="px-6 py-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#7a818e]">
+                      Banks and fintech
+                    </div>
+                  </div>
+
+                  {COMPARISON_ROWS.map((row, index) => (
+                    <div
+                      key={row.label}
+                      className={`grid grid-cols-[0.9fr_1fr_1.05fr_1fr] ${
+                        index !== 0 ? 'border-t border-[#ece4d8]' : ''
+                      }`}
+                    >
+                      <div className="px-6 py-5 text-sm font-semibold text-[#1f2937]">
+                        {row.label}
+                      </div>
+                      <div className="px-6 py-5 text-sm leading-6 text-[#596170]">
+                        {row.traditional}
+                      </div>
+                      <div className="bg-[#f3f6fb] px-6 py-5 text-sm font-medium leading-6 text-[#334155]">
+                        {row.onchain}
+                      </div>
+                      <div className="px-6 py-5 text-sm leading-6 text-[#596170]">
+                        {row.fintech}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-12 grid gap-4 lg:hidden">
+                  {COMPARISON_CARDS.map((card) => (
+                    <div
+                      key={card.title}
+                      className={`rounded-[28px] border p-6 shadow-[0_24px_70px_-58px_rgba(15,23,42,0.42)] ${card.tone}`}
+                    >
+                      <h3 className="text-xl font-semibold tracking-[-0.03em]">
+                        {card.title}
+                      </h3>
+                      <ul className="mt-5 space-y-3 text-sm leading-6">
+                        {card.items.map((item) => (
+                          <li key={item} className="flex items-start gap-3">
+                            <span className="mt-2 h-1.5 w-1.5 rounded-full bg-current" />
+                            <span>{item}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            <section id="launch" className="px-4 py-18 sm:px-6 lg:px-8 lg:py-24">
+              <div className="mx-auto max-w-7xl">
+                <div className={`${shellCardClass} p-7 sm:p-9 lg:p-10`}>
+                  <div className="grid gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-start">
+                    <div className="max-w-xl">
+                      <span className={sectionEyebrowClass}>Mainnet release</span>
+                      <h2 className={sectionTitleClass}>
+                        Follow the launch without following noise.
+                      </h2>
+                      <p className={sectionBodyClass}>
+                        The product is live for testnet exploration today. Join
+                        the release list if you want the clearest signal on
+                        production readiness, rollout timing, and early access.
+                      </p>
+
+                      <div className="mt-8 space-y-3">
+                        {launchNotes.map((note) => (
+                          <div
+                            key={note}
+                            className="flex items-start gap-3 rounded-2xl border border-[#e7dfd4] bg-[#fbfaf7] px-4 py-3"
+                          >
+                            <BadgeCheck className="mt-0.5 h-4 w-4 text-[#70819a]" />
+                            <p className="text-sm leading-6 text-[#596170]">{note}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className={`${mutedCardClass} p-6 sm:p-7`}>
+                      <div className="inline-flex items-center gap-2 rounded-full border border-[#e4dbcf] bg-white px-3 py-2 text-sm font-medium text-[#556070]">
+                        <Mail className="h-4 w-4 text-[#70819a]" />
+                        Launch updates
+                      </div>
+
+                      <form
+                        onSubmit={handleMainnetSignup}
+                        className="mt-6 flex flex-col gap-3"
+                      >
+                        <input
+                          type="email"
+                          placeholder="Enter your email address"
+                          value={signupEmail}
+                          onChange={(e) => setSignupEmail(e.target.value)}
+                          required
+                          disabled={isSignupLoading}
+                          className="w-full rounded-2xl border border-[#d8d0c4] bg-white px-5 py-4 text-base text-[#171923] outline-none transition-colors duration-200 placeholder:text-[#8a93a1] focus:border-[#9aa7b9] disabled:cursor-not-allowed disabled:bg-[#f7f4ee]"
+                        />
+                        <button
+                          type="submit"
+                          disabled={isSignupLoading}
+                          className="inline-flex items-center justify-center rounded-2xl bg-[#1d2533] px-5 py-4 text-sm font-semibold text-white transition-colors duration-200 hover:bg-[#101723] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isSignupLoading ? 'Signing up...' : 'Notify me about mainnet'}
+                        </button>
+                      </form>
+
+                      {signupMessage && (
+                        <div
+                          className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${
+                            showSignupSuccess
+                              ? 'border-[#b6d8c0] bg-[#edf7ef] text-[#24553a]'
+                              : 'border-[#e5c5c5] bg-[#fdf1f1] text-[#7b3636]'
+                          }`}
+                        >
+                          {signupMessage}
+                        </div>
+                      )}
+
+                      <p className="mt-4 text-sm leading-6 text-[#667085]">
+                        Updates are limited to meaningful milestones. No weekly
+                        filler, no broadcast spam.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="px-4 py-18 sm:px-6 lg:px-8 lg:py-24">
+              <div className="mx-auto max-w-4xl">
+                <div className="text-center">
+                  <span className={sectionEyebrowClass}>Common questions</span>
+                  <h2 className={sectionTitleClass}>A few things people ask first.</h2>
+                  <p className={`${sectionBodyClass} mx-auto`}>
+                    If you want the full context, the deeper guides live in the
+                    learning and FAQ sections. These cover the basics.
+                  </p>
+                </div>
+
+                <div className="mt-12 space-y-4">
+                  {FAQ_ITEMS.map((item) => (
+                    <div key={item.id} className={`${shellCardClass} overflow-hidden`}>
+                      <button
+                        type="button"
+                        onClick={() => toggleFaqItem(item.id)}
+                        aria-expanded={openFaqItems[item.id]}
+                        className="flex w-full items-center justify-between gap-4 px-6 py-5 text-left sm:px-7"
+                      >
+                        <span className="text-lg font-semibold tracking-[-0.03em] text-[#171923]">
+                          {item.question}
+                        </span>
+                        <ChevronDown
+                          className={`h-5 w-5 shrink-0 text-[#6b7280] transition-transform duration-200 ${
+                            openFaqItems[item.id] ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
+                      {openFaqItems[item.id] && (
+                        <div className="border-t border-[#ece4d8] px-6 pb-6 pt-4 sm:px-7">
+                          <p className="text-sm leading-7 text-[#5f6674] sm:text-base">
+                            {item.answer}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-8 flex flex-col items-center justify-center gap-3 text-sm font-semibold sm:flex-row">
+                  <Link
+                    href="/learn"
+                    className="inline-flex items-center gap-2 text-[#556070] transition-colors duration-200 hover:text-[#171923]"
+                  >
+                    Learn about savings circles
+                    <ArrowRight className="h-4 w-4" />
+                  </Link>
+                  <Link
+                    href="/faq"
+                    className="inline-flex items-center gap-2 text-[#556070] transition-colors duration-200 hover:text-[#171923]"
+                  >
+                    View the full FAQ
+                    <ArrowRight className="h-4 w-4" />
+                  </Link>
+                </div>
+              </div>
+            </section>
+
+            <section className="px-4 pb-20 sm:px-6 lg:px-8 lg:pb-24">
+              <div className="mx-auto max-w-7xl">
+                <div className={`${shellCardClass} p-7 sm:p-9`}>
+                  <div className="max-w-3xl">
+                    <span className={sectionEyebrowClass}>A global tradition</span>
+                    <h2 className={sectionTitleClass}>Known by many names, held by the same instinct.</h2>
+                    <p className={sectionBodyClass}>
+                      Communities across the world already understand rotating
+                      savings. Njangi On-Chain is designed to respect that
+                      history rather than flatten it into a generic fintech
+                      pattern.
+                    </p>
+                  </div>
+
+                  <div className="mt-8 flex flex-wrap gap-3">
+                    {CULTURAL_NAMES.map((name) => (
+                      <span
+                        key={name}
+                        className="rounded-full border border-[#ddd5ca] bg-[#fbfaf7] px-4 py-2 text-sm font-medium text-[#556070]"
+                      >
+                        {name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>
+          </main>
+
+          <footer className="border-t border-[#e6ddd1]/90 bg-[#f1ece4]/80">
+            <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+              <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:justify-between">
+                <div className="flex items-center gap-4">
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[#dfd7cb] bg-white">
+                    <Image
+                      src="/njangi-on-chain-logo.png"
+                      alt="Njangi On-Chain"
+                      width={72}
+                      height={72}
+                      className="h-full w-full scale-[2.2] object-contain"
+                      unoptimized
+                    />
+                  </span>
+                  <div>
+                    <p
+                      className={`${wordmarkFont.className} text-[1.9rem] leading-none tracking-[-0.05em] text-[#111827]`}
+                    >
+                      Njangi
+                    </p>
+                    <p className="mt-1 text-[0.7rem] font-semibold uppercase tracking-[0.42em] text-[#65748b]">
+                      On-chain
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+                  <Link href="/learn" className={socialLinkClass}>
+                    Learn
+                  </Link>
+                  <Link href="/faq" className={socialLinkClass}>
+                    FAQ
+                  </Link>
+                  <a
+                    href="https://x.com/njangi_on_chain"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={socialLinkClass}
+                  >
+                    X
+                  </a>
+                  <a
+                    href="https://www.instagram.com/njangionchain"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={socialLinkClass}
+                  >
+                    Instagram
+                  </a>
+                  <a href="mailto:njangionchain@gmail.com" className={socialLinkClass}>
+                    Email
+                  </a>
+                </div>
+              </div>
+
+              <div className="mt-8 flex flex-col gap-2 border-t border-[#ddd5c9] pt-4 text-sm text-[#6b7280] sm:flex-row sm:items-center sm:justify-between">
+                <p>&copy; {new Date().getFullYear()} Njangi On-Chain. All rights reserved.</p>
+                <p>Built on Sui with zkLogin for low-friction community access.</p>
+              </div>
             </div>
-          </div>
-          
-          <div className="mt-4 pt-4 border-t border-gray-800 text-center text-gray-400 text-xs">
-            <p>&copy; {new Date().getFullYear()} Njangi On-Chain. All rights reserved.</p>
-          </div>
+          </footer>
         </div>
-      </footer>
-    </div>
+      </div>
     </>
   );
-} 
+}

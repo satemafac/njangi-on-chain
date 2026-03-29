@@ -18,6 +18,7 @@ import {
   normalizeOnrampProviderFlag,
   shouldUseCoinbaseProvider,
 } from '@/lib/onramp-provider';
+import { resolveCircleLifecycleState } from '@/lib/circle-chain';
 import { cetusService } from '@/lib/cetus-service';
 import { getCircleConfigFieldsByObjectId, getCircleConfigObjectId } from '@/lib/circle-config';
 import { clearWalletBalanceCache, refreshWalletBalances } from '@/lib/wallet';
@@ -26,7 +27,11 @@ import type {
   CoinbaseApiErrorPayload,
   CoinbaseAssetIntent,
 } from '@/types/coinbase-onramp';
-import { getPackageId, getUserPackageIds } from '../services/circle-service';
+import {
+  getPackageId,
+  getPackageLookupIdsForCurrentNetwork,
+  getUserPackageIds,
+} from '../services/circle-service';
 // Use alias path for the modal import
 import ConfirmationModal from '@/components/ConfirmationModal';
 import { 
@@ -307,8 +312,8 @@ const getCachedUserPackageIds = async (userAddress: string): Promise<string[]> =
     return packageIds;
   } catch (error) {
     console.warn('Error getting user package IDs, using fallback:', error);
-    // Return current package ID as fallback
-    return [getPackageId()];
+    // Fall back to the full current-network lineage, not just one package ID.
+    return getPackageLookupIdsForCurrentNetwork(getPackageId());
   }
 };
 
@@ -923,19 +928,26 @@ declare global {
 // Update the TokenIcon component to use existing SVG files for SUI and USDC
 // Skeleton loading component for circle cards
 const CircleCardSkeleton = () => (
-  <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 animate-pulse">
-    <div className="flex justify-between items-start mb-4">
-      <div className="h-6 bg-gray-200 dark:bg-gray-600 rounded w-3/4"></div>
-      <div className="h-5 bg-gray-200 dark:bg-gray-600 rounded w-16"></div>
+  <div className="animate-pulse rounded-[28px] border border-stone-200 bg-white p-6 shadow-[0_18px_50px_-38px_rgba(15,23,42,0.35)]">
+    <div className="flex items-start justify-between gap-4">
+      <div className="space-y-3">
+        <div className="h-4 w-20 rounded-full bg-stone-200"></div>
+        <div className="h-7 w-48 rounded-full bg-stone-200"></div>
+        <div className="h-4 w-32 rounded-full bg-stone-200"></div>
+      </div>
+      <div className="h-9 w-24 rounded-full bg-stone-200"></div>
     </div>
-    <div className="space-y-3">
-      <div className="h-4 bg-gray-200 dark:bg-gray-600 rounded w-1/2"></div>
-      <div className="h-4 bg-gray-200 dark:bg-gray-600 rounded w-2/3"></div>
-      <div className="h-4 bg-gray-200 dark:bg-gray-600 rounded w-1/3"></div>
+    <div className="mt-8 grid grid-cols-2 gap-4">
+      {Array.from({ length: 4 }).map((_, index) => (
+        <div key={index} className="rounded-2xl border border-stone-100 bg-stone-50 p-4">
+          <div className="h-3 w-20 rounded-full bg-stone-200"></div>
+          <div className="mt-3 h-5 w-28 rounded-full bg-stone-200"></div>
+        </div>
+      ))}
     </div>
-    <div className="mt-4 flex justify-between items-center">
-      <div className="h-4 bg-gray-200 dark:bg-gray-600 rounded w-1/4"></div>
-      <div className="h-8 bg-gray-200 dark:bg-gray-600 rounded w-20"></div>
+    <div className="mt-6 flex gap-3">
+      <div className="h-10 w-24 rounded-full bg-stone-200"></div>
+      <div className="h-10 w-28 rounded-full bg-stone-200"></div>
     </div>
   </div>
 );
@@ -968,7 +980,7 @@ const TokenIcon = ({ symbol }: { symbol: string }) => {
     <img 
       src={iconPath(symbol)}
       alt={`${symbol} icon`}
-      className="w-5 h-5 mr-2"
+      className="h-5 w-5"
       style={{ objectFit: 'contain' }}
       onError={(e) => {
         // Fallback if the image fails to load
@@ -1057,7 +1069,7 @@ const CACHE_CONFIG = {
   CIRCLES_TTL: 10 * 60 * 1000, // 10 minutes for circles data (synchronized for consistency)
   EVENTS_TTL: 15 * 60 * 1000, // 15 minutes for events data (reduced for fresher data)
   API_RESPONSE_TTL: 10 * 60 * 1000, // 10 minutes for individual API responses (synchronized)
-  VERSION: '1.0.2' // Increment when data structure changes - updated for network fingerprinting
+  VERSION: '1.0.3' // Increment when data structure changes - updated for lifecycle/package-lineage fixes
 };
 
 // Enhanced cache keys with network fingerprinting to prevent cross-network contamination
@@ -2406,8 +2418,7 @@ export default function Dashboard() {
     const admin = (fields.admin as string) ?? ''; // Type assertion with fallback
     const currentMembers = Number(fields.current_members ?? 0); // Use nullish coalescing
     const nextPayoutTime = Number(fields.next_payout_time ?? 0); // Use nullish coalescing
-    // Ensure boolean conversion is safe
-    const isActive = fields.is_active === true || String(fields.is_active).toLowerCase() === 'true'; 
+    const lifecycle = resolveCircleLifecycleState(fields);
     
     // Initialize config values with default values
     const configValues = {
@@ -2540,7 +2551,7 @@ export default function Dashboard() {
       nextPayoutTime: nextPayoutTime,
       memberStatus: 'active' as const,
       isAdmin: admin === userAddress,
-      isActive: isActive,
+      isActive: lifecycle.isActive,
       createdAt: transactionTimestamp, // Add creation timestamp
       transactionDigest: transactionDigest, // Add transaction digest for reference
       packageId: extractedPackageId // Store package ID for this circle
@@ -2575,10 +2586,15 @@ export default function Dashboard() {
       };
 
       try {
-      // First get all package IDs this user has interacted with (cached)
+      // Always seed discovery with the current network's package lineage.
+      const packageIdsToCheck = Array.from(new Set([
+        ...getPackageLookupIdsForCurrentNetwork(defaultPackageId),
+        ...(await getCachedUserPackageIds(userAddress)),
+      ]));
+
+      // Then expand with package IDs this user has interacted with.
       console.log('🔍 Getting user package IDs...');
-      const userPackageIds = await getCachedUserPackageIds(userAddress);
-      console.log(`Found ${userPackageIds.length} package IDs for user:`, userPackageIds);
+      console.log(`Found ${packageIdsToCheck.length} package IDs for user/network:`, packageIdsToCheck);
       
       // Collect all admin events across all package IDs
       const allAdminEvents: any[] = [];
@@ -2586,7 +2602,7 @@ export default function Dashboard() {
       
       // Query admin events in parallel across all packages
       const adminEventsData = await batchQueryEvents(
-        userPackageIds,
+        packageIdsToCheck,
         'CircleCreated',
         client,
         {
@@ -2610,7 +2626,7 @@ export default function Dashboard() {
       
       // Query member events in parallel across all packages
       const memberEventsData = await batchQueryEvents(
-        userPackageIds,
+        packageIdsToCheck,
         'MemberJoined',
         client,
         {
@@ -2631,7 +2647,7 @@ export default function Dashboard() {
       // 🔴 CRITICAL FIX: Query MemberRemoved events to filter out circles where user was removed
       console.log('🔍 Checking for MemberRemoved events to filter out removed members...');
       const memberRemovedEventsData = await batchQueryEvents(
-        userPackageIds,
+        packageIdsToCheck,
         'MemberRemoved',
         client,
         {
@@ -2766,16 +2782,18 @@ export default function Dashboard() {
     };
     
     try {
-      // Get all package IDs this user has interacted with (cached)
-      const userPackageIds = await getCachedUserPackageIds(userAddress);
-      console.log(`Loading more circles across ${userPackageIds.length} packages`);
+      const packageIdsToCheck = Array.from(new Set([
+        ...getPackageLookupIdsForCurrentNetwork(defaultPackageId),
+        ...(await getCachedUserPackageIds(userAddress)),
+      ]));
+      console.log(`Loading more circles across ${packageIdsToCheck.length} packages`);
       
       // Collect more events across all package IDs
       const allAdminEvents: any[] = [];
       const allMemberEvents: any[] = [];
       
       // Query each package ID for more admin events
-      for (const packageId of userPackageIds) {
+      for (const packageId of packageIdsToCheck) {
         try {
           console.log(`Querying more admin events for package ${packageId}`);
 
@@ -2822,7 +2840,7 @@ export default function Dashboard() {
       }
       
       // Query each package ID for more member events
-      for (const packageId of userPackageIds) {
+      for (const packageId of packageIdsToCheck) {
         try {
           console.log(`Querying more member events for package ${packageId}`);
 
@@ -2879,7 +2897,7 @@ export default function Dashboard() {
       results.hasMoreAdmin = false;
       results.hasMoreMember = false;
       
-      console.log(`📖 Multi-package load more completed: ${results.circles.length} additional circles found across ${userPackageIds.length} packages`);
+      console.log(`📖 Multi-package load more completed: ${results.circles.length} additional circles found across ${packageIdsToCheck.length} packages`);
       
     } catch (error) {
       console.error('Error in multi-package loading more circles:', error);
@@ -2893,7 +2911,8 @@ export default function Dashboard() {
   const queryWalletEventsForCircles = useCallback(async (
     client: SuiClient,
     defaultPackageId: string,
-    circleIds: string[]
+    circleIds: string[],
+    userAddress: string
   ): Promise<any[]> => {
     // Wrap entire function to prevent any errors from escaping
     try {
@@ -2902,23 +2921,10 @@ export default function Dashboard() {
       console.log(`💰 Multi-package querying wallet events for ${circleIds.length} circles...`);
 
       try {
-      // Get package IDs that are likely to have wallet events
-      // For efficiency, use a cached set of common package IDs
-      const packageIdsToCheck = [
-        defaultPackageId, // Current package ID
-        // Add other known package IDs if needed
-      ];
-      
-      // Try to infer additional package IDs from the circles themselves
-      // Each circle event has a _packageId field that we added earlier
-      const additionalPackageIds = new Set<string>();
-      circleIds.forEach(circleId => {
-        // Note: We could extract package info from circle events if available
-        // For now, we'll rely on the default and getUserPackageIds
-      });
-      
-      // Get user package IDs as a fallback (though this requires userAddress)
-      // For now, focus on the default package and known packages
+      const packageIdsToCheck = Array.from(new Set([
+        ...getPackageLookupIdsForCurrentNetwork(defaultPackageId),
+        ...(await getCachedUserPackageIds(userAddress)),
+      ]));
       
       const allRelevantWalletEvents: any[] = [];
       
@@ -3425,7 +3431,7 @@ export default function Dashboard() {
       if (initialCircleIds.length > 0) {
         setLoadingProgress({ stage: 'fetching_events', current: 2, total: 3, message: 'Loading wallet info...' });
         try {
-          walletEvents = await queryWalletEventsForCircles(client, currentPackageId, initialCircleIds);
+          walletEvents = await queryWalletEventsForCircles(client, currentPackageId, initialCircleIds, userAddress);
         } catch (error) {
           console.error('Error fetching wallet events:', error);
           // Continue without wallet events
@@ -3495,11 +3501,6 @@ export default function Dashboard() {
       for (const [key, value] of mergedCircleWalletMap.entries()) {
         circleWalletMap.set(key, value);
       }
-      
-      // Create a set of activated circle IDs for quick lookup (empty for now since event-driven approach doesn't fetch activation events separately)
-      const activatedCircleIds = new Set<string>();
-      // Note: We'll determine activation status from the circle object itself during processing
-      console.log('Activated circle IDs from events:', Array.from(activatedCircleIds));
       
       // Create a member count map based on member events (used as fallback only)
       const memberCountMap = new Map<string, Set<string>>();
@@ -3788,9 +3789,6 @@ export default function Dashboard() {
                 members: memberCountMap.has(circleId) ? Array.from(memberCountMap.get(circleId)!) : []
               });
               
-              // Check if the circle has been activated
-              const isActive = activatedCircleIds.has(circleId);
-                
                 const safeCircleData = {
                   ...processedCircle,
                   id: processedCircle?.id ?? '',
@@ -3818,7 +3816,7 @@ export default function Dashboard() {
                 return {
                   ...safeCircleData,
                   currentMembers: finalMemberCount,
-                  isActive: isActive,
+                  isActive: safeCircleData.isActive,
                   walletId: walletId || undefined
                 };
               }
@@ -5511,54 +5509,307 @@ export default function Dashboard() {
     }
   };
 
+  const adminCircles = circles.filter((circle) => circle.isAdmin);
+  const memberCircles = circles.filter((circle) => !circle.isAdmin);
+  const activeCirclesCount = circles.filter((circle) => circle.isActive).length;
+  const fundedTokens = allCoins.filter((coin) => Number(coin.balance) > 0);
+  const networkLabel = network === 'mainnet' ? 'Mainnet' : 'Testnet';
+  const walletValueDisplay = balanceVisible
+    ? formatCurrency(totalWalletLocalValue, selectedCurrency)
+    : formatBalanceDisplay(totalWalletLocalValue, true);
+
+  const primarySurfaceClass =
+    'rounded-[32px] border border-stone-200 bg-white shadow-[0_24px_70px_-42px_rgba(15,23,42,0.32)]';
+  const primaryActionClass =
+    'inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+  const secondaryActionClass =
+    'inline-flex items-center justify-center rounded-full border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:border-stone-400 hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-stone-300 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+  const subtleIconButtonClass =
+    'inline-flex h-9 w-9 items-center justify-center rounded-full border border-stone-200 bg-white text-slate-500 transition hover:border-stone-300 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-stone-300 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+  const circleGhostActionClass =
+    'inline-flex items-center justify-center rounded-full border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-stone-400 hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-stone-300 focus:ring-offset-2';
+  const circlePrimaryActionClass =
+    'inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2';
+  const circleDangerActionClass =
+    'inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-300 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+
+  const renderCircleCard = (circle: Circle) => (
+    <article
+      key={circle.id}
+      className="rounded-[28px] border border-stone-200 bg-white p-6 shadow-[0_18px_50px_-38px_rgba(15,23,42,0.32)]"
+    >
+      <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${
+                  circle.isAdmin
+                    ? 'bg-slate-950 text-white'
+                    : 'bg-stone-100 text-slate-700'
+                }`}
+              >
+                {circle.isAdmin ? 'Admin' : 'Member'}
+              </span>
+              <span
+                className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${
+                  circle.isActive
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'border-amber-200 bg-amber-50 text-amber-700'
+                }`}
+              >
+                {circle.isActive ? 'Active' : 'Inactive'}
+              </span>
+            </div>
+            <h3 className="mt-4 truncate text-xl font-semibold tracking-tight text-slate-950">
+              {circle.name}
+            </h3>
+            <p className="mt-2 text-sm text-slate-500">
+              {circle.currentMembers} of {circle.maxMembers} members
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => copyToClipboard(circle.id, 'circleId')}
+              className={`inline-flex items-center rounded-full border px-3 py-2 text-xs font-medium transition ${
+                copiedCircleId === circle.id
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : 'border-stone-300 bg-white text-slate-600 hover:border-stone-400 hover:bg-stone-50'
+              }`}
+            >
+              <Copy className="mr-1.5 h-3.5 w-3.5" />
+              {copiedCircleId === circle.id ? 'Copied' : 'Copy ID'}
+            </button>
+            {circle.isAdmin && (
+              <button
+                type="button"
+                onClick={() => copyShareLink(circle.id)}
+                className="inline-flex items-center rounded-full border border-stone-300 bg-white px-3 py-2 text-xs font-medium text-slate-600 transition hover:border-stone-400 hover:bg-stone-50"
+              >
+                <Link className="mr-1.5 h-3.5 w-3.5" />
+                Invite link
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                Contribution
+              </p>
+              <p className="mt-2 text-sm font-medium text-slate-900">
+                <CurrencyDisplay
+                  usd={circle.contributionAmountUsd}
+                  sui={circle.contributionAmount}
+                  currencyType={circle.currencyType}
+                />
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                Cycle
+              </p>
+              <p className="mt-2 text-sm font-medium text-slate-900">
+                {formatCycleInfo(circle.cycleLength, circle.cycleDay)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                Security deposit
+              </p>
+              <p className="mt-2 text-sm font-medium text-slate-900">
+                <CurrencyDisplay
+                  usd={circle.securityDepositUsd}
+                  sui={circle.securityDeposit}
+                  currencyType={circle.currencyType}
+                />
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                Next payout
+              </p>
+              <p className="mt-2 text-sm font-medium text-slate-900">
+                {circle.isActive ? formatDate(circle.nextPayoutTime) : 'Activate circle to start'}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2 border-t border-stone-200 pt-5">
+          <button
+            type="button"
+            onClick={() => router.push(`/circle/${circle.id}`)}
+            className={circleGhostActionClass}
+          >
+            <Eye className="mr-2 h-4 w-4" />
+            Open
+          </button>
+          {circle.isAdmin && (
+            <button
+              type="button"
+              onClick={() => router.push(`/circle/${circle.id}/manage`)}
+              className={circleGhostActionClass}
+            >
+              <Settings className="mr-2 h-4 w-4" />
+              Manage
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => router.push(`/circle/${circle.id}/contribute`)}
+            className={circlePrimaryActionClass}
+          >
+            <CreditCard className="mr-2 h-4 w-4" />
+            Contribute
+          </button>
+          {circle.isAdmin && deleteableCircles.has(circle.id) && (
+            <button
+              type="button"
+              onClick={() => {
+                console.log("Delete button clicked for circle:", circle.id);
+                try {
+                  deleteCircle(circle.id);
+                } catch (e) {
+                  console.error("Error in delete button click handler:", e);
+                  toast.error("Error processing delete request");
+                }
+              }}
+              disabled={isDeleting === circle.id}
+              className={circleDangerActionClass}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              {isDeleting === circle.id ? 'Deleting' : 'Delete'}
+            </button>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+
+  const renderLoadMoreButton = (
+    circleList: Circle[],
+    options: { includeServerState?: boolean } = {},
+  ) => {
+    const totalCount = getSortedCircles(circleList).length;
+    const remainingCount = Math.max(0, totalCount - displayedCirclesCount);
+    const shouldShow =
+      options.includeServerState
+        ? displayedCirclesCount < totalCount ||
+          paginationState.hasMoreAdmin ||
+          paginationState.hasMoreMember
+        : displayedCirclesCount < totalCount;
+
+    if (!shouldShow) {
+      return null;
+    }
+
+    const helperText =
+      options.includeServerState &&
+      (paginationState.hasMoreAdmin || paginationState.hasMoreMember)
+        ? 'More circles are available from the network.'
+        : `${remainingCount} more ${remainingCount === 1 ? 'circle' : 'circles'}`;
+
+    return (
+      <div className="flex flex-col items-center gap-3 pt-2">
+        <button
+          type="button"
+          onClick={loadMoreCircles}
+          disabled={isLoadingMore}
+          className={secondaryActionClass}
+        >
+          {isLoadingMore ? (
+            <>
+              <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+              Loading circles...
+            </>
+          ) : (
+            'Load more circles'
+          )}
+        </button>
+        {!isLoadingMore && <p className="text-sm text-slate-500">{helperText}</p>}
+      </div>
+    );
+  };
+
+  const renderCirclePanel = (
+    circleList: Circle[],
+    options: { includeServerState?: boolean; emptyMessage: string } = {
+      emptyMessage: 'No circles in this view yet.',
+    },
+  ) => {
+    if (circleList.length === 0) {
+      return (
+        <div className="rounded-[28px] border border-dashed border-stone-300 bg-stone-50/70 px-6 py-10 text-center">
+          <p className="text-sm font-medium text-slate-900">{options.emptyMessage}</p>
+          <p className="mt-2 text-sm text-slate-500">
+            Switch views, create a new circle, or join an existing one.
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-8">
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+          {getPaginatedCircles(circleList, displayedCirclesCount).map(renderCircleCard)}
+        </div>
+        {renderLoadMoreButton(circleList, options)}
+      </div>
+    );
+  };
+
   if (!isAuthenticated || !account) {
     return null;
   }
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-[#f6f3ee] text-slate-950 [background-image:radial-gradient(circle_at_top_left,_rgba(255,255,255,0.92),_transparent_30%),radial-gradient(circle_at_top_right,_rgba(226,232,240,0.7),_transparent_26%)]">
       {/* Toast Notification */}
       {showToast && (
-        <div className="fixed top-4 right-4 bg-gray-900 text-white px-4 py-2 rounded-lg shadow-lg transition-opacity duration-200 flex items-center space-x-2 z-50">
-          <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="fixed right-6 top-6 z-50 flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-slate-900/20">
+          <svg className="h-4 w-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
           </svg>
-          <span>Address copied to clipboard!</span>
+          <span>Address copied</span>
         </div>
       )}
 
       {/* Testnet Banner */}
       {showTestnetBanner && (
-        <div className="bg-amber-50 border-b border-amber-200">
-          <div className="max-w-7xl mx-auto py-2 px-3 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-amber-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                  </svg>
-                </div>
-                <div className="ml-3 flex-1">
-                  <p className="text-sm text-amber-700">
-                    You are currently using the Sui Testnet. Funds and transactions are not on the main network.
-                  </p>
-                </div>
-                <div className="ml-4">
-                  <a
-                    href={`https://faucet.sui.io/?address=${userAddress || ''}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center px-3 py-1.5 border border-amber-300 text-xs font-medium rounded-md text-amber-700 bg-amber-100 hover:bg-amber-200 focus:outline-none focus:ring-2 focus:ring-amber-500 transition-colors duration-200"
-                  >
-                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                    </svg>
-                    Get Test Tokens
-                  </a>
-                </div>
+        <div className="border-b border-amber-200/70 bg-amber-50/90 backdrop-blur-sm">
+          <div className="mx-auto flex max-w-7xl items-start justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="mt-0.5 flex-shrink-0">
+                <svg className="h-5 w-5 text-amber-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
               </div>
-              <button 
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-amber-900">
+                  You are on Sui Testnet.
+                </p>
+                <p className="mt-1 text-sm text-amber-800">
+                  Funds and transfers here are for testing only and do not settle on mainnet.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <a
+                href={`https://faucet.sui.io/?address=${userAddress || ''}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center rounded-full border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-900 transition hover:bg-amber-100"
+              >
+                <ExternalLink className="mr-2 h-4 w-4" />
+                Open faucet
+              </a>
+              <button
                 onClick={dismissTestnetBanner}
-                className="rounded-md p-1.5 text-amber-500 hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-600"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full text-amber-700 transition hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-300"
               >
                 <span className="sr-only">Dismiss</span>
                 <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
@@ -5570,104 +5821,131 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Network Toggle */}
-      <div className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto py-3 px-3 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <span className="text-sm font-medium text-gray-700">Network:</span>
-              <div className="flex bg-gray-100 rounded-lg p-1">
-                <button
-                  onClick={() => switchNetwork('testnet')}
-                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-200 ${
-                    network === 'testnet' 
-                      ? 'bg-blue-500 text-white shadow-sm' 
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                  }`}
-                >
-                  Testnet
-                </button>
-                <button
-                  onClick={() => switchNetwork('mainnet')}
-                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-200 ${
-                    network === 'mainnet' 
-                      ? 'bg-green-500 text-white shadow-sm' 
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                  }`}
-                >
-                  Mainnet
-                </button>
-              </div>
-            </div>
-            
-            {/* Network Status Indicator */}
-            <div className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium ${
-              network === 'mainnet' 
-                ? 'bg-green-100 text-green-800' 
-                : 'bg-blue-100 text-blue-800'
-            }`}>
-              <div className={`w-2 h-2 rounded-full mr-2 ${
-                network === 'mainnet' ? 'bg-green-400' : 'bg-blue-400'
-              }`} />
-              {network === 'testnet' ? 'Testnet' : 'Mainnet'}
-            </div>
-          </div>
-        </div>
-      </div>
+      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <div className="space-y-8">
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr),380px]">
+            <section className={primarySurfaceClass}>
+              <div className="p-8 sm:p-10">
+                <div className="flex flex-col gap-10">
+                  <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="max-w-2xl">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
+                        Njangi Dashboard
+                      </p>
+                      <h1 className="mt-4 text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
+                        Welcome back{account.name ? `, ${account.name}` : ''}.
+                      </h1>
+                      <p className="mt-4 max-w-xl text-sm leading-7 text-slate-600 sm:text-base">
+                        Keep your circles, contributions, and cash movement organized in one quiet workspace.
+                      </p>
+                    </div>
 
-      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        <div className="px-4 py-6 sm:px-0">
-          {/* Profile and Balance Card */}
-          <div className="bg-white shadow rounded-lg overflow-hidden">
-            <div className="p-6">
-              <div className="flex items-center space-x-4">
-                <div className="h-16 w-16 rounded-full overflow-hidden bg-gray-200 flex-shrink-0 relative">
-                  {account.picture ? (
-                    // Use Next.js Image for Google profile pictures
-                    <Image
-                      src={account.picture}
-                      alt="Profile"
-                      width={64}
-                      height={64}
-                      className="object-cover"
-                      priority={true}
-                      onError={() => {
-                        console.error('Error loading Google profile picture');
-                      }}
-                    />
-                  ) : (
-                    // Use Next.js Image for fallback avatar
-                    <Image
-                      src={`https://api.dicebear.com/7.x/micah/svg?seed=${account.sub}`}
-                      alt="Profile"
-                      width={64}
-                      height={64}
-                      className="object-cover"
-                      priority={true}
-                      unoptimized={true} // Required for SVGs
-                    />
-                  )}
-                </div>
-                <div className="flex-grow">
-                  <h2 className="text-xl font-semibold text-gray-900">
-                    Welcome Back{account.name ? `, ${account.name}` : ''}!
-                  </h2>
-                </div>
-              </div>
-            </div>
-            
-            <div className="border-t border-gray-200">
-              <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-gray-200">
-                <div className="p-6">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm font-medium text-gray-500">Wallet Address</p>
+                    <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center lg:flex-col lg:items-end">
+                      <div className="inline-flex items-center rounded-full border border-stone-200 bg-white px-4 py-2 text-sm font-medium text-slate-600">
+                        <span
+                          className={`mr-2 h-2.5 w-2.5 rounded-full ${
+                            network === 'mainnet' ? 'bg-emerald-500' : 'bg-amber-500'
+                          }`}
+                        />
+                        {networkLabel}
+                      </div>
+                      <div className="inline-flex rounded-full border border-stone-200 bg-stone-100 p-1">
+                        <button
+                          type="button"
+                          onClick={() => switchNetwork('testnet')}
+                          className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                            network === 'testnet'
+                              ? 'bg-white text-slate-950 shadow-sm'
+                              : 'text-slate-500 hover:text-slate-900'
+                          }`}
+                        >
+                          Testnet
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => switchNetwork('mainnet')}
+                          className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                            network === 'mainnet'
+                              ? 'bg-white text-slate-950 shadow-sm'
+                              : 'text-slate-500 hover:text-slate-900'
+                          }`}
+                        >
+                          Mainnet
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5">
+                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                        Total circles
+                      </p>
+                      <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
+                        {circles.length}
+                      </p>
+                      <p className="mt-2 text-sm text-slate-500">
+                        {memberCircles.length > 0
+                          ? `${memberCircles.length} member role${memberCircles.length === 1 ? '' : 's'}`
+                          : 'No member-only roles yet'}
+                      </p>
+                    </div>
+                    <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5">
+                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                        Admin roles
+                      </p>
+                      <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
+                        {adminCircles.length}
+                      </p>
+                      <p className="mt-2 text-sm text-slate-500">
+                        {adminCircles.length > 0
+                          ? 'You can manage members, links, and payout flow here.'
+                          : 'Create a circle to become an admin.'}
+                      </p>
+                    </div>
+                    <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5">
+                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                        Active circles
+                      </p>
+                      <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
+                        {activeCirclesCount}
+                      </p>
+                      <p className="mt-2 text-sm text-slate-500">
+                        {circles.length === 0
+                          ? 'Your circle activity will appear once you join or create one.'
+                          : `${circles.length - activeCirclesCount} inactive circle${circles.length - activeCirclesCount === 1 ? '' : 's'}`}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-3">
                     <button
-                      onClick={() => copyToClipboard(userAddress)}
-                      className="text-blue-600 hover:text-blue-700 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200"
-                      title="Copy address"
+                      type="button"
+                      onClick={handleManualRefresh}
+                      disabled={loading || isBackgroundRefreshing}
+                      className={secondaryActionClass}
+                    >
+                      <RefreshCw className={`mr-2 h-4 w-4 ${(loading || isBackgroundRefreshing) ? 'animate-spin' : ''}`} />
+                      Refresh circles
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsJoinDialogOpen(true)}
+                      className={secondaryActionClass}
+                    >
+                      <Users className="mr-2 h-4 w-4" />
+                      Join circle
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        invalidateCirclesCache();
+                        router.push('/create-circle');
+                      }}
+                      className={primaryActionClass}
                     >
                       <svg
-                        className="w-5 h-5"
+                        className="mr-2 h-4 w-4"
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"
@@ -5676,114 +5954,182 @@ export default function Dashboard() {
                           strokeLinecap="round"
                           strokeLinejoin="round"
                           strokeWidth="2"
-                          d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"
+                          d="M12 4v16m8-8H4"
                         />
                       </svg>
+                      New circle
                     </button>
                   </div>
-                  <div className="group relative">
-                    <p className="mt-1 text-sm text-gray-900 break-all font-mono">
-                      {showFullAddress ? userAddress : shortenAddress(userAddress)}
+
+                  {isBackgroundRefreshing && (
+                    <div className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700">
+                      <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                      Updating your circle data
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            <aside className={`${primarySurfaceClass} overflow-hidden`}>
+              <div className="border-b border-stone-200 px-6 py-6">
+                <div className="flex items-center gap-4">
+                  <div className="relative h-14 w-14 overflow-hidden rounded-full bg-stone-200">
+                    {account.picture ? (
+                      <Image
+                        src={account.picture}
+                        alt="Profile"
+                        width={56}
+                        height={56}
+                        className="h-full w-full object-cover"
+                        priority={true}
+                        onError={() => {
+                          console.error('Error loading Google profile picture');
+                        }}
+                      />
+                    ) : (
+                      <Image
+                        src={`https://api.dicebear.com/7.x/micah/svg?seed=${account.sub}`}
+                        alt="Profile"
+                        width={56}
+                        height={56}
+                        className="h-full w-full object-cover"
+                        priority={true}
+                        unoptimized={true}
+                      />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                      Wallet Overview
                     </p>
-                    <button
-                      onClick={() => setShowFullAddress(!showFullAddress)}
-                      className="mt-1 text-xs text-blue-600 hover:text-blue-700"
-                    >
-                      {showFullAddress ? 'Show less' : 'Show more'}
-                    </button>
+                    <h2 className="mt-1 truncate text-xl font-semibold tracking-tight text-slate-950">
+                      {account.name || 'Your account'}
+                    </h2>
+                    <p className="mt-1 text-sm text-slate-500">{networkLabel} wallet</p>
                   </div>
                 </div>
-                <div className="p-6">
-                  {/* Balance Header - Mobile First Design */}
-                  <div className="flex flex-col space-y-3 sm:flex-row sm:items-center sm:justify-between sm:space-y-0 mb-4">
-                    <div className="flex items-center space-x-2">
-                      <p className="text-sm font-medium text-gray-500">Balance</p>
+              </div>
+
+              <div className="space-y-5 px-6 py-6">
+                <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                        Wallet address
+                      </p>
+                      <p className="mt-3 break-all font-mono text-sm text-slate-900">
+                        {showFullAddress ? userAddress : shortenAddress(userAddress)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(userAddress)}
+                      className={subtleIconButtonClass}
+                      aria-label="Copy wallet address"
+                    >
+                      <Copy className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowFullAddress(!showFullAddress)}
+                    className="mt-3 text-sm font-medium text-slate-600 transition hover:text-slate-900"
+                  >
+                    {showFullAddress ? 'Show less' : 'Reveal full address'}
+                  </button>
+                </div>
+
+                <div className="rounded-[24px] border border-stone-200 bg-white p-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                        Estimated wallet value
+                      </p>
+                      <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
+                        {walletValueDisplay}
+                      </p>
+                      <p className="mt-2 text-sm text-slate-500">
+                        {fundedTokens.length} funded token{fundedTokens.length === 1 ? '' : 's'} tracked
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
                       <Tooltip.Provider>
                         <Tooltip.Root>
                           <Tooltip.Trigger asChild>
                             <button
+                              type="button"
                               onClick={toggleBalanceVisibility}
-                              className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors duration-200"
+                              className={subtleIconButtonClass}
                               aria-label={balanceVisible ? 'Hide balance' : 'Show balance'}
                             >
-                              {balanceVisible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                              {balanceVisible ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
                             </button>
                           </Tooltip.Trigger>
                           <Tooltip.Portal>
-                            <Tooltip.Content
-                              className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                              sideOffset={5}
-                            >
+                            <Tooltip.Content className="rounded-lg bg-slate-900 px-2 py-1 text-xs text-white" sideOffset={5}>
                               {balanceVisible ? 'Hide balance' : 'Show balance'}
-                              <Tooltip.Arrow className="fill-gray-800" />
+                              <Tooltip.Arrow className="fill-slate-900" />
                             </Tooltip.Content>
                           </Tooltip.Portal>
                         </Tooltip.Root>
                       </Tooltip.Provider>
-                      
-                      {/* Add Refresh Balance Button */}
                       <Tooltip.Provider>
                         <Tooltip.Root>
                           <Tooltip.Trigger asChild>
                             <button
+                              type="button"
                               onClick={handleRefreshBalance}
                               disabled={isRefreshingBalance}
-                              className={`p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors duration-200 ${
-                                isRefreshingBalance ? 'opacity-50 cursor-not-allowed' : ''
-                              }`}
+                              className={subtleIconButtonClass}
                               aria-label="Refresh balance"
                             >
-                              <RefreshCw className={`w-4 h-4 ${isRefreshingBalance ? 'animate-spin' : ''}`} />
+                              <RefreshCw className={`h-4 w-4 ${isRefreshingBalance ? 'animate-spin' : ''}`} />
                             </button>
                           </Tooltip.Trigger>
                           <Tooltip.Portal>
-                            <Tooltip.Content
-                              className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                              sideOffset={5}
-                            >
+                            <Tooltip.Content className="rounded-lg bg-slate-900 px-2 py-1 text-xs text-white" sideOffset={5}>
                               {isRefreshingBalance ? 'Refreshing...' : 'Refresh balance'}
-                              <Tooltip.Arrow className="fill-gray-800" />
+                              <Tooltip.Arrow className="fill-slate-900" />
                             </Tooltip.Content>
                           </Tooltip.Portal>
                         </Tooltip.Root>
                       </Tooltip.Provider>
-                      
-                      {/* Transaction History Button */}
                       <Tooltip.Provider>
                         <Tooltip.Root>
                           <Tooltip.Trigger asChild>
                             <button
+                              type="button"
                               onClick={() => {
                                 setIsTransactionHistoryOpen(true);
                                 void fetchTransactionHistory();
                               }}
-                              className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors duration-200"
-                              aria-label="View transaction history"
+                              className={subtleIconButtonClass}
+                              aria-label="Open transaction history"
                             >
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-                              </svg>
+                              <Clock className="h-4 w-4" />
                             </button>
                           </Tooltip.Trigger>
                           <Tooltip.Portal>
-                            <Tooltip.Content
-                              className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                              sideOffset={5}
-                            >
-                              Transaction History
-                              <Tooltip.Arrow className="fill-gray-800" />
+                            <Tooltip.Content className="rounded-lg bg-slate-900 px-2 py-1 text-xs text-white" sideOffset={5}>
+                              Transaction history
+                              <Tooltip.Arrow className="fill-slate-900" />
                             </Tooltip.Content>
                           </Tooltip.Portal>
                         </Tooltip.Root>
                       </Tooltip.Provider>
                     </div>
-                    
-                    {/* Currency Selector - Better Mobile Styling */}
-                    <div className="relative w-full sm:w-auto">
+                  </div>
+
+                  <div className="mt-5">
+                    <label className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                      Display currency
+                    </label>
+                    <div className="relative mt-2">
                       <select
                         value={selectedCurrency}
                         onChange={(e) => setSelectedCurrency(e.target.value)}
-                        className="w-full sm:w-auto text-xs bg-white border border-gray-300 rounded-lg pl-3 pr-8 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none cursor-pointer"
+                        className="w-full appearance-none rounded-2xl border border-stone-300 bg-stone-50 px-4 py-3 pr-10 text-sm font-medium text-slate-700 outline-none transition focus:border-stone-400"
                       >
                         <option value="USD">USD ($)</option>
                         <option value="XAF">XAF (FCFA)</option>
@@ -5797,192 +6143,181 @@ export default function Dashboard() {
                         <option value="MAD">MAD</option>
                         <option value="GHS">GHS (GH₵)</option>
                       </select>
-                      {/* Custom dropdown arrow */}
-                      <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-                        <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </div>
+                      <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                     </div>
                   </div>
-                  
-                  <div className="space-y-1">
-                    <p className="text-2xl font-semibold text-blue-600"> {/* Changed from text-3xl to text-2xl */}
-                      {/* Display total wallet value here, formatted with balance visibility */}
-                      {balanceVisible 
-                        ? formatCurrency(totalWalletLocalValue, selectedCurrency)
-                        : formatBalanceDisplay(totalWalletLocalValue, true)
-                      }
-                    </p>
-                    <p className="text-sm text-gray-500 mt-1"> {/* New sub-text */}
-                      Total Estimated Value
-                    </p>
-                  </div>
-                  
-                  {/* Add Send and Buy buttons */}
-                  <div className="mt-4 flex space-x-3">
-                    <button
-                      onClick={() => setIsTransferDialogOpen(true)}
-                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsTransferDialogOpen(true)}
+                    className={primaryActionClass}
+                  >
+                    <Send className="mr-2 h-4 w-4" />
+                    Send
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openBuyFlow('usdc')}
+                    className={secondaryActionClass}
+                  >
+                    <CreditCard className="mr-2 h-4 w-4" />
+                    Buy crypto
+                  </button>
+                  {network === 'testnet' && (
+                    <a
+                      href={`https://faucet.sui.io/?address=${userAddress || ''}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`sm:col-span-2 ${secondaryActionClass}`}
                     >
-                      <Send className="w-4 h-4 mr-2" />
-                      Send
-                    </button>
-                    <button
-                      onClick={() => openBuyFlow('usdc')}
-                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 transition-all duration-200"
-                    >
-                      <CreditCard className="w-4 h-4 mr-2" />
-                      Buy Crypto
-                    </button>
-                    {getCurrentNetwork() === 'testnet' && (
-                      <a
-                        href={`https://faucet.sui.io/?address=${userAddress || ''}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
-                      >
-                        <ExternalLink className="w-4 h-4 mr-2" />
-                        Faucet
-                      </a>
+                      <ExternalLink className="mr-2 h-4 w-4" />
+                      Open faucet
+                    </a>
+                  )}
+                </div>
+
+                {onrampResultStatus !== 'idle' && onrampResultMessage && (
+                  <div
+                    className={`rounded-[24px] border px-4 py-3 text-sm ${
+                      onrampResultStatus === 'success'
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                        : onrampResultStatus === 'pending'
+                          ? 'border-amber-200 bg-amber-50 text-amber-800'
+                          : 'border-red-200 bg-red-50 text-red-800'
+                    }`}
+                  >
+                    <p>{onrampResultMessage}</p>
+                    {isOnrampResultRefreshing && (
+                      <p className="mt-1 text-xs opacity-80">Updating on-chain balances...</p>
                     )}
                   </div>
+                )}
 
-                  {onrampResultStatus !== 'idle' && onrampResultMessage && (
-                    <div
-                      className={`mt-4 rounded-lg border p-3 text-sm ${
-                        onrampResultStatus === 'success'
-                          ? 'border-green-200 bg-green-50 text-green-800'
-                          : onrampResultStatus === 'pending'
-                            ? 'border-yellow-200 bg-yellow-50 text-yellow-800'
-                            : 'border-red-200 bg-red-50 text-red-800'
-                      }`}
-                    >
-                      <p>{onrampResultMessage}</p>
-                      {isOnrampResultRefreshing && (
-                        <p className="mt-1 text-xs opacity-80">
-                          Updating on-chain balances...
-                        </p>
-                      )}
+                <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                        Holdings
+                      </p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {allCoins.length} asset{allCoins.length === 1 ? '' : 's'} tracked
+                      </p>
                     </div>
-                  )}
-                  
-                  {/* Display all coins */}
-                  {allCoins.length > 0 && ( // Changed from > 1 to > 0 to always show if any coins exist
-                    <div className="mt-6">
-                      <p className="text-xs font-medium text-gray-500 mb-2">All Tokens</p>
-                      <div className="space-y-3 max-h-60 overflow-y-auto pr-2"> {/* Increased max-h slightly */}
-                        {allCoins.map((coin, index) => {
-                          const tokenBalance = Number(coin.balance) / getCoinDecimals(coin.coinType); 
-                          
-                          const convertedValue = convertedBalances[coin.symbol] || 0;
-                          
-                          return (
-                            <div key={index} className="flex items-center justify-between py-2 border-b border-gray-100 last:border-b-0">
-                              <div className="flex items-center space-x-3"> {/* Added space-x-3 for icon and name */}
+                  </div>
+
+                  {allCoins.length > 0 ? (
+                    <div className="mt-4 space-y-3">
+                      {allCoins.map((coin, index) => {
+                        const tokenBalance = Number(coin.balance) / getCoinDecimals(coin.coinType);
+                        const convertedValue = convertedBalances[coin.symbol] || 0;
+
+                        return (
+                          <div
+                            key={index}
+                            className="flex items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-white px-4 py-3"
+                          >
+                            <div className="flex min-w-0 items-center gap-3">
+                              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-stone-100">
                                 <TokenIcon symbol={coin.symbol} />
-                                <span className="font-medium text-sm">{coin.symbol}</span>
                               </div>
-                              <div className="flex items-center space-x-4"> {/* Added space-x-4 for amounts and button */}
-                                <div className="text-right">
-                                  <div className="text-sm font-medium text-gray-800">
-                                    {balanceVisible 
-                                      ? tokenBalance.toFixed(coin.symbol === 'USDC' ? 2 : 4)
-                                      : formatBalanceDisplay(tokenBalance)
-                                    }
-                                  </div>
-                                  {(coin.symbol === 'SUI' || coin.symbol === 'USDC') && suiPrice && convertedValue > 0 && (
-                                    <div className="text-xs text-gray-500">
-                                      {balanceVisible 
-                                        ? formatCurrency(convertedValue, selectedCurrency)
-                                        : formatBalanceDisplay(convertedValue)
-                                      }
-                                    </div>
-                                  )}
-                                </div>
-                                {(coin.symbol === 'USDC' || coin.symbol === 'SUI') && (
-                                  <button
-                                    onClick={() => {
-                                      console.log(`Buy ${coin.symbol} button clicked`);
-                                      openBuyFlow(coin.symbol);
-                                    }}
-                                    className="text-xs bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white px-3 py-1.5 rounded-lg font-medium shadow-sm hover:shadow-md transition-all duration-200 flex items-center space-x-1"
-                                    title={`Buy ${coin.symbol}`}
-                                  >
-                                    <CreditCard className="w-3 h-3" />
-                                    <span>Buy</span>
-                                  </button>
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-slate-900">{coin.symbol}</p>
+                                {(coin.symbol === 'SUI' || coin.symbol === 'USDC') && suiPrice && convertedValue > 0 && (
+                                  <p className="text-xs text-slate-500">
+                                    {balanceVisible
+                                      ? formatCurrency(convertedValue, selectedCurrency)
+                                      : formatBalanceDisplay(convertedValue)}
+                                  </p>
                                 )}
                               </div>
                             </div>
-                          );
-                        })}
-                      </div>
+
+                            <div className="flex items-center gap-3">
+                              <div className="text-right">
+                                <div className="text-sm font-medium text-slate-900">
+                                  {balanceVisible
+                                    ? tokenBalance.toFixed(coin.symbol === 'USDC' ? 2 : 4)
+                                    : formatBalanceDisplay(tokenBalance)}
+                                </div>
+                              </div>
+                              {(coin.symbol === 'USDC' || coin.symbol === 'SUI') && (
+                                <button
+                                  type="button"
+                                  onClick={() => openBuyFlow(coin.symbol)}
+                                  className="inline-flex items-center rounded-full border border-stone-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:border-stone-400 hover:bg-stone-50"
+                                  title={`Buy ${coin.symbol}`}
+                                >
+                                  Buy
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
+                  ) : (
+                    <p className="mt-4 text-sm text-slate-500">
+                      Token balances will appear here after your wallet is funded.
+                    </p>
                   )}
                 </div>
               </div>
-            </div>
+            </aside>
           </div>
 
-          <div className="mt-8 bg-white shadow rounded-lg overflow-hidden">
-            <div className="border-b border-gray-200 bg-gradient-to-r from-slate-900 to-slate-800 px-6 py-5 text-white">
+          <div className={`${primarySurfaceClass} overflow-hidden`}>
+            <div className="border-b border-stone-200 px-8 py-6">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <h3 className="flex items-center text-lg font-semibold">
-                    <ArrowRightLeft className="mr-2 h-5 w-5 text-cyan-300" />
-                    Manual Swap
+                  <h3 className="text-2xl font-semibold tracking-tight text-slate-950">
+                    Manual swap
                   </h3>
-                  <p className="mt-1 text-sm text-slate-200">
-                    Spend one token, get the other. Enter one amount, review the live quote, then swap.
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                    Convert between SUI and USDC from the same wallet when you need to rebalance or prepare for a contribution.
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-100">
+                  <span className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-600">
                     {activeSwapNetwork}
                   </span>
                   <button
                     type="button"
                     onClick={() => setIsManualSwapOpen((current) => !current)}
-                    className="inline-flex items-center rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-white/20"
+                    className={secondaryActionClass}
                     aria-expanded={isManualSwapOpen}
                     aria-label={isManualSwapOpen ? 'Collapse manual swap' : 'Expand manual swap'}
                   >
+                    {isManualSwapOpen ? 'Hide swap' : 'Open swap'}
                     {isManualSwapOpen ? (
-                      <>
-                        Hide
-                        <ChevronUp className="ml-2 h-4 w-4" />
-                      </>
+                      <ChevronUp className="ml-2 h-4 w-4" />
                     ) : (
-                      <>
-                        Open
-                        <ChevronDown className="ml-2 h-4 w-4" />
-                      </>
+                      <ChevronDown className="ml-2 h-4 w-4" />
                     )}
                   </button>
                 </div>
               </div>
             </div>
-
             {!isManualSwapOpen ? (
-              <div className="px-6 py-4">
-                <div className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-4 text-sm text-gray-600">
+              <div className="px-8 py-6">
+                <div className="rounded-[24px] border border-dashed border-stone-300 bg-stone-50/80 px-5 py-5 text-sm text-slate-600">
                   Manual swap is hidden. Open it only when you need to convert between SUI and USDC.
                 </div>
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-6 px-6 py-6 xl:grid-cols-[minmax(0,1.7fr),minmax(280px,1fr)]">
+              <div className="grid grid-cols-1 gap-6 px-8 py-8 xl:grid-cols-[minmax(0,1.7fr),minmax(300px,1fr)]">
                 <div className="space-y-5">
-                  <div className="rounded-2xl border border-gray-200 p-5">
-                    <p className="text-sm font-semibold text-gray-500">1. Pick what you are spending</p>
-                    <div className="mt-3 inline-flex rounded-2xl bg-gray-100 p-1">
+                  <div className="rounded-[24px] border border-stone-200 bg-white p-5">
+                    <p className="text-sm font-semibold text-slate-500">1. Pick what you are spending</p>
+                    <div className="mt-3 inline-flex rounded-2xl bg-stone-100 p-1">
                       <button
                         type="button"
                         onClick={() => setSwapDirection('SUI_TO_USDC')}
                         className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
                           swapDirection === 'SUI_TO_USDC'
-                            ? 'bg-white text-gray-900 shadow-sm'
-                            : 'text-gray-500'
+                            ? 'bg-white text-slate-950 shadow-sm'
+                            : 'text-slate-500'
                         }`}
                       >
                         Spend SUI
@@ -5992,23 +6327,23 @@ export default function Dashboard() {
                         onClick={() => setSwapDirection('USDC_TO_SUI')}
                         className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
                           swapDirection === 'USDC_TO_SUI'
-                            ? 'bg-white text-gray-900 shadow-sm'
-                            : 'text-gray-500'
+                            ? 'bg-white text-slate-950 shadow-sm'
+                            : 'text-slate-500'
                         }`}
                       >
                         Spend USDC
                       </button>
                     </div>
-                    <p className="mt-3 text-sm text-gray-600">
+                    <p className="mt-3 text-sm text-slate-600">
                       The destination token is chosen automatically, so there is no routing setup.
                     </p>
                   </div>
 
-                  <div className="rounded-2xl border border-gray-200 p-5">
+                  <div className="rounded-[24px] border border-stone-200 bg-white p-5">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <div>
-                        <p className="text-sm font-semibold text-gray-500">2. Enter one amount</p>
-                        <p className="mt-1 text-xs text-gray-500">
+                        <p className="text-sm font-semibold text-slate-500">2. Enter one amount</p>
+                        <p className="mt-1 text-xs text-slate-500">
                           Available now: {formatManualSwapAmount(sourceBalance, sourceSymbol)}
                         </p>
                       </div>
@@ -6016,15 +6351,15 @@ export default function Dashboard() {
                         type="button"
                         onClick={handleRefreshBalance}
                         disabled={isRefreshingBalance}
-                        className="inline-flex items-center justify-center rounded-xl border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="inline-flex items-center justify-center rounded-full border border-stone-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshingBalance ? 'animate-spin' : ''}`} />
                         Refresh
                       </button>
                     </div>
 
-                    <div className="mt-4 rounded-2xl border border-gray-200 px-4 py-3">
-                      <label className="block text-sm font-medium text-gray-700">
+                    <div className="mt-4 rounded-[20px] border border-stone-200 bg-stone-50/60 px-4 py-3">
+                      <label className="block text-sm font-medium text-slate-700">
                         Amount in {sourceSymbol}
                       </label>
                       <input
@@ -6034,7 +6369,7 @@ export default function Dashboard() {
                         value={swapAmount}
                         onChange={(event) => setSwapAmount(event.target.value)}
                         placeholder={sourceSymbol === 'SUI' ? '0.2500' : '10.00'}
-                        className="mt-2 w-full border-0 p-0 text-3xl font-semibold text-gray-900 focus:outline-none focus:ring-0"
+                        className="mt-2 w-full border-0 bg-transparent p-0 text-3xl font-semibold text-slate-950 focus:outline-none focus:ring-0"
                       />
                     </div>
 
@@ -6042,51 +6377,51 @@ export default function Dashboard() {
                       <button
                         type="button"
                         onClick={() => applySwapQuickAmount(0.25)}
-                        className="rounded-full border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50"
+                        className="rounded-full border border-stone-300 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-stone-50"
                       >
                         25%
                       </button>
                       <button
                         type="button"
                         onClick={() => applySwapQuickAmount(0.5)}
-                        className="rounded-full border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50"
+                        className="rounded-full border border-stone-300 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-stone-50"
                       >
                         50%
                       </button>
                       <button
                         type="button"
                         onClick={() => applySwapQuickAmount(1)}
-                        className="rounded-full border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50"
+                        className="rounded-full border border-stone-300 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-stone-50"
                       >
                         Max
                       </button>
                     </div>
 
                     {sourceSymbol === 'SUI' && (
-                      <p className="mt-3 text-xs text-gray-500">
+                      <p className="mt-3 text-xs text-slate-500">
                         Max keeps {MANUAL_SWAP_SUI_GAS_BUFFER.toFixed(2)} SUI available for gas.
                       </p>
                     )}
                   </div>
 
-                  <div className="rounded-2xl border border-gray-200 p-5">
-                    <p className="text-sm font-semibold text-gray-500">3. Review and swap</p>
+                  <div className="rounded-[24px] border border-stone-200 bg-white p-5">
+                    <p className="text-sm font-semibold text-slate-500">3. Review and swap</p>
 
-                    <div className="mt-4 rounded-2xl bg-gray-50 p-4">
-                      <div className="flex items-center justify-between text-sm text-gray-600">
+                    <div className="mt-4 rounded-[24px] bg-stone-50 p-4">
+                      <div className="flex items-center justify-between text-sm text-slate-600">
                         <span>You pay</span>
-                        <span className="font-semibold text-gray-900">
+                        <span className="font-semibold text-slate-950">
                           {hasValidSwapAmount
                             ? formatManualSwapAmount(parsedSwapAmount, sourceSymbol)
                             : `0.00 ${sourceSymbol}`}
                         </span>
                       </div>
-                      <div className="mt-3 flex items-center justify-center text-gray-400">
+                      <div className="mt-3 flex items-center justify-center text-slate-400">
                         <ArrowRightLeft className="h-4 w-4" />
                       </div>
-                      <div className="mt-3 flex items-center justify-between text-sm text-gray-600">
+                      <div className="mt-3 flex items-center justify-between text-sm text-slate-600">
                         <span>You receive</span>
-                        <span className="font-semibold text-gray-900">
+                        <span className="font-semibold text-slate-950">
                           {!hasValidSwapAmount
                             ? `Enter an amount`
                             : swapQuote
@@ -6095,17 +6430,17 @@ export default function Dashboard() {
                         </span>
                       </div>
                       <div className="mt-4 grid grid-cols-1 gap-3 text-xs sm:grid-cols-2">
-                        <div className="rounded-xl bg-white px-3 py-2 text-gray-600">
+                        <div className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-slate-600">
                           Slippage protection: {MANUAL_SWAP_SLIPPAGE.toFixed(1)}%
                         </div>
-                        <div className="rounded-xl bg-white px-3 py-2 text-gray-600">
+                        <div className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-slate-600">
                           Price impact: {swapQuote ? formatManualSwapPercent(swapQuote.priceImpact) : '--'}
                         </div>
                       </div>
                     </div>
 
                     {isSwapQuoteLoading && (
-                      <p className="mt-3 text-sm text-gray-500">Updating live quote...</p>
+                      <p className="mt-3 text-sm text-slate-500">Updating live quote...</p>
                     )}
 
                     {swapQuoteError && (
@@ -6125,7 +6460,7 @@ export default function Dashboard() {
                         <button
                           type="button"
                           onClick={() => openBuyFlow(sourceSymbol === 'SUI' ? 'sui' : 'usdc')}
-                          className="mt-3 inline-flex items-center rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+                          className="mt-3 inline-flex items-center rounded-full bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
                         >
                           <CreditCard className="mr-2 h-4 w-4" />
                           Buy {sourceSymbol}
@@ -6144,7 +6479,7 @@ export default function Dashboard() {
                         !!swapQuoteError ||
                         !swapQuote
                       }
-                      className="mt-5 inline-flex w-full items-center justify-center rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                      className="mt-5 inline-flex w-full items-center justify-center rounded-full bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
                     >
                       {isSwapSubmitting
                         ? 'Swapping...'
@@ -6154,32 +6489,32 @@ export default function Dashboard() {
                 </div>
 
                 <div className="space-y-5">
-                  <div className="rounded-2xl border border-gray-200 p-5">
-                    <h4 className="text-base font-semibold text-gray-900">Wallet snapshot</h4>
+                  <div className="rounded-[24px] border border-stone-200 bg-white p-5">
+                    <h4 className="text-base font-semibold text-slate-950">Wallet snapshot</h4>
                     <div className="mt-4 space-y-3">
-                      <div className="rounded-xl bg-gray-50 px-4 py-3">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">SUI</p>
-                        <p className="mt-1 text-xl font-semibold text-gray-900">
+                      <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">SUI</p>
+                        <p className="mt-1 text-xl font-semibold text-slate-950">
                           {formatManualSwapAmount(getManualSwapBalance(allCoins, 'SUI'), 'SUI')}
                         </p>
                       </div>
-                      <div className="rounded-xl bg-gray-50 px-4 py-3">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">USDC</p>
-                        <p className="mt-1 text-xl font-semibold text-gray-900">
+                      <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">USDC</p>
+                        <p className="mt-1 text-xl font-semibold text-slate-950">
                           {formatManualSwapAmount(getManualSwapBalance(allCoins, 'USDC'), 'USDC')}
                         </p>
                       </div>
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-gray-200 p-5">
-                    <h4 className="text-base font-semibold text-gray-900">How this works</h4>
-                    <div className="mt-4 space-y-3 text-sm text-gray-600">
+                  <div className="rounded-[24px] border border-stone-200 bg-white p-5">
+                    <h4 className="text-base font-semibold text-slate-950">How this works</h4>
+                    <div className="mt-4 space-y-3 text-sm text-slate-600">
                       <p>1. Choose the token you already hold.</p>
                       <p>2. Enter one amount or use a quick amount button.</p>
                       <p>3. Review the quote and press the swap button once.</p>
                     </div>
-                    <div className="mt-4 rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+                    <div className="mt-4 rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm text-slate-600">
                       You currently hold {formatManualSwapAmount(targetBalance, targetSymbol)} on the receive side.
                     </div>
                   </div>
@@ -6204,935 +6539,205 @@ export default function Dashboard() {
           </div>
 
           {/* Njangi Circles Section */}
-          <div className="mt-8">
-                          <div className="bg-white shadow rounded-lg p-6">
-                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-4 sm:space-y-0 mb-6">
-                  <div className="flex items-center space-x-3">
-                    <h3 className="text-lg font-medium text-gray-900 text-center sm:text-left">My Njangi Circles</h3>
-                    {(isBackgroundRefreshing) && (
-                      <div className="flex items-center space-x-2 text-sm text-blue-600">
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>Updating...</span>
-                      </div>
-                    )}
+          <section className={primarySurfaceClass}>
+            <div className="p-8 sm:p-10">
+              <div className="flex flex-col gap-8">
+                <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
+                      Circle Portfolio
+                    </p>
+                    <h3 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">
+                      My Njangi circles
+                    </h3>
+                    <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                      Review membership, payouts, and required actions without hunting through separate views.
+                    </p>
                   </div>
-                  <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3 w-full sm:w-auto">
-                    <button
-                      type="button"
-                      onClick={handleManualRefresh}
-                      disabled={loading || isBackgroundRefreshing}
-                      className="w-full sm:w-auto inline-flex items-center justify-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
-                      title="Refresh circles"
-                    >
-                      <RefreshCw className={`w-4 h-4 mr-2 ${(loading || isBackgroundRefreshing) ? 'animate-spin' : ''}`} />
-                      Refresh
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIsJoinDialogOpen(true)}
-                      className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-blue-600 text-sm font-medium rounded-md shadow-sm text-blue-600 bg-white hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
-                    >
-                      <Users className="w-5 h-5 mr-2" />
-                      Join Circle
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        invalidateCirclesCache();
-                        router.push('/create-circle');
-                      }}
-                      className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
-                    >
-                      <svg
-                        className="w-5 h-5 mr-2"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M12 4v16m8-8H4"
-                        />
-                      </svg>
-                      Create New Circle
-                    </button>
+
+                  <div className="flex flex-wrap gap-3">
+                    <div className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-4 py-2 text-sm font-medium text-slate-600">
+                      {circles.length} total
+                    </div>
+                    <div className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-4 py-2 text-sm font-medium text-slate-600">
+                      {adminCircles.length} admin
+                    </div>
+                    <div className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-4 py-2 text-sm font-medium text-slate-600">
+                      {activeCirclesCount} active
+                    </div>
                   </div>
                 </div>
 
-              {loading ? (
-                <div className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {Array.from({ length: 6 }, (_, i) => (
-                      <CircleCardSkeleton key={i} />
-                    ))}
-                  </div>
-                  <div className="text-center py-4">
-                    <div className="text-sm text-gray-500 dark:text-gray-400">
-                      {loadingProgress.message}
+                {loading ? (
+                  <div className="space-y-6">
+                    <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+                      {Array.from({ length: 6 }, (_, i) => (
+                        <CircleCardSkeleton key={i} />
+                      ))}
                     </div>
-                    <div className="mt-2 w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                      <div 
-                        className="bg-blue-600 h-2 rounded-full transition-all duration-300" 
-                        style={{ 
-                          width: `${loadingProgress.total > 0 ? (loadingProgress.current / loadingProgress.total) * 100 : 0}%` 
-                        }}
-                      ></div>
+                    <div className="max-w-xl">
+                      <div className="flex items-center justify-between text-sm text-slate-500">
+                        <span>{loadingProgress.message}</span>
+                        <span>
+                          {loadingProgress.total > 0
+                            ? Math.round((loadingProgress.current / loadingProgress.total) * 100)
+                            : 0}
+                          %
+                        </span>
+                      </div>
+                      <div className="mt-3 h-2 rounded-full bg-stone-200">
+                        <div
+                          className="h-2 rounded-full bg-slate-950 transition-all duration-300"
+                          style={{
+                            width: `${loadingProgress.total > 0 ? (loadingProgress.current / loadingProgress.total) * 100 : 0}%`,
+                          }}
+                        ></div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ) : error ? (
-                <div className="bg-red-50 rounded-lg p-8 text-center">
-                  <svg
-                    className="mx-auto h-12 w-12 text-red-400"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    aria-hidden="true"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                    />
-                  </svg>
-                  <h3 className="mt-2 text-sm font-medium text-red-900">{error}</h3>
-                  <p className="mt-1 text-sm text-red-500">Please try again later.</p>
-                  <div className="mt-6">
-                    <button
-                      type="button"
-                      onClick={() => fetchUserCircles()}
-                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors duration-200"
-                    >
-                      Try Again
-                    </button>
-                  </div>
-                </div>
-              ) : circles.length > 0 ? (
-                <div>
-                  <Tab.Group>
-                    <Tab.List className="flex space-x-1 rounded-xl bg-blue-50 p-1 mb-6">
-                      <Tab
-                        className={({ selected }) =>
-                          `w-full rounded-lg py-2.5 text-sm font-medium leading-5 transition-colors duration-200
-                           ${selected
-                            ? 'bg-white text-blue-700 shadow'
-                            : 'text-blue-600 hover:bg-white/[0.12] hover:text-blue-700'
-                          }`
-                        }
-                      >
-                        All Circles ({circles.length})
-                      </Tab>
-                      <Tab
-                        className={({ selected }) =>
-                          `w-full rounded-lg py-2.5 text-sm font-medium leading-5 transition-colors duration-200
-                           ${selected
-                            ? 'bg-white text-blue-700 shadow'
-                            : 'text-blue-600 hover:bg-white/[0.12] hover:text-blue-700'
-                          }`
-                        }
-                      >
-                        Administering ({circles.filter(c => c.isAdmin).length})
-                      </Tab>
-                      <Tab
-                        className={({ selected }) =>
-                          `w-full rounded-lg py-2.5 text-sm font-medium leading-5 transition-colors duration-200
-                           ${selected
-                            ? 'bg-white text-blue-700 shadow'
-                            : 'text-blue-600 hover:bg-white/[0.12] hover:text-blue-700'
-                          }`
-                        }
-                      >
-                        Member Only ({circles.filter(c => !c.isAdmin).length})
-                      </Tab>
-                    </Tab.List>
-                    <Tab.Panels>
-                      <Tab.Panel>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                          {getPaginatedCircles(circles, displayedCirclesCount).map((circle) => (
-                            <div key={circle.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow duration-200">
-                              <div className="p-5 border-b border-gray-100">
-                                <div className="flex justify-between items-start">
-                                  <h3 className="text-lg font-semibold text-gray-900 line-clamp-1">{circle.name}</h3>
-                                  <div className="flex space-x-1">
-                                    <span className={`text-xs font-medium px-2 py-1 rounded-full ${circle.isAdmin ? "bg-purple-100 text-purple-800" : "bg-blue-100 text-blue-800"}`}>
-                                      {circle.isAdmin ? "Admin" : "Member"}
-                                    </span>
-                                    <span className={`text-xs font-medium px-2 py-1 rounded-full ${circle.isActive ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
-                                      {circle.isActive ? "Active" : "Inactive"}
-                                    </span>
-                                  </div>
-                                </div>
-                                <div className="mt-2 flex items-center text-sm text-gray-500">
-                                  <svg className="mr-1.5 h-4 w-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                                  </svg>
-                                  {circle.currentMembers} / {circle.maxMembers} members
-                                </div>
-                                
-                                {/* Add circle ID with copy functionality */}
-                                <div className="mt-2 flex items-center space-x-1 text-xs text-gray-500">
-                                  <span>ID: {shortenId(circle.id)}</span>
-                                  <Tooltip.Provider>
-                                    <Tooltip.Root>
-                                      <Tooltip.Trigger asChild>
-                                        <button
-                                          onClick={() => copyToClipboard(circle.id, 'circleId')}
-                                          className={`text-gray-400 hover:text-blue-600 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200 ${copiedCircleId === circle.id ? 'text-green-500' : ''}`}
-                                          aria-label="Copy Circle ID"
-                                        >
-                                          <Copy size={14} />
-                                        </button>
-                                      </Tooltip.Trigger>
-                                      <Tooltip.Portal>
-                                        <Tooltip.Content
-                                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                          sideOffset={5}
-                                        >
-                                          {copiedCircleId === circle.id ? 'Copied!' : 'Copy Circle ID'}
-                                          <Tooltip.Arrow className="fill-gray-800" />
-                                        </Tooltip.Content>
-                                      </Tooltip.Portal>
-                                    </Tooltip.Root>
-                                  </Tooltip.Provider>
-                                  
-                                  {circle.isAdmin && (
-                                    <Tooltip.Provider>
-                                      <Tooltip.Root>
-                                        <Tooltip.Trigger asChild>
-                                          <button
-                                            onClick={() => copyShareLink(circle.id)}
-                                            className="text-gray-400 hover:text-blue-600 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200"
-                                            aria-label="Copy Invite Link"
-                                          >
-                                            <Link size={14} />
-                                          </button>
-                                        </Tooltip.Trigger>
-                                        <Tooltip.Portal>
-                                          <Tooltip.Content
-                                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                            sideOffset={5}
-                                          >
-                                            Copy Invite Link
-                                            <Tooltip.Arrow className="fill-gray-800" />
-                                          </Tooltip.Content>
-                                        </Tooltip.Portal>
-                                      </Tooltip.Root>
-                                    </Tooltip.Provider>
-                                  )}
-                                </div>
-                              </div>
-                              
-                              <div className="px-5 py-3 bg-gray-50 text-sm">
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
-                                  <div>
-                                    <p className="text-gray-500">Contribution</p>
-                                    <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay 
-                                        usd={circle.contributionAmountUsd} 
-                                        sui={circle.contributionAmount}
-                                        currencyType={circle.currencyType} 
-                                      />
-                                    </p>
-                                  </div>
-                                  <div>
-                                    <p className="text-gray-500">Cycle</p>
-                                    <p className="font-medium text-gray-900">{formatCycleInfo(circle.cycleLength, circle.cycleDay)}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-gray-500">Security Deposit</p>
-                                    <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay 
-                                        usd={circle.securityDepositUsd} 
-                                        sui={circle.securityDeposit}
-                                        currencyType={circle.currencyType} 
-                                      />
-                                    </p>
-                                  </div>
-                                  <div>
-                                    <p className="text-gray-500">Next Payout</p>
-                                    <p className="font-medium text-gray-900">
-                                      {circle.isActive ? formatDate(circle.nextPayoutTime) : "Activate Circle to Start"}
-                                    </p>
-                                  </div>
-                                </div>
-                              </div>
-                              
-                              <div className="p-4 flex justify-between bg-white border-t border-gray-100">
-                                <Tooltip.Provider>
-                                  <Tooltip.Root>
-                                    <Tooltip.Trigger asChild>
-                                      <button
-                                        onClick={() => router.push(`/circle/${circle.id}`)}
-                                        className="text-blue-600 hover:text-blue-800 font-medium p-2 hover:bg-blue-50 rounded-full transition-colors"
-                                        aria-label="View Details"
-                                      >
-                                        <Eye size={18} />
-                                      </button>
-                                    </Tooltip.Trigger>
-                                    <Tooltip.Portal>
-                                      <Tooltip.Content
-                                        className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                        sideOffset={5}
-                                      >
-                                        View Details
-                                        <Tooltip.Arrow className="fill-gray-800" />
-                                      </Tooltip.Content>
-                                    </Tooltip.Portal>
-                                  </Tooltip.Root>
-                                </Tooltip.Provider>
-                                
-                                <div className="flex items-center space-x-2">
-                                  {circle.isAdmin && (
-                                    <Tooltip.Provider>
-                                      <Tooltip.Root>
-                                        <Tooltip.Trigger asChild>
-                                          <button
-                                            onClick={() => router.push(`/circle/${circle.id}/manage`)}
-                                            className="text-purple-600 hover:text-purple-800 font-medium p-2 hover:bg-purple-50 rounded-full transition-colors"
-                                            aria-label="Manage Circle"
-                                          >
-                                            <Settings size={18} />
-                                          </button>
-                                        </Tooltip.Trigger>
-                                        <Tooltip.Portal>
-                                          <Tooltip.Content
-                                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                            sideOffset={5}
-                                          >
-                                            Manage
-                                            <Tooltip.Arrow className="fill-gray-800" />
-                                          </Tooltip.Content>
-                                        </Tooltip.Portal>
-                                      </Tooltip.Root>
-                                    </Tooltip.Provider>
-                                  )}
-                                  
-                                  {circle.isAdmin && deleteableCircles.has(circle.id) && (
-                                    <Tooltip.Provider>
-                                      <Tooltip.Root>
-                                        <Tooltip.Trigger asChild>
-                                          <button
-                                            onClick={() => {
-                                              console.log("Delete button clicked for circle:", circle.id);
-                                              try {
-                                                deleteCircle(circle.id);
-                                              } catch (e) {
-                                                console.error("Error in delete button click handler:", e);
-                                                toast.error("Error processing delete request");
-                                              }
-                                            }}
-                                            disabled={isDeleting === circle.id}
-                                            className={`text-red-600 hover:text-red-800 font-medium p-2 hover:bg-red-50 rounded-full transition-colors ${
-                                              isDeleting === circle.id ? 'opacity-50 cursor-not-allowed' : ''
-                                            }`}
-                                            aria-label="Delete Circle"
-                                          >
-                                            <Trash2 size={18} />
-                                          </button>
-                                        </Tooltip.Trigger>
-                                        <Tooltip.Portal>
-                                          <Tooltip.Content
-                                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                            sideOffset={5}
-                                          >
-                                            {isDeleting === circle.id ? 'Deleting...' : 'Delete'}
-                                            <Tooltip.Arrow className="fill-gray-800" />
-                                          </Tooltip.Content>
-                                        </Tooltip.Portal>
-                                      </Tooltip.Root>
-                                    </Tooltip.Provider>
-                                  )}
-                                  
-                                  <Tooltip.Provider>
-                                    <Tooltip.Root>
-                                      <Tooltip.Trigger asChild>
-                                        <button
-                                          onClick={() => router.push(`/circle/${circle.id}/contribute`)}
-                                          className="text-green-600 hover:text-green-800 font-medium p-2 hover:bg-green-50 rounded-full transition-colors"
-                                          aria-label="Contribute"
-                                        >
-                                          <CreditCard size={18} />
-                                        </button>
-                                      </Tooltip.Trigger>
-                                      <Tooltip.Portal>
-                                        <Tooltip.Content
-                                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                          sideOffset={5}
-                                        >
-                                          Contribute
-                                          <Tooltip.Arrow className="fill-gray-800" />
-                                        </Tooltip.Content>
-                                      </Tooltip.Portal>
-                                    </Tooltip.Root>
-                                  </Tooltip.Provider>
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                        
-                        {/* Load More Button */}
-                        {(displayedCirclesCount < getSortedCircles(circles).length || paginationState.hasMoreAdmin || paginationState.hasMoreMember) && (
-                          <div className="mt-8 text-center">
-                            <button
-                              onClick={loadMoreCircles}
-                              disabled={isLoadingMore}
-                              className="inline-flex items-center px-6 py-3 border border-gray-300 shadow-sm text-base font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
-                            >
-                              {isLoadingMore ? (
-                                <>
-                                  <RefreshCw className="animate-spin -ml-1 mr-3 h-5 w-5" />
-                                  Loading...
-                                </>
-                              ) : (
-                                <>
-                                  Load More Circles
-                                  <span className="ml-2 text-sm text-gray-500">
-                                    {paginationState.hasMoreAdmin || paginationState.hasMoreMember 
-                                      ? '(from server)' 
-                                      : `(${getSortedCircles(circles).length - displayedCirclesCount} remaining)`}
-                                  </span>
-                                </>
-                              )}
-                            </button>
-                          </div>
-                        )}
-                      </Tab.Panel>
-                      
-                      <Tab.Panel>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                          {getPaginatedCircles(circles.filter(c => c.isAdmin), displayedCirclesCount).map((circle) => (
-                            <div key={circle.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow duration-200">
-                              <div className="p-5 border-b border-gray-100">
-                                <div className="flex justify-between items-start">
-                                  <h3 className="text-lg font-semibold text-gray-900 line-clamp-1">{circle.name}</h3>
-                                  <div className="flex space-x-1">
-                                    <span className="text-xs font-medium px-2 py-1 rounded-full bg-purple-100 text-purple-800">
-                                      Admin
-                                    </span>
-                                    <span className={`text-xs font-medium px-2 py-1 rounded-full ${circle.isActive ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
-                                      {circle.isActive ? "Active" : "Inactive"}
-                                    </span>
-                                  </div>
-                                </div>
-                                <div className="mt-2 flex items-center text-sm text-gray-500">
-                                  <svg className="mr-1.5 h-4 w-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                                  </svg>
-                                  {circle.currentMembers} / {circle.maxMembers} members
-                                </div>
-                                
-                                {/* Add circle ID with copy functionality */}
-                                <div className="mt-2 flex items-center space-x-1 text-xs text-gray-500">
-                                  <span>ID: {shortenId(circle.id)}</span>
-                                  <Tooltip.Provider>
-                                    <Tooltip.Root>
-                                      <Tooltip.Trigger asChild>
-                                        <button
-                                          onClick={() => copyToClipboard(circle.id, 'circleId')}
-                                          className={`text-gray-400 hover:text-blue-600 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200 ${copiedCircleId === circle.id ? 'text-green-500' : ''}`}
-                                          aria-label="Copy Circle ID"
-                                        >
-                                          <Copy size={14} />
-                                        </button>
-                                      </Tooltip.Trigger>
-                                      <Tooltip.Portal>
-                                        <Tooltip.Content
-                                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                          sideOffset={5}
-                                        >
-                                          {copiedCircleId === circle.id ? 'Copied!' : 'Copy Circle ID'}
-                                          <Tooltip.Arrow className="fill-gray-800" />
-                                        </Tooltip.Content>
-                                      </Tooltip.Portal>
-                                    </Tooltip.Root>
-                                  </Tooltip.Provider>
-                                  
-                                  <Tooltip.Provider>
-                                    <Tooltip.Root>
-                                      <Tooltip.Trigger asChild>
-                                        <button
-                                          onClick={() => copyShareLink(circle.id)}
-                                          className="text-gray-400 hover:text-blue-600 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200"
-                                          aria-label="Copy Invite Link"
-                                        >
-                                          <Link size={14} />
-                                        </button>
-                                      </Tooltip.Trigger>
-                                      <Tooltip.Portal>
-                                        <Tooltip.Content
-                                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                          sideOffset={5}
-                                        >
-                                          Copy Invite Link
-                                          <Tooltip.Arrow className="fill-gray-800" />
-                                        </Tooltip.Content>
-                                      </Tooltip.Portal>
-                                    </Tooltip.Root>
-                                  </Tooltip.Provider>
-                                </div>
-                              </div>
-                              
-                              <div className="px-5 py-3 bg-gray-50 text-sm">
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
-                                  <div>
-                                    <p className="text-gray-500">Contribution</p>
-                                    <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay 
-                                        usd={circle.contributionAmountUsd} 
-                                        sui={circle.contributionAmount}
-                                        currencyType={circle.currencyType} 
-                                      />
-                                    </p>
-                                  </div>
-                                  <div>
-                                    <p className="text-gray-500">Cycle</p>
-                                    <p className="font-medium text-gray-900">{formatCycleInfo(circle.cycleLength, circle.cycleDay)}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-gray-500">Security Deposit</p>
-                                    <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay 
-                                        usd={circle.securityDepositUsd} 
-                                        sui={circle.securityDeposit}
-                                        currencyType={circle.currencyType} 
-                                      />
-                                    </p>
-                                  </div>
-                                  <div>
-                                    <p className="text-gray-500">Next Payout</p>
-                                    <p className="font-medium text-gray-900">
-                                      {circle.isActive ? formatDate(circle.nextPayoutTime) : "Activate Circle to Start"}
-                                    </p>
-                                  </div>
-                                </div>
-                              </div>
-                              
-                              <div className="p-4 flex justify-between bg-white border-t border-gray-100">
-                                <Tooltip.Provider>
-                                  <Tooltip.Root>
-                                    <Tooltip.Trigger asChild>
-                                      <button
-                                        onClick={() => router.push(`/circle/${circle.id}`)}
-                                        className="text-blue-600 hover:text-blue-800 font-medium p-2 hover:bg-blue-50 rounded-full transition-colors"
-                                        aria-label="View Details"
-                                      >
-                                        <Eye size={18} />
-                                      </button>
-                                    </Tooltip.Trigger>
-                                    <Tooltip.Portal>
-                                      <Tooltip.Content
-                                        className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                        sideOffset={5}
-                                      >
-                                        View Details
-                                        <Tooltip.Arrow className="fill-gray-800" />
-                                      </Tooltip.Content>
-                                    </Tooltip.Portal>
-                                  </Tooltip.Root>
-                                </Tooltip.Provider>
-                                
-                                <div className="flex items-center space-x-2">
-                                  {circle.isAdmin && (
-                                    <Tooltip.Provider>
-                                      <Tooltip.Root>
-                                        <Tooltip.Trigger asChild>
-                                          <button
-                                            onClick={() => router.push(`/circle/${circle.id}/manage`)}
-                                            className="text-purple-600 hover:text-purple-800 font-medium p-2 hover:bg-purple-50 rounded-full transition-colors"
-                                            aria-label="Manage Circle"
-                                          >
-                                            <Settings size={18} />
-                                          </button>
-                                        </Tooltip.Trigger>
-                                        <Tooltip.Portal>
-                                          <Tooltip.Content
-                                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                            sideOffset={5}
-                                          >
-                                            Manage
-                                            <Tooltip.Arrow className="fill-gray-800" />
-                                          </Tooltip.Content>
-                                        </Tooltip.Portal>
-                                      </Tooltip.Root>
-                                    </Tooltip.Provider>
-                                  )}
-                                  
-                                  {circle.isAdmin && deleteableCircles.has(circle.id) && (
-                                    <Tooltip.Provider>
-                                      <Tooltip.Root>
-                                        <Tooltip.Trigger asChild>
-                                          <button
-                                            onClick={() => {
-                                              console.log("Delete button clicked for circle:", circle.id);
-                                              try {
-                                                deleteCircle(circle.id);
-                                              } catch (e) {
-                                                console.error("Error in delete button click handler:", e);
-                                                toast.error("Error processing delete request");
-                                              }
-                                            }}
-                                            disabled={isDeleting === circle.id}
-                                            className={`text-red-600 hover:text-red-800 font-medium p-2 hover:bg-red-50 rounded-full transition-colors ${
-                                              isDeleting === circle.id ? 'opacity-50 cursor-not-allowed' : ''
-                                            }`}
-                                            aria-label="Delete Circle"
-                                          >
-                                            <Trash2 size={18} />
-                                          </button>
-                                        </Tooltip.Trigger>
-                                        <Tooltip.Portal>
-                                          <Tooltip.Content
-                                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                            sideOffset={5}
-                                          >
-                                            {isDeleting === circle.id ? 'Deleting...' : 'Delete'}
-                                            <Tooltip.Arrow className="fill-gray-800" />
-                                          </Tooltip.Content>
-                                        </Tooltip.Portal>
-                                      </Tooltip.Root>
-                                    </Tooltip.Provider>
-                                  )}
-                                  
-                                  <Tooltip.Provider>
-                                    <Tooltip.Root>
-                                      <Tooltip.Trigger asChild>
-                                        <button
-                                          onClick={() => router.push(`/circle/${circle.id}/contribute`)}
-                                          className="text-green-600 hover:text-green-800 font-medium p-2 hover:bg-green-50 rounded-full transition-colors"
-                                          aria-label="Contribute"
-                                        >
-                                          <CreditCard size={18} />
-                                        </button>
-                                      </Tooltip.Trigger>
-                                      <Tooltip.Portal>
-                                        <Tooltip.Content
-                                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                          sideOffset={5}
-                                        >
-                                          Contribute
-                                          <Tooltip.Arrow className="fill-gray-800" />
-                                        </Tooltip.Content>
-                                      </Tooltip.Portal>
-                                    </Tooltip.Root>
-                                  </Tooltip.Provider>
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                        
-                        {/* Load More Button for Admin Tab */}
-                        {displayedCirclesCount < getSortedCircles(circles.filter(c => c.isAdmin)).length && (
-                          <div className="mt-8 text-center">
-                            <button
-                              onClick={loadMoreCircles}
-                              disabled={isLoadingMore}
-                              className="inline-flex items-center px-6 py-3 border border-gray-300 shadow-sm text-base font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
-                            >
-                              {isLoadingMore ? (
-                                <>
-                                  <RefreshCw className="animate-spin -ml-1 mr-3 h-5 w-5" />
-                                  Loading...
-                                </>
-                              ) : (
-                                <>
-                                  Load More Circles
-                                  <span className="ml-2 text-sm text-gray-500">
-                                    ({getSortedCircles(circles.filter(c => c.isAdmin)).length - displayedCirclesCount} remaining)
-                                  </span>
-                                </>
-                              )}
-                            </button>
-                          </div>
-                        )}
-                      </Tab.Panel>
-                      <Tab.Panel>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                          {getPaginatedCircles(circles.filter(c => !c.isAdmin), displayedCirclesCount).map((circle) => (
-                            <div key={circle.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow duration-200">
-                              <div className="p-5 border-b border-gray-100">
-                                <div className="flex justify-between items-start">
-                                  <h3 className="text-lg font-semibold text-gray-900 line-clamp-1">{circle.name}</h3>
-                                  <div className="flex space-x-1">
-                                    <span className="text-xs font-medium px-2 py-1 rounded-full bg-blue-100 text-blue-800">
-                                      Member
-                                    </span>
-                                    <span className={`text-xs font-medium px-2 py-1 rounded-full ${circle.isActive ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
-                                      {circle.isActive ? "Active" : "Inactive"}
-                                    </span>
-                                  </div>
-                                </div>
-                                <div className="mt-2 flex items-center text-sm text-gray-500">
-                                  <svg className="mr-1.5 h-4 w-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                                  </svg>
-                                  {circle.currentMembers} / {circle.maxMembers} members
-                                </div>
-                                
-                                {/* Add circle ID with copy functionality */}
-                                <div className="mt-2 flex items-center space-x-1 text-xs text-gray-500">
-                                  <span>ID: {shortenId(circle.id)}</span>
-                                  <Tooltip.Provider>
-                                    <Tooltip.Root>
-                                      <Tooltip.Trigger asChild>
-                                        <button
-                                          onClick={() => copyToClipboard(circle.id, 'circleId')}
-                                          className={`text-gray-400 hover:text-blue-600 p-1 rounded-full hover:bg-blue-50 transition-colors duration-200 ${copiedCircleId === circle.id ? 'text-green-500' : ''}`}
-                                          aria-label="Copy Circle ID"
-                                        >
-                                          <Copy size={14} />
-                                        </button>
-                                      </Tooltip.Trigger>
-                                      <Tooltip.Portal>
-                                        <Tooltip.Content
-                                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                          sideOffset={5}
-                                        >
-                                          {copiedCircleId === circle.id ? 'Copied!' : 'Copy Circle ID'}
-                                          <Tooltip.Arrow className="fill-gray-800" />
-                                        </Tooltip.Content>
-                                      </Tooltip.Portal>
-                                    </Tooltip.Root>
-                                  </Tooltip.Provider>
-                                </div>
-                              </div>
-                              
-                              <div className="px-5 py-3 bg-gray-50 text-sm">
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
-                                  <div>
-                                    <p className="text-gray-500">Contribution</p>
-                                    <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay 
-                                        usd={circle.contributionAmountUsd} 
-                                        sui={circle.contributionAmount}
-                                        currencyType={circle.currencyType} 
-                                      />
-                                    </p>
-                                  </div>
-                                  <div>
-                                    <p className="text-gray-500">Cycle</p>
-                                    <p className="font-medium text-gray-900">{formatCycleInfo(circle.cycleLength, circle.cycleDay)}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-gray-500">Security Deposit</p>
-                                    <p className="font-medium text-gray-900">
-                                      <CurrencyDisplay 
-                                        usd={circle.securityDepositUsd} 
-                                        sui={circle.securityDeposit}
-                                        currencyType={circle.currencyType} 
-                                      />
-                                    </p>
-                                  </div>
-                                  <div>
-                                    <p className="text-gray-500">Next Payout</p>
-                                    <p className="font-medium text-gray-900">
-                                      {circle.isActive ? formatDate(circle.nextPayoutTime) : "Activate Circle to Start"}
-                                    </p>
-                                  </div>
-                                </div>
-                              </div>
-                              
-                              <div className="p-4 flex justify-between bg-white border-t border-gray-100">
-                                <Tooltip.Provider>
-                                  <Tooltip.Root>
-                                    <Tooltip.Trigger asChild>
-                                      <button
-                                        onClick={() => router.push(`/circle/${circle.id}`)}
-                                        className="text-blue-600 hover:text-blue-800 font-medium p-2 hover:bg-blue-50 rounded-full transition-colors"
-                                        aria-label="View Details"
-                                      >
-                                        <Eye size={18} />
-                                      </button>
-                                    </Tooltip.Trigger>
-                                    <Tooltip.Portal>
-                                      <Tooltip.Content
-                                        className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                        sideOffset={5}
-                                      >
-                                        View Details
-                                        <Tooltip.Arrow className="fill-gray-800" />
-                                      </Tooltip.Content>
-                                    </Tooltip.Portal>
-                                  </Tooltip.Root>
-                                </Tooltip.Provider>
-                                
-                                <div className="flex items-center space-x-2">
-                                  {circle.isAdmin && (
-                                    <Tooltip.Provider>
-                                      <Tooltip.Root>
-                                        <Tooltip.Trigger asChild>
-                                          <button
-                                            onClick={() => router.push(`/circle/${circle.id}/manage`)}
-                                            className="text-purple-600 hover:text-purple-800 font-medium p-2 hover:bg-purple-50 rounded-full transition-colors"
-                                            aria-label="Manage Circle"
-                                          >
-                                            <Settings size={18} />
-                                          </button>
-                                        </Tooltip.Trigger>
-                                        <Tooltip.Portal>
-                                          <Tooltip.Content
-                                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                            sideOffset={5}
-                                          >
-                                            Manage
-                                            <Tooltip.Arrow className="fill-gray-800" />
-                                          </Tooltip.Content>
-                                        </Tooltip.Portal>
-                                      </Tooltip.Root>
-                                    </Tooltip.Provider>
-                                  )}
-                                  
-                                  {circle.isAdmin && deleteableCircles.has(circle.id) && (
-                                    <Tooltip.Provider>
-                                      <Tooltip.Root>
-                                        <Tooltip.Trigger asChild>
-                                          <button
-                                            onClick={() => {
-                                              console.log("Delete button clicked for circle:", circle.id);
-                                              try {
-                                                deleteCircle(circle.id);
-                                              } catch (e) {
-                                                console.error("Error in delete button click handler:", e);
-                                                toast.error("Error processing delete request");
-                                              }
-                                            }}
-                                            disabled={isDeleting === circle.id}
-                                            className={`text-red-600 hover:text-red-800 font-medium p-2 hover:bg-red-50 rounded-full transition-colors ${
-                                              isDeleting === circle.id ? 'opacity-50 cursor-not-allowed' : ''
-                                            }`}
-                                            aria-label="Delete Circle"
-                                          >
-                                            <Trash2 size={18} />
-                                          </button>
-                                        </Tooltip.Trigger>
-                                        <Tooltip.Portal>
-                                          <Tooltip.Content
-                                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                            sideOffset={5}
-                                          >
-                                            {isDeleting === circle.id ? 'Deleting...' : 'Delete'}
-                                            <Tooltip.Arrow className="fill-gray-800" />
-                                          </Tooltip.Content>
-                                        </Tooltip.Portal>
-                                      </Tooltip.Root>
-                                    </Tooltip.Provider>
-                                  )}
-                                  
-                                  <Tooltip.Provider>
-                                    <Tooltip.Root>
-                                      <Tooltip.Trigger asChild>
-                                        <button
-                                          onClick={() => router.push(`/circle/${circle.id}/contribute`)}
-                                          className="text-green-600 hover:text-green-800 font-medium p-2 hover:bg-green-50 rounded-full transition-colors"
-                                          aria-label="Contribute"
-                                        >
-                                          <CreditCard size={18} />
-                                        </button>
-                                      </Tooltip.Trigger>
-                                      <Tooltip.Portal>
-                                        <Tooltip.Content
-                                          className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                          sideOffset={5}
-                                        >
-                                          Contribute
-                                          <Tooltip.Arrow className="fill-gray-800" />
-                                        </Tooltip.Content>
-                                      </Tooltip.Portal>
-                                    </Tooltip.Root>
-                                  </Tooltip.Provider>
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                        
-                        {/* Load More Button for Member Only Tab */}
-                        {displayedCirclesCount < getSortedCircles(circles.filter(c => !c.isAdmin)).length && (
-                          <div className="mt-8 text-center">
-                            <button
-                              onClick={loadMoreCircles}
-                              disabled={isLoadingMore}
-                              className="inline-flex items-center px-6 py-3 border border-gray-300 shadow-sm text-base font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
-                            >
-                              {isLoadingMore ? (
-                                <>
-                                  <RefreshCw className="animate-spin -ml-1 mr-3 h-5 w-5" />
-                                  Loading...
-                                </>
-                              ) : (
-                                <>
-                                  Load More Circles
-                                  <span className="ml-2 text-sm text-gray-500">
-                                    ({getSortedCircles(circles.filter(c => !c.isAdmin)).length - displayedCirclesCount} remaining)
-                                  </span>
-                                </>
-                              )}
-                            </button>
-                          </div>
-                        )}
-                      </Tab.Panel>
-                    </Tab.Panels>
-                  </Tab.Group>
-                </div>
-              ) : (
-              <div className="bg-gray-50 rounded-lg p-8 text-center">
-                <svg
-                  className="mx-auto h-12 w-12 text-gray-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  aria-hidden="true"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
-                  />
-                </svg>
-                <h3 className="mt-2 text-sm font-medium text-gray-900">No circles yet</h3>
-                <p className="mt-1 text-sm text-gray-500">Get started by creating a new circle or joining an existing one.</p>
-                <div className="mt-6 flex justify-center space-x-4">
-                  <button
-                    type="button"
-                    onClick={() => setIsJoinDialogOpen(true)}
-                    className="inline-flex items-center justify-center p-3 rounded-full text-blue-600 bg-white border border-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
-                    title="Join Existing Circle"
-                  >
-                    <Users className="w-6 h-6" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      invalidateCirclesCache();
-                      router.push('/create-circle');
-                    }}
-                    className="inline-flex items-center justify-center p-3 rounded-full text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
-                    title="Create New Circle"
-                  >
+                ) : error ? (
+                  <div className="rounded-[28px] border border-red-200 bg-red-50 px-6 py-10 text-center">
                     <svg
-                      className="w-6 h-6"
+                      className="mx-auto h-12 w-12 text-red-400"
                       fill="none"
-                      stroke="currentColor"
                       viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      aria-hidden="true"
                     >
                       <path
                         strokeLinecap="round"
                         strokeLinejoin="round"
-                        strokeWidth="2"
-                        d="M12 4v16m8-8H4"
+                        strokeWidth={2}
+                        d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
                       />
                     </svg>
-                  </button>
-                </div>
+                    <h3 className="mt-4 text-base font-semibold text-red-900">{error}</h3>
+                    <p className="mt-2 text-sm text-red-700">Please try again in a moment.</p>
+                    <div className="mt-6">
+                      <button
+                        type="button"
+                        onClick={() => fetchUserCircles()}
+                        className={circleDangerActionClass}
+                      >
+                        Try again
+                      </button>
+                    </div>
+                  </div>
+                ) : circles.length > 0 ? (
+                  <Tab.Group>
+                    <Tab.List className="inline-flex w-full flex-col gap-2 rounded-[28px] border border-stone-200 bg-stone-50 p-2 sm:w-auto sm:flex-row">
+                      <Tab
+                        className={({ selected }) =>
+                          `rounded-full px-4 py-2.5 text-sm font-medium transition ${
+                            selected
+                              ? 'bg-white text-slate-950 shadow-sm'
+                              : 'text-slate-500 hover:text-slate-900'
+                          }`
+                        }
+                      >
+                        All circles ({circles.length})
+                      </Tab>
+                      <Tab
+                        className={({ selected }) =>
+                          `rounded-full px-4 py-2.5 text-sm font-medium transition ${
+                            selected
+                              ? 'bg-white text-slate-950 shadow-sm'
+                              : 'text-slate-500 hover:text-slate-900'
+                          }`
+                        }
+                      >
+                        Administering ({adminCircles.length})
+                      </Tab>
+                      <Tab
+                        className={({ selected }) =>
+                          `rounded-full px-4 py-2.5 text-sm font-medium transition ${
+                            selected
+                              ? 'bg-white text-slate-950 shadow-sm'
+                              : 'text-slate-500 hover:text-slate-900'
+                          }`
+                        }
+                      >
+                        Member only ({memberCircles.length})
+                      </Tab>
+                    </Tab.List>
+
+                    <Tab.Panels className="mt-8">
+                      <Tab.Panel>
+                        {renderCirclePanel(circles, {
+                          includeServerState: true,
+                          emptyMessage: 'No circles match this view yet.',
+                        })}
+                      </Tab.Panel>
+                      <Tab.Panel>
+                        {renderCirclePanel(adminCircles, {
+                          emptyMessage: 'You are not administering any circles yet.',
+                        })}
+                      </Tab.Panel>
+                      <Tab.Panel>
+                        {renderCirclePanel(memberCircles, {
+                          emptyMessage: 'You do not have member-only circles yet.',
+                        })}
+                      </Tab.Panel>
+                    </Tab.Panels>
+                  </Tab.Group>
+                ) : (
+                  <div className="rounded-[28px] border border-dashed border-stone-300 bg-stone-50/80 px-6 py-14 text-center">
+                    <svg
+                      className="mx-auto h-12 w-12 text-stone-400"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      aria-hidden="true"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0z"
+                      />
+                    </svg>
+                    <h3 className="mt-4 text-base font-semibold text-slate-950">No circles yet</h3>
+                    <p className="mt-2 text-sm text-slate-500">
+                      Start by creating a circle or joining one with an invite link.
+                    </p>
+                    <div className="mt-6 flex flex-wrap justify-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setIsJoinDialogOpen(true)}
+                        className={secondaryActionClass}
+                      >
+                        <Users className="mr-2 h-4 w-4" />
+                        Join a circle
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          invalidateCirclesCache();
+                          router.push('/create-circle');
+                        }}
+                        className={primaryActionClass}
+                      >
+                        <svg
+                          className="mr-2 h-4 w-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth="2"
+                            d="M12 4v16m8-8H4"
+                          />
+                        </svg>
+                        Create a circle
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-              )}
             </div>
-          </div>
+          </section>
         </div>
       </main>
       

@@ -569,33 +569,31 @@ interface EmberActionSnapshot {
 
 // Skeleton component for loading state
 const ManageCircleSkeleton = () => (
-  <div className="animate-pulse">
-    <div className="px-2 mb-8">
-      <div className="h-6 bg-gray-200 rounded w-3/4 mb-4"></div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="bg-gray-100 p-4 rounded-lg h-20"></div>
-        <div className="bg-gray-100 p-4 rounded-lg h-20"></div>
-        <div className="bg-gray-100 p-4 rounded-lg h-20"></div>
-        <div className="bg-gray-100 p-4 rounded-lg h-20"></div>
+  <div className="animate-pulse space-y-6">
+    <div className="rounded-[32px] border border-stone-200 bg-white px-8 py-8 shadow-[0_24px_70px_-42px_rgba(15,23,42,0.32)]">
+      <div className="h-4 w-28 rounded-full bg-stone-200"></div>
+      <div className="mt-4 h-10 w-72 rounded-full bg-stone-200"></div>
+      <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, index) => (
+          <div key={index} className="rounded-[24px] border border-stone-200 bg-stone-50 p-5">
+            <div className="h-3 w-20 rounded-full bg-stone-200"></div>
+            <div className="mt-3 h-6 w-28 rounded-full bg-stone-200"></div>
+          </div>
+        ))}
       </div>
     </div>
-    <div className="px-2 mb-8">
-      <div className="h-6 bg-gray-200 rounded w-1/4 mb-4"></div>
-      <div className="bg-gray-100 p-4 rounded-lg h-40"></div>
-    </div>
-    <div className="px-2 mb-8">
-      <div className="h-6 bg-gray-200 rounded w-1/4 mb-4"></div>
-      <div className="bg-gray-100 p-4 rounded-lg h-20"></div>
-    </div>
-     <div className="pt-6 border-t border-gray-200 px-2">
-       <div className="h-6 bg-gray-200 rounded w-1/4 mb-4"></div>
-       <div className="flex space-x-4">
-         <div className="h-10 bg-gray-200 rounded w-1/4"></div>
-         <div className="h-10 bg-gray-200 rounded w-1/4"></div>
-         <div className="h-10 bg-gray-200 rounded w-1/4"></div>
-         <div className="h-10 bg-gray-200 rounded w-1/4"></div>
-       </div>
-     </div>
+    {Array.from({ length: 3 }).map((_, index) => (
+      <div
+        key={index}
+        className="rounded-[28px] border border-stone-200 bg-white px-6 py-6 shadow-[0_18px_50px_-38px_rgba(15,23,42,0.24)]"
+      >
+        <div className="h-5 w-36 rounded-full bg-stone-200"></div>
+        <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="h-24 rounded-[24px] bg-stone-100"></div>
+          <div className="h-24 rounded-[24px] bg-stone-100"></div>
+        </div>
+      </div>
+    ))}
   </div>
 );
 
@@ -4737,40 +4735,81 @@ export default function ManageCircle() {
     }
   };
 
+  const pageSurfaceClass =
+    'rounded-[32px] border border-stone-200 bg-white shadow-[0_24px_70px_-42px_rgba(15,23,42,0.32)]';
+  const sectionCardClass =
+    'rounded-[28px] border border-stone-200 bg-white px-5 py-5 sm:px-6 sm:py-6 shadow-[0_18px_50px_-38px_rgba(15,23,42,0.24)]';
+  const mutedPanelClass = 'rounded-[24px] border border-stone-200 bg-stone-50/80 p-4 sm:p-5';
+  const panelCardClass = 'rounded-[24px] border border-stone-200 bg-stone-50/85 p-4 sm:p-5';
+  const tableCardClass =
+    'overflow-hidden rounded-[24px] border border-stone-200 bg-white shadow-[0_14px_34px_-26px_rgba(15,23,42,0.22)]';
+  const sectionTitleClass = 'text-xl font-semibold tracking-tight text-slate-950';
+  const sectionEyebrowClass = 'text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500';
+  const primaryActionClass =
+    'inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+  const secondaryActionClass =
+    'inline-flex items-center justify-center rounded-full border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:border-stone-400 hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-stone-300 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+  const successActionClass =
+    'inline-flex items-center justify-center rounded-full bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+  const warningActionClass =
+    'inline-flex items-center justify-center rounded-full bg-amber-500 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-300 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+  const infoActionClass =
+    'inline-flex items-center justify-center rounded-full bg-sky-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+  const dangerActionClass =
+    'inline-flex items-center justify-center rounded-full bg-red-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-300 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+  const subtleTagClass =
+    'inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-3 py-1.5 text-sm font-medium text-slate-600';
+  const circleStatusLabel = circle?.paused ? 'Paused' : circle?.isActive ? 'Active' : 'Inactive';
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <main className="max-w-7xl mx-auto py-4 sm:py-6 px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center mb-4 sm:mb-6 flex-wrap gap-3">
+    <div className="min-h-screen bg-[#f6f3ee] text-slate-950 [background-image:radial-gradient(circle_at_top_left,_rgba(255,255,255,0.92),_transparent_30%),radial-gradient(circle_at_top_right,_rgba(226,232,240,0.7),_transparent_26%)]">
+      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <button
             onClick={() => router.push('/dashboard')}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 sm:px-4 sm:py-2 rounded-full bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm text-xs sm:text-sm text-gray-700 font-medium"
+            className={secondaryActionClass}
           >
-            <ArrowLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            <ArrowLeft className="mr-2 h-4 w-4" />
             Back to Dashboard
           </button>
-          <h1 className="text-lg sm:text-xl font-semibold text-blue-600">Manage Circle</h1>
+          <div className="text-right">
+            <p className={sectionEyebrowClass}>Circle Admin</p>
+            <h1 className="mt-1 text-lg font-semibold text-slate-950 sm:text-xl">Manage Circle</h1>
+          </div>
         </div>
 
-        <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100">
-          <div className="p-4 sm:p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-2 sm:mb-0">
-              <h2 className="text-xl sm:text-2xl font-bold text-gray-900 flex flex-wrap items-center gap-2">
+        <div className={`${pageSurfaceClass} overflow-hidden`}>
+          <div className="border-b border-stone-200 px-6 py-6 sm:px-8 sm:py-8">
+            <div className="flex flex-col gap-6">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className={sectionEyebrowClass}>Admin Workspace</p>
+                  <h2 className="mt-3 flex flex-wrap items-center gap-3 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">
                 {!loading && circle ? circle.name : 'Manage Circle'}
                 {!loading && circle && (
-                  <span className="text-xs sm:text-sm font-normal bg-blue-100 text-blue-800 py-0.5 px-2 rounded-full">
+                      <span className={subtleTagClass}>
                     {circle.currentMembers}/{circle.maxMembers} Members
                   </span>
                 )}
               </h2>
+                  <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
+                    Control membership, deposits, payout flow, and vault routing from one place.
+                  </p>
+                </div>
               {!loading && circle && (
-                <div className="flex items-center space-x-2 text-xs sm:text-sm">
-                  <span className="text-gray-500 bg-gray-100 py-1 px-2 rounded-md truncate max-w-[120px] sm:max-w-none">{shortenId(id as string)}</span>
+                  <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
+                    <span className={subtleTagClass}>{circleStatusLabel}</span>
+                    <span className={subtleTagClass}>{shortenId(id as string)}</span>
                   <Tooltip.Provider>
                     <Tooltip.Root>
                       <Tooltip.Trigger asChild>
                         <button
                           onClick={() => copyToClipboard(id as string, 'id')}
-                          className={`text-gray-500 hover:text-blue-600 p-1.5 rounded-full hover:bg-blue-50 transition-colors duration-200 ${copiedId ? 'text-green-500 bg-green-50' : ''}`}
+                            className={`inline-flex h-10 w-10 items-center justify-center rounded-full border transition ${
+                              copiedId
+                                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                : 'border-stone-300 bg-white text-slate-600 hover:border-stone-400 hover:bg-stone-50'
+                            }`}
                         >
                           {copiedId ? <Check size={16} /> : <Copy size={16} />}
                         </button>
@@ -4792,7 +4831,7 @@ export default function ManageCircle() {
                       <Tooltip.Trigger asChild>
                         <button
                           onClick={() => copyToClipboard(id as string, 'link')}
-                          className="text-gray-500 hover:text-blue-600 p-1.5 rounded-full hover:bg-blue-50 transition-colors duration-200"
+                            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-stone-300 bg-white text-slate-600 transition hover:border-stone-400 hover:bg-stone-50"
                         >
                           <Link size={16} />
                         </button>
@@ -4811,303 +4850,331 @@ export default function ManageCircle() {
                 </div>
               )}
             </div>
+              {!loading && circle && (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className={mutedPanelClass}>
+                    <p className={sectionEyebrowClass}>Members</p>
+                    <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
+                      {circle.currentMembers}/{circle.maxMembers}
+                    </p>
+                    <p className="mt-2 text-sm text-slate-500">Current capacity</p>
+                  </div>
+                  <div className={mutedPanelClass}>
+                    <p className={sectionEyebrowClass}>Status</p>
+                    <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
+                      {circleStatusLabel}
+                    </p>
+                    <p className="mt-2 text-sm text-slate-500">
+                      {circle.paused ? 'Cycle completed and awaiting admin action' : circle.isActive ? 'Contributions and payouts are live' : 'Setup is still in progress'}
+                    </p>
+                  </div>
+                  <div className={mutedPanelClass}>
+                    <p className={sectionEyebrowClass}>Contribution</p>
+                    <div className="mt-3 text-lg font-semibold text-slate-950">
+                      <CurrencyDisplay
+                        usd={circle.contributionAmountUsd}
+                        sui={circle.contributionAmount}
+                        currencyType={circle.currencyType}
+                        className="font-semibold"
+                      />
+                    </div>
+                    <p className="mt-2 text-sm text-slate-500">Per member, per cycle</p>
+                  </div>
+                  <div className={mutedPanelClass}>
+                    <p className={sectionEyebrowClass}>Next payout</p>
+                    <p className="mt-3 text-lg font-semibold text-slate-950">
+                      {circle.isActive
+                        ? formatNextPayoutDate(circle.nextPayoutTime)
+                        : formatNextPayoutDate(calculatePotentialNextPayoutDate(circle.cycleLength, circle.cycleDay))}
+                    </p>
+                    <p className="mt-2 text-sm text-slate-500">
+                      {circle.isActive ? 'Scheduled cycle payout' : 'Estimated if activated now'}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
             {loading ? (
               <ManageCircleSkeleton />
             ) : circle ? (
-              <div className="py-4 space-y-6 sm:space-y-8">
+              <div className="space-y-6 bg-stone-50/60 px-4 py-6 sm:px-6 sm:py-8">
                 {/* Circle Details */}
-                <div className="px-1 sm:px-2">
-                  <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3 flex justify-between items-center">
-                    <span>Circle Details</span>
+                <div className={sectionCardClass}>
+                  <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className={sectionEyebrowClass}>Overview</p>
+                      <h3 className={`${sectionTitleClass} mt-2`}>Circle Details</h3>
+                      <p className="mt-2 text-sm leading-6 text-slate-500">
+                        A concise operational view of this circle&apos;s cadence, contribution settings, and capacity.
+                      </p>
+                    </div>
                     {circle.isActive && (
                       <button
                         onClick={() => fetchContributionStatus()}
                         disabled={loadingContributions}
-                        className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 py-1 px-2 rounded flex items-center transition-colors"
+                        className={`${secondaryActionClass} px-3 py-2 text-xs sm:text-sm`}
                       >
                         {loadingContributions ? (
-                          <svg className="animate-spin -ml-1 mr-1 h-3 w-3 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <svg className="-ml-0.5 mr-2 h-3.5 w-3.5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                           </svg>
                         ) : (
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                          </svg>
+                          <RefreshCw className="mr-2 h-3.5 w-3.5" />
                         )}
-                        {loadingContributions ? "Refreshing..." : "Refresh Status"}
+                        {loadingContributions ? 'Refreshing...' : 'Refresh Status'}
                       </button>
                     )}
-                  </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
-                    <div className="bg-gray-50 p-3 sm:p-4 rounded-lg shadow-sm">
-                      <p className="text-sm text-gray-500 mb-1">Circle Name</p>
-                      <p className="text-lg font-medium">{circle.name}</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className={panelCardClass}>
+                      <p className={sectionEyebrowClass}>Circle Name</p>
+                      <p className="mt-3 text-lg font-semibold tracking-tight text-slate-950">{circle.name}</p>
                     </div>
-                    
-                    <div className="bg-gray-50 p-3 sm:p-4 rounded-lg shadow-sm">
-                      <p className="text-sm text-gray-500 mb-1">Status</p>
-                      <div className="flex items-center">
-                        <span className={`mr-2 h-2.5 w-2.5 rounded-full ${circle.isActive ? 'bg-green-500' : 'bg-amber-500'}`}></span>
-                        <p className="text-lg font-medium">
-                          {circle.isActive ? 'Active' : 'Not Active'}
+
+                    <div className={panelCardClass}>
+                      <p className={sectionEyebrowClass}>Status</p>
+                      <div className="mt-3 flex items-center gap-3">
+                        <span className={`h-2.5 w-2.5 rounded-full ${circle.isActive ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
+                        <p className="text-lg font-semibold tracking-tight text-slate-950">
+                          {circle.isActive ? 'Active' : 'Inactive'}
                         </p>
                       </div>
                     </div>
 
                     {circle.isActive && (
-                      <div className="bg-gray-50 p-3 sm:p-4 rounded-lg shadow-sm md:col-span-2">
-                        <p className="text-sm text-gray-500 mb-1">Contribution Progress</p>
-                        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-6">
+                      <div className={`${panelCardClass} md:col-span-2`}>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                           <div className="flex-1">
-                            <div className="flex items-center justify-between mb-1">
-                              <p className="text-sm font-medium">
+                            <p className={sectionEyebrowClass}>Contribution Progress</p>
+                            <div className="mt-3 flex items-center justify-between gap-4">
+                              <p className="text-sm font-medium text-slate-700">
                                 Cycle {contributionStatus.currentCycle}
                                 {typeof contributionStatus.currentPosition === 'number' && contributionStatus.totalActiveInRotation > 0 && (
-                                  <span className="text-gray-600 ml-1">
-                                    (Position {(contributionStatus.currentPosition + 1)} of {contributionStatus.totalActiveInRotation})
+                                  <span className="ml-1 text-slate-500">
+                                    (Position {contributionStatus.currentPosition + 1} of {contributionStatus.totalActiveInRotation})
                                   </span>
                                 )}
                               </p>
-                              <p className="text-xs text-gray-600">
-                                {loadingContributions ? 'Loading...' : (
-                                  contributionStatus.contributedMembers.size > 0 
-                                    ? `${contributionStatus.contributedMembers.size}/${contributionStatus.totalActiveInRotation - 1} contributed` 
-                                    : 'No contributions yet'
-                                )}
+                              <p className="text-xs font-medium text-slate-500">
+                                {loadingContributions
+                                  ? 'Loading...'
+                                  : contributionStatus.contributedMembers.size > 0
+                                    ? `${contributionStatus.contributedMembers.size}/${contributionStatus.totalActiveInRotation - 1} contributed`
+                                    : 'No contributions yet'}
                               </p>
                             </div>
-                            <div className="w-full bg-gray-200 rounded-full h-2.5">
-                              <div 
-                                className={`${allContributionsMadeThisCycle ? 'bg-green-500' : 'bg-blue-500'} h-2.5 rounded-full transition-all duration-500`} 
-                                style={{ 
-                                  width: `${loadingContributions ? '0' : contributionStatus.totalActiveInRotation <= 1 
-                                    ? '0' 
-                                    : `${(contributionStatus.contributedMembers.size / (contributionStatus.totalActiveInRotation - 1)) * 100}%`}`
+                            <div className="mt-3 h-2.5 w-full rounded-full bg-stone-200">
+                              <div
+                                className={`${allContributionsMadeThisCycle ? 'bg-emerald-500' : 'bg-slate-900'} h-2.5 rounded-full transition-all duration-500`}
+                                style={{
+                                  width: `${loadingContributions
+                                    ? '0'
+                                    : contributionStatus.totalActiveInRotation <= 1
+                                      ? '0'
+                                      : `${(contributionStatus.contributedMembers.size / (contributionStatus.totalActiveInRotation - 1)) * 100}%`}`,
                                 }}
                               ></div>
                             </div>
                           </div>
-                          
-                          <div className="flex flex-shrink-0 items-center gap-2">
-                            <p className="text-sm">Next Payout:</p>
-                            <span className="text-sm font-medium">
+
+                          <div className="min-w-[160px] rounded-[18px] border border-stone-200 bg-white px-4 py-3">
+                            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">Next payout</p>
+                            <p className="mt-2 text-sm font-semibold text-slate-950">
                               {formatNextPayoutDate(circle.nextPayoutTime)}
-                            </span>
+                            </p>
                           </div>
                         </div>
                       </div>
                     )}
-                    
-                    <div className="bg-gray-50 p-3 sm:p-4 rounded-lg shadow-sm">
-                      <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
-                      <CurrencyDisplay 
-                        usd={circle.contributionAmountUsd} 
-                        sui={circle.contributionAmount} 
-                        currencyType={circle.currencyType}
-                        className="font-medium" 
-                      />
+
+                    <div className={panelCardClass}>
+                      <p className={sectionEyebrowClass}>Contribution Amount</p>
+                      <div className="mt-3 text-lg font-semibold text-slate-950">
+                        <CurrencyDisplay
+                          usd={circle.contributionAmountUsd}
+                          sui={circle.contributionAmount}
+                          currencyType={circle.currencyType}
+                          className="font-semibold"
+                        />
+                      </div>
                     </div>
-                    
-                    <div className="bg-gray-50 p-3 sm:p-4 rounded-lg shadow-sm">
-                      <p className="text-sm text-gray-500 mb-1">Security Deposit</p>
-                      <CurrencyDisplay 
-                        usd={circle.securityDepositUsd} 
-                        sui={circle.securityDeposit} 
-                        currencyType={circle.currencyType}
-                        className="font-medium" 
-                      />
+
+                    <div className={panelCardClass}>
+                      <p className={sectionEyebrowClass}>Security Deposit</p>
+                      <div className="mt-3 text-lg font-semibold text-slate-950">
+                        <CurrencyDisplay
+                          usd={circle.securityDepositUsd}
+                          sui={circle.securityDeposit}
+                          currencyType={circle.currencyType}
+                          className="font-semibold"
+                        />
+                      </div>
                     </div>
-                    
-                    <div className="bg-gray-50 p-3 sm:p-4 rounded-lg shadow-sm">
-                      <p className="text-sm text-gray-500 mb-1">
+
+                    <div className={panelCardClass}>
+                      <p className={sectionEyebrowClass}>
                         {circle.isActive ? 'Next Payout' : 'Potential Next Payout'}
                       </p>
-                      <p className="text-base sm:text-lg font-medium">
-                        {circle.isActive 
+                      <p className="mt-3 text-base font-semibold text-slate-950 sm:text-lg">
+                        {circle.isActive
                           ? formatNextPayoutDate(circle.nextPayoutTime)
                           : formatNextPayoutDate(calculatePotentialNextPayoutDate(circle.cycleLength, circle.cycleDay))}
                       </p>
                       {!circle.isActive && (
-                        <p className="text-xs text-blue-600 mt-1">
-                          <span className="font-bold">Estimate</span> if circle activated now
-                        </p>
+                        <p className="mt-2 text-xs text-slate-500">Estimated if the circle is activated now.</p>
                       )}
                     </div>
-                     {/* Maximum Members - Interactive Edition */}
-                     <div className="bg-gray-50 p-4 rounded-lg shadow-sm col-span-1 md:col-span-2">
-                          <div className="flex justify-between items-center">
-                            <div className="w-full">
-                              <p className="text-sm text-gray-500 mb-1">Maximum Members</p>
-                              {isEditingMaxMembers ? (
-                                <div className="space-y-6 mt-3 w-full">
-                                  {/* Visual member count indicators with animation */}
-                                  <div className={`flex flex-wrap gap-2 mb-4 transition-opacity duration-300 ${animateMembers ? 'animate-pulse' : ''}`}>
-                                    {[...Array(Number(newMaxMembersValue))].map((_, i) => (
-                                      <div 
-                                        key={i} 
-                                        className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                                          i < circle.currentMembers 
-                                            ? 'bg-blue-100 text-blue-600 border-2 border-blue-300' 
-                                            : 'bg-gray-100 text-gray-400 border border-gray-300'
-                                        } ${animateMembers ? 'animate-bounce' : ''}`}
-                                        style={{ animationDelay: `${i * 50}ms` }}
-                                      >
-                                        <Users size={14} />
-                                      </div>
-                                    ))}
-                                  </div>
-                                  
-                                  {/* Slider with current value display */}
-                                  <div className="space-y-2">
-                                    <div className="flex justify-between items-center">
-                                      <span className="text-sm font-medium text-gray-700">
-                                        {newMaxMembersValue} members maximum
-                                      </span>
-                                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                                        getCircleSizeCategory(Number(newMaxMembersValue)) === 'small' 
-                                          ? 'bg-green-100 text-green-800' 
-                                          : getCircleSizeCategory(Number(newMaxMembersValue)) === 'medium'
-                                            ? 'bg-blue-100 text-blue-800'
-                                            : 'bg-purple-100 text-purple-800'
-                                      }`}>
-                                        {getCircleSizeCategory(Number(newMaxMembersValue)) === 'small' 
-                                          ? 'Small Circle' 
-                                          : getCircleSizeCategory(Number(newMaxMembersValue)) === 'medium'
-                                            ? 'Medium Circle'
-                                            : 'Large Circle'}
-                                      </span>
-                                    </div>
-                                    
-                                    <div className="relative">
-                                      <input
-                                        type="range"
-                                        min={Math.max(3, circle.currentMembers)}
-                                        max={20}
-                                        value={newMaxMembersValue}
-                                        onChange={(e) => {
-                                          setNewMaxMembersValue(e.target.value);
-                                          setAnimateMembers(true);
-                                          setTimeout(() => setAnimateMembers(false), 600);
-                                        }}
-                                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                                      />
-                                      
-                                      {/* Tick marks for recommended ranges */}
-                                      <div className="flex justify-between text-xs text-gray-600 px-2 mt-1">
-                                        <span>Min: {Math.max(3, circle.currentMembers)}</span>
-                                        <span>Max: 20</span>
-                                      </div>
-                                    </div>
-                                  </div>
-                                  
-                                  {/* Recommendation based on selection */}
-                                  <div className={`p-3 rounded-lg text-sm transition-colors ${
-                                    getCircleSizeCategory(Number(newMaxMembersValue)) === 'small' 
-                                      ? 'bg-green-50 text-green-800 border border-green-200' 
-                                      : getCircleSizeCategory(Number(newMaxMembersValue)) === 'medium'
-                                        ? 'bg-blue-50 text-blue-800 border border-blue-200'
-                                        : 'bg-purple-50 text-purple-800 border border-purple-200'
-                                  }`}>
-                                    <p className="font-medium">
-                                      {recommendedRanges[getCircleSizeCategory(Number(newMaxMembersValue))].label}
-                                    </p>
-                                    <p className="mt-1">
-                                      {recommendedRanges[getCircleSizeCategory(Number(newMaxMembersValue))].description}
-                                    </p>
-                                  </div>
-                                  
-                                  {/* Action buttons */}
-                                  <div className="flex space-x-3 justify-end">
-                                    <button
-                                      onClick={() => {
-                                        setIsEditingMaxMembers(false);
-                                        setNewMaxMembersValue(circle.maxMembers);
-                                      }}
-                                      disabled={isSavingMaxMembers}
-                                      className="px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 transition-colors text-sm"
-                                    >
-                                      Cancel
-                                    </button>
-                                    <button
-                                      onClick={handleSaveMaxMembers}
-                                      disabled={isSavingMaxMembers || Number(newMaxMembersValue) === circle.maxMembers}
-                                      className={`px-4 py-2 rounded-md text-white text-sm transition-colors ${
-                                        isSavingMaxMembers || Number(newMaxMembersValue) === circle.maxMembers
-                                          ? 'bg-gray-400 cursor-not-allowed'
-                                          : 'bg-blue-600 hover:bg-blue-700'
-                                      }`}
-                                    >
-                                      {isSavingMaxMembers ? (
-                                        <div className="flex items-center">
-                                          <svg className="animate-spin h-4 w-4 mr-2 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                          </svg>
-                                          Saving...
-                                        </div>
-                                      ) : 'Save Changes'}
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="flex items-center">
-                                  <div className="flex items-center">
-                                    <p className="text-lg font-medium">
-                                      {circle.currentMembers} / {circle.maxMembers} members
-                                    </p>
-                                    <span className={`ml-2 px-2 py-0.5 text-xs font-medium rounded-full ${
-                                      getCircleSizeCategory(circle.maxMembers) === 'small' 
-                                        ? 'bg-green-100 text-green-800' 
-                                        : getCircleSizeCategory(circle.maxMembers) === 'medium'
-                                          ? 'bg-blue-100 text-blue-800'
-                                          : 'bg-purple-100 text-purple-800'
-                                    }`}>
-                                      {getCircleSizeCategory(circle.maxMembers) === 'small' 
-                                        ? 'Small Circle' 
-                                        : getCircleSizeCategory(circle.maxMembers) === 'medium'
-                                          ? 'Medium Circle'
-                                          : 'Large Circle'}
-                                    </span>
-                                  </div>
-                                  {!circle.isActive && (
-                                    <button
-                                      onClick={() => setIsEditingMaxMembers(true)}
-                                      className="ml-3 bg-blue-50 hover:bg-blue-100 text-blue-600 py-1.5 px-3 rounded-md flex items-center transition-colors shadow-sm text-sm border border-blue-200"
-                                    >
-                                      <Edit3 size={14} className="mr-1.5" />
-                                      Edit Max Capacity
-                                    </button>
-                                  )}
-                                </div>
-                              )}
+
+                    <div className={`${panelCardClass} md:col-span-2`}>
+                      <div className="flex flex-col gap-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <p className={sectionEyebrowClass}>Capacity</p>
+                            <div className="mt-3 flex flex-wrap items-center gap-3">
+                              <p className="text-lg font-semibold text-slate-950">
+                                {circle.currentMembers} / {circle.maxMembers} members
+                              </p>
+                              <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${
+                                getCircleSizeCategory(isEditingMaxMembers ? Number(newMaxMembersValue) : circle.maxMembers) === 'small'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : getCircleSizeCategory(isEditingMaxMembers ? Number(newMaxMembersValue) : circle.maxMembers) === 'medium'
+                                    ? 'bg-sky-100 text-sky-800'
+                                    : 'bg-violet-100 text-violet-800'
+                              }`}>
+                                {getCircleSizeCategory(isEditingMaxMembers ? Number(newMaxMembersValue) : circle.maxMembers) === 'small'
+                                  ? 'Small Circle'
+                                  : getCircleSizeCategory(isEditingMaxMembers ? Number(newMaxMembersValue) : circle.maxMembers) === 'medium'
+                                    ? 'Medium Circle'
+                                    : 'Large Circle'}
+                              </span>
                             </div>
                           </div>
-                          {circle.isActive && (
-                            <p className="text-xs text-gray-400 mt-1">Capacity cannot be changed for active circles.</p>
+                          {!circle.isActive && !isEditingMaxMembers && (
+                            <button
+                              onClick={() => setIsEditingMaxMembers(true)}
+                              className={`${secondaryActionClass} px-3 py-2 text-xs sm:text-sm`}
+                            >
+                              <Edit3 size={14} className="mr-2" />
+                              Edit Max Capacity
+                            </button>
                           )}
                         </div>
+
+                        {isEditingMaxMembers ? (
+                          <div className="space-y-5">
+                            <div className={`flex flex-wrap gap-2 transition-opacity duration-300 ${animateMembers ? 'animate-pulse' : ''}`}>
+                              {[...Array(Number(newMaxMembersValue))].map((_, i) => (
+                                <div
+                                  key={i}
+                                  className={`flex h-8 w-8 items-center justify-center rounded-full ${
+                                    i < circle.currentMembers
+                                      ? 'border-2 border-slate-300 bg-white text-slate-700'
+                                      : 'border border-stone-200 bg-stone-100 text-stone-400'
+                                  } ${animateMembers ? 'animate-bounce' : ''}`}
+                                  style={{ animationDelay: `${i * 50}ms` }}
+                                >
+                                  <Users size={14} />
+                                </div>
+                              ))}
+                            </div>
+
+                            <div className="space-y-3">
+                              <div className="flex flex-wrap items-center justify-between gap-3">
+                                <span className="text-sm font-medium text-slate-700">
+                                  {newMaxMembersValue} members maximum
+                                </span>
+                                <span className="text-xs text-slate-500">
+                                  Min {Math.max(3, circle.currentMembers)} · Max 20
+                                </span>
+                              </div>
+                              <input
+                                type="range"
+                                min={Math.max(3, circle.currentMembers)}
+                                max={20}
+                                value={newMaxMembersValue}
+                                onChange={(e) => {
+                                  setNewMaxMembersValue(e.target.value);
+                                  setAnimateMembers(true);
+                                  setTimeout(() => setAnimateMembers(false), 600);
+                                }}
+                                className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-stone-200 accent-slate-900"
+                              />
+                            </div>
+
+                            <div className={`rounded-[18px] border p-3 text-sm ${
+                              getCircleSizeCategory(Number(newMaxMembersValue)) === 'small'
+                                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                                : getCircleSizeCategory(Number(newMaxMembersValue)) === 'medium'
+                                  ? 'border-sky-200 bg-sky-50 text-sky-800'
+                                  : 'border-violet-200 bg-violet-50 text-violet-800'
+                            }`}>
+                              <p className="font-medium">
+                                {recommendedRanges[getCircleSizeCategory(Number(newMaxMembersValue))].label}
+                              </p>
+                              <p className="mt-1">
+                                {recommendedRanges[getCircleSizeCategory(Number(newMaxMembersValue))].description}
+                              </p>
+                            </div>
+
+                            <div className="flex flex-wrap justify-end gap-3">
+                              <button
+                                onClick={() => {
+                                  setIsEditingMaxMembers(false);
+                                  setNewMaxMembersValue(circle.maxMembers);
+                                }}
+                                disabled={isSavingMaxMembers}
+                                className={`${secondaryActionClass} px-4 py-2`}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={handleSaveMaxMembers}
+                                disabled={isSavingMaxMembers || Number(newMaxMembersValue) === circle.maxMembers}
+                                className={`${primaryActionClass} px-4 py-2`}
+                              >
+                                {isSavingMaxMembers ? (
+                                  <span className="flex items-center">
+                                    <svg className="mr-2 h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                    Saving...
+                                  </span>
+                                ) : 'Save Changes'}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          circle.isActive && (
+                            <p className="text-xs text-slate-500">Capacity cannot be changed while the circle is active.</p>
+                          )
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
                 
                 {/* Add the paused status banner */}
                 {circle.paused && (
-                  <div className="mb-6 p-5 bg-amber-50 border-2 border-amber-300 rounded-lg">
+                  <div className="rounded-[28px] border border-amber-200 bg-amber-50/80 px-5 py-5 sm:px-6 sm:py-6">
                     <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
                       <div className="flex-1">
-                        <h3 className="text-lg font-semibold text-amber-800 flex items-center">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-700">Cycle State</p>
+                        <h3 className="mt-2 flex items-center text-xl font-semibold tracking-tight text-amber-950">
                           <Pause className="mr-2 h-5 w-5" />
                           Circle Paused After Cycle Completion
                         </h3>
-                        <p className="text-amber-700 mt-2">
+                        <p className="mt-3 text-sm leading-6 text-amber-900/80">
                           The circle has been paused after completing cycle {circle.currentCycle}. As the admin, you can:
                         </p>
-                        <ul className="list-disc pl-5 mt-2 text-sm text-amber-600 space-y-1">
+                        <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-amber-800/90">
                           <li>Pay out remaining security deposits to members who want to leave</li>
                           <li>Edit rotation order for the next cycle</li>
                           <li>Resume the circle to start the next cycle</li>
                         </ul>
-                        <p className="mt-3 text-sm text-amber-700 font-medium bg-amber-100 p-2 rounded border border-amber-200 flex items-start">
+                        <p className="mt-4 flex items-start rounded-[18px] border border-amber-200 bg-white/70 p-3 text-sm font-medium text-amber-900">
                           <AlertTriangle className="mr-2 h-4 w-4 flex-shrink-0 mt-0.5" />
                           <span>
                             When you resume the circle, all members will need to pay a new security deposit for the next cycle.
@@ -5116,10 +5183,8 @@ export default function ManageCircle() {
                         </p>
                       </div>
                       <div className="flex flex-col gap-3 w-full sm:w-auto">
-                        {/* Resume Cycle Button */}
                         <button
                           onClick={() => {
-                            // Confirm before proceeding
                             setConfirmationModal({
                               isOpen: true,
                               title: 'Resume Circle & Reset Deposits',
@@ -5135,14 +5200,14 @@ export default function ManageCircle() {
                               confirmButtonVariant: 'warning',
                             });
                           }}
-                          className="w-full px-4 py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white rounded-md shadow-sm transition-all flex items-center justify-center font-medium text-sm"
+                          className={`${warningActionClass} w-full`}
                         >
                           <CheckCircle className="mr-2 h-4 w-4" />
                           Resume Cycle
                         </button>
                         <button
                           onClick={openReturnAllDepositsModal}
-                          className="w-full px-4 py-3 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white rounded-md shadow-sm transition-all flex items-center justify-center font-medium text-sm"
+                          className={`${infoActionClass} w-full`}
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -5151,7 +5216,7 @@ export default function ManageCircle() {
                         </button>
                         <button
                           onClick={fetchCircleDetails}
-                          className="w-full px-4 py-3 bg-white hover:bg-gray-50 text-gray-700 rounded-md shadow-sm transition-all flex items-center justify-center font-medium border border-gray-300 text-sm"
+                          className={`${secondaryActionClass} w-full`}
                         >
                           <RefreshCw className="mr-2 h-4 w-4" />
                           Refresh
@@ -5162,21 +5227,22 @@ export default function ManageCircle() {
                 )}
 
                 {!circle.isActive && !circle.paused && paidDepositMembers.length > 0 && (
-                  <div className="mb-6 p-5 bg-sky-50 border-2 border-sky-200 rounded-lg">
+                  <div className="rounded-[28px] border border-sky-200 bg-sky-50/80 px-5 py-5 sm:px-6 sm:py-6">
                     <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
                       <div className="flex-1">
-                        <h3 className="text-lg font-semibold text-sky-800 flex items-center">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-700">Deposits</p>
+                        <h3 className="mt-2 flex items-center text-xl font-semibold tracking-tight text-sky-950">
                           <AlertTriangle className="mr-2 h-5 w-5" />
                           Deposit Management
                         </h3>
-                        <p className="text-sky-700 mt-2">
+                        <p className="mt-3 text-sm leading-6 text-sky-900/80">
                           This circle is inactive. Manage individual member actions from the Members table, or use the deposit manager to return all {paidDepositMembers.length} paid deposit{paidDepositMembers.length === 1 ? '' : 's'} in one batch.
                         </p>
                       </div>
                       <div className="flex flex-col gap-3 w-full sm:w-auto">
                         <button
                           onClick={openReturnAllDepositsModal}
-                          className="w-full px-4 py-3 bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-600 hover:to-sky-700 text-white rounded-md shadow-sm transition-all flex items-center justify-center font-medium text-sm"
+                          className={`${infoActionClass} w-full`}
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -5185,7 +5251,7 @@ export default function ManageCircle() {
                         </button>
                         <button
                           onClick={fetchCircleDetails}
-                          className="w-full px-4 py-3 bg-white hover:bg-gray-50 text-gray-700 rounded-md shadow-sm transition-all flex items-center justify-center font-medium border border-gray-300 text-sm"
+                          className={`${secondaryActionClass} w-full`}
                         >
                           <RefreshCw className="mr-2 h-4 w-4" />
                           Refresh
@@ -5196,26 +5262,27 @@ export default function ManageCircle() {
                 )}
                 
                 {/* Members Management */}
-                <div className="px-1 sm:px-2">
-                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4">
+                <div className={sectionCardClass}>
+                  <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div>
-                      <h3 className="text-lg font-medium text-gray-900 border-l-4 border-blue-500 pl-3">Members</h3>
+                      <p className={sectionEyebrowClass}>Roster</p>
+                      <h3 className={`${sectionTitleClass} mt-2`}>Members</h3>
                       {!circle.isActive && paidDepositMembers.length > 0 && (
-                        <p className="mt-1 pl-3 text-sm text-slate-500">
-                          Use Manage for individual member actions. Use Manage Deposits above for batch returns.
+                        <p className="mt-2 text-sm leading-6 text-slate-500">
+                          Use member-level actions for individual cases, or manage deposits above for a batch return.
                         </p>
                       )}
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       {circle && circle.isActive && contributionStatus.currentCycle > 0 && (
-                        <div className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-1.5 mr-2">
-                          <p className="text-xs text-blue-700 mb-1">
+                        <div className="rounded-full border border-stone-200 bg-stone-50 px-4 py-2">
+                          <p className="mb-1 text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
                             Contribution Progress (Cycle {contributionStatus.currentCycle})
                           </p>
                           <div className="flex items-center gap-2">
-                            <div className="w-32 bg-gray-200 rounded-full h-2.5">
-                              <div 
-                                className="bg-blue-600 h-2.5 rounded-full" 
+                            <div className="h-2.5 w-32 rounded-full bg-stone-200">
+                              <div
+                                className="h-2.5 rounded-full bg-slate-900"
                                 style={{ width: `${contributionStatus.totalActiveInRotation > 0 
                                   ? (
                                       (() => {
@@ -5231,7 +5298,7 @@ export default function ManageCircle() {
                                   : 0}%` }}
                               ></div>
                             </div>
-                            <span className="text-xs font-medium text-blue-800">
+                            <span className="text-xs font-medium text-slate-700">
                               {(() => {
                                 const recipient = contributionStatus.currentPosition !== null && contributionStatus.currentPosition !== undefined ? contributionStatus.activeMembersInRotation[contributionStatus.currentPosition] : null;
                                 let validContributed = 0;
@@ -5243,7 +5310,7 @@ export default function ManageCircle() {
                               })()}
                             </span>
                             {allContributionsMadeThisCycle && (
-                              <div className="bg-green-100 text-green-800 text-xs font-medium rounded-full px-2 py-0.5 flex items-center">
+                              <div className="flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
                                 <CheckCircle size={12} className="mr-1" />
                                 Complete
                               </div>
@@ -5258,10 +5325,10 @@ export default function ManageCircle() {
                               <div>
                                 <button
                                   onClick={() => setIsEditingRotation(true)}
-                                  className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center ${
+                                  className={`inline-flex items-center justify-center rounded-full px-4 py-2 text-xs font-medium transition ${
                                       circle?.isActive && !circle?.paused 
-                                      ? 'bg-gray-100 text-gray-500 cursor-not-allowed' 
-                                      : 'bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors'
+                                      ? 'cursor-not-allowed border border-stone-200 bg-stone-100 text-stone-400'
+                                      : 'border border-stone-300 bg-white text-slate-700 hover:border-stone-400 hover:bg-stone-50'
                                   }`}
                                   disabled={circle?.isActive && !circle?.paused}
                                 >
@@ -5306,7 +5373,7 @@ export default function ManageCircle() {
                   
                   {/* Add warning message for rotation order when not in edit mode */}
                   {!isEditingRotation && !isRotationOrderSet(members) && (
-                    <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-700">
+                    <div className="mb-4 rounded-[18px] border border-amber-200 bg-amber-50/80 p-3 text-amber-900">
                       <p className="font-medium flex items-center text-sm">
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
                           <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
@@ -5320,7 +5387,7 @@ export default function ManageCircle() {
                   {isEditingRotation ? (
                     <div>
                       {!isRotationOrderSet(members) && (
-                        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-700">
+                        <div className="mb-4 rounded-[18px] border border-amber-200 bg-amber-50/80 p-3 text-amber-900">
                           <p className="font-medium flex items-center text-sm">
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
                               <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
@@ -5333,7 +5400,7 @@ export default function ManageCircle() {
                       <div className="flex justify-end mb-4">
                         <button
                           onClick={shuffleRotationOrder}
-                          className="px-4 py-2 bg-indigo-50 text-indigo-600 rounded-md flex items-center hover:bg-indigo-100 transition-colors text-sm"
+                          className={`${secondaryActionClass} px-4 py-2`}
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -5353,36 +5420,36 @@ export default function ManageCircle() {
                   ) : (
                     <div className="overflow-x-auto -mx-4 sm:mx-0">
                       <div className="inline-block min-w-full align-middle">
-                        <div className="overflow-hidden shadow-sm rounded-lg border border-gray-200">
-                          <table className="min-w-full divide-y divide-gray-200">
-                            <thead className="bg-gray-50">
+                        <div className={tableCardClass}>
+                          <table className="min-w-full divide-y divide-stone-200">
+                            <thead className="bg-stone-50/80">
                               <tr>
-                                <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-xs sm:text-sm font-semibold text-gray-900 sm:pl-6">
+                                <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-xs font-semibold text-slate-900 sm:pl-6 sm:text-sm">
                                   Address
                                 </th>
-                                <th scope="col" className="px-3 py-3.5 text-left text-xs sm:text-sm font-semibold text-gray-900 hidden sm:table-cell">
+                                <th scope="col" className="hidden px-3 py-3.5 text-left text-xs font-semibold text-slate-900 sm:table-cell sm:text-sm">
                                   Status
                                 </th>
-                                <th scope="col" className="px-3 py-3.5 text-left text-xs sm:text-sm font-semibold text-gray-900">
+                                <th scope="col" className="px-3 py-3.5 text-left text-xs font-semibold text-slate-900 sm:text-sm">
                                   Deposit
                                 </th>
                                 {circle && circle.isActive && contributionStatus.currentCycle > 0 && (
-                                  <th scope="col" className="px-3 py-3.5 text-left text-xs sm:text-sm font-semibold text-gray-900">
+                                  <th scope="col" className="px-3 py-3.5 text-left text-xs font-semibold text-slate-900 sm:text-sm">
                                     Contribution
                                   </th>
                                 )}
-                                <th scope="col" className="px-3 py-3.5 text-left text-xs sm:text-sm font-semibold text-gray-900 hidden sm:table-cell">
+                                <th scope="col" className="hidden px-3 py-3.5 text-left text-xs font-semibold text-slate-900 sm:table-cell sm:text-sm">
                                   Joined
                                 </th>
-                                <th scope="col" className="px-3 py-3.5 text-left text-xs sm:text-sm font-semibold text-gray-900">
+                                <th scope="col" className="px-3 py-3.5 text-left text-xs font-semibold text-slate-900 sm:text-sm">
                                   Position
                                 </th>
-                                <th scope="col" className="py-3.5 pl-3 pr-4 text-right text-xs sm:text-sm font-semibold text-gray-900 sm:pr-6">
+                                <th scope="col" className="py-3.5 pl-3 pr-4 text-right text-xs font-semibold text-slate-900 sm:pr-6 sm:text-sm">
                                   Actions
                                 </th>
                               </tr>
                             </thead>
-                            <tbody className="divide-y divide-gray-200 bg-white">
+                            <tbody className="divide-y divide-stone-200 bg-white">
                               {members.map((member) => {
                                 const isRecipientThisCycle = contributionStatus.currentPosition !== null && 
                                                              contributionStatus.currentPosition !== undefined && 
@@ -5391,19 +5458,19 @@ export default function ManageCircle() {
                                 const memberManagementAction = getMemberManagementAction(member);
 
                                 return (
-                                <tr key={member.address} className="hover:bg-gray-50 transition-colors">
-                                  <td className="whitespace-nowrap py-3 pl-4 pr-3 text-xs sm:text-sm font-medium text-gray-900 sm:pl-6">
+                                <tr key={member.address} className="transition-colors hover:bg-stone-50/70">
+                                  <td className="whitespace-nowrap py-3 pl-4 pr-3 text-xs font-medium text-slate-900 sm:pl-6 sm:text-sm">
                                     <span className="flex flex-col sm:flex-row sm:items-center">
                                       <span className="font-mono text-xs truncate max-w-[100px] sm:max-w-none">{shortenAddress(member.address)}</span>
                                       {member.address === circle?.admin && (
-                                        <span className="text-xs bg-purple-100 text-purple-700 rounded-full px-2 py-0.5 ml-0 mt-1 sm:mt-0 sm:ml-2 inline-block">Admin</span>
+                                        <span className="ml-0 mt-1 inline-block rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-700 sm:ml-2 sm:mt-0">Admin</span>
                                       )}
                                     </span>
                                   </td>
-                                  <td className="whitespace-nowrap px-3 py-3 text-xs hidden sm:table-cell">
-                                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                                      member.status === 'active' ? 'bg-green-100 text-green-800' : 
-                                      member.status === 'suspended' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'
+                                  <td className="hidden whitespace-nowrap px-3 py-3 text-xs sm:table-cell">
+                                    <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
+                                      member.status === 'active' ? 'bg-emerald-100 text-emerald-800' : 
+                                      member.status === 'suspended' ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'
                                     }`}>
                                       {member.status.charAt(0).toUpperCase() + member.status.slice(1)}
                                     </span>
@@ -5412,9 +5479,9 @@ export default function ManageCircle() {
                                     <Tooltip.Provider>
                                       <Tooltip.Root>
                                         <Tooltip.Trigger asChild>
-                                          <span className={`inline-flex items-center p-1 rounded-full ${member.depositPaid ? 'bg-green-100' : 'bg-amber-100'}`}>
+                                          <span className={`inline-flex items-center rounded-full p-1 ${member.depositPaid ? 'bg-emerald-100' : 'bg-amber-100'}`}>
                                             {member.depositPaid ? 
-                                              <CheckCircle size={16} className="text-green-600" /> : 
+                                              <CheckCircle size={16} className="text-emerald-600" /> : 
                                               <AlertTriangle size={16} className="text-amber-600" />
                                             }
                                           </span>
@@ -5436,25 +5503,25 @@ export default function ManageCircle() {
                                   {circle && circle.isActive && contributionStatus.currentCycle > 0 && (
                                     <td className="whitespace-nowrap px-3 py-3 text-xs">
                                       <Tooltip.Provider>
-                                        <Tooltip.Root>
-                                          <Tooltip.Trigger asChild>
-                                            <span className={`inline-flex items-center p-1 rounded-full ${
+                                      <Tooltip.Root>
+                                        <Tooltip.Trigger asChild>
+                                          <span className={`inline-flex items-center p-1 rounded-full ${
                                               isRecipientThisCycle 
-                                                ? 'bg-blue-100' 
+                                                ? 'bg-sky-100' 
                                                 : contributionStatus.contributedMembers.has(member.address) 
-                                                  ? 'bg-green-100' 
+                                                  ? 'bg-emerald-100' 
                                                   : contributionStatus.activeMembersInRotation.includes(member.address)
                                                     ? 'bg-amber-100'
-                                                    : 'bg-gray-100'
+                                                    : 'bg-stone-100'
                                             }`}>
                                               {isRecipientThisCycle ? (
-                                                <Crown size={16} className="text-blue-600" />
+                                                <Crown size={16} className="text-sky-600" />
                                               ) : contributionStatus.contributedMembers.has(member.address) ? (
-                                                <CheckCircle size={16} className="text-green-600" />
+                                                <CheckCircle size={16} className="text-emerald-600" />
                                               ) : contributionStatus.activeMembersInRotation.includes(member.address) ? (
                                                 <AlertTriangle size={16} className="text-amber-600" />
                                               ) : (
-                                                <X size={16} className="text-gray-400" />
+                                                <X size={16} className="text-stone-400" />
                                               )}
                                             </span>
                                           </Tooltip.Trigger>
@@ -5479,7 +5546,7 @@ export default function ManageCircle() {
                                     </td>
                                   )}
                                   
-                                  <td className="whitespace-nowrap px-3 py-3 text-xs text-gray-500 hidden sm:table-cell">
+                                  <td className="hidden whitespace-nowrap px-3 py-3 text-xs text-slate-500 sm:table-cell">
                                     {member.joinDate ? formatDate(member.joinDate) : 'Unknown'}
                                   </td>
                                   <td className="whitespace-nowrap px-3 py-3 text-xs">
@@ -5487,7 +5554,7 @@ export default function ManageCircle() {
                                       {!isRotationOrderSet(members) ? (
                                         // Display when rotation order is not set
                                         <div className="flex items-center">
-                                          <div className="flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 bg-gray-100 text-gray-400 rounded-full mr-2">
+                                          <div className="mr-2 flex h-6 w-6 items-center justify-center rounded-full bg-stone-100 text-stone-400 sm:h-8 sm:w-8">
                                             <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 sm:h-4 sm:w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                                             </svg>
@@ -5497,7 +5564,7 @@ export default function ManageCircle() {
                                       ) : (
                                         // Display when rotation order is set properly
                                         <div className="flex items-center">
-                                          <div className="flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 bg-blue-50 text-blue-600 rounded-full mr-2">
+                                          <div className="mr-2 flex h-6 w-6 items-center justify-center rounded-full bg-stone-900 text-white sm:h-8 sm:w-8">
                                             {member.position !== undefined ? member.position + 1 : '?'}
                                           </div>
                                           {/* Textual description of position removed as per request */}
@@ -5512,10 +5579,10 @@ export default function ManageCircle() {
                                           onClick={memberManagementAction.onClick}
                                           disabled={memberManagementAction.isDisabled}
                                           title={memberManagementAction.helperText}
-                                          className={`inline-flex items-center justify-center rounded-md border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                                          className={`inline-flex items-center justify-center rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
                                             memberManagementAction.isDisabled
                                               ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'
-                                              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                                              : 'border-stone-300 bg-white text-slate-700 hover:border-stone-400 hover:bg-stone-50'
                                           }`}
                                         >
                                           {memberManagementAction.buttonText}
@@ -5544,23 +5611,26 @@ export default function ManageCircle() {
                 </div>
                 
                 {/* Invite Members */}
-                <div className="px-1 sm:px-2">
-                  <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Invite New Members</h3>
-                  <p className="mb-4 text-sm text-gray-500">Send the following link to people you&apos;d like to invite to your circle.</p>
+                <div className={sectionCardClass}>
+                  <p className={sectionEyebrowClass}>Invitations</p>
+                  <h3 className={`${sectionTitleClass} mt-2`}>Invite New Members</h3>
+                  <p className="mt-2 text-sm text-slate-500">
+                    Send this link to anyone you want to bring into the circle.
+                  </p>
                   
-                  <div className="flex flex-col sm:flex-row items-center space-y-2 sm:space-y-0 sm:space-x-2 bg-gray-50 p-3 rounded-xl border border-gray-200">
+                  <div className="mt-5 flex flex-col items-center rounded-[24px] border border-stone-200 bg-stone-50/80 p-3 sm:flex-row sm:space-x-2 sm:space-y-0">
                     <input
                       type="text"
                       readOnly
                       value={`${window.location.origin}/circle/${circle.id}/join`}
-                      className="flex-1 p-2 bg-transparent text-gray-800 border-0 focus:ring-0 text-xs sm:text-sm truncate"
+                      className="flex-1 truncate border-0 bg-transparent p-2 text-xs text-slate-800 focus:ring-0 sm:text-sm"
                     />
                     <button
                       onClick={() => {
                         navigator.clipboard.writeText(`${window.location.origin}/circle/${circle.id}/join`);
                         toast.success('Invite link copied to clipboard');
                       }}
-                      className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg text-xs sm:text-sm hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm font-medium flex items-center justify-center"
+                      className={`${primaryActionClass} w-full px-4 py-2 sm:w-auto`}
                     >
                       <Copy className="w-4 h-4 mr-2" />
                       Copy
@@ -5570,42 +5640,41 @@ export default function ManageCircle() {
                 
                 {/* Pending Join Requests Section */}
                 {pendingRequests.length > 0 && (
-                  <div className="px-1 sm:px-2">
-                    <div className="border-2 border-blue-200 rounded-xl overflow-hidden bg-blue-50">
-                      <div className="bg-blue-100 px-4 py-3 sm:px-5 sm:py-4 border-b border-blue-200 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
-                        <div>
-                          <h3 className="text-base sm:text-lg font-semibold text-blue-900">
+                  <div className={sectionCardClass}>
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                          <p className={sectionEyebrowClass}>Approvals</p>
+                          <h3 className={`${sectionTitleClass} mt-2 flex items-center gap-2`}>
                             Pending Join Requests
-                            <span className="ml-2 bg-blue-600 text-white text-xs font-medium px-2.5 py-0.5 rounded-full">
+                            <span className="inline-flex rounded-full bg-slate-900 px-2.5 py-0.5 text-xs font-medium text-white">
                               {pendingRequests.length}
                             </span>
                           </h3>
-                          <p className="text-xs sm:text-sm text-blue-700 mt-1">These users want to join your circle</p>
-                        </div>
+                          <p className="mt-2 text-sm text-slate-500">These users are waiting for admin approval.</p>
+                      </div>
                         <button
                           onClick={handleBulkApprove}
                           disabled={isApproving || pendingRequests.length === 0}
-                          className={`px-3 sm:px-4 py-2 rounded-lg text-white text-xs sm:text-sm font-medium shadow-sm flex items-center justify-center ${
+                          className={`${successActionClass} px-4 py-2 ${
                             isApproving || pendingRequests.length === 0
-                              ? 'bg-gray-400 cursor-not-allowed'
-                              : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
+                              ? 'bg-gray-400'
+                              : ''
                           }`}
                         >
                           <Check className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1" />
                           Approve All ({pendingRequests.length})
                         </button>
-                      </div>
-                      <div className="p-3 sm:p-4">
-                        <div className="overflow-x-auto -mx-3 sm:mx-0">
+                    </div>
+                      <div className="mt-5 overflow-x-auto -mx-3 sm:mx-0">
                           <div className="inline-block min-w-full align-middle">
-                            <div className="overflow-hidden shadow-sm rounded-lg border border-blue-200 bg-white">
-                              <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-gray-50">
+                            <div className={tableCardClass}>
+                              <table className="min-w-full divide-y divide-stone-200">
+                                <thead className="bg-stone-50/80">
                                   <tr>
-                                    <th scope="col" className="py-3 pl-4 pr-3 text-left text-xs sm:text-sm font-semibold text-gray-900 sm:pl-6">
+                                    <th scope="col" className="py-3 pl-4 pr-3 text-left text-xs font-semibold text-slate-900 sm:pl-6 sm:text-sm">
                                       User
                                     </th>
-                                    <th scope="col" className="px-3 py-3 text-left text-xs sm:text-sm font-semibold text-gray-900 hidden sm:table-cell">
+                                    <th scope="col" className="hidden px-3 py-3 text-left text-xs font-semibold text-slate-900 sm:table-cell sm:text-sm">
                                       Requested On
                                     </th>
                                     <th scope="col" className="relative py-3 pl-3 pr-4 sm:pr-6">
@@ -5613,23 +5682,23 @@ export default function ManageCircle() {
                                     </th>
                                   </tr>
                                 </thead>
-                                <tbody className="divide-y divide-gray-200 bg-white">
+                                <tbody className="divide-y divide-stone-200 bg-white">
                                   {pendingRequests.map((request) => (
-                                    <tr key={`${request.circle_id}-${request.user_address}`} className="hover:bg-gray-50 transition-colors">
+                                    <tr key={`${request.circle_id}-${request.user_address}`} className="transition-colors hover:bg-stone-50/70">
                                       <td className="px-4 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
                                         <div className="flex flex-col sm:flex-row sm:items-center gap-1">
-                                          <div className="font-medium text-gray-900 text-xs sm:text-sm">{request.user_name || 'Unknown User'}</div>
-                                          <span className="text-gray-500 text-xs font-mono">{shortenAddress(request.user_address)}</span>
+                                          <div className="text-xs font-medium text-slate-900 sm:text-sm">{request.user_name || 'Unknown User'}</div>
+                                          <span className="font-mono text-xs text-slate-500">{shortenAddress(request.user_address)}</span>
                                         </div>
                                       </td>
-                                      <td className="px-3 py-3 whitespace-nowrap text-xs text-gray-500 hidden sm:table-cell">
+                                      <td className="hidden whitespace-nowrap px-3 py-3 text-xs text-slate-500 sm:table-cell">
                                         {formatDate(request.created_at || new Date())}
                                       </td>
                                       <td className="relative whitespace-nowrap py-3 pl-3 pr-4 text-right text-xs font-medium sm:pr-6">
                                         <div className="flex justify-end space-x-2">
                                           <button
                                             onClick={() => handleJoinRequest(request, true)}
-                                            className={`${isApproving ? 'opacity-50 cursor-not-allowed' : ''} text-white bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 transition-all flex items-center px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg shadow-sm text-xs font-medium`}
+                                            className={`${successActionClass} px-3 py-2 text-xs ${isApproving ? 'cursor-not-allowed opacity-50' : ''}`}
                                             disabled={isApproving}
                                           >
                                             {isApproving ? (
@@ -5644,7 +5713,7 @@ export default function ManageCircle() {
                                           </button>
                                           <button
                                             onClick={() => handleJoinRequest(request, false)}
-                                            className="text-white bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 transition-all flex items-center px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg shadow-sm text-xs font-medium"
+                                            className={`${dangerActionClass} px-3 py-2 text-xs`}
                                             disabled={isApproving}
                                           >
                                             <X className="w-3 h-3 sm:w-4 sm:h-4 mr-1.5" />
@@ -5659,25 +5728,29 @@ export default function ManageCircle() {
                             </div>
                           </div>
                         </div>
-                      </div>
-                    </div>
                   </div>
                 )}
                 
                 {/* Circle Management Actions */}
-                <div className="pt-4 sm:pt-6 border-t border-gray-200 px-1 sm:px-2">
-                  <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Management</h3>
-                  <div className="flex flex-wrap gap-2 sm:gap-4">
+                <div className={sectionCardClass}>
+                  <div className="mb-5">
+                    <p className={sectionEyebrowClass}>Operations</p>
+                    <h3 className={`${sectionTitleClass} mt-2`}>Circle Management</h3>
+                    <p className="mt-2 text-sm leading-6 text-slate-500">
+                      Core admin actions for activation, verification, payouts, and lifecycle control.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                     <Tooltip.Provider>
                       <Tooltip.Root>
                         <Tooltip.Trigger asChild>
                           <div>
                             <button
                               onClick={handleActivateCircle}
-                              className={`px-3 sm:px-5 py-2 sm:py-3 text-white rounded-lg text-xs sm:text-sm transition-all flex items-center justify-center shadow-md font-medium w-full sm:w-auto ${
+                              className={`w-full ${
                                 !canActivate
-                                  ? 'bg-gray-400 opacity-60 cursor-not-allowed'
-                                  : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
+                                  ? 'inline-flex cursor-not-allowed items-center justify-center rounded-full bg-stone-300 px-4 py-2.5 text-sm font-medium text-white/90'
+                                  : successActionClass
                               }`}
                               disabled={!canActivate}
                             >
@@ -5719,7 +5792,7 @@ export default function ManageCircle() {
                           fetchCircleDetails();
                         }, 500);
                       }}
-                      className="px-3 sm:px-5 py-2 sm:py-3 text-blue-700 bg-blue-50 rounded-lg text-xs sm:text-sm transition-all flex items-center justify-center shadow-sm font-medium border border-blue-200 hover:bg-blue-100 w-full sm:w-auto"
+                      className={`${secondaryActionClass} w-full`}
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 h-3.5 sm:h-4 sm:w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -5846,10 +5919,10 @@ export default function ManageCircle() {
                                   confirmButtonVariant: 'primary',
                                 });
                               }}
-                              className={`px-3 sm:px-5 py-2 sm:py-3 text-white rounded-lg text-xs sm:text-sm transition-all flex items-center justify-center shadow-md font-medium w-full sm:w-auto ${
+                              className={`w-full ${
                                 !circle || !circle.isActive || !circle.custody?.walletId || !allContributionsMadeThisCycle || loadingContributions
-                                  ? 'bg-gray-400 opacity-60 cursor-not-allowed'
-                                  : 'bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700'
+                                  ? 'inline-flex cursor-not-allowed items-center justify-center rounded-full bg-stone-300 px-4 py-2.5 text-sm font-medium text-white/90'
+                                  : primaryActionClass
                               }`}
                               disabled={!circle || !circle.isActive || !circle.custody?.walletId || !allContributionsMadeThisCycle || loadingContributions}
                             >
@@ -5916,10 +5989,10 @@ export default function ManageCircle() {
                           <div>
                             <button
                               onClick={() => toast.success('This feature is coming soon')}
-                              className={`px-3 sm:px-5 py-2 sm:py-3 text-white rounded-lg text-xs sm:text-sm transition-all flex items-center justify-center shadow-md font-medium w-full sm:w-auto ${
+                              className={`w-full ${
                                 !circle || !circle.isActive || circle.paused
-                                  ? 'bg-gray-400 opacity-60 cursor-not-allowed'
-                                  : 'bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-600 hover:to-yellow-700'
+                                  ? 'inline-flex cursor-not-allowed items-center justify-center rounded-full bg-stone-300 px-4 py-2.5 text-sm font-medium text-white/90'
+                                  : warningActionClass
                               }`}
                               disabled={!circle || !circle.isActive || circle.paused}
                             >
@@ -5973,10 +6046,10 @@ export default function ManageCircle() {
                           <div>
                             <button
                               onClick={() => toast.success('This feature is coming soon')}
-                              className={`px-3 sm:px-5 py-2 sm:py-3 text-white rounded-lg text-xs sm:text-sm transition-all flex items-center justify-center shadow-md font-medium w-full sm:w-auto ${
+                              className={`w-full ${
                                 circle && circle.currentMembers > 1 
-                                  ? 'bg-gray-400 opacity-60 cursor-not-allowed'
-                                  : 'bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700'
+                                  ? 'inline-flex cursor-not-allowed items-center justify-center rounded-full bg-stone-300 px-4 py-2.5 text-sm font-medium text-white/90'
+                                  : dangerActionClass
                               }`}
                               disabled={circle && circle.currentMembers > 1}
                             >
@@ -6003,7 +6076,7 @@ export default function ManageCircle() {
                 </div>
                 
                 {/* Circle Token Routing Configuration */}
-                <div className="pt-4 sm:pt-6 border-t border-gray-200 px-1 sm:px-2 mt-2 sm:mt-6">
+                <div className={sectionCardClass}>
                   {circle && <CircleRoutingSettings 
                     circle={circle} 
                     totalLocalDisplay={manageCustodyUsdcTotalLocalDisplay}
@@ -6013,39 +6086,42 @@ export default function ManageCircle() {
                 </div>
 
                 {/* Ember Vault Operations */}
-                <div className="pt-4 sm:pt-6 border-t border-gray-200 px-1 sm:px-2 mt-2 sm:mt-6">
+                <div className={sectionCardClass}>
                   {circle && (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 sm:p-5">
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                        <h3 className="text-lg font-semibold text-gray-900">Ember Vault Operations</h3>
-                        <span className="text-xs font-medium bg-amber-100 text-amber-800 px-2 py-1 rounded-full w-fit">
+                    <div className="rounded-[24px] border border-amber-200 bg-amber-50/50 p-5 sm:p-6">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-700">Yield Routing</p>
+                          <h3 className="mt-2 text-xl font-semibold tracking-tight text-slate-950">Ember Vault Operations</h3>
+                        </div>
+                        <span className="w-fit rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-800">
                           Admin Only
                         </span>
                       </div>
-                      <p className="text-sm text-gray-600 mt-2">
+                      <p className="mt-3 text-sm leading-6 text-slate-600">
                         Move custody balances into the Ember `suiUSDe` vault, then request redemption when liquidity is needed.
                         Withdrawal processing stays external/operator-driven.
                       </p>
-                      <p className="text-xs text-gray-500 mt-1">
+                      <p className="mt-1 text-xs text-slate-500">
                         APR is intentionally not shown here until a verified live share-price/APR source is wired for this exact vault route.
                       </p>
 
-                      <div className="grid grid-cols-1 xl:grid-cols-5 gap-4 mt-4">
-                        <div className="xl:col-span-3 rounded-lg border border-gray-200 bg-white p-4 sm:p-5">
+                      <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-5">
+                        <div className="xl:col-span-3 rounded-[22px] border border-stone-200 bg-white p-4 sm:p-5">
                           <div className="flex items-center justify-between gap-3">
-                            <h4 className="text-base font-semibold text-gray-900">1) Convert and Deposit</h4>
-                            <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full font-medium">
+                            <h4 className="text-base font-semibold text-slate-950">1) Convert and Deposit</h4>
+                            <span className="rounded-full bg-stone-100 px-2 py-1 text-xs font-medium text-slate-700">
                               Guided Flow
                             </span>
                           </div>
-                          <p className="text-xs sm:text-sm text-gray-600 mt-1">
+                          <p className="mt-1 text-xs text-slate-600 sm:text-sm">
                             Pick a custody source. If it is not already <span className="font-medium">suiUSDe</span>, we convert it
                             automatically, then deposit to Ember in one action.
                           </p>
 
                           <div className="mt-4">
-                            <p className="text-xs font-medium text-gray-600 mb-2">Funding Source</p>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <p className="mb-2 text-xs font-medium text-slate-600">Funding Source</p>
+                            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                               {emberDepositSourceCards.map((card) => (
                                 <button
                                   key={card.asset}
@@ -6054,24 +6130,24 @@ export default function ManageCircle() {
                                   disabled={!card.available}
                                   className={`text-left rounded-lg border p-3 transition-all ${
                                     emberSourceAsset === card.asset
-                                      ? 'border-indigo-400 bg-indigo-50/70 ring-2 ring-indigo-200'
+                                      ? 'border-slate-900 bg-stone-50 ring-1 ring-stone-300'
                                       : card.available
-                                        ? 'border-gray-200 bg-white hover:border-indigo-300'
-                                        : 'border-gray-200 bg-gray-50 opacity-60 cursor-not-allowed'
+                                        ? 'border-stone-200 bg-white hover:border-stone-300 hover:bg-stone-50'
+                                        : 'cursor-not-allowed border-stone-200 bg-stone-50 opacity-60'
                                   }`}
                                 >
                                   <div className="flex items-center justify-between gap-2">
-                                    <span className="text-sm font-semibold text-gray-900">{card.label}</span>
+                                    <span className="text-sm font-semibold text-slate-900">{card.label}</span>
                                     {recommendedEmberSource === card.asset && card.available && (
-                                      <span className="text-[11px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-medium">
+                                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
                                         Recommended
                                       </span>
                                     )}
                                   </div>
-                                  <p className="text-xs text-gray-600 mt-1">
+                                  <p className="mt-1 text-xs text-slate-600">
                                     {card.balance.toFixed(4)} available
                                   </p>
-                                  <p className="text-[11px] text-gray-500 mt-1">{card.routeSummary}</p>
+                                  <p className="mt-1 text-[11px] text-slate-500">{card.routeSummary}</p>
                                 </button>
                               ))}
                             </div>
@@ -6079,13 +6155,13 @@ export default function ManageCircle() {
 
                           <div className="mt-4">
                             <div className="flex items-center justify-between mb-1">
-                              <label className="text-xs font-medium text-gray-600">
+                              <label className="text-xs font-medium text-slate-600">
                                 Amount ({selectedEmberSourceCard?.label || SOURCE_ASSET_LABELS[emberSourceAsset]})
                               </label>
                               <button
                                 type="button"
                                 onClick={handleUseMaxEmberDeposit}
-                                className="text-xs font-medium text-indigo-700 hover:text-indigo-800 disabled:text-gray-400"
+                                className="text-xs font-medium text-slate-700 hover:text-slate-900 disabled:text-stone-400"
                                 disabled={(selectedEmberSourceCard?.balance || 0) <= 0}
                               >
                                 Use max
@@ -6098,25 +6174,25 @@ export default function ManageCircle() {
                               value={emberDepositAmount}
                               onChange={(event) => setEmberDepositAmount(event.target.value)}
                               placeholder="0.0"
-                              className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm text-gray-800"
+                              className="w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm text-slate-800"
                             />
-                            <p className="text-xs text-gray-500 mt-1">
+                            <p className="mt-1 text-xs text-slate-500">
                               Available: {(selectedEmberSourceCard?.balance || 0).toFixed(4)}{' '}
                               {selectedEmberSourceCard?.label || SOURCE_ASSET_LABELS[emberSourceAsset]}
                             </p>
                           </div>
 
-                          <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
-                            <p className="text-xs font-semibold text-indigo-900">What happens next</p>
-                            <p className="text-xs text-indigo-900 mt-1">
+                          <div className="mt-4 rounded-[18px] border border-stone-200 bg-stone-100/80 p-3">
+                            <p className="text-xs font-semibold text-slate-900">What happens next</p>
+                            <p className="mt-1 text-xs text-slate-700">
                               1. Withdraw {selectedEmberSourceCard?.label || SOURCE_ASSET_LABELS[emberSourceAsset]} from custody.
                             </p>
-                            <p className="text-xs text-indigo-900 mt-1">
+                            <p className="mt-1 text-xs text-slate-700">
                               2. {selectedEmberSourceCard?.requiresSwap
                                 ? `Swap into suiUSDe.`
                                 : 'Skip swap because source is already suiUSDe.'}
                             </p>
-                            <p className="text-xs text-indigo-900 mt-1">
+                            <p className="mt-1 text-xs text-slate-700">
                               3. Deposit to Ember vault and redeposit esuiUSDe receipts back to custody.
                             </p>
                           </div>
@@ -6124,10 +6200,10 @@ export default function ManageCircle() {
                           <button
                             onClick={handleEmberDeposit}
                             disabled={isSubmittingEmberDeposit || !!emberDepositDisabledReason}
-                            className={`w-full mt-4 px-3 py-2.5 rounded-lg text-sm font-semibold text-white transition-colors ${
+                            className={`mt-4 w-full ${
                               isSubmittingEmberDeposit || !!emberDepositDisabledReason
-                                ? 'bg-gray-400 cursor-not-allowed'
-                                : 'bg-gradient-to-r from-indigo-600 to-amber-500 hover:from-indigo-700 hover:to-amber-600'
+                                ? 'inline-flex cursor-not-allowed items-center justify-center rounded-full bg-stone-300 px-4 py-2.5 text-sm font-medium text-white/90'
+                                : primaryActionClass
                             }`}
                           >
                             {isSubmittingEmberDeposit ? 'Submitting...' : emberDepositPrimaryCta}
@@ -6137,18 +6213,18 @@ export default function ManageCircle() {
                           )}
                         </div>
 
-                        <div className="xl:col-span-2 rounded-lg border border-gray-200 bg-white p-4 sm:p-5">
-                          <h4 className="text-base font-semibold text-gray-900">2) Request Redemption</h4>
-                          <p className="text-xs sm:text-sm text-gray-600 mt-1">
+                        <div className="xl:col-span-2 rounded-[22px] border border-stone-200 bg-white p-4 sm:p-5">
+                          <h4 className="text-base font-semibold text-slate-950">2) Request Redemption</h4>
+                          <p className="mt-1 text-xs text-slate-600 sm:text-sm">
                             Submit the shares to redeem. Processing is operator-driven; custody receives returned suiUSDe after settlement.
                           </p>
                           <div className="mt-4">
                             <div className="flex items-center justify-between mb-1">
-                              <label className="text-xs font-medium text-gray-600">Receipt Amount (esuiUSDe)</label>
+                              <label className="text-xs font-medium text-slate-600">Receipt Amount (esuiUSDe)</label>
                               <button
                                 type="button"
                                 onClick={handleUseMaxEmberRedemption}
-                                className="text-xs font-medium text-indigo-700 hover:text-indigo-800 disabled:text-gray-400"
+                                className="text-xs font-medium text-slate-700 hover:text-slate-900 disabled:text-stone-400"
                                 disabled={(circle.custody?.emberReceiptBalance || 0) <= 0}
                               >
                                 Use max
@@ -6161,34 +6237,34 @@ export default function ManageCircle() {
                               value={emberRedeemAmount}
                               onChange={(event) => setEmberRedeemAmount(event.target.value)}
                               placeholder="0.0"
-                              className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm text-gray-800"
+                              className="w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm text-slate-800"
                             />
                           </div>
                           <button
                             onClick={handleEmberRequestRedemption}
                             disabled={isSubmittingEmberRedemption || !circle?.custody?.walletId || !circle?.isActive || circle?.paused}
-                            className={`w-full mt-4 px-3 py-2.5 rounded-lg text-sm font-semibold text-white transition-colors ${
+                            className={`mt-4 w-full ${
                               isSubmittingEmberRedemption || !circle?.custody?.walletId || !circle?.isActive || circle?.paused
-                                ? 'bg-gray-400 cursor-not-allowed'
-                                : 'bg-indigo-600 hover:bg-indigo-700'
+                                ? 'inline-flex cursor-not-allowed items-center justify-center rounded-full bg-stone-300 px-4 py-2.5 text-sm font-medium text-white/90'
+                                : primaryActionClass
                             }`}
                           >
                             {isSubmittingEmberRedemption ? 'Submitting...' : 'Request Redemption'}
                           </button>
-                          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-                            <div className="rounded-md border border-gray-200 bg-gray-50 p-2">
-                              <p className="text-gray-500">Receipt Balance</p>
-                              <p className="font-semibold text-gray-900">
+                          <div className="mt-4 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
+                            <div className="rounded-md border border-stone-200 bg-stone-50 p-2">
+                              <p className="text-slate-500">Receipt Balance</p>
+                              <p className="font-semibold text-slate-900">
                                 {circle.custody?.emberReceiptBalance?.toFixed(4) || '0.0000'}
                               </p>
                             </div>
-                            <div className="rounded-md border border-gray-200 bg-gray-50 p-2">
-                              <p className="text-gray-500">Pending Requests</p>
-                              <p className="font-semibold text-gray-900">{circle.custody?.emberPendingRedeemRequests ?? 0}</p>
+                            <div className="rounded-md border border-stone-200 bg-stone-50 p-2">
+                              <p className="text-slate-500">Pending Requests</p>
+                              <p className="font-semibold text-slate-900">{circle.custody?.emberPendingRedeemRequests ?? 0}</p>
                             </div>
-                            <div className="rounded-md border border-gray-200 bg-gray-50 p-2">
-                              <p className="text-gray-500">Pending Shares</p>
-                              <p className="font-semibold text-gray-900">
+                            <div className="rounded-md border border-stone-200 bg-stone-50 p-2">
+                              <p className="text-slate-500">Pending Shares</p>
+                              <p className="font-semibold text-slate-900">
                                 {circle.custody?.emberPendingRedeemShares?.toFixed(4) || '0.0000'}
                               </p>
                             </div>
@@ -6197,8 +6273,8 @@ export default function ManageCircle() {
                       </div>
 
                       {(emberActionSnapshot || lastEmberDigest) && (
-                        <div className="mt-4 rounded-lg border border-gray-200 bg-white p-3 text-xs text-gray-700 space-y-1">
-                          <p className="font-medium text-gray-900">Latest Ember Transaction</p>
+                        <div className="mt-4 space-y-1 rounded-[18px] border border-stone-200 bg-white p-3 text-xs text-slate-700">
+                          <p className="font-medium text-slate-900">Latest Ember Transaction</p>
                           {emberActionSnapshot?.operation && (
                             <p>
                               Operation: {emberActionSnapshot.operation === 'deposit' ? 'Deposit' : 'Request Redemption'}
@@ -6230,7 +6306,7 @@ export default function ManageCircle() {
                               href={`https://suivision.xyz/txblock/${emberActionSnapshot?.digest || lastEmberDigest}`}
                               target="_blank"
                               rel="noreferrer"
-                              className="text-blue-600 hover:text-blue-700 underline break-all"
+                              className="break-all text-slate-900 underline"
                             >
                               {emberActionSnapshot?.digest || lastEmberDigest}
                             </a>
@@ -6244,24 +6320,24 @@ export default function ManageCircle() {
                       )}
 
                       {emberActionHistory.length > 0 && (
-                        <div className="mt-3 rounded-lg border border-gray-200 bg-white p-3">
-                          <p className="text-xs font-medium text-gray-900 mb-2">Recent Ember Activity</p>
+                        <div className="mt-3 rounded-[18px] border border-stone-200 bg-white p-3">
+                          <p className="mb-2 text-xs font-medium text-slate-900">Recent Ember Activity</p>
                           <div className="space-y-2">
                             {emberActionHistory.map((item) => (
                               <div
                                 key={`${item.digest}-${item.timestampMs}`}
-                                className="text-xs text-gray-700 border-b border-gray-100 pb-2 last:border-b-0 last:pb-0"
+                                className="border-b border-stone-100 pb-2 text-xs text-slate-700 last:border-b-0 last:pb-0"
                               >
-                                <p className="font-medium text-gray-900">
+                                <p className="font-medium text-slate-900">
                                   {item.operation === 'deposit' ? 'Deposit' : 'Request Redemption'} · {item.lifecycle.status}
                                 </p>
-                                <p className="text-gray-600">{new Date(item.timestampMs).toLocaleString()}</p>
+                                <p className="text-slate-600">{new Date(item.timestampMs).toLocaleString()}</p>
                                 <p className="break-all">
                                   <a
                                     href={`https://suivision.xyz/txblock/${item.digest}`}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className="text-blue-600 hover:text-blue-700 underline"
+                                    className="text-slate-900 underline"
                                   >
                                     {item.digest}
                                   </a>
@@ -6276,7 +6352,7 @@ export default function ManageCircle() {
                 </div>
 
                 {/* WhatsApp Integration Section */}
-                <div className="pt-4 sm:pt-6 border-t border-gray-200 px-1 sm:px-2 mt-2 sm:mt-6">
+                <div className={sectionCardClass}>
                   {circle && account && (
                     <WhatsAppCircleIntegration
                       circleId={id as string}
