@@ -1,7 +1,7 @@
 import { initCetusSDK } from '@cetusprotocol/cetus-sui-clmm-sdk';
 import { SuiClient } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
-import { PACKAGE_ID } from './circle-service';
+import { getObjectTransactionPackageId } from './circle-service';
 import { 
   CetusErrorCode, 
   createCetusError, 
@@ -561,10 +561,11 @@ class CetusService {
       
       // Convert minimum swap amount to MIST (1 SUI = 1e9 MIST)
       const minimumSwapAmount = BigInt(Math.floor(config.minimumSwapAmount * 1e9));
+      const packageIdToUse = await getObjectTransactionPackageId(walletId);
       
       // Call the configure_stablecoin_swap function in the Move contract
       tx.moveCall({
-        target: `${PACKAGE_ID}::njangi_circle::configure_stablecoin_swap`,
+        target: `${packageIdToUse}::njangi_circle::configure_stablecoin_swap`,
         arguments: [
           tx.object(walletId), // custody wallet object
           tx.pure.bool(config.enabled), // enabled

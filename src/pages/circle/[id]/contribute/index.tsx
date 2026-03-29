@@ -9,7 +9,12 @@ import { priceService } from '../../../../services/price-service';
 import { PACKAGE_ID, getCirclePackageId } from '../../../../services/circle-service';
 import SimplifiedSwapUI from '../../../../components/SimplifiedSwapUI';
 import { getCoinType } from '../../../../config/constants';
-import { getCurrentRpcUrl, getCurrentNetwork } from '../../../../services/network-config';
+import {
+  getCurrentRpcUrl,
+  getCurrentNetwork,
+  getCurrentCoinTypes,
+  getCurrentTokens,
+} from '../../../../services/network-config';
 import { cetusService } from '../../../../lib/cetus-service';
 import MoonPayWrapper from '@/components/MoonPayWrapper';
 import CoinbaseOnrampLauncher from '@/components/CoinbaseOnrampLauncher';
@@ -20,6 +25,8 @@ import {
   shouldUseCoinbaseProvider,
 } from '@/lib/onramp-provider';
 import type { CoinbaseSessionClientError } from '@/hooks/useCoinbaseSession';
+import { getCircleConfigFieldsFromDynamicFields } from '@/lib/circle-config';
+import { resolveCircleLifecycleState } from '@/lib/circle-chain';
 import type {
   CoinbaseApiErrorPayload,
   CoinbaseAssetIntent,
@@ -175,6 +182,11 @@ interface CircleFields {
   wallet_id?: string; // Add wallet_id if it can be a direct field
   auto_swap_enabled?: boolean | string; // Allow string for potential older structures
   next_payout_time?: string; // Add next_payout_time field
+  is_active?: boolean | string;
+  paused_after_cycle?: boolean | string;
+  current_cycle?: string | number;
+  current_position?: string | number;
+  rotation_order?: unknown[];
   // Use unknown for index signature as a safer alternative to any
   [key: string]: string | number | boolean | object | unknown;
 }
@@ -206,6 +218,206 @@ interface PayoutProcessedEvent {
 // Define types for SUI object field values
 type SuiFieldValue = string | number | boolean | null | undefined | SuiFieldValue[] | Record<string, unknown>;
 
+type DynamicFieldRef = {
+  objectId: string;
+  objectType?: string;
+  name?: {
+    type?: string;
+    value?: unknown;
+  };
+};
+
+const parseU64Like = (value: unknown): bigint => {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return BigInt(Math.max(0, Math.trunc(value)));
+  if (typeof value === 'string' && /^\d+$/.test(value)) return BigInt(value);
+  return 0n;
+};
+
+const normalizeMoveTypeKey = (value: string): string => value.trim().toLowerCase().replace(/^0x/, '');
+
+const extractNestedBalance = (value: unknown): bigint => {
+  if (value === null || typeof value === 'undefined') return 0n;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint') {
+    return parseU64Like(value);
+  }
+
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if ('fields' in record && record.fields && typeof record.fields === 'object') {
+      const fields = record.fields as Record<string, unknown>;
+      if ('value' in fields) {
+        return extractNestedBalance(fields.value);
+      }
+    }
+    if ('value' in record) {
+      return extractNestedBalance(record.value);
+    }
+  }
+
+  return 0n;
+};
+
+const toDisplayAmount = (value: bigint, decimals: number): number => {
+  if (value <= 0n) return 0;
+  return Number(value) / 10 ** decimals;
+};
+
+const readCustodyCoinBalance = async (
+  client: SuiClient,
+  walletDynamicFields: DynamicFieldRef[],
+  coinType: string
+): Promise<bigint> => {
+  if (!coinType) return 0n;
+
+  const normalizedCoinType = normalizeMoveTypeKey(coinType);
+  let total = 0n;
+
+  const typedField = walletDynamicFields.find((field) => {
+    const nameValue = field.name?.value;
+    return typeof nameValue === 'string' && normalizeMoveTypeKey(nameValue) === normalizedCoinType;
+  });
+
+  if (typedField?.objectId) {
+    try {
+      const fieldObject = await client.getObject({
+        id: typedField.objectId,
+        options: { showContent: true }
+      });
+
+      if (fieldObject.data?.content && 'fields' in fieldObject.data.content) {
+        const fieldContent = fieldObject.data.content.fields as Record<string, unknown>;
+        total += extractNestedBalance(fieldContent.value);
+      }
+    } catch (error) {
+      console.warn('[Contribute] Failed to read typed custody balance field:', { coinType, error });
+    }
+  }
+
+  const legacyCoinFields = walletDynamicFields.filter(
+    (field) =>
+      typeof field.objectType === 'string' &&
+      (
+        field.objectType.toLowerCase().includes(`::coin::coin<0x${normalizedCoinType}>`) ||
+        field.objectType.toLowerCase().includes(`::coin::coin<${normalizedCoinType}>`)
+      )
+  );
+
+  if (legacyCoinFields.length > 0) {
+    const legacyCoinObjects = await Promise.all(
+      legacyCoinFields.map((field) =>
+        client.getObject({
+          id: field.objectId,
+          options: { showContent: true }
+        })
+      )
+    );
+
+    for (const coinObject of legacyCoinObjects) {
+      if (coinObject.data?.content && 'fields' in coinObject.data.content) {
+        const coinFields = coinObject.data.content.fields as Record<string, unknown>;
+        total += parseU64Like(coinFields.balance);
+      }
+    }
+  }
+
+  return total;
+};
+
+const resolveStablecoinMetadata = (
+  targetCoinType?: string | null
+): { coinType: string; decimals: number } => {
+  const coinTypes = getCurrentCoinTypes();
+  const tokens = getCurrentTokens();
+  const normalizedTarget = (targetCoinType || '').trim();
+  const normalizedUpper = normalizedTarget.toUpperCase();
+
+  const usdcCoinType = coinTypes.USDC || tokens.USDC || normalizedTarget;
+  const usdtCoinType = tokens.USDT || normalizedTarget;
+  const suiUsdeCoinType = coinTypes.SUI_USDE || tokens.SUI_USDE || normalizedTarget;
+
+  if (!normalizedTarget || normalizedUpper === 'USDC' || normalizedTarget === usdcCoinType || normalizedTarget === tokens.USDC) {
+    return { coinType: usdcCoinType, decimals: 6 };
+  }
+
+  if (normalizedUpper === 'USDT' || normalizedTarget === usdtCoinType) {
+    return { coinType: usdtCoinType, decimals: 6 };
+  }
+
+  if (normalizedUpper === 'SUI_USDE' || normalizedTarget === suiUsdeCoinType || normalizedTarget === tokens.SUI_USDE) {
+    return { coinType: suiUsdeCoinType, decimals: 9 };
+  }
+
+  const lowerTarget = normalizedTarget.toLowerCase();
+  if (lowerTarget.includes('usdt')) {
+    return { coinType: normalizedTarget, decimals: 6 };
+  }
+
+  if (lowerTarget.includes('sui_usde') || lowerTarget.includes('usde')) {
+    return { coinType: normalizedTarget, decimals: 9 };
+  }
+
+  return { coinType: normalizedTarget || usdcCoinType, decimals: 6 };
+};
+
+const readOutstandingSecurityDepositRaw = async (
+  client: SuiClient,
+  circleId: string
+): Promise<bigint> => {
+  const circleObject = await client.getObject({
+    id: circleId,
+    options: { showContent: true }
+  });
+
+  if (!circleObject.data?.content || !('fields' in circleObject.data.content)) {
+    return 0n;
+  }
+
+  const circleFields = circleObject.data.content.fields as {
+    members?: { fields?: { id?: { id?: string } } };
+  };
+  const membersTableId = circleFields.members?.fields?.id?.id;
+  if (!membersTableId) {
+    return 0n;
+  }
+
+  const members = await client.getDynamicFields({ parentId: membersTableId });
+  let outstandingTotal = 0n;
+
+  for (const memberEntry of members.data) {
+    const memberAddress = memberEntry.name?.value;
+    if (memberEntry.name?.type !== 'address' || typeof memberAddress !== 'string') {
+      continue;
+    }
+
+    try {
+      const memberField = await client.getDynamicFieldObject({
+        parentId: membersTableId,
+        name: { type: 'address', value: memberAddress }
+      });
+
+      if (memberField.data?.content && 'fields' in memberField.data.content) {
+        const memberFields = memberField.data.content.fields as {
+          value?: {
+            fields?: {
+              deposit_paid?: boolean;
+              deposit_balance?: string | number;
+            };
+          };
+        };
+
+        if (memberFields.value?.fields?.deposit_paid) {
+          outstandingTotal += parseU64Like(memberFields.value.fields.deposit_balance);
+        }
+      }
+    } catch (error) {
+      console.warn('[Contribute] Failed to read member deposit balance:', { memberAddress, error });
+    }
+  }
+
+  return outstandingTotal;
+};
+
 // Add ContributionProgress component
 const ContributionProgress: React.FC<{
   circleId: string;
@@ -217,6 +429,7 @@ const ContributionProgress: React.FC<{
   // totalMembersInRotation?: number | null; // REMOVED - No longer used here
   isPaused?: boolean; // Add isPaused prop
   circlePackageId: string; // Add circlePackageId prop
+  refreshKey?: number;
 }> = ({ 
   circleId, 
   maxMembers, 
@@ -224,7 +437,8 @@ const ContributionProgress: React.FC<{
   className = '', 
   currentRecipientAddress,
   isPaused = false, // Default to false
-  circlePackageId // Add to destructured props
+  circlePackageId, // Add to destructured props
+  refreshKey = 0
   // currentPositionInCycle, // REMOVED
   // totalMembersInRotation // REMOVED
 }) => {
@@ -241,6 +455,10 @@ const ContributionProgress: React.FC<{
   
   // Track if we've already fetched data for this cycle
   const alreadyFetchedForCycle = useRef<number | null>(null);
+
+  useEffect(() => {
+    alreadyFetchedForCycle.current = null;
+  }, [refreshKey]);
   
   // Check for payout events to detect cycle changes
   const checkForPayoutEvents = async () => {
@@ -434,7 +652,7 @@ const ContributionProgress: React.FC<{
       console.log("[Progress] Waiting for required data:", { circleId, maxMembers, currentCycle });
     }
   // Add currentPosition (internal state), lastPayoutTime and currentRecipientAddress to dependency array
-  }, [circleId, maxMembers, currentCycle, currentPosition, lastPayoutTime, currentRecipientAddress, isPaused]);
+  }, [circleId, maxMembers, currentCycle, currentPosition, lastPayoutTime, currentRecipientAddress, isPaused, refreshKey]);
 
   // Calculate progress percentage
   const contributedCount = progressData.contributedMembers.size;
@@ -732,6 +950,7 @@ export default function ContributeToCircle() {
   // New states for cycle position tracking
   const [currentPositionInCycle, setCurrentPositionInCycle] = useState<number | null>(null);
   const [totalMembersInRotation, setTotalMembersInRotation] = useState<number | null>(null);
+  const [contributionRefreshKey, setContributionRefreshKey] = useState<number>(0);
 
   // Add a new state variable to track if a user has had their security deposit returned during the current paused cycle
   const [securityDepositReturnedDuringPause, setSecurityDepositReturnedDuringPause] = useState<boolean>(false);
@@ -1361,27 +1580,8 @@ export default function ContributeToCircle() {
         const fields = objectData.data.content.fields as CircleFields;
       console.log('Contribute - Raw Circle Object Fields:', fields);
       
-      // Explicitly check for the is_active field in the circle object and log it
-      let isActive = false;
-      if ('is_active' in fields) {
-        isActive = Boolean(fields.is_active);
-        console.log('Contribute - Found is_active field in circle object:', isActive);
-      }
-
-      // Check for paused after cycle field
-      let isPausedAfterCycle = false;
-      if ('paused_after_cycle' in fields) {
-        isPausedAfterCycle = Boolean(fields.paused_after_cycle);
-        console.log('Contribute - Found paused_after_cycle field in circle object:', isPausedAfterCycle);
-      }
-      
-      // Read current_cycle from the circle object
-      let cycleNumber = 1; // Default to 1
-      if ('current_cycle' in fields && typeof fields.current_cycle === 'string') {
-        cycleNumber = parseInt(fields.current_cycle, 10);
-        console.log('Contribute - Found current_cycle field:', cycleNumber);
-      }
-      setCurrentCycle(cycleNumber);
+      let lifecycleState = resolveCircleLifecycleState(fields);
+      console.log('Contribute - Initial lifecycle state from circle object:', lifecycleState);
 
       // Get current_position and rotation_order for cycle position display
       if (fields.current_position !== undefined && fields.rotation_order && Array.isArray(fields.rotation_order)) {
@@ -1397,8 +1597,7 @@ export default function ContributeToCircle() {
       // Get max_members from the circle object or dynamic fields
       let maxMembers = 10; // Default value
       
-      // If is_active is not in the direct fields, also try to check activation events
-      if (!isActive) {
+      if (lifecycleState.activeSource === 'default') {
         try {
           const activationEvents = await client.queryEvents({
             query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleActivated` },
@@ -1409,21 +1608,22 @@ export default function ContributeToCircle() {
             const eventData = event.parsedJson as { circle_id?: string };
             return eventData?.circle_id === id;
           });
-          
-          if (activationForThisCircle) {
-            isActive = true;
-            console.log('Contribute - Circle is active based on CircleActivated event');
-          }
+
+          lifecycleState = resolveCircleLifecycleState(fields, {
+            activationEventFound: activationForThisCircle,
+          });
+          console.log('Contribute - Lifecycle state after activation event fallback:', lifecycleState);
         } catch (err) {
           console.error('Contribute - Error checking activation events:', err);
         }
       }
-      
-      // For specific circle with known ID, apply special override
-      if (id === "0xa37e274f29ebc5a37b3f5c8acd3db61aac022739dc52973a0312ae3b19f18128") {
-        console.log('Contribute - Special case: Known active circle detected. Forcing isActive to true.');
-        isActive = true;
-      }
+
+      const {
+        isActive,
+        isPausedAfterCycle,
+        currentCycle: resolvedCurrentCycle,
+      } = lifecycleState;
+      setCurrentCycle(resolvedCurrentCycle);
         
       // Get dynamic fields
       const dynamicFieldsResult = await client.getDynamicFields({
@@ -1598,92 +1798,75 @@ export default function ContributeToCircle() {
       }
       console.log('[CONTRIBUTE DEBUG] Config after TransactionInput:', JSON.parse(JSON.stringify(configValues)));
 
-      // 3. Look for config in dynamic fields
-      for (const field of dynamicFields) {
-        if (!field) continue;
+      try {
+        const configFields = await getCircleConfigFieldsFromDynamicFields(
+          client,
+          dynamicFields,
+        );
 
-        // CORRECTED CONDITION: Check the objectType property
-        if (field.objectType && typeof field.objectType === 'string' && field.objectType.includes('::CircleConfig')) {
-          console.log('Contribute - Found CircleConfig dynamic field by objectType:', field);
-          if (field.objectId) {
-            console.log('Contribute - Fetching CircleConfig dynamic field object:', field.objectId);
-            try {
-              const configData = await client.getObject({
-                id: field.objectId,
-                options: { showContent: true }
-              });
-              console.log('Contribute - Config object content:', configData);
+        if (configFields) {
+          const resolvedConfigFields = configFields as Record<string, SuiFieldValue>;
+          console.log('Contribute - CircleConfig fields:', resolvedConfigFields);
 
-              // Check if content and fields exist
-              if (configData.data?.content && 'fields' in configData.data.content) {
-                const outerFields = configData.data.content.fields;
+          if (resolvedConfigFields.contribution_amount) {
+            configValues.contributionAmount = Number(resolvedConfigFields.contribution_amount) / 1e9;
+          }
+          if (resolvedConfigFields.contribution_amount_usd) {
+            configValues.contributionAmountUsd = Number(resolvedConfigFields.contribution_amount_usd);
+          }
+          if (resolvedConfigFields.security_deposit_usd) {
+            configValues.securityDepositUsd = Number(resolvedConfigFields.security_deposit_usd);
+          }
+          if (resolvedConfigFields.contribution_amount_local) {
+            configValues.contributionAmountLocal = Number(resolvedConfigFields.contribution_amount_local);
+          }
+          if (resolvedConfigFields.security_deposit_local) {
+            configValues.securityDepositLocal = Number(resolvedConfigFields.security_deposit_local);
+          }
 
-                // TYPE GUARD: Safely check if outerFields is an object and has a 'value' property
-                if (typeof outerFields === 'object' && outerFields !== null && 'value' in outerFields) {
-                  const valueField = outerFields.value;
+          const currency =
+            typeof resolvedConfigFields.currency_type === 'string'
+              ? resolvedConfigFields.currency_type
+              : ((transactionInput?.currency_type as string) || 'USD');
 
-                  // TYPE GUARD: Safely check if valueField is an object and has a 'fields' property
-                  if (typeof valueField === 'object' && valueField !== null && 'fields' in valueField) {
-                    // Access the NESTED fields object safely
-                    const configFields = valueField.fields as Record<string, SuiFieldValue>;
-                    console.log('Contribute - Accessed nested configFields:', configFields);
+          if (
+            configValues.contributionAmountLocal === 0 &&
+            configValues.contributionAmountUsd > 0 &&
+            currency !== 'USD'
+          ) {
+            console.warn(
+              '[CONTRIBUTE DEBUG] CircleConfig: contribution_amount_local missing, using contribution_amount_usd as local. Currency:',
+              currency,
+            );
+            configValues.contributionAmountLocal = configValues.contributionAmountUsd;
+          }
+          if (
+            configValues.securityDepositLocal === 0 &&
+            configValues.securityDepositUsd > 0 &&
+            currency !== 'USD'
+          ) {
+            console.warn(
+              '[CONTRIBUTE DEBUG] CircleConfig: security_deposit_local missing, using security_deposit_usd as local. Currency:',
+              currency,
+            );
+            configValues.securityDepositLocal = configValues.securityDepositUsd;
+          }
 
-                    // Override/set with values from the config object, prioritizing specific fields
-                    if (configFields.contribution_amount) configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
-                    
-                    // True USD equivalent from config
-                    if (configFields.contribution_amount_usd) {
-                      configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd); // Expect cents
-                    }
-                    if (configFields.security_deposit_usd) {
-                      configValues.securityDepositUsd = Number(configFields.security_deposit_usd); // Expect cents
-                    }
-
-                    // Local currency amounts from config (these are XAF, NGN etc in their smallest unit)
-                    if (configFields.contribution_amount_local) {
-                      configValues.contributionAmountLocal = Number(configFields.contribution_amount_local);
-                    }
-                    if (configFields.security_deposit_local) {
-                      configValues.securityDepositLocal = Number(configFields.security_deposit_local);
-                    }
-                    
-                    // Fallback for older config structures: if _local is missing but _usd is present and currency is not USD, assume _usd was intended as local
-                    const currency = typeof configFields.currency_type === 'string' ? configFields.currency_type : (transactionInput?.currency_type as string || 'USD');
-                    if (configValues.contributionAmountLocal === 0 && configValues.contributionAmountUsd > 0 && currency !== 'USD') {
-                        console.warn("[CONTRIBUTE DEBUG] CircleConfig: contribution_amount_local missing, using contribution_amount_usd as local. Currency:", currency);
-                        configValues.contributionAmountLocal = configValues.contributionAmountUsd;
-                    }
-                    if (configValues.securityDepositLocal === 0 && configValues.securityDepositUsd > 0 && currency !== 'USD') {
-                        console.warn("[CONTRIBUTE DEBUG] CircleConfig: security_deposit_local missing, using security_deposit_usd as local. Currency:", currency);
-                        configValues.securityDepositLocal = configValues.securityDepositUsd;
-                    }
-
-                    if (configFields.security_deposit) configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
-                    
-                    if (configFields.auto_swap_enabled !== undefined) {
-                        const dynamicValue = Boolean(configFields.auto_swap_enabled);
-                        console.log(`Contribute - Found auto_swap_enabled (${dynamicValue}) in dynamic field ${field.objectId}`);
-                        configValues.autoSwapEnabled = dynamicValue;
-                    }
-                    if (configFields.max_members) {
-                        maxMembers = Number(configFields.max_members);
-                        console.log(`Contribute - Found max_members (${maxMembers}) in config field`);
-                    }
-                  } else {
-                     console.warn('Contribute - Could not find nested fields in outerFields.value');
-                  }
-                } else {
-                  console.warn("Contribute - Could not find 'value' property in outerFields");
-                }
-               } else {
-                  console.warn('Contribute - Could not find fields in configData.data.content');
-               }
-            } catch (error) {
-              console.error(`Contribute - Error fetching config object ${field.objectId}:`, error);
-            }
-            break; 
+          if (resolvedConfigFields.security_deposit) {
+            configValues.securityDeposit = Number(resolvedConfigFields.security_deposit) / 1e9;
+          }
+          if (resolvedConfigFields.auto_swap_enabled !== undefined) {
+            const dynamicValue = Boolean(resolvedConfigFields.auto_swap_enabled);
+            console.log(`Contribute - Found auto_swap_enabled (${dynamicValue}) in CircleConfig`);
+            configValues.autoSwapEnabled = dynamicValue;
+          }
+          if (resolvedConfigFields.max_members) {
+            maxMembers = Number(resolvedConfigFields.max_members);
+            console.log(`Contribute - Found max_members (${maxMembers}) in CircleConfig`);
           }
         }
+      } catch (error) {
+        console.error('Contribute - Error fetching CircleConfig fields:', error);
       }
       console.log('[CONTRIBUTE DEBUG] Config after Dynamic Fields (CircleConfig):', JSON.parse(JSON.stringify(configValues)));
 
@@ -2078,183 +2261,82 @@ export default function ContributeToCircle() {
     
     try {
       const client = new SuiClient({ url: getJsonRpcUrl() });
+      const circleObject = await client.getObject({
+        id: circle.id,
+        options: { showContent: true }
+      });
+
+      if (!circleObject.data?.content || !('fields' in circleObject.data.content)) {
+        setUserHasContributed(false);
+        return false;
+      }
+
+      const circleFields = circleObject.data.content.fields as {
+        current_position?: string | number;
+        rotation_order?: unknown[];
+        members?: { fields?: { id?: { id?: string } } };
+      };
+
+      const rotationOrder = Array.isArray(circleFields.rotation_order)
+        ? circleFields.rotation_order.filter((value): value is string => typeof value === 'string' && value !== '0x0')
+        : [];
+      const currentPosition = typeof circleFields.current_position === 'string'
+        ? parseInt(circleFields.current_position, 10)
+        : typeof circleFields.current_position === 'number'
+          ? circleFields.current_position
+          : null;
+      const currentRecipient = currentPosition !== null &&
+        currentPosition >= 0 &&
+        currentPosition < rotationOrder.length
+          ? rotationOrder[currentPosition]
+          : null;
+
+      if (currentRecipient === userAddress) {
+        console.log(`[Contribution Check] User ${userAddress} is the current recipient and does not need to contribute`);
+        setUserHasContributed(false);
+        return false;
+      }
+
+      const membersTableId = circleFields.members?.fields?.id?.id;
+      if (!membersTableId) {
+        setUserHasContributed(false);
+        return false;
+      }
+
+      const memberField = await client.getDynamicFieldObject({
+        parentId: membersTableId,
+        name: { type: 'address', value: userAddress }
+      });
+
       let hasContributed = false;
-      
-      // First check for recent payout events to detect cycle/position changes
-      const payoutEvents = await client.queryEvents({
-        query: { MoveEventType: `${circlePackageId}::njangi_payments::PayoutProcessed` },
-        limit: 20
-      });
-      
-      // Find the most recent payout event for this circle
-      const recentPayoutEvents = payoutEvents.data
-        .filter(event => {
-          const parsedJson = event.parsedJson as { circle_id?: string };
-          return parsedJson?.circle_id === circle.id;
-        })
-        .sort((a, b) => {
-          // Sort by timestamp (newest first)
-          return (Number(b.timestampMs) || 0) - (Number(a.timestampMs) || 0);
-        });
-        
-      const recentPayoutEvent = recentPayoutEvents.length > 0 ? recentPayoutEvents[0] : null;
-      const payoutTimestamp = recentPayoutEvent ? Number(recentPayoutEvent.timestampMs) : 0;
-      
-      if (recentPayoutEvent) {
-        console.log(`[Contribution Check] Found recent payout event at ${new Date(payoutTimestamp).toISOString()}`);
-      }
-      
-      // 1. Check ContributionMade events
-      const contributionEvents = await client.queryEvents({
-        query: { MoveEventType: `${circlePackageId}::njangi_payments::ContributionMade` },
-        limit: 100
-      });
-      
-      console.log(`[Contribution Check] Found ${contributionEvents.data.length} ContributionMade events`);
-      
-      for (const event of contributionEvents.data) {
-        if (event.parsedJson && typeof event.parsedJson === 'object') {
-          const data = event.parsedJson as {
-            circle_id?: string;
-            member?: string;
-            cycle?: string | number;
+      if (memberField.data?.content && 'fields' in memberField.data.content) {
+        const memberWrapper = memberField.data.content.fields as {
+          value?: {
+            fields?: {
+              last_contribution?: string | number;
+              status?: string | number;
+              deposit_paid?: boolean;
+            };
           };
-          
-          const eventCycle = typeof data.cycle === 'string' ? parseInt(data.cycle, 10) : data.cycle;
-          const eventTimestamp = Number(event.timestampMs || 0);
-          
-          // Only count contributions that match the current cycle AND happened after the most recent payout
-          if (data.circle_id === circle.id && 
-              data.member === userAddress && 
-              eventCycle === currentCycle &&
-              (!payoutTimestamp || eventTimestamp > payoutTimestamp)) {
-            
-            hasContributed = true;
-            console.log(`[Contribution Check] MATCH: Found ContributionMade for user ${userAddress} in cycle ${currentCycle} after latest payout`);
-            break;
-          }
-        }
-      }
-      
-      // 2. Check StablecoinContributionMade events
-      if (!hasContributed) {
-        const stablecoinEvents = await client.queryEvents({
-          query: { MoveEventType: `${circlePackageId}::njangi_circles::StablecoinContributionMade` },
-          limit: 100
+        };
+
+        const memberData = memberWrapper.value?.fields;
+        const lastContributionRaw = parseU64Like(memberData?.last_contribution);
+        const rawStatus = memberData?.status;
+        const statusRaw = typeof rawStatus === 'string'
+          ? parseInt(rawStatus, 10)
+          : typeof rawStatus === 'number'
+            ? rawStatus
+            : null;
+        const isActiveMember = statusRaw === null ? true : statusRaw === 0;
+
+        hasContributed = Boolean(memberData?.deposit_paid) && isActiveMember && lastContributionRaw > 0n;
+        console.log('[Contribution Check] Member snapshot result:', {
+          userAddress,
+          lastContributionRaw: lastContributionRaw.toString(),
+          statusRaw,
+          hasContributed
         });
-        
-        console.log(`[Contribution Check] Found ${stablecoinEvents.data.length} StablecoinContributionMade events`);
-        
-        for (const event of stablecoinEvents.data) {
-          if (event.parsedJson && typeof event.parsedJson === 'object') {
-            const data = event.parsedJson as {
-              circle_id?: string;
-              member?: string;
-              cycle?: string | number;
-            };
-            
-            const eventCycle = typeof data.cycle === 'string' ? parseInt(data.cycle, 10) : data.cycle;
-            const eventTimestamp = Number(event.timestampMs || 0);
-            
-            // Only count contributions that match the current cycle AND happened after the most recent payout
-            if (data.circle_id === circle.id && 
-                data.member === userAddress &&
-                (!payoutTimestamp || eventTimestamp > payoutTimestamp)) {
-                
-              // If cycle is specified, check it matches current cycle
-              if (eventCycle !== undefined) {
-                if (eventCycle === currentCycle) {
-                  hasContributed = true;
-                  console.log(`[Contribution Check] MATCH: Found StablecoinContributionMade for user ${userAddress} in cycle ${currentCycle} after latest payout`);
-                  break;
-                }
-              } else {
-                // If cycle is not specified, assume it's for the current cycle if after payout
-                hasContributed = true;
-                console.log(`[Contribution Check] MATCH: Found StablecoinContributionMade for user ${userAddress} (cycle not specified) after latest payout`);
-                break;
-              }
-            }
-          }
-        }
-      }
-      
-      // 3. If not found in other events, try CustodyDeposited events
-      if (!hasContributed) {
-        const custodyEvents = await client.queryEvents({
-          query: { MoveEventType: `${circlePackageId}::njangi_custody::CustodyDeposited` },
-          limit: 100
-        });
-        
-        console.log(`[Contribution Check] Found ${custodyEvents.data.length} CustodyDeposited events`);
-        
-        for (const event of custodyEvents.data) {
-          if (event.parsedJson && typeof event.parsedJson === 'object') {
-            const data = event.parsedJson as {
-              circle_id?: string;
-              member?: string;
-              operation_type?: number | string;
-              timestamp?: string;
-            };
-            
-            const opType = typeof data.operation_type === 'string' 
-              ? parseInt(data.operation_type, 10) 
-              : data.operation_type;
-              
-            const eventTimestamp = Number(event.timestampMs || 0);
-              
-            if (data.circle_id === circle.id && 
-                data.member === userAddress && 
-                opType === 0 && // 0 = contribution
-                (!payoutTimestamp || eventTimestamp > payoutTimestamp)) {
-              
-              // Check if we can determine which cycle this belongs to
-              // For now, assume all contribution operations are for the current cycle
-              hasContributed = true;
-              console.log(`[Contribution Check] MATCH: Found CustodyDeposited with operation_type=0 for user ${userAddress} after latest payout`);
-              break;
-            }
-          }
-        }
-      }
-      
-      // 4. Check CustodyTransaction events (for maximum coverage)
-      if (!hasContributed) {
-        const txEvents = await client.queryEvents({
-          query: { MoveEventType: `${circlePackageId}::njangi_custody::CustodyTransaction` },
-          limit: 100
-        });
-        
-        console.log(`[Contribution Check] Found ${txEvents.data.length} CustodyTransaction events`);
-        
-        for (const event of txEvents.data) {
-          if (event.parsedJson && typeof event.parsedJson === 'object') {
-            const txData = event.parsedJson as {
-              operation_type?: number | string;
-              user?: string;
-              circle_id?: string;
-            };
-            
-            const opType = typeof txData.operation_type === 'string'
-              ? parseInt(txData.operation_type, 10)
-              : (typeof txData.operation_type === 'number' ? txData.operation_type : -1); // Default to -1 if undefined
-            
-            const eventTimestamp = Number(event.timestampMs || 0);
-            
-            // Check if this is a contribution transaction after the most recent payout
-            if (txData.user === userAddress && 
-                opType === 0 && 
-                (!payoutTimestamp || eventTimestamp > payoutTimestamp)) {
-                
-              // If circle_id is present, check it matches, otherwise assume it does
-              if (txData.circle_id === undefined || txData.circle_id === circle.id) {
-                hasContributed = true;
-                console.log(`[Contribution Check] MATCH: Found CustodyTransaction with operation_type=0 for user ${userAddress} after latest payout`);
-                break;
-              }
-            }
-          }
-        }
       }
       
       console.log(`[Contribution Check] Final result for user ${userAddress}: ${hasContributed ? 'HAS contributed' : 'has NOT contributed'}`);
@@ -2541,6 +2623,8 @@ export default function ContributeToCircle() {
       fetchUserWalletInfo();
       fetchCircleDetails();
       fetchCustodyWalletBalance();
+      setContributionRefreshKey(prev => prev + 1);
+      checkUserContribution();
     } catch (error) {
       console.error('Error contributing:', error);
       toast.error('Failed to process contribution');
@@ -3036,6 +3120,7 @@ export default function ContributeToCircle() {
       fetchUserWalletInfo();
       fetchCircleDetails();
       fetchCustodyWalletBalance();
+      setContributionRefreshKey(prev => prev + 1);
       checkUserContribution();
     } catch (error) {
       const errorMessage =
@@ -3450,175 +3535,67 @@ export default function ContributeToCircle() {
     try {
       const client = new SuiClient({ url: getCurrentRpcUrl() });
       const previousBalance = custodyStablecoinBalance;
-      let newBalance = null;
-      let newSecurityDepositBalance = 0;
-      let newContributionBalance = 0;
-      
-      // First try to get the balance from CoinDeposited events with coin_type "stablecoin"
-      const coinDepositedEvents = await client.queryEvents({
-        query: {
-          MoveEventType: `${circlePackageId}::njangi_custody::CoinDeposited`
-        },
-        limit: 20
-      });
-      
-      console.log(`[USDC Balance] Found ${coinDepositedEvents.data.length} CoinDeposited events`);
-      
-      // Find the most recent event for this wallet to get total balance
-      for (const event of coinDepositedEvents.data) {
-        if (event.parsedJson && 
-            typeof event.parsedJson === 'object' &&
-            'wallet_id' in event.parsedJson &&
-            'coin_type' in event.parsedJson &&
-            'new_balance' in event.parsedJson) {
-            
-          const parsedEvent = event.parsedJson as {
-            wallet_id: string;
-            coin_type: string;
-            new_balance: string;
-            amount: string;
-          };
-          
-          console.log(`[USDC Balance] Processing event with coin_type: ${parsedEvent.coin_type}, wallet_id: ${parsedEvent.wallet_id}`);
-          
-          if (parsedEvent.wallet_id === circle.walletId && 
-              parsedEvent.coin_type === 'stablecoin') {
-            // Get the total balance from the most recent event
-            const balance = Number(parsedEvent.new_balance) / 1e6; // USDC has 6 decimals
-            if (newBalance === null || balance > newBalance) {
-              newBalance = balance;
-              console.log('[USDC Balance Fetch] Found stablecoin balance from CoinDeposited event:', balance);
-            }
-          }
-        }
-      }
-      
-      // Fallback to checking StablecoinDeposited events
-      if (newBalance === null) {
-        const stablecoinEvents = await client.queryEvents({
-        query: {
-            MoveEventType: `${circlePackageId}::njangi_circles::StablecoinDeposited`
-          },
-          limit: 10
-        });
-        
-        // Find the most recent event for this wallet to get total balance
-        for (const event of stablecoinEvents.data) {
-        if (event.parsedJson && 
-            typeof event.parsedJson === 'object' &&
-              'wallet_id' in event.parsedJson &&
-              'new_balance' in event.parsedJson) {
-              
-            const eventData = event.parsedJson as {
-              circle_id?: string;
-              wallet_id?: string;
-              member?: string;
-              amount?: string;
-              new_balance?: string;
-              previous_balance?: string;
-              coin_type?: string;
-            };
-            
-            if (eventData.wallet_id === circle.walletId) {
-              const balanceInMicroUnits = Number(eventData.new_balance);
-              const balanceInDollars = balanceInMicroUnits / 1e6; // Convert from micro units to dollars
-              newBalance = balanceInDollars;
-              console.log('Found stablecoin balance from StablecoinDeposited event:', balanceInDollars, 'USDC');
-              break;
-            }
-          }
-        }
-      }
-      
-      // Process CustodyDeposited events to identify security deposits in USDC
-      const custodyEvents = await client.queryEvents({
-        query: {
-          MoveEventType: `${circlePackageId}::njangi_custody::CustodyDeposited`
-        },
-        limit: 50
-      });
-      
-      for (const event of custodyEvents.data) {
-        if (event.parsedJson && 
-            typeof event.parsedJson === 'object' &&
-            'circle_id' in event.parsedJson &&
-            'operation_type' in event.parsedJson &&
-            'amount' in event.parsedJson &&
-            event.parsedJson.circle_id === circle.id) {
-          
-          const parsedEvent = event.parsedJson as {
-            operation_type: number | string;
-            amount: string;
-            coin_type?: string; // Add coin_type field
-          };
-          
-          // Skip if this is NOT a stablecoin event
-          // If coin_type exists and is 'sui', skip it
-          if (parsedEvent.coin_type === 'sui') {
-            console.log('Skipping SUI event in stablecoin balance calculation');
-            continue;
-          }
-          
-          // Operation type 3 indicates security deposit
-          const opType = typeof parsedEvent.operation_type === 'string' ? 
-            parseInt(parsedEvent.operation_type) : parsedEvent.operation_type;
-            
-          if (opType === 3) {
-            // This is a security deposit in USDC (we're in the stablecoin balance function)
-            const amount = Number(parsedEvent.amount) / 1e6; // Convert from micro units (USDC has 6 decimals)
-            newSecurityDepositBalance += amount;
-            console.log(`Found security deposit USDC: ${amount}`);
-          }
-        }
-      }
-      
-      // Ensure security deposit is not larger than the total balance
-      if (newBalance !== null) {
-        newSecurityDepositBalance = Math.min(newSecurityDepositBalance, newBalance);
-      
-      // Calculate contribution balance (total minus security deposits)
-        newContributionBalance = Math.max(0, newBalance - newSecurityDepositBalance);
-      }
-      
-      // Set the balances if we found any
-      if (newBalance !== null) {
-        setCustodyStablecoinBalance(newBalance);
+      const [walletData, walletDynamicFields, outstandingDepositRaw] = await Promise.all([
+        client.getObject({
+          id: circle.walletId,
+          options: { showContent: true }
+        }),
+        client.getDynamicFields({ parentId: circle.walletId }),
+        readOutstandingSecurityDepositRaw(client, circle.id)
+      ]);
+
+      const walletFields = walletData.data?.content && 'fields' in walletData.data.content
+        ? walletData.data.content.fields as Record<string, unknown>
+        : null;
+      const stablecoinConfigFields = walletFields?.stablecoin_config &&
+        typeof walletFields.stablecoin_config === 'object' &&
+        walletFields.stablecoin_config !== null &&
+        'fields' in walletFields.stablecoin_config
+          ? (walletFields.stablecoin_config as { fields: Record<string, unknown> }).fields
+          : null;
+
+      const stablecoinMeta = resolveStablecoinMetadata(
+        typeof stablecoinConfigFields?.target_coin_type === 'string'
+          ? stablecoinConfigFields.target_coin_type
+          : USDC_COIN_TYPE
+      );
+      const dynamicFields = walletDynamicFields.data as unknown as DynamicFieldRef[];
+      const liveStablecoinBalanceRaw = await readCustodyCoinBalance(
+        client,
+        dynamicFields,
+        stablecoinMeta.coinType
+      );
+
+      const newBalance = toDisplayAmount(liveStablecoinBalanceRaw, stablecoinMeta.decimals);
+      const newSecurityDepositBalance = Math.min(
+        toDisplayAmount(outstandingDepositRaw, stablecoinMeta.decimals),
+        newBalance
+      );
+      const newContributionBalance = Math.max(0, newBalance - newSecurityDepositBalance);
+
+      setCustodyStablecoinBalance(newBalance);
       setSecurityDepositBalance(newSecurityDepositBalance);
       setContributionBalance(newContributionBalance);
       
-        console.log('[USDC Balance Fetch] Setting USDC state:', { newBalance, newSecurityDepositBalance, newContributionBalance });
-        console.log('Custody stablecoin balances breakdown:', {
+      console.log('[USDC Balance Fetch] Setting stablecoin state:', {
+        newBalance,
+        newSecurityDepositBalance,
+        newContributionBalance,
+        coinType: stablecoinMeta.coinType
+      });
+      console.log('Custody stablecoin balances breakdown:', {
         total: newBalance,
         securityDeposits: newSecurityDepositBalance,
-        contributionFunds: newContributionBalance
+        contributionFunds: newContributionBalance,
+        outstandingDepositRaw: outstandingDepositRaw.toString()
       });
-      } else {
-        // If we couldn't find any balance, default to zero but don't override existing values
-              setCustodyStablecoinBalance(0);
-              setSecurityDepositBalance(0);
-              setContributionBalance(0);
-        console.log('No stablecoin balance found, setting to zero');
-      }
       
       // Show success message if this was a manual refresh
       if (wasManualRefresh && toastId) {
-        if (newBalance !== null) {
-          if (previousBalance !== newBalance) {
-            toast.success(`Balance updated: $${newBalance.toFixed(2)} USDC`, { id: toastId });
-            
-            // If there was a security deposit transaction, show a specific message
-            if (newSecurityDepositBalance > 0) {
-              // Use a new toast ID to avoid conflicting with the first toast
-              toast.success(`Security deposit detected: $${newSecurityDepositBalance.toFixed(2)} USDC`, { 
-                id: 'security-deposit-toast',
-                duration: 5000
-              });
-            }
-          } else {
-            toast.success('Balance refreshed', { id: toastId });
-          }
+        if (previousBalance !== newBalance) {
+          toast.success(`Balance updated: $${newBalance.toFixed(2)} USDC`, { id: toastId });
         } else {
-          toast.success('Balance check completed', { id: toastId });
+          toast.success('Balance refreshed', { id: toastId });
         }
       }
     } catch (error) {
@@ -3728,6 +3705,8 @@ export default function ContributeToCircle() {
       fetchUserWalletInfo();
       fetchCircleDetails();
       fetchCustodyWalletBalance();
+      setContributionRefreshKey(prev => prev + 1);
+      checkUserContribution();
       
     } catch (error) {
       console.error('Error in direct USDC deposit:', error);
@@ -3763,6 +3742,7 @@ export default function ContributeToCircle() {
       
       // Refresh current recipient status
       await checkIfUserIsCurrentRecipient();
+      setContributionRefreshKey(prev => prev + 1);
       
       toast.success('Contribution status refreshed', { id: 'refresh-status' });
     } catch (error) {
@@ -4749,6 +4729,7 @@ export default function ContributeToCircle() {
                               currentRecipientAddress={cycleRecipientAddress} // Pass the recipient address
                               isPaused={circle.pausedAfterCycle} // Add isPaused prop
                               circlePackageId={circlePackageId} // Pass the circlePackageId prop
+                              refreshKey={contributionRefreshKey}
                             />
                           </div>
                         </div>

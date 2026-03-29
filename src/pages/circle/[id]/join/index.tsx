@@ -4,8 +4,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { ArrowLeft, AlertCircle, LogIn } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { SuiClient } from '@mysten/sui/client';
+import { getCircleConfigFieldsFromDynamicFields } from '@/lib/circle-config';
 import { priceService } from '@/services/price-service';
-import { PACKAGE_ID } from '../../../../services/circle-service';
+import { getCirclePackageId } from '../../../../services/circle-service';
 import { getCurrentRpcUrl } from '../../../../services/network-config';
 import Head from 'next/head';
 import { LoginButton } from '@/components/LoginButton';
@@ -158,7 +159,12 @@ export default function JoinCircle() {
       if (!objectData.data?.content || !('fields' in objectData.data.content)) {
         throw new Error('Invalid circle object data received');
       }
-        const fields = objectData.data.content.fields as CircleFields;
+      const determinedPackageId = await getCirclePackageId(
+        id as string,
+        userAddress ?? undefined,
+      );
+      const fields = objectData.data.content.fields as CircleFields;
+      console.log('Join - Using package ID:', determinedPackageId);
       console.log('Join - Raw Circle Object Fields:', fields);
         
       // Get dynamic fields
@@ -175,7 +181,7 @@ export default function JoinCircle() {
       try {
         // 1. Fetch CircleCreated event
         const circleEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::CircleCreated` },
+          query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleCreated` },
           limit: 50 // Limit scope if needed
         });
         const createEvent = circleEvents.data.find(event => 
@@ -248,106 +254,40 @@ export default function JoinCircle() {
       }
       console.log('Join - Config after Tx/Event:', configValues);
 
-      // 2. Look for config in dynamic fields (e.g., 'circle_config')
-      for (const field of dynamicFields) {
-        if (!field) continue;
-        
-        // Find the CircleConfig dynamic field
-        const isConfigField = 
-          (field.name && typeof field.name === 'object' && 'value' in field.name && field.name.value === 'circle_config') ||
-          (field.type && typeof field.type === 'string' && field.type.includes('CircleConfig')) ||
-          (field.objectType && typeof field.objectType === 'string' && field.objectType.includes('CircleConfig'));
+      try {
+        const configFields = await getCircleConfigFieldsFromDynamicFields(
+          client,
+          dynamicFields,
+        );
 
-        if (isConfigField && field.objectId) {
-          console.log('Join - Found CircleConfig dynamic field object:', field.objectId);
-          try {
-            // Fetch the complete CircleConfig object
-            const configData = await client.getObject({
-              id: field.objectId,
-              options: { 
-                showContent: true,
-                showDisplay: false,
-                showType: true
-              }
-            });
-            
-            console.log('Join - Fetched complete CircleConfig object:', configData);
-            
-            // Process the object data to access potentially nested values
-            if (configData.data?.content && 'fields' in configData.data.content) {
-              const contentFields = configData.data.content.fields as Record<string, unknown>;
-              console.log('Join - CircleConfig content fields:', contentFields);
-              
-              // Check if we have direct access to the config values
-              if ('contribution_amount' in contentFields) {
-                configValues.contributionAmount = Number(contentFields.contribution_amount) / 1e9;
-              }
-              if ('contribution_amount_local' in contentFields) {
-                configValues.contributionAmountUsd = Number(contentFields.contribution_amount_local) / 100;
-              }
-              if ('security_deposit' in contentFields) {
-                configValues.securityDeposit = Number(contentFields.security_deposit) / 1e9;
-              }
-              if ('security_deposit_local' in contentFields) {
-                configValues.securityDepositUsd = Number(contentFields.security_deposit_local) / 100;
-              }
-              if ('cycle_length' in contentFields) {
-                configValues.cycleLength = Number(contentFields.cycle_length);
-              }
-              if ('cycle_day' in contentFields) {
-                configValues.cycleDay = Number(contentFields.cycle_day);
-              }
-              if ('max_members' in contentFields) {
-                configValues.maxMembers = Number(contentFields.max_members);
-                console.log('Join - Extracted max_members directly:', configValues.maxMembers);
-              }
-              
-              // Check for the deeper nested path: value.fields.max_members
-              if ('value' in contentFields && 
-                  contentFields.value && 
-                  typeof contentFields.value === 'object') {
-                
-                const valueObj = contentFields.value as Record<string, unknown>;
-                console.log('Join - CircleConfig value object:', valueObj);
-                
-                if ('fields' in valueObj && 
-                    valueObj.fields && 
-                    typeof valueObj.fields === 'object') {
-                  
-                  const configFields = valueObj.fields as Record<string, unknown>;
-                  console.log('Join - CircleConfig nested fields:', configFields);
-                  
-                  // Extract all config values from the deeply nested structure
-                  if ('max_members' in configFields) {
-                    configValues.maxMembers = Number(configFields.max_members);
-                    console.log('Join - Successfully extracted max_members:', configValues.maxMembers);
-                  }
-                  if ('contribution_amount' in configFields) {
-                    configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
-                  }
-                  if ('contribution_amount_local' in configFields) {
-                    configValues.contributionAmountUsd = Number(configFields.contribution_amount_local) / 100;
-                  }
-                  if ('security_deposit' in configFields) {
-                    configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
-                  }
-                  if ('security_deposit_local' in configFields) {
-                    configValues.securityDepositUsd = Number(configFields.security_deposit_local) / 100;
-                  }
-                  if ('cycle_length' in configFields) {
-                    configValues.cycleLength = Number(configFields.cycle_length);
-                  }
-                  if ('cycle_day' in configFields) {
-                    configValues.cycleDay = Number(configFields.cycle_day);
-                  }
-                }
-              }
-            }
-          } catch (error) {
-            console.error(`Join - Error fetching config object ${field.objectId}:`, error);
+        if (configFields) {
+          console.log('Join - CircleConfig fields:', configFields);
+
+          if (configFields.contribution_amount) {
+            configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
           }
-          break; // Assume only one config object
+          if (configFields.contribution_amount_local) {
+            configValues.contributionAmountUsd = Number(configFields.contribution_amount_local) / 100;
+          }
+          if (configFields.security_deposit) {
+            configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
+          }
+          if (configFields.security_deposit_local) {
+            configValues.securityDepositUsd = Number(configFields.security_deposit_local) / 100;
+          }
+          if (configFields.cycle_length) {
+            configValues.cycleLength = Number(configFields.cycle_length);
+          }
+          if (configFields.cycle_day) {
+            configValues.cycleDay = Number(configFields.cycle_day);
+          }
+          if (configFields.max_members) {
+            configValues.maxMembers = Number(configFields.max_members);
+            console.log('Join - Extracted max_members from CircleConfig:', configValues.maxMembers);
+          }
         }
+      } catch (error) {
+        console.error('Join - Error fetching CircleConfig fields:', error);
       }
       console.log('Join - Config after Dynamic Fields:', configValues);
 
@@ -396,7 +336,7 @@ export default function JoinCircle() {
         
         // Fetch all members from join events
         const joinedEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::MemberJoined` },
+          query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
           limit: 1000 // Fetch enough events
         });
         
@@ -409,7 +349,7 @@ export default function JoinCircle() {
         
         // 🔴 CRITICAL FIX: Also fetch MemberRemoved events to filter out removed members
         const removedEvents = await client.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_circles::MemberRemoved` },
+          query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberRemoved` },
           limit: 1000
         });
         
@@ -952,4 +892,4 @@ export default function JoinCircle() {
       </div>
     </>
   );
-} 
+}

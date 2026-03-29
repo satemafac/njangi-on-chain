@@ -1,7 +1,10 @@
 import { createLogger, format, transports } from 'winston';
 import joinRequestService from './join-request-service';
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
-import { PACKAGE_ID } from './constants';
+import {
+  getCirclePackageId,
+  getPackageLookupIdsForCurrentNetwork,
+} from './circle-service';
 
 // Create logger instance
 const logger = createLogger({
@@ -207,22 +210,26 @@ export class CircleMemberManagerService {
       
       // Always include the admin
       memberAddresses.add(adminAddress);
+      const circlePackageId = await getCirclePackageId(circleId, adminAddress);
+      const packageIdsToQuery = getPackageLookupIdsForCurrentNetwork(circlePackageId);
       
       // Method 1: Check MemberJoined events
-      try {
-        const events = await this.suiClient.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_members::MemberJoined` },
-          limit: 100
-        });
+      for (const packageId of packageIdsToQuery) {
+        try {
+          const events = await this.suiClient.queryEvents({
+            query: { MoveEventType: `${packageId}::njangi_members::MemberJoined` },
+            limit: 100
+          });
 
-        for (const event of events.data) {
-          const eventData = event.parsedJson as { circle_id?: string; user?: string };
-          if (eventData.circle_id === circleId && eventData.user) {
-            memberAddresses.add(eventData.user);
+          for (const event of events.data) {
+            const eventData = event.parsedJson as { circle_id?: string; user?: string };
+            if (eventData.circle_id === circleId && eventData.user) {
+              memberAddresses.add(eventData.user);
+            }
           }
+        } catch (error) {
+          logger.debug(`Could not fetch MemberJoined events for ${packageId}: ${error}`);
         }
-      } catch (error) {
-        logger.debug(`Could not fetch MemberJoined events: ${error}`);
       }
 
       // Method 2: Check join requests (we'll get pending ones for now as approved tracking needs implementation)
@@ -241,20 +248,22 @@ export class CircleMemberManagerService {
       }
 
       // Method 3: Check ContributionMade events to find active members
-      try {
-        const events = await this.suiClient.queryEvents({
-          query: { MoveEventType: `${PACKAGE_ID}::njangi_payments::ContributionMade` },
-          limit: 200
-        });
+      for (const packageId of packageIdsToQuery) {
+        try {
+          const events = await this.suiClient.queryEvents({
+            query: { MoveEventType: `${packageId}::njangi_payments::ContributionMade` },
+            limit: 200
+          });
 
-        for (const event of events.data) {
-          const eventData = event.parsedJson as { circle_id?: string; contributor?: string };
-          if (eventData.circle_id === circleId && eventData.contributor) {
-            memberAddresses.add(eventData.contributor);
+          for (const event of events.data) {
+            const eventData = event.parsedJson as { circle_id?: string; contributor?: string };
+            if (eventData.circle_id === circleId && eventData.contributor) {
+              memberAddresses.add(eventData.contributor);
+            }
           }
+        } catch (error) {
+          logger.debug(`Could not fetch ContributionMade events for ${packageId}: ${error}`);
         }
-      } catch (error) {
-        logger.debug(`Could not fetch ContributionMade events: ${error}`);
       }
 
       const addresses = Array.from(memberAddresses);

@@ -5,9 +5,10 @@ import { SuiClient, SuiEvent } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
 import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle, Edit3, Users, Crown, RefreshCw } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
+import { getCircleConfigFieldsFromDynamicFields } from '@/lib/circle-config';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
-import { PACKAGE_ID, getCirclePackageId } from '../../../../services/circle-service';
+import { getCirclePackageId } from '../../../../services/circle-service';
 import {
   getCurrentRpcUrl,
   getCurrentNetwork,
@@ -48,6 +49,7 @@ interface Circle {
     walletId: string;
     stablecoinEnabled: boolean;
     stablecoinType: string;
+    stablecoinCoinType?: string;
     stablecoinBalance: number;
     suiBalance: number;
     securityDeposits?: number;
@@ -67,6 +69,8 @@ interface Member {
   status: 'active' | 'suspended' | 'exited';
   position?: number; // Add position field
   depositPaid?: boolean; // Add depositPaid field
+  depositBalanceRaw?: bigint;
+  lastContributionRaw?: bigint;
 }
 
 // Debug logging utility
@@ -154,6 +158,8 @@ const formatRawTokenAmount = (rawAmount: string, decimals: number): string => {
   return value.toLocaleString(undefined, { maximumFractionDigits: Math.min(9, decimals) });
 };
 
+const normalizeMoveTypeKey = (value: string): string => value.trim().toLowerCase().replace(/^0x/, '');
+
 const readCustodyCoinBalance = async (
   client: SuiClient,
   walletDynamicFields: DynamicFieldRef[],
@@ -161,12 +167,12 @@ const readCustodyCoinBalance = async (
 ): Promise<bigint> => {
   if (!coinType) return 0n;
 
-  const normalizedCoinType = coinType.toLowerCase();
+  const normalizedCoinType = normalizeMoveTypeKey(coinType);
   let total = 0n;
 
   const typedField = walletDynamicFields.find((field) => {
     const nameValue = field.name?.value;
-    return typeof nameValue === 'string' && nameValue.toLowerCase() === normalizedCoinType;
+    return typeof nameValue === 'string' && normalizeMoveTypeKey(nameValue) === normalizedCoinType;
   });
 
   if (typedField?.objectId) {
@@ -188,7 +194,10 @@ const readCustodyCoinBalance = async (
   const legacyCoinFields = walletDynamicFields.filter(
     (field) =>
       typeof field.objectType === 'string' &&
-      field.objectType.toLowerCase().includes(`::coin::coin<${normalizedCoinType}>`)
+      (
+        field.objectType.toLowerCase().includes(`::coin::coin<0x${normalizedCoinType}>`) ||
+        field.objectType.toLowerCase().includes(`::coin::coin<${normalizedCoinType}>`)
+      )
   );
 
   if (legacyCoinFields.length > 0) {
@@ -210,6 +219,42 @@ const readCustodyCoinBalance = async (
   }
 
   return total;
+};
+
+const resolveStablecoinMetadata = (
+  targetCoinType?: string | null
+): { label: string; coinType: string; decimals: number } => {
+  const coinTypes = getCurrentCoinTypes();
+  const tokens = getCurrentTokens();
+  const normalizedTarget = (targetCoinType || '').trim();
+  const normalizedUpper = normalizedTarget.toUpperCase();
+
+  const usdcCoinType = coinTypes.USDC || tokens.USDC || normalizedTarget;
+  const usdtCoinType = tokens.USDT || normalizedTarget;
+  const suiUsdeCoinType = coinTypes.SUI_USDE || tokens.SUI_USDE || normalizedTarget;
+
+  if (!normalizedTarget || normalizedUpper === 'USDC' || normalizedTarget === usdcCoinType || normalizedTarget === tokens.USDC) {
+    return { label: 'USDC', coinType: usdcCoinType, decimals: 6 };
+  }
+
+  if (normalizedUpper === 'USDT' || normalizedTarget === usdtCoinType) {
+    return { label: 'USDT', coinType: usdtCoinType, decimals: 6 };
+  }
+
+  if (normalizedUpper === 'SUI_USDE' || normalizedTarget === suiUsdeCoinType || normalizedTarget === tokens.SUI_USDE) {
+    return { label: 'SUI_USDE', coinType: suiUsdeCoinType, decimals: 9 };
+  }
+
+  const lowerTarget = normalizedTarget.toLowerCase();
+  if (lowerTarget.includes('usdt')) {
+    return { label: 'USDT', coinType: normalizedTarget, decimals: 6 };
+  }
+
+  if (lowerTarget.includes('sui_usde') || lowerTarget.includes('usde')) {
+    return { label: 'SUI_USDE', coinType: normalizedTarget, decimals: 9 };
+  }
+
+  return { label: 'USDC', coinType: normalizedTarget, decimals: 6 };
 };
 
 // Utility function to extract configuration from transaction inputs
@@ -287,9 +332,12 @@ const checkMemberDepositStatus = async (
   memberActivatedEvents: SuiEvent[],
   custodyEvents: SuiEvent[],
   securityReturnedEvents: SuiEvent[]
-): Promise<{ hasPaid: boolean; position?: number }> => {
+): Promise<{ hasPaid: boolean; position?: number; depositBalanceRaw: bigint; lastContributionRaw: bigint }> => {
   let hasPaid = false;
   let position: number | undefined = undefined;
+  let depositBalanceRaw = 0n;
+  let lastContributionRaw = 0n;
+  let resolvedFromStruct = false;
   
   try {
     // Method 1: Try fetching the Member struct directly for the deposit_paid flag
@@ -301,11 +349,21 @@ const checkMemberDepositStatus = async (
       
       if (memberField.data?.content && 'fields' in memberField.data.content) {
         const memberFields = memberField.data.content.fields as {
-          value?: { fields?: { deposit_paid?: boolean, payout_position?: { fields?: { vec?: string[] } } } } 
+          value?: {
+            fields?: {
+              deposit_paid?: boolean,
+              deposit_balance?: string | number,
+              last_contribution?: string | number,
+              payout_position?: { fields?: { vec?: string[] } }
+            }
+          }
         };
         
         if (memberFields.value?.fields?.deposit_paid !== undefined) {
+          resolvedFromStruct = true;
           hasPaid = Boolean(memberFields.value.fields.deposit_paid);
+          depositBalanceRaw = parseU64Like(memberFields.value.fields.deposit_balance);
+          lastContributionRaw = parseU64Like(memberFields.value.fields.last_contribution);
           debugLog(`Deposit status from Member struct`, { address: shortenAddress(address), hasPaid });
           
           // Also try to get position if available
@@ -324,7 +382,7 @@ const checkMemberDepositStatus = async (
   }
   
   // Method 2: Fallback to MemberActivated Event (using pre-fetched data)
-  if (!hasPaid) {
+  if (!resolvedFromStruct && !hasPaid) {
      hasPaid = memberActivatedEvents.some(event => {
        const parsed = event.parsedJson as { circle_id?: string; member?: string };
        return parsed?.circle_id === circleId && parsed?.member === address;
@@ -333,7 +391,7 @@ const checkMemberDepositStatus = async (
   }
 
   // Method 3: Fallback to CustodyDeposited Event (Type 3, using pre-fetched data)
-  if (!hasPaid) {
+  if (!resolvedFromStruct && !hasPaid) {
     hasPaid = custodyEvents.some(e => {
        const p = e.parsedJson as { circle_id?: string; member?: string; operation_type?: number | string };
        return p?.circle_id === circleId && p?.member === address && (p?.operation_type === 3 || p?.operation_type === "3");
@@ -343,6 +401,10 @@ const checkMemberDepositStatus = async (
 
   // Check SecurityDepositReturned Event to override hasPaid (using pre-fetched data)
   try {
+    if (resolvedFromStruct) {
+      return { hasPaid, position, depositBalanceRaw, lastContributionRaw };
+    }
+
     const hasReturnedEvent = securityReturnedEvents.some(event => {
       const parsed = event.parsedJson as { circle_id?: string; member?: string; };
       return parsed?.circle_id === circleId && parsed?.member?.toLowerCase() === address.toLowerCase();
@@ -350,13 +412,14 @@ const checkMemberDepositStatus = async (
 
     if (hasReturnedEvent) {
       hasPaid = false; // Override: if a deposit was returned, it's no longer considered paid
+      depositBalanceRaw = 0n;
       debugLog(`Deposit marked as UNPAID due to SecurityDepositReturned event`, { address: shortenAddress(address) });
     }
   } catch (eventError) {
     debugLog(`Error checking SecurityDepositReturned events`, { address: shortenAddress(address), error: eventError });
   }
   
-  return { hasPaid, position };
+  return { hasPaid, position, depositBalanceRaw, lastContributionRaw };
 };
 
 // Constants for time calculations
@@ -547,7 +610,6 @@ export default function ManageCircle() {
   const { isAuthenticated, isLoading: authLoading, userAddress, account } = useAuth();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
-  const [circlePackageId, setCirclePackageId] = useState<string>(PACKAGE_ID); // Track the package ID for this circle
   const [members, setMembers] = useState<Member[]>([]);
   const [pendingRequests, setPendingRequests] = useState<JoinRequest[]>([]);
   const [suiPrice, setSuiPrice] = useState(1.25);
@@ -609,7 +671,6 @@ export default function ManageCircle() {
   const [showPayoutDepositModal, setShowPayoutDepositModal] = useState(false);
   const [selectedMembersForPayout, setSelectedMembersForPayout] = useState<Set<string>>(new Set());
   const [isProcessingPayout, setIsProcessingPayout] = useState(false);
-  const [payoutCoinType, setPayoutCoinType] = useState<'sui' | 'stablecoin'>('sui');
   const [payoutProgress, setPayoutProgress] = useState<{current: number, total: number}>({current: 0, total: 0});
 
   const [emberSourceAsset, setEmberSourceAsset] = useState<EmberSourceAsset>('SUI_USDE');
@@ -745,7 +806,6 @@ export default function ManageCircle() {
       // Determine package ID for this circle
       const determinedPackageId = await getCirclePackageId(id as string, userAddress);
       debugLog('Using package ID', determinedPackageId);
-      setCirclePackageId(determinedPackageId);
       
       // Parallel fetch: Get circle object and dynamic fields simultaneously
       const [objectData, dynamicFieldsResult] = await Promise.all([
@@ -849,67 +909,48 @@ export default function ManageCircle() {
       const configValues = processConfigValues(transactionInput, circleCreationEventData);
       debugLog('Config after transaction/event processing', configValues);
         
-      // 2. Look for config in dynamic fields
-      let foundInDynamicField = false; // Flag to track if found
-      for (const field of dynamicFieldsResult.data) {
-        // CORRECTED CONDITION: Check the objectType property
-        if (field.objectType && typeof field.objectType === 'string' && field.objectType.includes('::CircleConfig')) {
-          console.log('Manage - Found CircleConfig dynamic field by objectType:', field);
-          if (field.objectId) {
-            console.log('[fetchCircleDetails] Found CircleConfig dynamic field object:', field.objectId);
-            try {
-              const configData = await client.getObject({
-                id: field.objectId,
-                options: { showContent: true }
-              });
-              console.log('Manage - Config object data:', configData);
+      let foundInDynamicField = false;
+      try {
+        const configFields = await getCircleConfigFieldsFromDynamicFields(
+          client,
+          dynamicFieldsResult.data,
+        );
 
-              // Check if content and fields exist
-              if (configData.data?.content && 'fields' in configData.data.content) {
-                const outerFields = configData.data.content.fields;
+        if (configFields) {
+          const resolvedConfigFields = configFields as Record<string, SuiFieldValue>;
+          console.log('Manage - CircleConfig fields:', resolvedConfigFields);
 
-                // TYPE GUARD: Safely check if outerFields is an object and has a 'value' property
-                if (typeof outerFields === 'object' && outerFields !== null && 'value' in outerFields) {
-                  const valueField = outerFields.value;
-
-                  // TYPE GUARD: Safely check if valueField is an object and has a 'fields' property
-                  if (typeof valueField === 'object' && valueField !== null && 'fields' in valueField) {
-                    
-                    // Access the NESTED fields object safely
-                    const configFields = valueField.fields as Record<string, SuiFieldValue>;
-                    console.log('Manage - Accessed nested configFields:', configFields);
-
-                    // Override with dynamic field values if present
-                    if (configFields.contribution_amount) configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
-                    if (configFields.contribution_amount_usd) configValues.contributionAmountUsd = Number(configFields.contribution_amount_usd) / 100;
-                    if (configFields.security_deposit) configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
-                    if (configFields.security_deposit_usd) configValues.securityDepositUsd = Number(configFields.security_deposit_usd) / 100;
-                    if (configFields.cycle_length !== undefined) configValues.cycleLength = Number(configFields.cycle_length);
-                    if (configFields.cycle_day !== undefined) configValues.cycleDay = Number(configFields.cycle_day);
-                    if (configFields.max_members !== undefined) configValues.maxMembers = Number(configFields.max_members);
-                    
-                    if (configFields.auto_swap_enabled !== undefined) {
-                        const dynamicValue = Boolean(configFields.auto_swap_enabled);
-                        console.log(`[fetchCircleDetails] Found auto_swap_enabled (${dynamicValue}) in dynamic field ${field.objectId}`);
-                        configValues.autoSwapEnabled = dynamicValue;
-                        foundInDynamicField = true; // Set flag
-                    }
-                  } else {
-                    console.warn('Manage - Could not find nested fields in outerFields.value');
+          if (resolvedConfigFields.contribution_amount) {
+            configValues.contributionAmount = Number(resolvedConfigFields.contribution_amount) / 1e9;
           }
-        } else {
-                  // FIX: Use double quotes for the outer string literal
-                  console.warn("Manage - Could not find 'value' property in outerFields");
-                }
-              } else {
-                 console.warn('Manage - Could not find fields in configData.data.content');
-              }
-            } catch (error) {
-              console.error('Manage - Error fetching config object:', error);
-            }
-          if (foundInDynamicField) break; // Exit loop once found
+          if (resolvedConfigFields.contribution_amount_usd) {
+            configValues.contributionAmountUsd = Number(resolvedConfigFields.contribution_amount_usd) / 100;
           }
+          if (resolvedConfigFields.security_deposit) {
+            configValues.securityDeposit = Number(resolvedConfigFields.security_deposit) / 1e9;
+          }
+          if (resolvedConfigFields.security_deposit_usd) {
+            configValues.securityDepositUsd = Number(resolvedConfigFields.security_deposit_usd) / 100;
+          }
+          if (resolvedConfigFields.cycle_length !== undefined) {
+            configValues.cycleLength = Number(resolvedConfigFields.cycle_length);
+          }
+          if (resolvedConfigFields.cycle_day !== undefined) {
+            configValues.cycleDay = Number(resolvedConfigFields.cycle_day);
+          }
+          if (resolvedConfigFields.max_members !== undefined) {
+            configValues.maxMembers = Number(resolvedConfigFields.max_members);
+          }
+          if (resolvedConfigFields.auto_swap_enabled !== undefined) {
+            const dynamicValue = Boolean(resolvedConfigFields.auto_swap_enabled);
+            console.log(`[fetchCircleDetails] Found auto_swap_enabled (${dynamicValue}) in CircleConfig`);
+            configValues.autoSwapEnabled = dynamicValue;
+          }
+
+          foundInDynamicField = true;
         }
+      } catch (error) {
+        console.error('Manage - Error fetching CircleConfig fields:', error);
       }
       debugLog('Config after dynamic fields', { foundInDynamicField, configValues });
 
@@ -931,17 +972,23 @@ export default function ManageCircle() {
       
       // Check for circle activation status
       let isActive = false;
-      try {
-        const activationEvents = await client.queryEvents({
-          query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleActivated` },
-          limit: 50
-        });
-        isActive = activationEvents.data.some(event => 
-          (event.parsedJson as { circle_id?: string })?.circle_id === id
-        );
-        debugLog('Circle activation status', isActive);
-      } catch (error) {
-        console.error('Error checking circle activation:', error);
+      if (typeof fields.is_active === 'boolean') {
+        isActive = fields.is_active;
+      } else if (typeof fields.is_active === 'string') {
+        isActive = fields.is_active.toLowerCase() === 'true';
+      } else {
+        try {
+          const activationEvents = await client.queryEvents({
+            query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleActivated` },
+            limit: 50
+          });
+          isActive = activationEvents.data.some(event => 
+            (event.parsedJson as { circle_id?: string })?.circle_id === id
+          );
+          debugLog('Circle activation status', isActive);
+        } catch (error) {
+          console.error('Error checking circle activation:', error);
+        }
       }
 
       // Check for paused status - safely get the boolean value
@@ -1095,7 +1142,7 @@ export default function ManageCircle() {
         
         try {
           // Use utility function to check deposit status
-          const { hasPaid, position } = await checkMemberDepositStatus(
+          const { hasPaid, position, depositBalanceRaw, lastContributionRaw } = await checkMemberDepositStatus(
             client,
             id as string,
             membersTableId,
@@ -1125,13 +1172,15 @@ export default function ManageCircle() {
           membersList.push({
             address, 
             depositPaid: hasPaid,
+            depositBalanceRaw,
+            lastContributionRaw,
             status: 'active', 
             joinDate: joinTimestamp,
             position: finalPosition
           });
         } catch (error) {
           console.error(`Manage - Error fetching deposit status for ${address}:`, error);
-          membersList.push({ address, depositPaid: false, status: 'active', joinDate: creationTimestamp ?? Date.now(), position: undefined });
+          membersList.push({ address, depositPaid: false, depositBalanceRaw: 0n, lastContributionRaw: 0n, status: 'active', joinDate: creationTimestamp ?? Date.now(), position: undefined });
         }
       });
       await Promise.all(depositStatusPromises);
@@ -1161,6 +1210,10 @@ export default function ManageCircle() {
         if (b.position === undefined) return -1;
         return a.position - b.position;
       });
+      const outstandingSecurityDepositRaw = sortedMembers.reduce((total, member) => {
+        if (!member.depositPaid) return total;
+        return total + (member.depositBalanceRaw || 0n);
+      }, 0n);
       setMembers(sortedMembers);
           
       // Correctly calculate allDepositsPaid based on the fetched flag
@@ -1222,6 +1275,11 @@ export default function ManageCircle() {
                   const stablecoinConfigFields = wf.stablecoin_config && typeof wf.stablecoin_config === 'object' && wf.stablecoin_config !== null && 'fields' in wf.stablecoin_config ? wf.stablecoin_config.fields as Record<string, unknown> : null;
                   const balanceFields = wf.balance && typeof wf.balance === 'object' && wf.balance !== null && 'fields' in wf.balance ? wf.balance.fields as Record<string, unknown> : null;
                   const dynamicFields = walletDynamicFields.data as unknown as DynamicFieldRef[];
+                  const stablecoinMeta = resolveStablecoinMetadata(
+                    typeof stablecoinConfigFields?.target_coin_type === 'string'
+                      ? stablecoinConfigFields.target_coin_type
+                      : null
+                  );
                   
                   // Get the main balance - this represents contributions
                   const contributionsBalance = balanceFields?.value ? Number(balanceFields.value) / 1e9 : 0;
@@ -1255,9 +1313,26 @@ export default function ManageCircle() {
                     }
                   } catch (error) {
                     debugLog('Dynamic fields error, using fallback', error);
-                    // Fallback to the hardcoded security deposit value
-                    securityDeposits = 0.163488;
+                    securityDeposits = 0;
                   }
+
+                  const stablecoinBalanceRaw = await readCustodyCoinBalance(
+                    client,
+                    dynamicFields,
+                    stablecoinMeta.coinType
+                  );
+                  const stablecoinBalance = toDisplayAmount(
+                    stablecoinBalanceRaw,
+                    stablecoinMeta.decimals
+                  );
+                  const stablecoinSecurityDeposits = Math.min(
+                    toDisplayAmount(outstandingSecurityDepositRaw, stablecoinMeta.decimals),
+                    stablecoinBalance
+                  );
+                  const stablecoinContributionBalance = Math.max(
+                    0,
+                    stablecoinBalance - stablecoinSecurityDeposits
+                  );
 
                   const coinTypes = getCurrentCoinTypes();
                   const tokens = getCurrentTokens();
@@ -1334,18 +1409,27 @@ export default function ManageCircle() {
                     walletId: shortenAddress(walletId),
                     contributionsBalance,
                     securityDeposits,
+                    stablecoinBalance,
+                    stablecoinSecurityDeposits,
+                    stablecoinContributionBalance,
                     hasMainBalance: !!balanceFields?.value
                   });
+
+                  setSuiSecurityDepositBalance(securityDeposits);
+                  setSuiContributionBalance(contributionsBalance);
+                  setUsdcSecurityDepositBalance(stablecoinSecurityDeposits);
+                  setUsdcContributionBalance(stablecoinContributionBalance);
                   
                   setCircle(prev => prev ? {
                     ...prev,
                     custody: {
                       walletId,
                       stablecoinEnabled: !!(stablecoinConfigFields?.enabled),
-                      stablecoinType: (stablecoinConfigFields?.target_coin_type as string) || 'USDC',
-                      stablecoinBalance: wf.stablecoin_balance ? Number(wf.stablecoin_balance) / 1e8 : 0,
+                      stablecoinType: stablecoinMeta.label,
+                      stablecoinCoinType: stablecoinMeta.coinType,
+                      stablecoinBalance,
                       suiBalance: contributionsBalance, // This is for regular contributions
-                      securityDeposits: securityDeposits,
+                      securityDeposits: securityDeposits > 0 ? securityDeposits : stablecoinSecurityDeposits,
                       suiUsdeBalance: toDisplayAmount(suiUsdeBalanceRaw, 9),
                       emberReceiptBalance: toDisplayAmount(emberReceiptBalanceRaw, 9),
                       emberPendingRedeemShares: toDisplayAmount(emberPendingRedeemSharesRaw, 9),
@@ -1558,16 +1642,14 @@ export default function ManageCircle() {
   };
 
   // Function to call admin_remove_member
-  const callAdminRemoveMember = async (circleId: string, memberAddress: string): Promise<boolean> => {
+  const callAdminRemoveMember = async (circleId: string, memberAddress: string): Promise<void> => {
+    setIsApproving(true);
+    
     try {
-      setIsApproving(true);
-      
       if (!account) {
-        toast.error('Authentication required');
-        return false;
+        throw new Error('Authentication required');
       }
 
-      // Call the API directly like the approve functions
       const response = await fetch('/api/zkLogin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1583,28 +1665,17 @@ export default function ManageCircle() {
 
       const result = await response.json();
 
-      // Check HTTP response status
       if (!response.ok) {
         throw new Error(result.error || 'Failed to remove member');
       }
 
-      // Also check transaction status in response body
       if (result.status === 'failure') {
         console.error('Transaction failed:', result);
         throw new Error(result.error || result.details || 'Transaction failed on blockchain');
       }
 
       console.log('Member removed successfully:', result);
-      toast.success(`Member ${shortenAddress(memberAddress)} removed successfully`);
-      
-      // Refresh the circle data to update the member list
       await fetchCircleDetails();
-      
-      return true;
-    } catch (error: unknown) {
-      console.error('Error removing member on blockchain:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to remove member on blockchain');
-      return false;
     } finally {
       setIsApproving(false);
     }
@@ -1613,18 +1684,38 @@ export default function ManageCircle() {
   // Handler for removing a member with confirmation
   const handleRemoveMember = async (memberAddress: string) => {
     if (!circle || !id) return;
+    const member = members.find((entry) => entry.address === memberAddress);
+    const hasDeposit = Boolean(member?.depositPaid);
+    const actionTitle = hasDeposit ? 'Return Deposit & Remove Member' : 'Remove Member';
+    const confirmText = hasDeposit ? 'Return Deposit & Remove' : 'Remove Member';
+    const progressMessage = hasDeposit
+      ? `Returning deposit and removing ${shortenAddress(memberAddress)}...`
+      : `Removing ${shortenAddress(memberAddress)}...`;
+    const successMessage = hasDeposit
+      ? `Returned deposit and removed ${shortenAddress(memberAddress)}`
+      : `Member ${shortenAddress(memberAddress)} removed successfully`;
 
     // Show confirmation modal
     setConfirmationModal({
       isOpen: true,
-      title: 'Remove Member',
+      title: actionTitle,
       message: (
         <div className="space-y-3">
           <p>
-            Are you sure you want to remove <strong>{shortenAddress(memberAddress)}</strong> from this circle?
+            {hasDeposit ? (
+              <>
+                Are you sure you want to return the security deposit for <strong>{shortenAddress(memberAddress)}</strong> and remove them from this circle?
+              </>
+            ) : (
+              <>
+                Are you sure you want to remove <strong>{shortenAddress(memberAddress)}</strong> from this circle?
+              </>
+            )}
           </p>
           <p className="text-sm text-gray-600">
-            This action can only be performed when the circle is inactive and will return any security deposit to the member.
+            {hasDeposit
+              ? 'This action can only be performed when the circle is inactive. Any paid security deposit will be returned before the member is removed.'
+              : 'This action can only be performed when the circle is inactive.'}
           </p>
           <p className="text-sm text-red-600 font-medium">
             This action cannot be undone.
@@ -1633,17 +1724,20 @@ export default function ManageCircle() {
       ),
       onConfirm: async () => {
         const toastId = 'remove-member';
-        toast.loading(`Removing ${shortenAddress(memberAddress)}...`, { id: toastId });
-        
-        const success = await callAdminRemoveMember(id as string, memberAddress);
-        
-        if (success) {
-          toast.success(`Member ${shortenAddress(memberAddress)} removed successfully`, { id: toastId });
-        } else {
-          toast.error(`Failed to remove member ${shortenAddress(memberAddress)}`, { id: toastId });
+        toast.loading(progressMessage, { id: toastId });
+
+        try {
+          await callAdminRemoveMember(id as string, memberAddress);
+          toast.success(successMessage, { id: toastId });
+        } catch (error) {
+          console.error('Error removing member on blockchain:', error);
+          toast.error(
+            error instanceof Error ? error.message : `Failed to remove member ${shortenAddress(memberAddress)}`,
+            { id: toastId }
+          );
         }
       },
-      confirmText: 'Remove Member',
+      confirmText,
       cancelText: 'Cancel',
       confirmButtonVariant: 'danger',
     });
@@ -1652,6 +1746,12 @@ export default function ManageCircle() {
   // Handler for returning security deposit to a member
   const handleReturnSecurityDeposit = async (memberAddress: string) => {
     if (!circle || !id) return;
+    const canReturnSecurityDeposit = !circle.isActive || circle.paused;
+
+    if (!canReturnSecurityDeposit) {
+      toast.error('Security deposits can only be returned when the circle is inactive or paused after a cycle.');
+      return;
+    }
 
     // Show confirmation modal
     setConfirmationModal({
@@ -1663,7 +1763,7 @@ export default function ManageCircle() {
             Are you sure you want to return the security deposit to <strong>{shortenAddress(memberAddress)}</strong>?
           </p>
           <p className="text-sm text-gray-600">
-            This will withdraw their security deposit from the circle&apos;s wallet and send it back to their address.
+            This will withdraw their security deposit from the circle&apos;s wallet and send it back to their address. Deposits can be returned when the circle is inactive or paused after a cycle.
           </p>
           <p className="text-sm text-amber-600 font-medium">
             Make sure the member has completed their obligations in the circle before returning their deposit.
@@ -1721,6 +1821,41 @@ export default function ManageCircle() {
       cancelText: 'Cancel',
       confirmButtonVariant: 'warning',
     });
+  };
+
+  const getMemberManagementAction = (member: Member) => {
+    if (!circle || userAddress !== circle.admin) {
+      return null;
+    }
+
+    const isAdminMember = member.address === circle.admin;
+    const canReturnDeposit = !circle.isActive || circle.paused;
+
+    if (isAdminMember) {
+      if (!member.depositPaid) {
+        return null;
+      }
+
+      return {
+        buttonText: 'Manage',
+        helperText: canReturnDeposit ? 'Return deposit' : 'Available when inactive or paused',
+        isDisabled: !canReturnDeposit,
+        onClick: () => handleReturnSecurityDeposit(member.address),
+      };
+    }
+
+    const canRemoveMember = !circle.isActive;
+
+    return {
+      buttonText: 'Manage',
+      helperText: canRemoveMember
+        ? member.depositPaid
+          ? 'Return deposit and remove'
+          : 'Remove member'
+        : 'Available when inactive',
+      isDisabled: !canRemoveMember,
+      onClick: () => handleRemoveMember(member.address),
+    };
   };
 
   const handleJoinRequest = async (request: JoinRequest, approve: boolean) => {
@@ -2696,112 +2831,67 @@ export default function ManageCircle() {
     setFetchingUsdcBalance(true);
     try {
       const client = new SuiClient({ url: getCurrentRpcUrl() });
-      let newBalance = null;
-      let newSecurityDepositBalance = 0;
-      let newContributionBalance = 0;
+      const [walletData, walletDynamicFields] = await Promise.all([
+        client.getObject({
+          id: circle.custody.walletId,
+          options: { showContent: true }
+        }),
+        client.getDynamicFields({ parentId: circle.custody.walletId })
+      ]);
+
+      const walletFields = walletData.data?.content && 'fields' in walletData.data.content
+        ? walletData.data.content.fields as Record<string, unknown>
+        : null;
+      const stablecoinConfigFields = walletFields?.stablecoin_config &&
+        typeof walletFields.stablecoin_config === 'object' &&
+        walletFields.stablecoin_config !== null &&
+        'fields' in walletFields.stablecoin_config
+          ? (walletFields.stablecoin_config as { fields: Record<string, unknown> }).fields
+          : null;
+
+      const stablecoinMeta = resolveStablecoinMetadata(
+        typeof stablecoinConfigFields?.target_coin_type === 'string'
+          ? stablecoinConfigFields.target_coin_type
+          : circle.custody.stablecoinCoinType || circle.custody.stablecoinType
+      );
+      const dynamicFields = walletDynamicFields.data as unknown as DynamicFieldRef[];
+      const liveStablecoinBalanceRaw = await readCustodyCoinBalance(
+        client,
+        dynamicFields,
+        stablecoinMeta.coinType
+      );
+      const outstandingDepositRaw = members.reduce((total, member) => {
+        if (!member.depositPaid) return total;
+        return total + (member.depositBalanceRaw || 0n);
+      }, 0n);
+
+      const newBalance = toDisplayAmount(liveStablecoinBalanceRaw, stablecoinMeta.decimals);
+      const newSecurityDepositBalance = Math.min(
+        toDisplayAmount(outstandingDepositRaw, stablecoinMeta.decimals),
+        newBalance
+      );
+      const newContributionBalance = Math.max(0, newBalance - newSecurityDepositBalance);
+
+      setUsdcSecurityDepositBalance(newSecurityDepositBalance);
+      setUsdcContributionBalance(newContributionBalance);
       
-      // First try to get the balance from CoinDeposited events with coin_type "stablecoin"
-      const coinDepositedEvents = await client.queryEvents({
-        query: {
-          MoveEventType: `${circlePackageId}::njangi_custody::CoinDeposited`
-        },
-        limit: 20
-      });
-      
-      // Find the most recent event for this wallet to get total balance
-      for (const event of coinDepositedEvents.data) {
-        if (event.parsedJson && 
-            typeof event.parsedJson === 'object' &&
-            'wallet_id' in event.parsedJson &&
-            'coin_type' in event.parsedJson &&
-            'new_balance' in event.parsedJson) {
-            
-          const parsedEvent = event.parsedJson as {
-            wallet_id: string;
-            coin_type: string;
-            new_balance: string;
-            amount: string;
-          };
-          
-          if (parsedEvent.wallet_id === circle.custody.walletId && 
-              parsedEvent.coin_type === 'stablecoin') {
-            // Get the total balance from the most recent event
-            const balance = Number(parsedEvent.new_balance) / 1e6; // USDC has 6 decimals
-            if (newBalance === null || balance > newBalance) {
-              newBalance = balance;
-              console.log('[USDC Balance Fetch] Found stablecoin balance from CoinDeposited event:', balance);
-            }
-          }
+      setCircle(prev => prev ? {
+        ...prev,
+        custody: {
+          ...prev.custody!,
+          stablecoinType: stablecoinMeta.label,
+          stablecoinCoinType: stablecoinMeta.coinType,
+          stablecoinBalance: newBalance,
+          securityDeposits: newSecurityDepositBalance
         }
-      }
+      } : prev);
       
-      // Process CustodyDeposited events to identify security deposits in USDC
-      const custodyEvents = await client.queryEvents({
-        query: {
-          MoveEventType: `${circlePackageId}::njangi_custody::CustodyDeposited`
-        },
-        limit: 50
+      console.log('Custody stablecoin balances breakdown:', {
+        total: newBalance,
+        securityDeposits: newSecurityDepositBalance,
+        contributionFunds: newContributionBalance,
+        coinType: stablecoinMeta.coinType
       });
-      
-      for (const event of custodyEvents.data) {
-        if (event.parsedJson && 
-            typeof event.parsedJson === 'object' &&
-            'circle_id' in event.parsedJson &&
-            'operation_type' in event.parsedJson &&
-            'amount' in event.parsedJson &&
-            event.parsedJson.circle_id === circle.id) {
-          
-          const parsedEvent = event.parsedJson as {
-            operation_type: number | string;
-            amount: string;
-            coin_type?: string;
-          };
-          
-          // Skip if this is not a stablecoin event
-          if (parsedEvent.coin_type === 'sui') {
-            continue;
-          }
-          
-          // Operation type 3 indicates security deposit
-          const opType = typeof parsedEvent.operation_type === 'string' ? 
-            parseInt(parsedEvent.operation_type) : parsedEvent.operation_type;
-            
-          if (opType === 3) {
-            // This is a security deposit in USDC
-            const amount = Number(parsedEvent.amount) / 1e6; // Convert from micro units (USDC has 6 decimals)
-            newSecurityDepositBalance += amount;
-            console.log(`Found security deposit USDC: ${amount}`);
-          }
-        }
-      }
-      
-      // Ensure security deposit is not larger than the total balance
-      if (newBalance !== null) {
-        newSecurityDepositBalance = Math.min(newSecurityDepositBalance, newBalance);
-        // Calculate contribution balance (total minus security deposits)
-        newContributionBalance = Math.max(0, newBalance - newSecurityDepositBalance);
-      }
-      
-      // Set the balances if we found any
-      if (newBalance !== null) {
-        setUsdcSecurityDepositBalance(newSecurityDepositBalance);
-        setUsdcContributionBalance(newContributionBalance);
-        
-        // Update circle state
-        setCircle(prev => prev ? {
-          ...prev,
-          custody: {
-            ...prev.custody!,
-            stablecoinBalance: newBalance
-          }
-        } : prev);
-        
-        console.log('Custody stablecoin balances breakdown:', {
-          total: newBalance,
-          securityDeposits: newSecurityDepositBalance,
-          contributionFunds: newContributionBalance
-        });
-      }
     } catch (error) {
       console.error('Error fetching custody wallet USDC balance:', error);
     } finally {
@@ -3769,32 +3859,19 @@ export default function ManageCircle() {
     let determinedActiveMembersInRotation: string[] = [];
     let currentPositionInRotation: number | null = null;
     let memberAtCurrentPosition: string | null = null;
+    const uniqueContributors = new Set<string>();
 
     try {
-      // Check for payout events first, to detect if a cycle has just advanced
-      const payoutEvents = await client.queryEvents({
-        query: { MoveEventType: `${circlePackageId}::njangi_payments::PayoutProcessed` },
-        limit: 20
-      });
-      
-      // Find the most recent payout event for this circle
-      const recentPayoutForCircle = payoutEvents.data
-        .filter(event => {
-          const parsedJson = event.parsedJson as { circle_id?: string };
-          return parsedJson?.circle_id === circle.id;
-        })
-        .sort((a, b) => {
-          // Sort by timestamp (newest first)
-          return (Number(b.timestampMs) || 0) - (Number(a.timestampMs) || 0);
-        })[0]; // Take the first (most recent) one
-        
-      if (recentPayoutForCircle) {
-        console.log('[ContributionStatus] Found recent payout event:', recentPayoutForCircle);
-      }
-
       const circleObjectData = await client.getObject({ id: circle.id, options: { showContent: true } });
       if (circleObjectData.data?.content && 'fields' in circleObjectData.data.content) {
         const cFields = circleObjectData.data.content.fields as Record<string, SuiFieldValue>;
+        const membersField = cFields.members && typeof cFields.members === 'object' && cFields.members !== null
+          ? cFields.members as { fields?: Record<string, unknown> }
+          : null;
+        const membersFieldId = membersField?.fields?.id;
+        const membersTableId = membersFieldId && typeof membersFieldId === 'object' && membersFieldId !== null
+          ? (membersFieldId as { id?: string }).id
+          : undefined;
         currentCycleFromServer = cFields.current_cycle ? Number(cFields.current_cycle) : 0;
         currentPositionInRotation = cFields.current_position ? Number(cFields.current_position) : null;
         console.log('[ContributionStatus] Current cycle from server:', currentCycleFromServer);
@@ -3803,23 +3880,99 @@ export default function ManageCircle() {
         const rotationOrderFromFields = cFields.rotation_order as string[];
         if (Array.isArray(rotationOrderFromFields) && rotationOrderFromFields.length > 0) {
           const membersMap = new Map(members.map(m => [m.address, m]));
-          determinedActiveMembersInRotation = rotationOrderFromFields.filter(addr => {
-            if (addr && addr !== '0x0') {
-              const memberDetail = membersMap.get(addr);
-              // Member must be in current member list, active, and have deposit paid
-              return memberDetail && memberDetail.status === 'active' && memberDetail.depositPaid;
-            }
-            return false;
-          });
-          console.log('[ContributionStatus] Active members from rotation_order:', determinedActiveMembersInRotation);
-          
-          // Get the member at current position if available
           if (currentPositionInRotation !== null && 
               currentPositionInRotation >= 0 && 
               currentPositionInRotation < rotationOrderFromFields.length) {
             memberAtCurrentPosition = rotationOrderFromFields[currentPositionInRotation];
             console.log('[ContributionStatus] Member at current position:', memberAtCurrentPosition);
           }
+
+          if (membersTableId) {
+            const memberSnapshots = await Promise.all(
+              rotationOrderFromFields
+                .filter((addr): addr is string => typeof addr === 'string' && addr !== '0x0')
+                .map(async (address) => {
+                  try {
+                    const memberField = await client.getDynamicFieldObject({
+                      parentId: membersTableId,
+                      name: { type: 'address', value: address }
+                    });
+
+                    if (!memberField.data?.content || !('fields' in memberField.data.content)) {
+                      return null;
+                    }
+
+                    const memberWrapper = memberField.data.content.fields as {
+                      value?: {
+                        fields?: {
+                          deposit_paid?: boolean;
+                          last_contribution?: string | number;
+                          status?: string | number;
+                        };
+                      };
+                    };
+
+                    const memberData = memberWrapper.value?.fields;
+                    const rawStatus = memberData?.status;
+                    const statusRaw = typeof rawStatus === 'string'
+                      ? parseInt(rawStatus, 10)
+                      : typeof rawStatus === 'number'
+                        ? rawStatus
+                        : null;
+
+                    return {
+                      address,
+                      depositPaid: Boolean(memberData?.deposit_paid),
+                      lastContributionRaw: parseU64Like(memberData?.last_contribution),
+                      statusRaw
+                    };
+                  } catch (error) {
+                    console.warn('[ContributionStatus] Failed to read member contribution snapshot:', { address, error });
+                    return null;
+                  }
+                })
+            );
+
+            const activeSnapshots = memberSnapshots.filter((snapshot): snapshot is NonNullable<typeof snapshot> => {
+              if (!snapshot || !snapshot.depositPaid) return false;
+              if (snapshot.statusRaw !== null) {
+                return snapshot.statusRaw === 0;
+              }
+              const fallbackMember = membersMap.get(snapshot.address);
+              return fallbackMember?.status === 'active';
+            });
+
+            determinedActiveMembersInRotation = activeSnapshots.map(snapshot => snapshot.address);
+
+            activeSnapshots.forEach((snapshot) => {
+              if (snapshot.address === memberAtCurrentPosition) {
+                return;
+              }
+              if (snapshot.lastContributionRaw > 0n) {
+                uniqueContributors.add(snapshot.address);
+              }
+            });
+          } else {
+            determinedActiveMembersInRotation = rotationOrderFromFields.filter(addr => {
+              if (addr && addr !== '0x0') {
+                const memberDetail = membersMap.get(addr);
+                return memberDetail && memberDetail.status === 'active' && memberDetail.depositPaid;
+              }
+              return false;
+            });
+
+            determinedActiveMembersInRotation.forEach((address) => {
+              if (address === memberAtCurrentPosition) {
+                return;
+              }
+              const memberDetail = membersMap.get(address);
+              if ((memberDetail?.lastContributionRaw || 0n) > 0n) {
+                uniqueContributors.add(address);
+              }
+            });
+          }
+
+          console.log('[ContributionStatus] Active members from rotation_order:', determinedActiveMembersInRotation);
         }
       }
 
@@ -3829,44 +3982,20 @@ export default function ManageCircle() {
           .filter(m => m.status === 'active' && m.depositPaid)
           .map(m => m.address);
         console.log('[ContributionStatus] Active members from members list (fallback):', determinedActiveMembersInRotation);
+
+        determinedActiveMembersInRotation.forEach((address) => {
+          if (address === memberAtCurrentPosition) {
+            return;
+          }
+          const memberDetail = members.find((member) => member.address === address);
+          if ((memberDetail?.lastContributionRaw || 0n) > 0n) {
+            uniqueContributors.add(address);
+          }
+        });
       }
       
       if (determinedActiveMembersInRotation.length === 0 && circle.currentMembers > 0) {
         console.warn("[ContributionStatus] Could not determine active members in rotation. Payout trigger UI might be inaccurate.");
-      }
-
-      const uniqueContributors = new Set<string>();
-      if (currentCycleFromServer > 0) {
-        const eventFetchPromises = [
-          client.queryEvents({ query: { MoveEventType: `${circlePackageId}::njangi_payments::ContributionMade` }, limit: 250 }),
-          client.queryEvents({ query: { MoveEventType: `${circlePackageId}::njangi_circles::StablecoinContributionMade` }, limit: 250 })
-        ];
-        const eventResults = await Promise.all(eventFetchPromises);
-
-        // If we have a recent payout event, only consider contributions after that event's timestamp
-        const payoutTimestamp = recentPayoutForCircle ? Number(recentPayoutForCircle.timestampMs) : 0;
-
-        eventResults.forEach((result, index) => {
-          const eventType = index === 0 ? 'ContributionMade' : 'StablecoinContributionMade';
-          result.data.forEach(event => {
-            const data = event.parsedJson as { circle_id?: string; member?: string; cycle?: string | number; };
-            const eventCycle = typeof data.cycle === 'string' ? parseInt(data.cycle, 10) : data.cycle;
-            const eventTimestamp = Number(event.timestampMs || 0);
-            
-            // Only count contributions that match the current cycle AND 
-            // (if there was a recent payout) happened after the payout event
-            if (data.circle_id === circle.id && 
-                data.member && 
-                eventCycle === currentCycleFromServer &&
-                (!payoutTimestamp || eventTimestamp > payoutTimestamp)) {
-              
-              if (determinedActiveMembersInRotation.includes(data.member)) { // Only count contributions from active members in rotation
-                 uniqueContributors.add(data.member);
-              }
-            }
-          });
-          console.log(`[ContributionStatus] ${eventType} events processed. Contributors this cycle: ${uniqueContributors.size}`);
-        });
       }
       
       setContributionStatus({
@@ -3883,7 +4012,7 @@ export default function ManageCircle() {
     } finally {
       setLoadingContributions(false);
     }
-  }, [circle, members, circlePackageId]); // Use dynamic package ID
+  }, [circle, members]);
 
   useEffect(() => {
     if (circle && circle.isActive && members.length > 0) {
@@ -3929,6 +4058,11 @@ export default function ManageCircle() {
     });
     return made;
   }, [contributionStatus, circle, loadingContributions]);
+
+  const paidDepositMembers = useMemo(
+    () => members.filter((member) => member.depositPaid),
+    [members],
+  );
 
   if (authLoading || !isAuthenticated || !account) {
     return null;
@@ -4054,8 +4188,29 @@ export default function ManageCircle() {
     });
   };
 
-  // Function to handle security deposit payout for multiple members
-  const handleSecurityDepositPayout = async (memberAddresses: string[], coinType: 'sui' | 'stablecoin') => {
+  const openReturnAllDepositsModal = () => {
+    if (!circle) return;
+
+    const canReturnSecurityDeposit = !circle.isActive || circle.paused;
+    if (!canReturnSecurityDeposit) {
+      toast.error('Security deposits can only be returned when the circle is inactive or paused after a cycle.');
+      return;
+    }
+
+    const eligibleAddresses = paidDepositMembers.map(member => member.address);
+
+    if (eligibleAddresses.length === 0) {
+      toast.error('No paid security deposits are available to return.');
+      return;
+    }
+
+    setPaidOutInCurrentSessionMembers(new Set());
+    setSelectedMembersForPayout(new Set(eligibleAddresses));
+    setShowPayoutDepositModal(true);
+  };
+
+  // Function to handle security deposit returns for multiple members
+  const handleSecurityDepositPayout = async (memberAddresses: string[]) => {
     if (!circle || !circle.id || !account) {
       toast.error('Missing circle information or account.');
       return;
@@ -4066,13 +4221,13 @@ export default function ManageCircle() {
       return;
     }
 
-    if (!circle.paused) {
-      toast.error('Circle must be paused to pay out security deposits.');
+    if (circle.isActive && !circle.paused) {
+      toast.error('Security deposits can only be returned when the circle is inactive or paused after a cycle.');
       return;
     }
 
     if (memberAddresses.length === 0) {
-      toast.error('No members selected for payout.');
+      toast.error('No members selected for deposit return.');
       return;
     }
 
@@ -4080,9 +4235,7 @@ export default function ManageCircle() {
     const toastId = 'security-deposit-payout';
     
     try {
-      toast.loading(`Processing security deposits payout for ${memberAddresses.length} member(s)...`, { id: toastId });
-      
-      const zkLoginClient = new ZkLoginClient();
+      toast.loading(`Returning security deposits for ${memberAddresses.length} member(s)...`, { id: toastId });
       setPayoutProgress({current: 0, total: memberAddresses.length});
       
       // Track actual successful payouts
@@ -4102,25 +4255,36 @@ export default function ManageCircle() {
           // Ensure address has proper format
           const normalizedAddress = memberAddress.startsWith('0x') ? memberAddress : `0x${memberAddress}`;
           
-          let result;
-          
-          if (coinType === 'sui') {
-            result = await zkLoginClient.payoutSecurityDepositSui(
+          const response = await fetch('/api/zkLogin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'returnSecurityDeposit',
               account,
-              circle.id,
-              normalizedAddress,
-              circle.custody.walletId
-            );
-          } else {
-            result = await zkLoginClient.payoutSecurityDepositStablecoin(
-              account,
-              circle.id,
-              normalizedAddress,
-              circle.custody.walletId
-            );
+              circleId: circle.id,
+              walletId: circle.custody.walletId,
+              memberAddress: normalizedAddress,
+              network: getCurrentNetwork()
+            })
+          });
+
+          const responseData = await response.json();
+
+          if (!response.ok) {
+            if (response.status === 401 || responseData.requireRelogin) {
+              throw new ZkLoginError(
+                responseData.error || 'Authentication failed. Please login again.',
+                true
+              );
+            }
+            throw new Error(responseData.error || 'Failed to return security deposit');
+          }
+
+          if (responseData.status === 'failure') {
+            throw new Error(responseData.error || responseData.details || 'Transaction failed on blockchain');
           }
           
-          console.log(`Security deposit payout transaction executed for ${shortenAddress(memberAddress)}. Digest: ${result.digest}`);
+          console.log(`Security deposit return executed for ${shortenAddress(memberAddress)}. Digest: ${responseData.digest}`);
           
           // Add to paid out set for immediate UI update in modal
           setPaidOutInCurrentSessionMembers(prev => new Set(prev).add(memberAddress));
@@ -4129,8 +4293,8 @@ export default function ManageCircle() {
           successCount++;
           
         } catch (memberError) {
-          console.error(`Error paying out security deposit for ${shortenAddress(memberAddress)}:`, memberError);
-          toast.error(`Failed to process payout for ${shortenAddress(memberAddress)}: ${memberError instanceof Error ? memberError.message : 'Unknown error'}`, 
+          console.error(`Error returning security deposit for ${shortenAddress(memberAddress)}:`, memberError);
+          toast.error(`Failed to return deposit for ${shortenAddress(memberAddress)}: ${memberError instanceof Error ? memberError.message : 'Unknown error'}`, 
             { id: `${toastId}-error-${i}`, duration: 5000 });
           
           // Continue with next member even if one fails
@@ -4145,7 +4309,7 @@ export default function ManageCircle() {
       await fetchCircleDetails();
       
       // Show success message with actual success count
-      toast.success(`Completed security deposit payouts: ${successCount}/${memberAddresses.length} successful`, { id: toastId });
+      toast.success(`Completed security deposit returns: ${successCount}/${memberAddresses.length} successful`, { id: toastId });
       
       // Close the modal and reset selections
       setShowPayoutDepositModal(false);
@@ -4153,7 +4317,7 @@ export default function ManageCircle() {
       // setPaidOutInCurrentSessionMembers(new Set()); // Clear for next modal opening if desired, or let fetchCircleDetails handle it
       
     } catch (error) {
-      console.error('Error processing multiple security deposit payouts:', error);
+      console.error('Error processing multiple security deposit returns:', error);
       
       // Parse the error for a more specific message
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
@@ -4170,27 +4334,6 @@ export default function ManageCircle() {
 
   // Replace the SecurityDepositPayoutModal component with the updated version
   const SecurityDepositPayoutModal = () => {
-    // Determine available coin types based on wallet balances
-    const hasSuiBalance = suiSecurityDepositBalance !== null && suiSecurityDepositBalance > 0;
-    const hasUsdcBalance = usdcSecurityDepositBalance !== null && usdcSecurityDepositBalance > 0;
-    
-    // Auto-detect default coin type based on balances - must be before any early returns
-    useEffect(() => {
-      // If we have USDC but no SUI, default to USDC
-      if (hasUsdcBalance && !hasSuiBalance) {
-        setPayoutCoinType('stablecoin');
-      }
-      // If we have both, prefer the one with higher balance
-      else if (hasUsdcBalance && hasSuiBalance) {
-        if ((usdcSecurityDepositBalance || 0) * suiPrice > (suiSecurityDepositBalance || 0)) {
-          setPayoutCoinType('stablecoin');
-        } else {
-          setPayoutCoinType('sui');
-        }
-      }
-      // Default remains 'sui' if we only have SUI or if we don't have any deposits
-    }, [hasUsdcBalance, hasSuiBalance, suiSecurityDepositBalance, usdcSecurityDepositBalance, suiPrice]);
-    
     // Safely get security deposit amount
     const securityDepositAmount = circle?.securityDeposit?.toFixed(4) || '0.0000';
     
@@ -4220,9 +4363,7 @@ export default function ManageCircle() {
         (selectedMembersForPayout.size > 0 && Array.from(selectedMembersForPayout).every(addr => 
           paidOutInCurrentSessionMembers.has(addr) || 
           !members.find(m => m.address === addr)?.depositPaid
-        )) ||
-        (payoutCoinType === 'sui' && !hasSuiBalance) ||
-        (payoutCoinType === 'stablecoin' && !hasUsdcBalance)
+        ))
       );
     };
     
@@ -4230,9 +4371,9 @@ export default function ManageCircle() {
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
           <div className="bg-blue-600 text-white px-6 py-4">
-            <h2 className="text-xl font-semibold">Pay Out Security Deposits</h2>
+            <h2 className="text-xl font-semibold">Manage Deposits</h2>
             <p className="text-blue-100 text-sm mt-1">
-              Return security deposits to members who wish to exit the circle
+              Return paid deposits in one batch. Member removals stay in the Members table.
             </p>
           </div>
           
@@ -4247,7 +4388,7 @@ export default function ManageCircle() {
             ) : (
               <div className="space-y-4">
                 <p className="text-gray-700 mb-4">
-                  Select one or more members to return their security deposits. This action cannot be undone.
+                  Select the members whose deposits should be returned. This action cannot be undone.
                 </p>
                 
                 <div className="flex justify-between items-center mb-2">
@@ -4330,74 +4471,20 @@ export default function ManageCircle() {
                           </div>
                         </div>
                         <div className="text-sm font-medium text-green-600">
-                          Paid Out
+                          {paidOutInCurrentSessionMembers.has(member.address) ? 'Returned' : 'No Deposit'}
                         </div>
                       </div>
                     </div>
                   ))}
                 </div>
                 
-                {/* Coin type selection with auto-detection */}
-                {selectedMembersForPayout.size > 0 && (
-                  <div className="mt-6 border-t border-gray-200 pt-4">
-                    <div className="flex justify-between items-center mb-3">
-                      <p className="font-medium text-gray-800">Select payout coin type:</p>
-                      
-                      {/* Show balances to help users select */}
-                      <div className="flex space-x-4 text-xs text-gray-600">
-                        <div className="flex items-center">
-                          <span className={`w-2 h-2 rounded-full mr-1 ${hasSuiBalance ? 'bg-green-500' : 'bg-gray-300'}`}></span>
-                          <span>SUI: {suiSecurityDepositBalance?.toFixed(4) || '0'}</span>
-                        </div>
-                        <div className="flex items-center">
-                          <span className={`w-2 h-2 rounded-full mr-1 ${hasUsdcBalance ? 'bg-green-500' : 'bg-gray-300'}`}></span>
-                          <span>USDC: {usdcSecurityDepositBalance?.toFixed(2) || '0'}</span>
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div className="flex space-x-3">
-                      <button
-                        className={`px-4 py-2 rounded-md border ${
-                          payoutCoinType === 'sui' 
-                            ? 'bg-blue-50 border-blue-500 text-blue-700' 
-                            : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-                        } ${!hasSuiBalance ? 'opacity-50 cursor-not-allowed' : ''}`}
-                        onClick={() => setPayoutCoinType('sui')}
-                        disabled={!hasSuiBalance}
-                        type="button"
-                      >
-                        SUI {!hasSuiBalance && '(No Balance)'}
-                      </button>
-                      <button
-                        className={`px-4 py-2 rounded-md border ${
-                          payoutCoinType === 'stablecoin' 
-                            ? 'bg-blue-50 border-blue-500 text-blue-700' 
-                            : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-                        } ${!hasUsdcBalance ? 'opacity-50 cursor-not-allowed' : ''}`}
-                        onClick={() => setPayoutCoinType('stablecoin')}
-                        disabled={!hasUsdcBalance}
-                        type="button"
-                      >
-                        Stablecoin (USDC) {!hasUsdcBalance && '(No Balance)'}
-                      </button>
-                    </div>
-                    
-                    {!hasSuiBalance && !hasUsdcBalance && (
-                      <p className="mt-2 text-sm text-amber-600">
-                        No security deposit balances available in either coin type.
-                      </p>
-                    )}
-                  </div>
-                )}
-                
-                {/* Progress indicator for multi-payout */}
+                {/* Progress indicator for multi-return */}
                 {isProcessingPayout && payoutProgress.total > 0 && (
                   <div className="mt-4 border-t border-gray-200 pt-4">
                     <div className="space-y-2">
                       <div className="flex justify-between items-center">
                         <span className="text-sm font-medium text-gray-700">
-                          Processing payouts: {payoutProgress.current}/{payoutProgress.total}
+                          Returning deposits: {payoutProgress.current}/{payoutProgress.total}
                         </span>
                         <span className="text-xs font-medium text-gray-500">
                           {Math.round((payoutProgress.current / payoutProgress.total) * 100)}%
@@ -4441,7 +4528,7 @@ export default function ManageCircle() {
                   addr => !(paidOutInCurrentSessionMembers.has(addr) || !members.find(m => m.address === addr)?.depositPaid)
                 );
                 if (selectedAddresses.length > 0) {
-                  handleSecurityDepositPayout(selectedAddresses, payoutCoinType);
+                  handleSecurityDepositPayout(selectedAddresses);
                 }
               }}
             >
@@ -4454,9 +4541,9 @@ export default function ManageCircle() {
                   Processing...
                 </div>
               ) : selectedMembersForPayout.size > 1 ? (
-                `Pay Out ${selectedMembersForPayout.size} Deposits with ${payoutCoinType === 'sui' ? 'SUI' : 'USDC'}`
+                `Return ${selectedMembersForPayout.size} Deposits`
               ) : (
-                `Pay Out Deposit with ${payoutCoinType === 'sui' ? 'SUI' : 'USDC'}`
+                'Return Deposit'
               )}
             </button>
           </div>
@@ -5054,13 +5141,47 @@ export default function ManageCircle() {
                           Resume Cycle
                         </button>
                         <button
-                          onClick={() => setShowPayoutDepositModal(true)}
+                          onClick={openReturnAllDepositsModal}
                           className="w-full px-4 py-3 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white rounded-md shadow-sm transition-all flex items-center justify-center font-medium text-sm"
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                           </svg>
-                          Pay Deposits
+                          Manage Deposits
+                        </button>
+                        <button
+                          onClick={fetchCircleDetails}
+                          className="w-full px-4 py-3 bg-white hover:bg-gray-50 text-gray-700 rounded-md shadow-sm transition-all flex items-center justify-center font-medium border border-gray-300 text-sm"
+                        >
+                          <RefreshCw className="mr-2 h-4 w-4" />
+                          Refresh
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {!circle.isActive && !circle.paused && paidDepositMembers.length > 0 && (
+                  <div className="mb-6 p-5 bg-sky-50 border-2 border-sky-200 rounded-lg">
+                    <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
+                      <div className="flex-1">
+                        <h3 className="text-lg font-semibold text-sky-800 flex items-center">
+                          <AlertTriangle className="mr-2 h-5 w-5" />
+                          Deposit Management
+                        </h3>
+                        <p className="text-sky-700 mt-2">
+                          This circle is inactive. Manage individual member actions from the Members table, or use the deposit manager to return all {paidDepositMembers.length} paid deposit{paidDepositMembers.length === 1 ? '' : 's'} in one batch.
+                        </p>
+                      </div>
+                      <div className="flex flex-col gap-3 w-full sm:w-auto">
+                        <button
+                          onClick={openReturnAllDepositsModal}
+                          className="w-full px-4 py-3 bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-600 hover:to-sky-700 text-white rounded-md shadow-sm transition-all flex items-center justify-center font-medium text-sm"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          Manage Deposits
                         </button>
                         <button
                           onClick={fetchCircleDetails}
@@ -5077,7 +5198,14 @@ export default function ManageCircle() {
                 {/* Members Management */}
                 <div className="px-1 sm:px-2">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4">
-                    <h3 className="text-lg font-medium text-gray-900 border-l-4 border-blue-500 pl-3">Members</h3>
+                    <div>
+                      <h3 className="text-lg font-medium text-gray-900 border-l-4 border-blue-500 pl-3">Members</h3>
+                      {!circle.isActive && paidDepositMembers.length > 0 && (
+                        <p className="mt-1 pl-3 text-sm text-slate-500">
+                          Use Manage for individual member actions. Use Manage Deposits above for batch returns.
+                        </p>
+                      )}
+                    </div>
                     <div className="flex items-center gap-2">
                       {circle && circle.isActive && contributionStatus.currentCycle > 0 && (
                         <div className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-1.5 mr-2">
@@ -5220,8 +5348,6 @@ export default function ManageCircle() {
                         shortenAddress={shortenAddress}
                         onSaveOrder={saveRotationOrder}
                         onCancelEdit={() => setIsEditingRotation(false)}
-                        onRemoveMember={handleRemoveMember}
-                        onReturnSecurityDeposit={handleReturnSecurityDeposit}
                       />
                     </div>
                   ) : (
@@ -5251,8 +5377,8 @@ export default function ManageCircle() {
                                 <th scope="col" className="px-3 py-3.5 text-left text-xs sm:text-sm font-semibold text-gray-900">
                                   Position
                                 </th>
-                                <th scope="col" className="relative py-3.5 pl-3 pr-4 sm:pr-6">
-                                  <span className="sr-only">Actions</span>
+                                <th scope="col" className="py-3.5 pl-3 pr-4 text-right text-xs sm:text-sm font-semibold text-gray-900 sm:pr-6">
+                                  Actions
                                 </th>
                               </tr>
                             </thead>
@@ -5262,6 +5388,7 @@ export default function ManageCircle() {
                                                              contributionStatus.currentPosition !== undefined && 
                                                              contributionStatus.activeMembersInRotation[contributionStatus.currentPosition] === member.address &&
                                                              contributionStatus.currentCycle > 0; // Only if cycle is active
+                                const memberManagementAction = getMemberManagementAction(member);
 
                                 return (
                                 <tr key={member.address} className="hover:bg-gray-50 transition-colors">
@@ -5379,16 +5506,30 @@ export default function ManageCircle() {
                                     </div>
                                   </td>
                                   <td className="relative whitespace-nowrap py-3 pl-3 pr-4 text-right text-xs font-medium sm:pr-6">
-                                    {/* No actions for admin */}
-                                    {member.address !== circle?.admin && (
-                                      <button
-                                        onClick={() => handleRemoveMember(member.address)}
-                                        disabled={circle?.isActive || userAddress !== circle?.admin} // Disable if circle is active or user is not admin
-                                        className={`px-2 py-1 rounded transition-colors ${circle?.isActive || userAddress !== circle?.admin ? 'text-gray-400 bg-gray-100 cursor-not-allowed' : 'text-red-600 hover:text-red-900 hover:bg-red-50'}`}
-                                      >
-                                        <span className="hidden sm:inline">Remove</span>
-                                        <X className="w-4 h-4 inline sm:hidden" />
-                                      </button>
+                                    {memberManagementAction ? (
+                                      <div className="flex flex-col items-end gap-1">
+                                        <button
+                                          onClick={memberManagementAction.onClick}
+                                          disabled={memberManagementAction.isDisabled}
+                                          title={memberManagementAction.helperText}
+                                          className={`inline-flex items-center justify-center rounded-md border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                                            memberManagementAction.isDisabled
+                                              ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'
+                                              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                                          }`}
+                                        >
+                                          {memberManagementAction.buttonText}
+                                        </button>
+                                        <span
+                                          className={`hidden sm:block text-[11px] ${
+                                            memberManagementAction.isDisabled ? 'text-slate-400' : 'text-slate-500'
+                                          }`}
+                                        >
+                                          {memberManagementAction.helperText}
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <span className="text-xs text-slate-400">No action</span>
                                     )}
                                   </td>
                                 </tr>

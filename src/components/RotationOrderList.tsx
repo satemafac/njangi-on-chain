@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, User, Info, X, DollarSign } from 'lucide-react';
+import { GripVertical, User, Info } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 
 interface Member {
@@ -10,6 +10,7 @@ interface Member {
   joinDate?: number;
   status: 'active' | 'suspended' | 'exited';
   position?: number;
+  depositPaid?: boolean;
 }
 
 interface SortableMemberProps {
@@ -18,9 +19,6 @@ interface SortableMemberProps {
   index: number;
   shortenAddress: (address: string) => string;
   isAdmin: boolean;
-  isCurrentUserAdmin: boolean;
-  onRemoveMember: (memberAddress: string) => void;
-  onReturnSecurityDeposit: (memberAddress: string) => void;
 }
 
 interface RotationOrderListProps {
@@ -30,8 +28,6 @@ interface RotationOrderListProps {
   shortenAddress: (address: string) => string;
   onSaveOrder: (newOrder: string[]) => void;
   onCancelEdit: () => void;
-  onRemoveMember: (memberAddress: string) => void;
-  onReturnSecurityDeposit: (memberAddress: string) => void;
 }
 
 // Sortable member component
@@ -41,9 +37,6 @@ const SortableMember: React.FC<SortableMemberProps> = ({
   index, 
   shortenAddress,
   isAdmin,
-  isCurrentUserAdmin,
-  onRemoveMember,
-  onReturnSecurityDeposit
 }) => {
   const {
     attributes,
@@ -93,42 +86,6 @@ const SortableMember: React.FC<SortableMemberProps> = ({
         <div className="flex items-center justify-center w-8 h-8 bg-blue-50 rounded-full">
           {index + 1}
         </div>
-        {isCurrentUserAdmin && (
-          <>
-            <Tooltip.Provider>
-              <Tooltip.Root>
-                <Tooltip.Trigger asChild>
-                  <button
-                    onClick={() => onReturnSecurityDeposit(member.address)}
-                    className="flex items-center justify-center px-3 py-1 bg-green-100 text-green-600 rounded-md hover:bg-green-200 transition-colors text-xs font-medium"
-                    title="Return security deposit"
-                  >
-                    <DollarSign size={14} className="mr-1" />
-                    Return Deposit
-                  </button>
-                </Tooltip.Trigger>
-                <Tooltip.Portal>
-                  <Tooltip.Content
-                    className="bg-gray-900 text-white px-3 py-2 rounded text-sm max-w-xs"
-                    sideOffset={5}
-                  >
-                    {isAdmin ? 'Return your security deposit' : 'Return security deposit to this member'}
-                    <Tooltip.Arrow className="fill-gray-900" />
-                  </Tooltip.Content>
-                </Tooltip.Portal>
-              </Tooltip.Root>
-            </Tooltip.Provider>
-            {!isAdmin && (
-              <button
-                onClick={() => onRemoveMember(member.address)}
-                className="flex items-center justify-center w-8 h-8 bg-red-100 text-red-600 rounded-full hover:bg-red-200 transition-colors"
-                title="Remove member"
-              >
-                <X size={16} />
-              </button>
-            )}
-          </>
-        )}
       </div>
     </div>
   );
@@ -141,11 +98,10 @@ const RotationOrderList: React.FC<RotationOrderListProps> = ({
   shortenAddress,
   onSaveOrder,
   onCancelEdit,
-  onRemoveMember,
-  onReturnSecurityDeposit
 }) => {
   // Convert members to a sorted array that we can reorder
   const [memberList, setMemberList] = useState<Member[]>([...members]);
+  const isCurrentUserAdmin = currentUserAddress === adminAddress;
   
   // Create a list of sortable items with unique IDs
   const items = memberList.map(member => member.address);
@@ -204,6 +160,11 @@ const RotationOrderList: React.FC<RotationOrderListProps> = ({
           </Tooltip.Root>
         </Tooltip.Provider>
       </div>
+      {isCurrentUserAdmin && (
+        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          Rotation order is managed here only. Deposit returns and member removals are handled in the Members table.
+        </div>
+      )}
       
       <DndContext 
         sensors={sensors}
@@ -223,9 +184,6 @@ const RotationOrderList: React.FC<RotationOrderListProps> = ({
                 index={index}
                 shortenAddress={shortenAddress}
                 isAdmin={member.address === adminAddress}
-                isCurrentUserAdmin={currentUserAddress === adminAddress}
-                onRemoveMember={onRemoveMember}
-                onReturnSecurityDeposit={onReturnSecurityDeposit}
               />
             ))}
           </div>

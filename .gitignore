@@ -161,3 +161,6 @@ src/pages/*.md
 # Task files
 tasks.json
 tasks/ 
+src/lib/__tests__/circle-chain.test.ts
+.gitignore
+src/lib/__tests__/circle-config.test.ts

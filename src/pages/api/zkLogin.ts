@@ -2,7 +2,11 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { SetupData, AccountData, OAuthProvider } from '@/services/zkLoginService';
 import { ZkLoginError } from '@/services/zkLoginClient';
 import { SuiClient } from '@mysten/sui/client';
-import { PACKAGE_ID, getCirclePackageId } from '../../services/circle-service';
+import {
+  getCirclePackageId,
+  getObjectTransactionPackageId,
+  getPackageLookupIdsForCurrentNetwork,
+} from '../../services/circle-service';
 import { AggregatorClient, Env } from '@cetusprotocol/aggregator-sdk';
 import BN from 'bn.js';
 import { Transaction } from '@mysten/sui/transactions';
@@ -17,7 +21,8 @@ import {
   getCurrentEmberConfig,
   setCurrentNetwork,
   NetworkType,
-  getCurrentPackageId
+  getCurrentPackageId,
+  getPackageIdForNetwork
 } from '@/services/network-config';
 import {
   emberErrorResponse,
@@ -25,6 +30,11 @@ import {
   buildRedemptionSuccessResponse
 } from '@/lib/ember-operation-response';
 import { getCanonicalBaseOrigin, normalizeOrigin, preferCanonicalOrigin } from '@/lib/canonical-host';
+import {
+  normalizePackageId,
+  resolveUpgradeAwarePackageId,
+} from '@/lib/circle-chain';
+import { getCircleConfigFields } from '@/lib/circle-config';
 
 // Add at the top with other imports
 interface RPCError extends Error {
@@ -49,6 +59,59 @@ function getNetworkAggregatorRouter(): string {
 
 function getNetworkRpcUrl(): string {
   return getCurrentRpcUrl();
+}
+
+async function resolveCirclePackageIdForTransaction(args: {
+  context: string;
+  network: NetworkType;
+  circleId?: string | null;
+  objectPackageId?: string | null;
+  requestedPackageId?: string | null;
+  userAddress?: string | null;
+}): Promise<string> {
+  const { context, network, circleId, objectPackageId, requestedPackageId, userAddress } = args;
+  const networkPackageId =
+    normalizePackageId(getPackageIdForNetwork(network)) ??
+    normalizePackageId(getCurrentPackageId()) ??
+    getPackageIdForNetwork(network);
+
+  let detectedPackageId = normalizePackageId(objectPackageId);
+
+  if (!detectedPackageId && circleId) {
+    try {
+      detectedPackageId = normalizePackageId(
+        await getCirclePackageId(circleId, userAddress ?? undefined),
+      );
+    } catch (error) {
+      console.warn(`[${context}] Failed to resolve package ID from circle ${circleId}:`, error);
+    }
+  }
+
+  if (!detectedPackageId) {
+    detectedPackageId = normalizePackageId(requestedPackageId);
+  }
+
+  if (!detectedPackageId) {
+    return networkPackageId;
+  }
+
+  const resolvedPackageId = resolveUpgradeAwarePackageId({
+    network,
+    objectPackageId: detectedPackageId,
+    currentPackageId: networkPackageId,
+  });
+
+  if (resolvedPackageId !== detectedPackageId) {
+    console.log(
+      `[${context}] Routing upgraded lineage package ${detectedPackageId} to current package ${resolvedPackageId}`
+    );
+  } else {
+    console.log(
+      `[${context}] Using package ID ${resolvedPackageId} for transaction routing`
+    );
+  }
+
+  return resolvedPackageId;
 }
 
 // Persistent session store using localStorage (client) or an external store (server)
@@ -545,41 +608,6 @@ function usdCentsToMicroUsdc(usdCents: number): bigint {
   return BigInt(Math.floor(usdCents)) * BigInt(10_000);
 }
 
-async function getCircleConfigFields(suiClient: SuiClient, circleId: string): Promise<Record<string, unknown> | null> {
-  const dynamicFields = await suiClient.getDynamicFields({ parentId: circleId });
-
-  const configField = dynamicFields.data.find((field) => {
-    const objectType = field.objectType ?? '';
-    const nameType =
-      field.name && typeof field.name === 'object' && 'type' in field.name
-        ? String((field.name as { type?: unknown }).type ?? '')
-        : '';
-
-    return objectType.includes('CircleConfig') || nameType.includes('CircleConfig');
-  });
-
-  if (!configField) {
-    return null;
-  }
-
-  const configObject = await suiClient.getObject({
-    id: configField.objectId,
-    options: { showContent: true },
-  });
-
-  if (!configObject.data?.content || !('fields' in configObject.data.content)) {
-    return null;
-  }
-
-  const rootFields = configObject.data.content.fields as Record<string, unknown>;
-  const valueField = rootFields.value;
-  if (valueField && typeof valueField === 'object' && 'fields' in valueField) {
-    return (valueField as { fields: Record<string, unknown> }).fields;
-  }
-
-  return rootFields;
-}
-
 function getConfigUsdCents(configFields: Record<string, unknown> | null, preferredKeys: string[]): number {
   if (!configFields) return 0;
 
@@ -798,6 +826,254 @@ function mapEmberAbortMessage(message: string): { status: number; error: string 
     return { status: 400, error: 'Ember vault max TVL would be exceeded by this deposit.' };
   }
   return null;
+}
+
+type SecurityDepositCoinKind = 'sui' | 'stablecoin';
+
+function parseOptionalU64Amount(value: unknown): bigint | null {
+  if (value === null || typeof value === 'undefined') return null;
+
+  try {
+    return parseU64Amount(value, 'amount');
+  } catch {
+    return null;
+  }
+}
+
+function getCircleMembersTableIdFromContent(content: unknown): string | null {
+  const fields = extractMoveFields(content);
+  if (!fields) return null;
+
+  const membersField = fields.members;
+  const membersFields = extractMoveFields(membersField);
+  return extractIdLike(membersFields?.id) || extractIdLike(membersField);
+}
+
+async function getMemberSecurityDepositState(
+  suiClient: SuiClient,
+  circleContent: unknown,
+  memberAddress: string,
+): Promise<{ hasPaidDeposit: boolean; depositBalance: bigint }> {
+  const membersTableId = getCircleMembersTableIdFromContent(circleContent);
+  if (!membersTableId) {
+    return { hasPaidDeposit: false, depositBalance: 0n };
+  }
+
+  try {
+    const memberField = await suiClient.getDynamicFieldObject({
+      parentId: membersTableId,
+      name: { type: 'address', value: normalizeAddress(memberAddress) }
+    });
+
+    const memberFields = extractMoveFields(memberField.data?.content);
+    if (!memberFields) {
+      return { hasPaidDeposit: false, depositBalance: 0n };
+    }
+
+    return {
+      hasPaidDeposit: memberFields.deposit_paid === true,
+      depositBalance: parseOptionalU64Amount(memberFields.deposit_balance) ?? 0n,
+    };
+  } catch (error) {
+    console.warn('[security-deposit] Failed to read member deposit state:', error);
+    return { hasPaidDeposit: false, depositBalance: 0n };
+  }
+}
+
+function getWalletStablecoinTarget(walletContent: unknown): string | null {
+  const walletFields = extractMoveFields(walletContent);
+  if (!walletFields) return null;
+
+  const stablecoinConfigFields = extractMoveFields(walletFields.stablecoin_config);
+  const target = stablecoinConfigFields?.target_coin_type;
+  return typeof target === 'string' && target.trim() !== '' ? target.trim() : null;
+}
+
+function resolveStablecoinCoinType(targetCoinType?: string | null): string {
+  if (targetCoinType && targetCoinType.includes('::')) {
+    return targetCoinType;
+  }
+
+  const normalizedTarget = targetCoinType?.trim().toUpperCase();
+  const coinTypes = getCurrentCoinTypes();
+  const tokens = getCurrentTokens();
+
+  switch (normalizedTarget) {
+    case 'USDT':
+      return tokens.USDT || tokens.USDC || coinTypes.USDC;
+    case 'SUI_USDE':
+      return coinTypes.SUI_USDE || tokens.SUI_USDE || coinTypes.USDC;
+    case 'USDC':
+    default:
+      return coinTypes.USDC || tokens.USDC;
+  }
+}
+
+function inferDepositCoinKindFromAmount(
+  depositBalance: bigint,
+  circleContent: unknown,
+  configFields: Record<string, unknown> | null
+): SecurityDepositCoinKind | null {
+  if (depositBalance <= 0n) return null;
+
+  const circleFields = extractMoveFields(circleContent);
+  const expectedSui = parseOptionalU64Amount(configFields?.security_deposit ?? circleFields?.security_deposit);
+  const expectedUsdCents = parseOptionalU64Amount(configFields?.security_deposit_usd ?? circleFields?.security_deposit_usd);
+  const expectedStablecoin = expectedUsdCents !== null ? expectedUsdCents * 10_000n : null;
+
+  if (expectedSui !== null && depositBalance === expectedSui && depositBalance !== expectedStablecoin) {
+    return 'sui';
+  }
+
+  if (expectedStablecoin !== null && depositBalance === expectedStablecoin && depositBalance !== expectedSui) {
+    return 'stablecoin';
+  }
+
+  return null;
+}
+
+async function inferDepositCoinKindFromEvents(
+  suiClient: SuiClient,
+  packageId: string,
+  circleId: string,
+  walletId: string,
+  memberAddress: string,
+): Promise<SecurityDepositCoinKind | null> {
+  try {
+    const normalizedCircleId = normalizeAddress(circleId);
+    const normalizedWalletId = normalizeAddress(walletId);
+    const normalizedMember = normalizeAddress(memberAddress);
+
+    const depositEvents = await suiClient.queryEvents({
+      query: { MoveEventType: `${packageId}::njangi_custody::CoinDeposited` },
+      limit: 200
+    });
+
+    const matchingEvent = [...depositEvents.data]
+      .filter((event) => {
+        const parsed = event.parsedJson as Record<string, unknown> | null;
+        if (!parsed) return false;
+
+        const eventCircleId = typeof parsed.circle_id === 'string' ? normalizeAddress(parsed.circle_id) : null;
+        const eventWalletId = typeof parsed.wallet_id === 'string' ? normalizeAddress(parsed.wallet_id) : null;
+        const eventMember = typeof parsed.member === 'string' ? normalizeAddress(parsed.member) : null;
+
+        return eventCircleId === normalizedCircleId &&
+          eventWalletId === normalizedWalletId &&
+          eventMember === normalizedMember;
+      })
+      .sort((a, b) => Number(b.timestampMs || 0) - Number(a.timestampMs || 0))[0];
+
+    const parsed = matchingEvent?.parsedJson as Record<string, unknown> | undefined;
+    if (!parsed || typeof parsed.coin_type !== 'string') {
+      return null;
+    }
+
+    return parsed.coin_type.toLowerCase() === 'sui' ? 'sui' : 'stablecoin';
+  } catch (error) {
+    console.warn('[security-deposit] Failed to infer deposit coin type from events:', error);
+    return null;
+  }
+}
+
+async function resolveMemberSecurityDepositContext(args: {
+  suiClient: SuiClient;
+  packageId: string;
+  circleId: string;
+  walletId: string;
+  memberAddress: string;
+  circleContent: unknown;
+  walletContent: unknown;
+}): Promise<{
+  hasPaidDeposit: boolean;
+  depositBalance: bigint;
+  coinKind: SecurityDepositCoinKind | null;
+  stablecoinTypeArg: string;
+}> {
+  const {
+    suiClient,
+    packageId,
+    circleId,
+    walletId,
+    memberAddress,
+    circleContent,
+    walletContent,
+  } = args;
+
+  const memberState = await getMemberSecurityDepositState(suiClient, circleContent, memberAddress);
+  const stablecoinTarget = getWalletStablecoinTarget(walletContent);
+  const stablecoinTypeArg = resolveStablecoinCoinType(stablecoinTarget);
+
+  if (!memberState.hasPaidDeposit || memberState.depositBalance <= 0n) {
+    return {
+      ...memberState,
+      coinKind: null,
+      stablecoinTypeArg,
+    };
+  }
+
+  let configFields: Record<string, unknown> | null = null;
+  try {
+    configFields = await getCircleConfigFields(suiClient, circleId);
+  } catch (error) {
+    console.warn('[security-deposit] Failed to load circle config fields:', error);
+  }
+
+  const amountInferredKind = inferDepositCoinKindFromAmount(
+    memberState.depositBalance,
+    circleContent,
+    configFields
+  );
+
+  const eventInferredKind = amountInferredKind || await inferDepositCoinKindFromEvents(
+    suiClient,
+    packageId,
+    circleId,
+    walletId,
+    memberAddress
+  );
+
+  return {
+    ...memberState,
+    coinKind: eventInferredKind || (stablecoinTarget ? 'stablecoin' : 'sui'),
+    stablecoinTypeArg,
+  };
+}
+
+function mapSecurityDepositErrorMessage(errorStr: string, fallback = 'Transaction failed'): string {
+  if (errorStr.includes(', 12)')) {
+    return 'Insufficient security deposit balance available to return this deposit.';
+  }
+  if (errorStr.includes(', 7)') || errorStr.includes('ENotAdmin')) {
+    return 'Only the circle admin can return security deposits';
+  }
+  if (errorStr.includes(', 58)')) {
+    return 'Security deposits can only be returned when the circle is inactive or paused after a cycle. If this circle is already inactive, the deployed contract package may need to be updated.';
+  }
+  if (errorStr.includes(', 8)') || errorStr.includes(', 5)') || errorStr.includes('EMemberNotFound')) {
+    return 'The specified address is not a member of this circle';
+  }
+  if (errorStr.includes(', 46)')) {
+    return 'The custody wallet does not belong to this circle';
+  }
+  if (errorStr.includes(', 43)')) {
+    return 'The custody wallet is not active';
+  }
+  if (errorStr.includes(', 59)')) {
+    return 'No security deposit to return for this member';
+  }
+  if (errorStr.includes(', 60)')) {
+    return 'Security deposit has already been returned';
+  }
+  if (errorStr.includes('ECircleIsActive') || errorStr.includes(', 2)')) {
+    return 'Members can only be removed from inactive circles';
+  }
+  if (errorStr.includes('MoveAbort')) {
+    const match = errorStr.match(/MoveAbort\([^,]+,\s*(\d+)\)/);
+    return match ? `Smart contract error (code ${match[1]}): ${errorStr}` : `Smart contract error: ${errorStr}`;
+  }
+
+  return fallback;
 }
 
 const CLOCK_OBJECT_ID = "0x6"; // Sui system clock object ID
@@ -1279,30 +1555,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             console.log("No wallet ID provided, trying to find it from events");
             
             try {
-              // Use circle-specific package ID for querying events, fall back to default
-              const packageIdForEvents = circlePackageId || PACKAGE_ID;
-              console.log(`Querying wallet events with package ID: ${packageIdForEvents}`);
-              
-              // Query CustodyWalletCreated events to find the wallet ID for this circle
-              const events = await suiClient.queryEvents({
-                query: {
-                  MoveEventType: `${packageIdForEvents}::njangi_custody::CustodyWalletCreated`
-                },
-                limit: 100
-              });
-              
-              console.log(`Found ${events.data.length} CustodyWalletCreated events`);
-              
-              // Look through events to find the wallet ID for this circle
-              for (const event of events.data) {
-                if (event.parsedJson && typeof event.parsedJson === 'object' && 
-                    'circle_id' in event.parsedJson && 'wallet_id' in event.parsedJson) {
-                  const eventData = event.parsedJson as { circle_id: string, wallet_id: string };
-                  if (eventData.circle_id === circleId) {
-                    walletId = eventData.wallet_id;
-                    console.log(`Found wallet ID ${walletId} for circle ${circleId} from events`);
-                    break;
+              const detectedCirclePackageId =
+                circlePackageId ||
+                await getCirclePackageId(circleId, session.account!.userAddr);
+              const packageIdsForEvents =
+                getPackageLookupIdsForCurrentNetwork(detectedCirclePackageId);
+
+              for (const packageIdForEvents of packageIdsForEvents) {
+                console.log(`Querying wallet events with package ID: ${packageIdForEvents}`);
+                const events = await suiClient.queryEvents({
+                  query: {
+                    MoveEventType: `${packageIdForEvents}::njangi_custody::CustodyWalletCreated`
+                  },
+                  limit: 100
+                });
+                
+                console.log(`Found ${events.data.length} CustodyWalletCreated events`);
+                
+                // Look through events to find the wallet ID for this circle
+                for (const event of events.data) {
+                  if (event.parsedJson && typeof event.parsedJson === 'object' && 
+                      'circle_id' in event.parsedJson && 'wallet_id' in event.parsedJson) {
+                    const eventData = event.parsedJson as { circle_id: string, wallet_id: string };
+                    if (eventData.circle_id === circleId) {
+                      walletId = eventData.wallet_id;
+                      console.log(`Found wallet ID ${walletId} for circle ${circleId} from events`);
+                      break;
+                    }
                   }
+                }
+
+                if (walletId) {
+                  break;
                 }
               }
               
@@ -1468,9 +1752,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               }
               
               // Use the package ID from the frontend if provided, otherwise fetch from blockchain
-              const packageIdToUse = circlePackageId || 
-                                     await getCirclePackageId(circleId, session.account!.userAddr) || 
-                                     getCurrentPackageId();
+              const packageIdToUse = await resolveCirclePackageIdForTransaction({
+                context: 'deleteCircle',
+                network: getCurrentNetwork(),
+                circleId,
+                requestedPackageId: circlePackageId,
+                userAddress: session.account!.userAddr,
+              });
               
               console.log(`Using package ID ${packageIdToUse} for circle ${circleId} (from frontend: ${!!circlePackageId})`);
               
@@ -1680,7 +1968,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 }
                 
                 // Get the correct package ID for this circle using the current network context
-                const circlePackageId = await getCirclePackageId(req.body.circleId, account.userAddr);
+                const circlePackageId = await resolveCirclePackageIdForTransaction({
+                  context: 'adminApproveMember',
+                  network: getCurrentNetwork(),
+                  circleId: req.body.circleId,
+                  userAddress: account.userAddr,
+                });
                 console.log(`Using package ID for circle ${req.body.circleId}: ${circlePackageId} (network: ${getCurrentNetwork()})`);
               
                 // Send transaction using zkLogin service
@@ -1830,7 +2123,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 }
                 
                 // Get the correct package ID for this circle using the current network context
-                const circlePackageId = await getCirclePackageId(req.body.circleId, account.userAddr);
+                const circlePackageId = await resolveCirclePackageIdForTransaction({
+                  context: 'adminApproveMembers',
+                  network: getCurrentNetwork(),
+                  circleId: req.body.circleId,
+                  userAddress: account.userAddr,
+                });
                 console.log(`Using package ID for bulk approve in circle ${req.body.circleId}: ${circlePackageId} (network: ${getCurrentNetwork()})`);
                 
                 // Normalize all addresses
@@ -2006,8 +2304,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
             
             // Verify the wallet exists on the requested network
+            let walletObj;
             try {
-              const walletObj = await suiClient.getObject({
+              walletObj = await suiClient.getObject({
                 id: req.body.walletId,
                 options: { showContent: true }
               });
@@ -2035,10 +2334,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               });
             }
             
-            const actualPackageId = objectType.split('::')[0];
-            console.log(`[adminRemoveMember] Extracted package ID from circle object: ${actualPackageId}`);
+            const objectPackageId = objectType.split('::')[0];
+            console.log(`[adminRemoveMember] Extracted package ID from circle object: ${objectPackageId}`);
+            const packageIdToUse = await resolveCirclePackageIdForTransaction({
+              context: 'adminRemoveMember',
+              network: networkToUse,
+              circleId: req.body.circleId,
+              objectPackageId,
+              userAddress: account.userAddr,
+            });
+            console.log(`[adminRemoveMember] Effective package ID for transaction: ${packageIdToUse}`);
             
             // Check if circle is inactive (required for member removal)
+            let isPausedAfterCycle = false;
             if (circleObj.data?.content && 'fields' in circleObj.data.content) {
               const fields = circleObj.data.content.fields as Record<string, unknown>;
               if (fields.is_active === true) {
@@ -2047,8 +2355,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   requireRelogin: false
                 });
               }
+              isPausedAfterCycle = fields.paused_after_cycle === true;
               console.log(`[adminRemoveMember] Circle is inactive (is_active: ${fields.is_active}), proceeding with member removal`);
             }
+
+            const normalizedMemberAddress = normalizeAddress(req.body.memberAddress);
+            const depositContext = await resolveMemberSecurityDepositContext({
+              suiClient,
+              packageId: packageIdToUse,
+              circleId: req.body.circleId,
+              walletId: req.body.walletId,
+              memberAddress: normalizedMemberAddress,
+              circleContent: circleObj.data.content,
+              walletContent: walletObj.data?.content,
+            });
+
+            console.log('[adminRemoveMember] Member deposit context:', {
+              memberAddress: normalizedMemberAddress,
+              hasPaidDeposit: depositContext.hasPaidDeposit,
+              depositBalance: depositContext.depositBalance.toString(),
+              coinKind: depositContext.coinKind,
+              isPausedAfterCycle,
+            });
             
             try {
               // Temporarily set the network to match the frontend request
@@ -2068,15 +2396,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   account,
                   (txb: Transaction) => {
                     txb.setSender(account.userAddr);
+
+                    // Return any paid security deposit before removing the member so
+                    // admin_remove_member never falls back to withdrawing from the wallet's SUI balance.
+                    if (depositContext.hasPaidDeposit && depositContext.depositBalance > 0n) {
+                      if (depositContext.coinKind === 'stablecoin') {
+                        txb.moveCall({
+                          target: `${packageIdToUse}::njangi_payments::admin_payout_security_deposit_stablecoin`,
+                          typeArguments: [depositContext.stablecoinTypeArg],
+                          arguments: [
+                            txb.object(req.body.circleId),
+                            txb.object(req.body.walletId),
+                            txb.pure.address(normalizedMemberAddress),
+                            txb.object(CLOCK_OBJECT_ID)
+                          ]
+                        });
+                      } else {
+                        txb.moveCall({
+                          target: `${packageIdToUse}::njangi_payments::admin_payout_security_deposit_sui`,
+                          arguments: [
+                            txb.object(req.body.circleId),
+                            txb.object(req.body.walletId),
+                            txb.pure.address(normalizedMemberAddress)
+                          ]
+                        });
+                      }
+                    }
                     
-                    // Call the admin_remove_member function
                     txb.moveCall({
-                      target: `${actualPackageId}::njangi_circles::admin_remove_member`,
+                      target: `${packageIdToUse}::njangi_circles::admin_remove_member`,
                       arguments: [
                         txb.object(req.body.circleId),
-                        txb.pure.address(req.body.memberAddress),
+                        txb.pure.address(normalizedMemberAddress),
                         txb.object(req.body.walletId),
-                        txb.object("0x6")  // Clock object
+                        txb.object(CLOCK_OBJECT_ID)
                       ]
                     });
                   },
@@ -2097,27 +2450,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               if (txResult.status === 'failure') {
                 console.error('Admin remove member transaction failed:', txResult.error);
                 
-                // Parse the Move error to provide a meaningful message
-                let errorMessage = 'Transaction failed';
                 const errorStr = txResult.error || '';
+                let errorMessage = mapSecurityDepositErrorMessage(errorStr);
                 
-                // Check for specific error codes
-                if (errorStr.includes('njangi_custody') && errorStr.includes(', 12)')) {
-                  errorMessage = 'Insufficient balance in custody wallet to return security deposit. Please ensure the custody wallet has enough funds.';
-                } else if (errorStr.includes('ENotAdmin') || errorStr.includes(', 1)')) {
+                if (errorStr.includes('ENotAdmin') || errorStr.includes(', 1)')) {
                   errorMessage = 'Only the circle admin can remove members';
                 } else if (errorStr.includes('EMemberNotFound') || errorStr.includes(', 5)')) {
                   errorMessage = 'Member not found in this circle';
-                } else if (errorStr.includes('ECircleIsActive') || errorStr.includes(', 2)')) {
-                  errorMessage = 'Members can only be removed from inactive circles';
-                } else if (errorStr.includes('MoveAbort')) {
-                  // Extract error details from MoveAbort
-                  const match = errorStr.match(/MoveAbort\([^,]+,\s*(\d+)\)/);
-                  if (match) {
-                    errorMessage = `Smart contract error (code ${match[1]}): ${errorStr}`;
-                  } else {
-                    errorMessage = `Smart contract error: ${errorStr}`;
-                  }
                 }
                 
                 return res.status(400).json({
@@ -2171,6 +2510,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 } else if (txError.message.includes('ECircleIsActive')) {
                   return res.status(400).json({ 
                     error: 'Cannot remove member: Members can only be removed from inactive circles',
+                    requireRelogin: false
+                  });
+                } else if (txError.message.includes('MoveAbort')) {
+                  return res.status(400).json({
+                    error: mapSecurityDepositErrorMessage(txError.message, 'Failed to remove member'),
                     requireRelogin: false
                   });
                 }
@@ -2237,7 +2581,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           try {
-            const currentPackageId = getCurrentPackageId();
+            const session = validateSession(sessionId, 'sendTransaction');
+            if (!session.account) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+              return res.status(401).json({ 
+                error: 'Invalid session: No account data found. Please authenticate first.'
+              });
+            }
+
+            const packageIdToUse = await resolveCirclePackageIdForTransaction({
+              context: 'swapAndDepositCetus',
+              network: getCurrentNetwork(),
+              circleId,
+              userAddress: session.account.userAddr,
+            });
+            const packageIdsForLookup = getPackageLookupIdsForCurrentNetwork(packageIdToUse);
             const currentCoinTypes = getCurrentCoinTypes();
             const currentUsdcCoinType = currentCoinTypes.USDC;
 
@@ -2262,16 +2621,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           // Ensure slippage is at least the minimum
           const effectiveSlippage = Math.max(slippage, MIN_AGGREGATOR_SLIPPAGE);
-
-          // Validate session
-          const session = validateSession(sessionId, 'sendTransaction');
-          if (!session.account) {
-            sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              error: 'Invalid session: No account data found. Please authenticate first.'
-            });
-          }
 
           // *** NEW: Check if user has already paid security deposit ***
           const suiClient = new SuiClient({ url: getJsonRpcUrl() });
@@ -2319,15 +2668,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             
             // Fallback to checking MemberActivated events if direct fetch fails
             if (!userDepositPaid) {
-              const memberActivatedEvents = await suiClient.queryEvents({
-                query: { MoveEventType: `${currentPackageId}::njangi_members::MemberActivated` },
-                limit: 50
-              });
-              
-              userDepositPaid = memberActivatedEvents.data.some(event => {
-                const parsed = event.parsedJson as { circle_id?: string; member?: string };
-                return parsed?.circle_id === circleId && parsed?.member === session.account!.userAddr;
-              });
+              for (const packageId of packageIdsForLookup) {
+                const memberActivatedEvents = await suiClient.queryEvents({
+                  query: { MoveEventType: `${packageId}::njangi_members::MemberActivated` },
+                  limit: 50
+                });
+                
+                userDepositPaid = memberActivatedEvents.data.some(event => {
+                  const parsed = event.parsedJson as { circle_id?: string; member?: string };
+                  return parsed?.circle_id === circleId && parsed?.member === session.account!.userAddr;
+                });
+
+                if (userDepositPaid) {
+                  break;
+                }
+              }
               
               if (userDepositPaid) {
                 console.log('Deposit status confirmed via MemberActivated event');
@@ -2336,17 +2691,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             
             // Additional check for CustodyDeposited events with operation_type 3 (security deposit)
             if (!userDepositPaid) {
-              const custodyEvents = await suiClient.queryEvents({
-                query: { MoveEventType: `${currentPackageId}::njangi_custody::CustodyDeposited` },
-                limit: 50
-              });
-              
-              userDepositPaid = custodyEvents.data.some(e => {
-                const p = e.parsedJson as { circle_id?: string; member?: string; operation_type?: number | string };
-                return p?.circle_id === circleId && 
-                       p?.member === session.account!.userAddr && 
-                       (p?.operation_type === 3 || p?.operation_type === "3");
-              });
+              for (const packageId of packageIdsForLookup) {
+                const custodyEvents = await suiClient.queryEvents({
+                  query: { MoveEventType: `${packageId}::njangi_custody::CustodyDeposited` },
+                  limit: 50
+                });
+                
+                userDepositPaid = custodyEvents.data.some(e => {
+                  const p = e.parsedJson as { circle_id?: string; member?: string; operation_type?: number | string };
+                  return p?.circle_id === circleId && 
+                         p?.member === session.account!.userAddr && 
+                         (p?.operation_type === 3 || p?.operation_type === "3");
+                });
+
+                if (userDepositPaid) {
+                  break;
+                }
+              }
               
               if (userDepositPaid) {
                 console.log('Deposit status confirmed via CustodyDeposited event');
@@ -2631,7 +2992,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   // User already paid security deposit, use contribute_stablecoin
                   console.log(`User has already paid security deposit, using contribute_stablecoin function`);
                   txb.moveCall({
-                    target: `${currentPackageId}::njangi_circles::contribute_stablecoin`,
+                    target: `${packageIdToUse}::njangi_circles::contribute_stablecoin`,
                     arguments: [
                       txb.object(circleId),
                       txb.object(walletId),
@@ -2644,7 +3005,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   // User has not paid security deposit, use member_deposit_security_deposit
                   console.log(`User has NOT paid security deposit, using member_deposit_security_deposit function`);
                   txb.moveCall({
-                    target: `${currentPackageId}::njangi_circles::member_deposit_security_deposit`,
+                    target: `${packageIdToUse}::njangi_circles::member_deposit_security_deposit`,
                     arguments: [
                       txb.object(circleId),
                       txb.object(walletId),
@@ -2817,6 +3178,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           
           // Convert minimum amount to MIST (1 SUI = 1e9 MIST)
           const minimumSwapAmount = Math.floor(config.minimumSwapAmount * 1e9);
+          const packageIdToUse = await getObjectTransactionPackageId(walletId);
           
           // Execute the transaction with zkLogin - using direct moveCall approach
             const txResult = await instance.sendTransaction(
@@ -2824,7 +3186,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               (txb) => {
               // Add a simple moveCall directly
                 txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_circles::configure_stablecoin_swap`,
+                target: `${packageIdToUse}::njangi_circles::configure_stablecoin_swap`,
                   arguments: [
                     txb.object(walletId),
                   txb.pure.bool(config.enabled),
@@ -3699,9 +4061,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               instance.initializeWithNetwork();
             }
             
-            // Get the correct package ID for this circle using the current network context
-            const circlePackageId = await getCirclePackageId(circleId, session.account!.userAddr);
-            const packageIdToUse = circlePackageId || getCurrentPackageId();
+            // Get the effective transaction package ID for this circle on the current network.
+            const packageIdToUse = await resolveCirclePackageIdForTransaction({
+              context: 'paySecurityDeposit',
+              network: getCurrentNetwork(),
+              circleId,
+              userAddress: session.account!.userAddr,
+            });
             console.log(`Using package ID for paySecurityDeposit: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
 
             const suiClient = new SuiClient({ url: getJsonRpcUrl() });
@@ -3917,78 +4283,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             
             // For USDC security deposit, we need to get it from the dynamic fields
             if (stablecoinType.toLowerCase().includes('usdc')) {
-              // First, get the dynamic fields of the circle to find the config
-              const dynamicFields = await suiClient.getDynamicFields({
-                parentId: circleId
-              });
-              
-              console.log('Searching for CircleConfig in dynamic fields...');
-              
-              // Find the CircleConfig field
-              let configFieldObjectId: string | null = null;
-              for (const field of dynamicFields.data) {
-                if (field.name && 
-                    typeof field.name === 'object' && 
-                    'type' in field.name && 
-                    field.name.type && 
-                    field.name.type.includes('vector<u8>') && 
-                    field.objectType && 
-                    field.objectType.includes('CircleConfig')) {
-                  
-                  configFieldObjectId = field.objectId;
-                  console.log(`Found CircleConfig dynamic field: ${configFieldObjectId}`);
-                  break;
-                }
-              }
-              
-              // Get the CircleConfig object if found
-              if (configFieldObjectId) {
-                const configObject = await suiClient.getObject({
-                  id: configFieldObjectId,
-                  options: { showContent: true }
-                });
-                
-                console.log('CircleConfig field content:', configObject);
-                
-                if (configObject.data?.content && 
-                    'fields' in configObject.data.content &&
-                    'value' in configObject.data.content.fields) {
-                  
-                  const valueField = configObject.data.content.fields.value;
-                  if (typeof valueField === 'object' && 
-                      valueField !== null && 
-                      'fields' in valueField) {
-                    
-                    // Extract the security_deposit_usd field
-                    const configFields = valueField.fields as Record<string, unknown>;
-                    
-                    if (depositIsPaid) {
-                      // If deposit is paid, get the contribution amount
-                      const contributionAmountUsd = Number(configFields.contribution_amount_usd || 0);
-                      console.log('Found contribution_amount_usd in CircleConfig:', contributionAmountUsd);
-                      
-                      // Convert cents to microUSDC: 1 cent = $0.01 = 10,000 microUSDC
-                      if (contributionAmountUsd > 0) {
-                        requiredDepositAmount = Math.floor(contributionAmountUsd * 10000);
-                        console.log('Calculated contribution amount (in microUSDC):', requiredDepositAmount);
-                      }
-                    } else {
-                      // If deposit not paid, get the security deposit amount
-                      const securityDepositUsd = Number(configFields.security_deposit_usd || 0);
-                      console.log('Found security_deposit_usd in CircleConfig:', securityDepositUsd);
-                      
-                      // The security_deposit_usd is in CENTS (e.g., 20 = $0.20)
-                      // But USDC coins are in microUSDC (e.g., 1 USDC = 1,000,000 microUSDC)
-                      // So we need to convert cents to microUSDC: 
-                      // 1 cent = $0.01 = 10,000 microUSDC
-                      if (securityDepositUsd > 0) {
-                        requiredDepositAmount = Math.floor(securityDepositUsd * 10000); // cents to microUSDC
-                        console.log('Calculated security deposit amount (in microUSDC):', requiredDepositAmount);
-                      }
-                    }
-                  }
-                }
-              }
+	              // First, get the dynamic fields of the circle to find the config
+	              console.log('Loading CircleConfig fields for required USDC amount...');
+	              const configFields = await getCircleConfigFields(suiClient, circleId);
+
+	              if (configFields) {
+	                if (depositIsPaid) {
+	                  const contributionAmountUsd = Number(configFields.contribution_amount_usd || 0);
+	                  console.log('Found contribution_amount_usd in CircleConfig:', contributionAmountUsd);
+
+	                  if (contributionAmountUsd > 0) {
+	                    requiredDepositAmount = Math.floor(contributionAmountUsd * 10000);
+	                    console.log('Calculated contribution amount (in microUSDC):', requiredDepositAmount);
+	                  }
+	                } else {
+	                  const securityDepositUsd = Number(configFields.security_deposit_usd || 0);
+	                  console.log('Found security_deposit_usd in CircleConfig:', securityDepositUsd);
+
+	                  if (securityDepositUsd > 0) {
+	                    requiredDepositAmount = Math.floor(securityDepositUsd * 10000);
+	                    console.log('Calculated security deposit amount (in microUSDC):', requiredDepositAmount);
+	                  }
+	                }
+	              }
             } else {
               // For other coins, try to get the regular security_deposit or contribution_amount field from circle
               const circleObject = await suiClient.getObject({
@@ -4033,6 +4350,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           } catch (e) {
             console.error('Error checking circle and coin info:', e);
           }
+
+          const packageIdToUse = await resolveCirclePackageIdForTransaction({
+            context: 'depositStablecoin',
+            network: getCurrentNetwork(),
+            circleId,
+            userAddress: session.account.userAddr,
+          });
           
           // Execute the transaction with coin splitting if needed
           const txResult = await instance.sendTransaction(
@@ -4055,7 +4379,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   // User already paid security deposit, this is a contribution
                   console.log('Calling contribute_stablecoin based on frontend status');
                   txb.moveCall({
-                    target: `${PACKAGE_ID}::njangi_circles::contribute_stablecoin`,
+                    target: `${packageIdToUse}::njangi_circles::contribute_stablecoin`,
                     typeArguments: [stablecoinType],
                     arguments: [
                       txb.object(circleId),
@@ -4068,7 +4392,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   // User has not paid security deposit yet
                   console.log('Calling member_deposit_security_deposit based on frontend status');
                   txb.moveCall({
-                    target: `${PACKAGE_ID}::njangi_circles::member_deposit_security_deposit`,
+                    target: `${packageIdToUse}::njangi_circles::member_deposit_security_deposit`,
                     typeArguments: [stablecoinType],
                     arguments: [
                       txb.object(circleId),
@@ -4085,7 +4409,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   // User already paid security deposit, this is a contribution
                   console.log('Calling contribute_stablecoin (direct coin) based on frontend status');
                   txb.moveCall({
-                    target: `${PACKAGE_ID}::njangi_circles::contribute_stablecoin`,
+                    target: `${packageIdToUse}::njangi_circles::contribute_stablecoin`,
                     typeArguments: [stablecoinType],
                     arguments: [
                       txb.object(circleId),
@@ -4098,7 +4422,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   // User has not paid security deposit yet
                   console.log('Calling member_deposit_security_deposit (direct coin) based on frontend status');
                   txb.moveCall({
-                    target: `${PACKAGE_ID}::njangi_circles::member_deposit_security_deposit`,
+                    target: `${packageIdToUse}::njangi_circles::member_deposit_security_deposit`,
                     typeArguments: [stablecoinType],
                     arguments: [
                       txb.object(circleId),
@@ -4308,6 +4632,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           console.log(`Toggling auto-swap to ${enabled ? 'enabled' : 'disabled'} for circle: ${circleId}`);
           
           try {
+            const packageIdToUse = await resolveCirclePackageIdForTransaction({
+              context: 'toggleAutoSwap',
+              network: getCurrentNetwork(),
+              circleId,
+              userAddress: account.userAddr,
+            });
+
             // Execute the transaction with zkLogin
             const txResult = await instance.sendTransaction(
               account,
@@ -4316,7 +4647,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 
                 // Toggle auto-swap call
                 txb.moveCall({
-                  target: `${PACKAGE_ID}::njangi_circles::toggle_auto_swap`,
+                  target: `${packageIdToUse}::njangi_circles::toggle_auto_swap`,
                   arguments: [
                     txb.object(circleId),
                     txb.pure.bool(enabled)
@@ -4452,9 +4783,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               instance.initializeWithNetwork();
             }
             
-            // Get the correct package ID for this circle using the current network context
-            const circlePackageId = await getCirclePackageId(circleId, session.account.userAddr);
-            const packageIdToUse = circlePackageId || getCurrentPackageId();
+            // Get the effective transaction package ID for this circle on the current network.
+            const packageIdToUse = await resolveCirclePackageIdForTransaction({
+              context: 'contributeFromCustody',
+              network: getCurrentNetwork(),
+              circleId,
+              userAddress: session.account.userAddr,
+            });
             console.log(`[contributeFromCustody] Using package ID: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
 
             const client = new SuiClient({ url: getJsonRpcUrl() });
@@ -5097,8 +5432,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
             
             // Get the correct package ID for this circle using the current network context
-            const circlePackageId = await getCirclePackageId(circleId, session.account.userAddr);
-            const packageIdToUse = circlePackageId || getCurrentPackageId();
+            const packageIdToUse = await resolveCirclePackageIdForTransaction({
+              context: 'activateCircle',
+              network: getCurrentNetwork(),
+              circleId,
+              userAddress: session.account.userAddr,
+            });
             console.log(`Using package ID for activateCircle: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
 
           // Execute the activate circle transaction using ZkLoginService's sendTransaction method
@@ -5172,6 +5511,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         try {
           console.log(`Setting rotation position for member ${memberAddress} to position ${position} in circle ${circleId}`);
+          const packageIdToUse = await resolveCirclePackageIdForTransaction({
+            context: 'setRotationPosition',
+            network: getCurrentNetwork(),
+            circleId,
+            userAddress: account.userAddr,
+          });
           
           // Get the ZkLoginService instance
           const zkLoginService = enokiZkLoginService;
@@ -5182,7 +5527,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             (txb) => {
               // Build the transaction in this callback
               txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_circles::set_rotation_position`,
+                target: `${packageIdToUse}::njangi_circles::set_rotation_position`,
                 arguments: [
                   txb.object(circleId), // circle
                   txb.pure.address(memberAddress.toLowerCase().startsWith('0x') ? memberAddress.toLowerCase() : `0x${memberAddress.toLowerCase()}`), // Normalize the address
@@ -5261,8 +5606,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
             
             // Get the correct package ID for this circle using the current network context
-            const circlePackageId = await getCirclePackageId(circleId, account.userAddr);
-            const packageIdToUse = circlePackageId || getCurrentPackageId();
+            const packageIdToUse = await resolveCirclePackageIdForTransaction({
+              context: 'reorderRotationPositions',
+              network: getCurrentNetwork(),
+              circleId,
+              userAddress: account.userAddr,
+            });
             console.log(`Using package ID for reorderRotationPositions: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
           
           // Send the transaction using the service's sendTransaction method
@@ -5334,7 +5683,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         try {
           // Print debug information about package ID and USDC coin type
           console.log('Debug info for depositUsdcDirect:');
-          console.log('PACKAGE_ID from import:', PACKAGE_ID);
+          console.log('Current network package ID:', getCurrentPackageId());
           console.log('USDC_COIN_TYPE from import:', USDC_COIN_TYPE);
           
           // Validate required parameters
@@ -5361,6 +5710,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           console.log(`Creating direct USDC deposit transaction for circle ${circleId}, wallet ${walletId}, amount ${usdcAmountMicroUnits} (${Number(usdcAmountMicroUnits) / 1e6} USDC)`);
           console.log(`Operation type: ${isSecurityDeposit ? 'Security Deposit' : 'Contribution'}`);
+          const packageIdToUse = await resolveCirclePackageIdForTransaction({
+            context: 'depositUsdcDirect',
+            network: getCurrentNetwork(),
+            circleId,
+            userAddress: session.account!.userAddr,
+          });
 
           // First, perform all async operations to gather the necessary data
           const suiClient = new SuiClient({ url: getJsonRpcUrl() });
@@ -5448,68 +5803,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               }
               
               // If not found in direct fields, try the dynamic fields
-              if (verifiedAmount === usdcAmountMicroUnits) {
-                // Get the dynamic fields of the circle to find the CircleConfig
-                const dynamicFields = await suiClient.getDynamicFields({
-                  parentId: circleId
-                });
-                
-                // Find the CircleConfig field
-                let configFieldObjectId: string | null = null;
-                for (const field of dynamicFields.data) {
-                  if (field.name && 
-                      typeof field.name === 'object' && 
-                      'type' in field.name && 
-                      field.name.type && 
-                      (field.name.type.includes('vector<u8>') || field.name.type.includes('CircleConfig')) && 
-                      field.objectType && 
-                      field.objectType.includes('CircleConfig')) {
-                    
-                    configFieldObjectId = field.objectId;
-                    console.log(`Found CircleConfig dynamic field: ${configFieldObjectId}`);
-                    break;
-                  }
-                }
-                
-                // Get the CircleConfig object if found
-                if (configFieldObjectId) {
-                  const configObject = await suiClient.getObject({
-                    id: configFieldObjectId,
-                    options: { showContent: true }
-                  });
-                  
-                  if (configObject.data?.content && 
-                      'fields' in configObject.data.content &&
-                      'value' in configObject.data.content.fields) {
-                    
-                    const valueField = configObject.data.content.fields.value;
-                    if (typeof valueField === 'object' && 
-                        valueField !== null && 
-                        'fields' in valueField) {
-                      
-                      // Extract the security_deposit_usd field
-                      const configFields = valueField.fields as Record<string, unknown>;
-                      const securityDepositUsd = Number(configFields.security_deposit_usd || 0);
-                      
-                      console.log('Found security_deposit_usd in CircleConfig:', securityDepositUsd);
-                      console.log('Raw value from config:', configFields.security_deposit_usd);
-                      
-                      // The security_deposit_usd is in CENTS (e.g., 20 = $0.20)
-                      // But USDC coins are in microUSDC (e.g., 1 USDC = 1,000,000 microUSDC)
-                      // So we need to convert cents to microUSDC: 
-                      // 1 cent = $0.01 = 10,000 microUSDC
-                      if (securityDepositUsd > 0) {
-                        const exactDepositAmount = BigInt(Math.floor(securityDepositUsd * 10000));
-                        console.log('Calculated requiredDepositAmount (in microUSDC):', exactDepositAmount.toString());
-                        console.log(`This equals ${formatMicroUnits(exactDepositAmount)} USDC`);
-                        
-                        // CRITICAL: Update the verified amount with the exact amount from the config
-                        verifiedAmount = exactDepositAmount;
-                      }
-                    }
-                  }
-                }
-              }
+	              if (verifiedAmount === usdcAmountMicroUnits) {
+	                const configFields = await getCircleConfigFields(suiClient, circleId);
+
+	                if (configFields) {
+	                  const securityDepositUsd = Number(configFields.security_deposit_usd || 0);
+
+	                  console.log('Found security_deposit_usd in CircleConfig:', securityDepositUsd);
+	                  console.log('Raw value from config:', configFields.security_deposit_usd);
+
+	                  if (securityDepositUsd > 0) {
+	                    const exactDepositAmount = BigInt(Math.floor(securityDepositUsd * 10000));
+	                    console.log('Calculated requiredDepositAmount (in microUSDC):', exactDepositAmount.toString());
+	                    console.log(`This equals ${formatMicroUnits(exactDepositAmount)} USDC`);
+
+	                    verifiedAmount = exactDepositAmount;
+	                  }
+	                }
+	              }
             } catch (err) {
               console.warn("Error verifying security deposit amount:", err);
               // Continue with the original amount
@@ -5517,67 +5828,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           } else {
             // This is a contribution, not a security deposit
             try {
-              console.log("Verifying contribution amount from CircleConfig...");
-              
-              // Get the dynamic fields of the circle to find the CircleConfig
-              const dynamicFields = await suiClient.getDynamicFields({
-                parentId: circleId
-              });
-              
-              // Find the CircleConfig field
-              let configFieldObjectId: string | null = null;
-              for (const field of dynamicFields.data) {
-                if (field.name && 
-                    typeof field.name === 'object' && 
-                    'type' in field.name && 
-                    field.name.type && 
-                    (field.name.type.includes('vector<u8>') || field.name.type.includes('CircleConfig')) && 
-                    field.objectType && 
-                    field.objectType.includes('CircleConfig')) {
-                  
-                  configFieldObjectId = field.objectId;
-                  console.log(`Found CircleConfig dynamic field: ${configFieldObjectId}`);
-                  break;
-                }
-              }
-              
-              // Get the CircleConfig object if found
-              if (configFieldObjectId) {
-                const configObject = await suiClient.getObject({
-                  id: configFieldObjectId,
-                  options: { showContent: true }
-                });
-                
-                if (configObject.data?.content && 
-                    'fields' in configObject.data.content &&
-                    'value' in configObject.data.content.fields) {
-                  
-                  const valueField = configObject.data.content.fields.value;
-                  if (typeof valueField === 'object' && 
-                      valueField !== null && 
-                      'fields' in valueField) {
-                    
-                    // Extract the contribution_amount_usd field
-                    const configFields = valueField.fields as Record<string, unknown>;
-                    const contributionAmountUsd = Number(configFields.contribution_amount_local || configFields.contribution_amount_usd || 0);
-                    
-                    console.log('Found contribution_amount_local in CircleConfig:', contributionAmountUsd);
-                    console.log('Raw value from config:', configFields.contribution_amount_local || configFields.contribution_amount_usd);
-                    
-                    // The contribution_amount_usd is in CENTS (e.g., 20 = $0.20)
-                    // Convert cents to microUSDC (1 cent = 10,000 microUSDC)
-                    if (contributionAmountUsd > 0) {
-                      const exactContributionAmount = BigInt(Math.floor(contributionAmountUsd * 10000));
-                      console.log('Calculated contribution amount (in microUSDC):', exactContributionAmount.toString());
-                      console.log(`This equals ${formatMicroUnits(exactContributionAmount)} USDC`);
-                      
-                      // CRITICAL: Update the verified amount with the exact amount from the config
-                      verifiedAmount = exactContributionAmount;
-                    }
-                  }
-                }
-              }
-              
+	              console.log("Verifying contribution amount from CircleConfig...");
+
+	              const configFields = await getCircleConfigFields(suiClient, circleId);
+
+	              if (configFields) {
+	                const contributionAmountUsd = Number(
+	                  configFields.contribution_amount_local || configFields.contribution_amount_usd || 0,
+	                );
+
+	                console.log('Found contribution_amount_local in CircleConfig:', contributionAmountUsd);
+	                console.log(
+	                  'Raw value from config:',
+	                  configFields.contribution_amount_local || configFields.contribution_amount_usd,
+	                );
+
+	                if (contributionAmountUsd > 0) {
+	                  const exactContributionAmount = BigInt(Math.floor(contributionAmountUsd * 10000));
+	                  console.log('Calculated contribution amount (in microUSDC):', exactContributionAmount.toString());
+	                  console.log(`This equals ${formatMicroUnits(exactContributionAmount)} USDC`);
+
+	                  verifiedAmount = exactContributionAmount;
+	                }
+	              }
+
               // If we couldn't find the amount in the config, try direct fields
               if (verifiedAmount === usdcAmountMicroUnits && circleObject.data?.content && 'fields' in circleObject.data.content) {
                 const circleFields = circleObject.data.content.fields as Record<string, unknown>;
@@ -5639,7 +5913,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   
                   // Call the deposit function with the split coin
                   txb.moveCall({
-                    target: `${PACKAGE_ID}::njangi_circles::member_deposit_security_deposit`,
+                    target: `${packageIdToUse}::njangi_circles::member_deposit_security_deposit`,
                     arguments: [
                       txb.sharedObjectRef({ objectId: circleId, initialSharedVersion: circleVersion, mutable: true }),
                       txb.sharedObjectRef({ objectId: walletId, initialSharedVersion: walletVersion, mutable: true }),
@@ -5678,12 +5952,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     );
                     
                     // Add debug logs for the contribution function call
-                    console.log(`DEBUG: Using PACKAGE_ID for contribute: ${PACKAGE_ID}`);
+                    console.log(`DEBUG: Using package ID for contribute: ${packageIdToUse}`);
                     console.log(`DEBUG: Using USDC_COIN_TYPE for contribute: ${USDC_COIN_TYPE}`);
                     
                     // We need to use member_deposit_security_deposit instead of contribute for USDC
                     txb.moveCall({
-                      target: `${PACKAGE_ID}::njangi_circles::member_deposit_security_deposit`,
+                      target: `${packageIdToUse}::njangi_circles::member_deposit_security_deposit`,
                       typeArguments: [USDC_COIN_TYPE],
                       arguments: [
                         txb.sharedObjectRef({ objectId: circleId, initialSharedVersion: circleVersion, mutable: true }),
@@ -5718,7 +5992,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   
                   // Call the contribute_stablecoin function with the split coin
                   txb.moveCall({
-                    target: `${PACKAGE_ID}::njangi_circles::contribute_stablecoin`,
+                    target: `${packageIdToUse}::njangi_circles::contribute_stablecoin`,
                     typeArguments: [USDC_COIN_TYPE],
                     arguments: [
                       txb.sharedObjectRef({ objectId: circleId, initialSharedVersion: circleVersion, mutable: true }),
@@ -5756,12 +6030,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     );
                     
                     // Add debug logs for the contribute_stablecoin function call
-                    console.log(`DEBUG: Using PACKAGE_ID for contribute_stablecoin: ${PACKAGE_ID}`);
+                    console.log(`DEBUG: Using package ID for contribute_stablecoin: ${packageIdToUse}`);
                     console.log(`DEBUG: Using USDC_COIN_TYPE for contribute_stablecoin: ${USDC_COIN_TYPE}`);
                     
                     // Call contribute_stablecoin with the merged and split coin
                     txb.moveCall({
-                      target: `${PACKAGE_ID}::njangi_circles::contribute_stablecoin`,
+                      target: `${packageIdToUse}::njangi_circles::contribute_stablecoin`,
                       typeArguments: [USDC_COIN_TYPE],
                       arguments: [
                         txb.sharedObjectRef({ objectId: circleId, initialSharedVersion: circleVersion, mutable: true }),
@@ -5992,9 +6266,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const suiClient = new SuiClient({ url: rpcUrl });
           console.log(`[returnSecurityDeposit] Using ${networkToUse} network with RPC: ${rpcUrl}`);
           
-          // Verify the wallet exists and has sufficient balance
+          // Verify the wallet exists and is accessible
+          let walletObj;
           try {
-            const walletObj = await suiClient.getObject({
+            walletObj = await suiClient.getObject({
               id: walletId,
               options: { showContent: true }
             });
@@ -6071,67 +6346,76 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             
             // Extract the actual package ID from the object type
             // Object type format: "0x<package_id>::njangi_circles::Circle"
-            const actualPackageId = objectType.split('::')[0];
-            console.log(`[returnSecurityDeposit] Circle object package ID: ${actualPackageId}`);
+            const objectPackageId = objectType.split('::')[0];
+            console.log(`[returnSecurityDeposit] Circle object package ID: ${objectPackageId}`);
             console.log(`[returnSecurityDeposit] Current network package ID: ${networkPackageId}`);
-            
-            if (actualPackageId !== networkPackageId) {
-              console.log(`[returnSecurityDeposit] Package ID mismatch detected! Using object's package ID: ${actualPackageId}`);
-            }
-            
-            let isSuiBased = true; // Default to SUI
+            const packageIdToUse = await resolveCirclePackageIdForTransaction({
+              context: 'returnSecurityDeposit',
+              network: networkToUse,
+              circleId,
+              objectPackageId,
+              userAddress: account.userAddr,
+            });
+            console.log(`[returnSecurityDeposit] Effective package ID for transaction: ${packageIdToUse}`);
+
+            const normalizedMemberAddress = normalizeAddress(memberAddress);
             if (circleObj.data?.content && 'fields' in circleObj.data.content) {
               const fields = circleObj.data.content.fields as Record<string, unknown>;
-              // Check if there's a currency_type field or similar indicator
-              if (fields.currency_type === 'stablecoin' || fields.currency_type === 'usdc') {
-                isSuiBased = false;
-              }
-              
-              // Also check if the circle is active or paused - these functions require specific states
               console.log('Circle is_active:', fields.is_active);
-              console.log('Circle is_paused_after_cycle:', fields.is_paused_after_cycle);
-              
-              // Check if there are members in the circle to inspect deposit status
-              if (fields.members) {
-                console.log('Circle has members table:', typeof fields.members);
-              }
-            }
-            
-            console.log(`Detected ${isSuiBased ? 'SUI' : 'stablecoin'} based circle for security deposit return`);
-            
-            // Check if the circle is properly paused for admin_payout_security_deposit_sui
-            // This function requires the circle to be paused after completing a cycle
-            if (circleObj.data?.content && 'fields' in circleObj.data.content) {
-              const fields = circleObj.data.content.fields as Record<string, unknown>;
-              const isPausedAfterCycle = fields.paused_after_cycle === true;
-              
-              if (!isPausedAfterCycle) {
+              console.log('Circle is_paused_after_cycle:', fields.paused_after_cycle);
+
+              const canReturnSecurityDeposit = fields.is_active !== true || fields.paused_after_cycle === true;
+              if (!canReturnSecurityDeposit) {
                 return res.status(400).json({ 
-                  error: `Circle must be paused after a cycle to return security deposits. Current state: is_active=${fields.is_active}, paused_after_cycle=${fields.paused_after_cycle}. Please pause the circle first.`
+                  error: `Circle must be inactive or paused after a cycle to return security deposits. Current state: is_active=${fields.is_active}, paused_after_cycle=${fields.paused_after_cycle}.`
                 });
               }
-              console.log(`[returnSecurityDeposit] Circle is paused after cycle (paused_after_cycle: ${fields.paused_after_cycle}), proceeding with deposit return`);
             }
-            
-            // Use admin_payout_security_deposit_sui which properly handles custody wallet dynamic fields
-            // The old process_security_deposit_return tried to withdraw from circle.deposits which is never populated
+
+            const depositContext = await resolveMemberSecurityDepositContext({
+              suiClient,
+              packageId: packageIdToUse,
+              circleId,
+              walletId,
+              memberAddress: normalizedMemberAddress,
+              circleContent: circleObj.data.content,
+              walletContent: walletObj.data?.content,
+            });
+
+            console.log('[returnSecurityDeposit] Resolved member deposit context:', {
+              memberAddress: normalizedMemberAddress,
+              hasPaidDeposit: depositContext.hasPaidDeposit,
+              depositBalance: depositContext.depositBalance.toString(),
+              coinKind: depositContext.coinKind,
+              stablecoinTypeArg: depositContext.stablecoinTypeArg,
+            });
+
             txResult = await instance.sendTransaction(
               session.account!,
               (txb: Transaction) => {
                 txb.setSender(session.account!.userAddr);
-                
-                // Use admin_payout_security_deposit_sui which:
-                // 1. Checks dynamic fields first (where security deposits are actually stored)
-                // 2. Falls back to main balance if needed
-                // 3. Properly handles the custody wallet
-                txb.moveCall({
-                  target: `${actualPackageId}::njangi_payments::admin_payout_security_deposit_sui`,
-                  arguments: [
-                    txb.object(circleId),     // circle: &mut Circle
-                    txb.object(walletId),     // wallet: &mut CustodyWallet
-                    txb.pure.address(memberAddress) // member_addr: address
-                  ]
-                });
+
+                if (depositContext.coinKind === 'stablecoin') {
+                  txb.moveCall({
+                    target: `${packageIdToUse}::njangi_payments::admin_payout_security_deposit_stablecoin`,
+                    typeArguments: [depositContext.stablecoinTypeArg],
+                    arguments: [
+                      txb.object(circleId),
+                      txb.object(walletId),
+                      txb.pure.address(normalizedMemberAddress),
+                      txb.object(CLOCK_OBJECT_ID)
+                    ]
+                  });
+                } else {
+                  txb.moveCall({
+                    target: `${packageIdToUse}::njangi_payments::admin_payout_security_deposit_sui`,
+                    arguments: [
+                      txb.object(circleId),
+                      txb.object(walletId),
+                      txb.pure.address(normalizedMemberAddress)
+                    ]
+                  });
+                }
               },
               { gasBudget: 100000000 }
             );
@@ -6150,31 +6434,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (txResult.status === 'failure') {
             console.error('Security deposit return transaction failed:', txResult.error);
             
-            // Parse the Move error to provide a meaningful message
-            let errorMessage = 'Transaction failed';
             const errorStr = txResult.error || '';
-            
-            // Check for specific error codes
-            if (errorStr.includes(', 12)')) {
-              errorMessage = 'Insufficient balance in custody wallet to return security deposit. Please ensure the custody wallet has enough funds.';
-            } else if (errorStr.includes(', 7)')) {
-              errorMessage = 'Only the circle admin can return security deposits';
-            } else if (errorStr.includes(', 58)')) {
-              errorMessage = 'Circle must be paused after a cycle before security deposits can be returned';
-            } else if (errorStr.includes(', 8)')) {
-              errorMessage = 'The specified address is not a member of this circle';
-            } else if (errorStr.includes(', 59)')) {
-              errorMessage = 'No security deposit to return for this member';
-            } else if (errorStr.includes(', 60)')) {
-              errorMessage = 'Security deposit has already been returned';
-            } else if (errorStr.includes('MoveAbort')) {
-              const match = errorStr.match(/MoveAbort\([^,]+,\s*(\d+)\)/);
-              if (match) {
-                errorMessage = `Smart contract error (code ${match[1]}): ${errorStr}`;
-              } else {
-                errorMessage = `Smart contract error: ${errorStr}`;
-              }
-            }
+            const errorMessage = mapSecurityDepositErrorMessage(errorStr);
             
             return res.status(400).json({
               error: errorMessage,
@@ -6194,56 +6455,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } catch (error) {
           console.error('Error returning security deposit:', error);
           
-          // Check if this is a MoveAbort error and provide specific guidance
-          // Error codes for admin_payout_security_deposit_sui function
           const errorStr = error instanceof Error ? error.message : String(error);
-          if (errorStr.includes('MoveAbort') && errorStr.includes(', 7)')) {
+
+          if (errorStr.includes('MoveAbort')) {
             return res.status(400).json({ 
-              error: 'Cannot return security deposit: Not authorized', 
-              details: 'Only the circle admin can return security deposits.',
-              errorCode: 7
-            });
-          } else if (errorStr.includes('MoveAbort') && errorStr.includes(', 58)')) {
-            return res.status(400).json({ 
-              error: 'Cannot return security deposit: Circle must be paused', 
-              details: 'The circle must be paused after completing a cycle before security deposits can be returned. Please pause the circle first.',
-              errorCode: 58
-            });
-          } else if (errorStr.includes('MoveAbort') && errorStr.includes(', 8)')) {
-            return res.status(400).json({ 
-              error: 'Cannot return security deposit: Not a member', 
-              details: 'The specified address is not a member of this circle.',
-              errorCode: 8
-            });
-          } else if (errorStr.includes('MoveAbort') && errorStr.includes(', 46)')) {
-            return res.status(400).json({ 
-              error: 'Cannot return security deposit: Wallet mismatch', 
-              details: 'The custody wallet does not belong to this circle.',
-              errorCode: 46
-            });
-          } else if (errorStr.includes('MoveAbort') && errorStr.includes(', 43)')) {
-            return res.status(400).json({ 
-              error: 'Cannot return security deposit: Wallet not active', 
-              details: 'The custody wallet is not active.',
-              errorCode: 43
-            });
-          } else if (errorStr.includes('MoveAbort') && errorStr.includes(', 59)')) {
-            return res.status(400).json({ 
-              error: 'Cannot return security deposit: No deposit to return', 
-              details: 'The member has no security deposit balance to return.',
-              errorCode: 59
-            });
-          } else if (errorStr.includes('MoveAbort') && errorStr.includes(', 60)')) {
-            return res.status(400).json({ 
-              error: 'Cannot return security deposit: Already returned', 
-              details: 'The member\'s security deposit has already been returned.',
-              errorCode: 60
-            });
-          } else if (errorStr.includes('MoveAbort') && errorStr.includes(', 12)')) {
-            return res.status(400).json({ 
-              error: 'Cannot return security deposit: Insufficient balance', 
-              details: 'The custody wallet does not have sufficient funds to return the security deposit. Please ensure the wallet has enough balance.',
-              errorCode: 12
+              error: mapSecurityDepositErrorMessage(errorStr, 'Failed to return security deposit'),
+              details: errorStr
             });
           }
           
@@ -6302,9 +6519,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               instance.initializeWithNetwork();
             }
             
-            // Get the correct package ID for this circle using the current network context
-            const circlePackageId = await getCirclePackageId(circleId, account.userAddr);
-            const packageIdToUse = circlePackageId || getCurrentPackageId();
+            // Get the effective transaction package ID for this circle on the current network.
+            const packageIdToUse = await resolveCirclePackageIdForTransaction({
+              context: 'adminSetMaxMembers',
+              network: getCurrentNetwork(),
+              circleId,
+              userAddress: account.userAddr,
+            });
             console.log(`Using package ID for adminSetMaxMembers: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
 
           // Send the transaction
@@ -6420,9 +6641,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           console.log(`Admin triggering automatic payout for circle ${circleId} with wallet ${req.body.walletId} on network ${getCurrentNetwork()}`);
 
-          // Get the dynamic package ID for this circle on the current network
-          const dynamicPackageId = await getCirclePackageId(circleId, session.account.userAddr);
-          const packageIdToUse = dynamicPackageId || PACKAGE_ID;
+          const packageIdToUse = await resolveCirclePackageIdForTransaction({
+            context: 'adminTriggerPayout',
+            network: getCurrentNetwork(),
+            circleId,
+            userAddress: session.account.userAddr,
+          });
           console.log(`Using package ID ${packageIdToUse} for circle ${circleId} on ${getCurrentNetwork()}`);
           const USDC_TYPE = getCurrentCoinTypes().USDC;
 
@@ -6548,9 +6772,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           console.log(`Admin triggering USDC payout for circle ${circleId} with wallet ${req.body.walletId} on network ${getCurrentNetwork()}`);
 
-          // Get the dynamic package ID for this circle on the current network
-          const dynamicPackageId = await getCirclePackageId(circleId, session.account.userAddr);
-          const packageIdToUse = dynamicPackageId || PACKAGE_ID;
+          const packageIdToUse = await resolveCirclePackageIdForTransaction({
+            context: 'adminTriggerUsdcPayout',
+            network: getCurrentNetwork(),
+            circleId,
+            userAddress: session.account.userAddr,
+          });
           console.log(`Using package ID ${packageIdToUse} for circle ${circleId} on ${getCurrentNetwork()}`);
 
           // Define the USDC coin type using network config
@@ -6668,6 +6895,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
+          const packageIdToUse = await resolveCirclePackageIdForTransaction({
+            context: 'resumeCycle',
+            network: getCurrentNetwork(),
+            circleId,
+            userAddress: account.userAddr,
+          });
+
           // Send transaction using zkLogin service
           const txResult = await instance.sendTransaction(
             account,
@@ -6676,7 +6910,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               
               // Call the resume_cycle function
               txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_circles::resume_cycle`,
+                target: `${packageIdToUse}::njangi_circles::resume_cycle`,
                 arguments: [
                   txb.object(circleId),
                   txb.object(CLOCK_OBJECT_ID) // Clock object
@@ -6776,6 +7010,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Normalize address to ensure it's in the correct format
           const normalizedAddress = memberAddress.startsWith('0x') ? memberAddress : `0x${memberAddress}`;
           console.log(`Processing SUI security deposit payout for member ${normalizedAddress} in circle ${payoutCircleId} with wallet ${payoutWalletId}`);
+          const packageIdToUse = await resolveCirclePackageIdForTransaction({
+            context: 'payoutSecurityDepositSui',
+            network: getCurrentNetwork(),
+            circleId: payoutCircleId,
+            userAddress: account.userAddr,
+          });
 
           // Send transaction using zkLogin service
           const txResult = await instance.sendTransaction(
@@ -6785,7 +7025,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               
               // Call the admin_payout_security_deposit_sui function - no clock parameter needed
               txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_payments::admin_payout_security_deposit_sui`,
+                target: `${packageIdToUse}::njangi_payments::admin_payout_security_deposit_sui`,
                 arguments: [
                   txb.object(payoutCircleId),
                   txb.object(payoutWalletId),
@@ -6893,6 +7133,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Use the standard USDC type from constants
           const depositUsedUsdcType = USDC_COIN_TYPE;
           console.log(`Using stablecoin type: ${depositUsedUsdcType}`);
+          const packageIdToUse = await resolveCirclePackageIdForTransaction({
+            context: 'payoutSecurityDepositStablecoin',
+            network: getCurrentNetwork(),
+            circleId: stablecoinPayoutCircleId,
+            userAddress: account.userAddr,
+          });
 
           // Send transaction using zkLogin service
           const txResult = await instance.sendTransaction(
@@ -6902,7 +7148,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               
               // Call the admin_payout_security_deposit_stablecoin function
               txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_payments::admin_payout_security_deposit_stablecoin`,
+                target: `${packageIdToUse}::njangi_payments::admin_payout_security_deposit_stablecoin`,
                 typeArguments: [depositUsedUsdcType],
                 arguments: [
                   txb.object(stablecoinPayoutCircleId),
@@ -7001,6 +7247,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           };
 
           console.log(`Creating yield config for circle ${yieldCircleId} with strategy ${strategy}`);
+          const packageIdToUse = await resolveCirclePackageIdForTransaction({
+            context: 'createYieldConfig',
+            network: getCurrentNetwork(),
+            circleId: yieldCircleId,
+            userAddress: account.userAddr,
+          });
 
           const txResult = await instance.sendTransaction(
             account,
@@ -7008,7 +7260,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               txb.setSender(account.userAddr);
               
               txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_yield_integration::create_yield_config`,
+                target: `${packageIdToUse}::njangi_yield_integration::create_yield_config`,
                 arguments: [
                   txb.object(yieldCircleId),
                   txb.pure.u8(strategyMap[strategy as keyof typeof strategyMap]),
@@ -7090,6 +7342,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           };
 
           console.log(`Changing yield strategy to ${strategy} for config ${yieldConfigId}`);
+          const packageIdToUse = await getObjectTransactionPackageId(yieldConfigId);
 
           const txResult = await instance.sendTransaction(
             account,
@@ -7099,7 +7352,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               // For now, we'll create a new config with the new strategy
               // In a future update, we could add an update_yield_strategy function to the smart contract
               txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_yield_integration::create_yield_config`,
+                target: `${packageIdToUse}::njangi_yield_integration::create_yield_config`,
                 arguments: [
                   txb.object(yieldConfigId), // This would need to be updated to use proper circle ID
                   txb.pure.u8(strategyMap[strategy as keyof typeof strategyMap]),
@@ -7175,6 +7428,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           console.log(`Generating yield on deposit for member ${memberAddress} with amount ${depositAmount} SUI`);
+          const packageIdToUse = await resolveCirclePackageIdForTransaction({
+            context: 'generateYieldOnDeposit',
+            network: getCurrentNetwork(),
+            circleId: depositCircleId,
+            userAddress: account.userAddr,
+          });
 
           const txResult = await instance.sendTransaction(
             account,
@@ -7184,7 +7443,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               // FIXED: Now we pass the deposit amount directly - the function will withdraw from custody wallet
               // Call generate_yield_on_security_deposit - now returns only YieldReceipt  
               const yieldReceipt = txb.moveCall({
-                target: `${PACKAGE_ID}::njangi_yield_integration::generate_yield_on_security_deposit`,
+                target: `${packageIdToUse}::njangi_yield_integration::generate_yield_on_security_deposit`,
                 arguments: [
                   txb.object(depositCircleId),
                   txb.object(depositWalletId),
@@ -7261,8 +7520,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             return res.status(400).json({ error: 'Circle ID, wallet ID, and yield config ID are required' });
           }
 
-          // Use the package ID for this specific circle (fallback to default if not provided)
-          const targetPackageId = packageId || PACKAGE_ID;
+          const targetPackageId = await resolveCirclePackageIdForTransaction({
+            context: 'collectYield',
+            network: getCurrentNetwork(),
+            circleId: collectCircleId,
+            requestedPackageId: packageId,
+            userAddress: account.userAddr,
+          });
           console.log('Using package ID for yield collection:', targetPackageId);
 
           console.log(`Collecting yield for circle ${collectCircleId}`);
@@ -7342,8 +7606,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             return res.status(400).json({ error: 'Circle ID, wallet ID, and yield config ID are required' });
           }
 
-          // Use the package ID for this specific circle (fallback to default if not provided)
-          const targetPackageId = packageId || PACKAGE_ID;
+          const targetPackageId = await resolveCirclePackageIdForTransaction({
+            context: 'emergencyWithdrawYield',
+            network: getCurrentNetwork(),
+            circleId: emergencyCircleId,
+            requestedPackageId: packageId,
+            userAddress: account.userAddr,
+          });
           console.log('Using package ID for emergency yield withdrawal:', targetPackageId);
 
           console.log(`Emergency withdrawing yield for circle ${emergencyCircleId}, reason: ${reason}`);
@@ -7426,8 +7695,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             return res.status(400).json({ error: 'Yield data with SUI amount, circle ID, and custody wallet ID are required' });
           }
 
-          // Use the package ID for this specific circle (fallback to default if not provided)
-          const targetPackageId = packageId || PACKAGE_ID;
+          const targetPackageId = await resolveCirclePackageIdForTransaction({
+            context: 'addCetusLiquidity',
+            network: getCurrentNetwork(),
+            circleId: yieldData.circle_id,
+            requestedPackageId: packageId,
+            userAddress: account.userAddr,
+          });
           console.log('Using package ID for legacy yield configuration:', targetPackageId);
 
           console.log(`Setting up legacy yield integration for circle ${yieldData.circle_id}:`, {
@@ -7519,8 +7793,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
 
-          // Use the package ID for this specific circle (fallback to default if not provided)
-          const targetPackageId = packageId || PACKAGE_ID;
+          const targetPackageId = await resolveCirclePackageIdForTransaction({
+            context: 'processSecurityDeposits',
+            network: getCurrentNetwork(),
+            circleId: yieldData.circle_id,
+            requestedPackageId: packageId,
+            userAddress: account.userAddr,
+          });
           console.log('Using package ID for legacy security deposit processing:', targetPackageId);
 
           console.log(`Processing security deposits via legacy yield path:`, {

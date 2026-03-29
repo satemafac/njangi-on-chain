@@ -19,6 +19,7 @@ import {
   shouldUseCoinbaseProvider,
 } from '@/lib/onramp-provider';
 import { cetusService } from '@/lib/cetus-service';
+import { getCircleConfigFieldsByObjectId, getCircleConfigObjectId } from '@/lib/circle-config';
 import { clearWalletBalanceCache, refreshWalletBalances } from '@/lib/wallet';
 import type { CoinbaseSessionClientError } from '@/hooks/useCoinbaseSession';
 import type {
@@ -32,6 +33,7 @@ import {
   getCurrentNetwork, 
   getCurrentNetworkConfig, 
   getNetworkConfig,
+  type NetworkConfig,
   getCurrentRpcUrl, 
   getCurrentPackageId,
   setCurrentNetwork
@@ -541,6 +543,335 @@ interface TransactionBlockPayload {
   transactionBlock: TransactionBlock;
   options: TransactionOptions;
 }
+
+type HistoryDirection = 'received' | 'sent' | 'mixed' | 'neutral';
+
+interface TransactionHistoryAmount {
+  coinType: string;
+  symbol: string;
+  formattedAmount: string;
+  rawAmount: bigint;
+  direction: 'received' | 'sent';
+}
+
+interface TransactionHistoryItem {
+  digest: string;
+  timestamp: Date;
+  type: string;
+  direction: HistoryDirection;
+  sentAmounts: TransactionHistoryAmount[];
+  receivedAmounts: TransactionHistoryAmount[];
+  status: 'Success' | 'Failed';
+  gasFee: number;
+  explorerUrl: string;
+}
+
+const HISTORY_FETCH_LIMIT = 60;
+
+const getHistoryTokenMetadata = (
+  coinType: string,
+  networkConfig: NetworkConfig,
+): { symbol: string; decimals: number } => {
+  if (coinType === networkConfig.coinTypes.SUI) {
+    return { symbol: 'SUI', decimals: 9 };
+  }
+
+  if (
+    coinType === networkConfig.coinTypes.USDC ||
+    coinType === networkConfig.tokens.USDC
+  ) {
+    return { symbol: 'USDC', decimals: 6 };
+  }
+
+  if (
+    networkConfig.tokens.USDT &&
+    coinType === networkConfig.tokens.USDT
+  ) {
+    return { symbol: 'USDT', decimals: 6 };
+  }
+
+  const fallbackSymbol = coinType.split('::').pop()?.toUpperCase() || 'TOKEN';
+  return {
+    symbol: fallbackSymbol,
+    decimals: fallbackSymbol === 'SUI' ? 9 : 6,
+  };
+};
+
+const formatHistoryTokenAmount = (rawAmount: bigint, decimals: number): string => {
+  const fixed = (Number(rawAmount) / 10 ** decimals).toFixed(4);
+  return fixed.replace(/\.?0+$/, '');
+};
+
+const getNetGasFeeMist = (tx: any): bigint => {
+  const gasUsed = tx.effects?.gasUsed;
+  if (!gasUsed) {
+    return BigInt(0);
+  }
+
+  const computationCost = BigInt(gasUsed.computationCost || 0);
+  const storageCost = BigInt(gasUsed.storageCost || 0);
+  const storageRebate = BigInt(gasUsed.storageRebate || 0);
+
+  return computationCost + storageCost - storageRebate;
+};
+
+const getHistoryExplorerUrl = (network: 'mainnet' | 'testnet', digest: string): string =>
+  `https://explorer.sui.io/txblock/${digest}?network=${network}`;
+
+const extractMoveCalls = (
+  tx: any,
+): Array<{ module: string; functionName: string; typeArguments: string[] }> => {
+  const transactions = tx.transaction?.data?.transaction?.transactions ?? [];
+
+  return transactions.flatMap((entry: any) => {
+    const moveCall = entry?.MoveCall;
+    if (!moveCall) {
+      return [];
+    }
+
+    return [{
+      module: moveCall.module,
+      functionName: moveCall.function,
+      typeArguments: moveCall.type_arguments || moveCall.typeArguments || [],
+    }];
+  });
+};
+
+const extractFallbackAmountsFromEvents = (
+  tx: any,
+  userAddress: string,
+  networkConfig: NetworkConfig,
+  moveCalls: Array<{ module: string; functionName: string; typeArguments: string[] }>,
+): Array<{ coinType: string; rawAmount: bigint }> => {
+  const fallbackAmounts: Array<{ coinType: string; rawAmount: bigint }> = [];
+  const normalizedUserAddress = userAddress.toLowerCase();
+  const primaryTypeArg = moveCalls.find((call) => call.typeArguments.length > 0)?.typeArguments[0];
+  const usesStablecoinPath = moveCalls.some(
+    (call) =>
+      call.functionName.includes('stablecoin') ||
+      call.typeArguments.some((typeArg) => typeArg === networkConfig.coinTypes.USDC),
+  );
+  const defaultCoinType = primaryTypeArg ||
+    (usesStablecoinPath ? networkConfig.coinTypes.USDC : networkConfig.coinTypes.SUI);
+
+  for (const event of tx.events || []) {
+    const eventType = typeof event.type === 'string' ? event.type : '';
+    const parsedJson = event.parsedJson as Record<string, unknown> | undefined;
+    if (!parsedJson) {
+      continue;
+    }
+
+    const eventMember = typeof parsedJson.member === 'string'
+      ? parsedJson.member.toLowerCase()
+      : null;
+    const rawAmount = parsedJson.amount != null ? BigInt(String(parsedJson.amount)) : BigInt(0);
+    if (rawAmount === BigInt(0)) {
+      continue;
+    }
+
+    if (
+      eventType.includes('SecurityDepositReturned') &&
+      eventMember === normalizedUserAddress
+    ) {
+      fallbackAmounts.push({
+        coinType: defaultCoinType,
+        rawAmount,
+      });
+      continue;
+    }
+
+    if (
+      eventType.includes('CustodyDeposited') &&
+      eventMember === normalizedUserAddress
+    ) {
+      fallbackAmounts.push({
+        coinType:
+          parsedJson.coin_type === 'stablecoin'
+            ? networkConfig.coinTypes.USDC
+            : defaultCoinType,
+        rawAmount: -rawAmount,
+      });
+    }
+  }
+
+  return fallbackAmounts;
+};
+
+const buildHistoryAmounts = (
+  tx: any,
+  userAddress: string,
+  networkConfig: NetworkConfig,
+): {
+  sentAmounts: TransactionHistoryAmount[];
+  receivedAmounts: TransactionHistoryAmount[];
+} => {
+  const normalizedUserAddress = userAddress.toLowerCase();
+  const moveCalls = extractMoveCalls(tx);
+  const userBalanceChanges = Array.isArray(tx.balanceChanges)
+    ? tx.balanceChanges
+        .filter((change: any) => change.owner?.AddressOwner?.toLowerCase() === normalizedUserAddress)
+        .map((change: any) => ({
+          coinType: change.coinType,
+          rawAmount: BigInt(change.amount),
+        }))
+    : [];
+
+  const netGasFeeMist = getNetGasFeeMist(tx);
+  const adjustedBalanceChanges = [...userBalanceChanges];
+
+  if (netGasFeeMist > BigInt(0)) {
+    const negativeSuiIndex = adjustedBalanceChanges.findIndex(
+      (change) =>
+        change.coinType === networkConfig.coinTypes.SUI &&
+        change.rawAmount < BigInt(0),
+    );
+
+    if (negativeSuiIndex >= 0) {
+      adjustedBalanceChanges[negativeSuiIndex] = {
+        ...adjustedBalanceChanges[negativeSuiIndex],
+        rawAmount: adjustedBalanceChanges[negativeSuiIndex].rawAmount + netGasFeeMist,
+      };
+    }
+  }
+
+  const meaningfulChanges = adjustedBalanceChanges.filter(
+    (change) => change.rawAmount !== BigInt(0),
+  );
+
+  const fallbackChanges =
+    meaningfulChanges.length > 0
+      ? meaningfulChanges
+      : extractFallbackAmountsFromEvents(tx, userAddress, networkConfig, moveCalls);
+
+  const sentAmounts = fallbackChanges
+    .filter((change) => change.rawAmount < BigInt(0))
+    .map((change) => {
+      const metadata = getHistoryTokenMetadata(change.coinType, networkConfig);
+      const absoluteAmount = change.rawAmount * BigInt(-1);
+
+      return {
+        coinType: change.coinType,
+        symbol: metadata.symbol,
+        formattedAmount: formatHistoryTokenAmount(absoluteAmount, metadata.decimals),
+        rawAmount: absoluteAmount,
+        direction: 'sent' as const,
+      };
+    });
+
+  const receivedAmounts = fallbackChanges
+    .filter((change) => change.rawAmount > BigInt(0))
+    .map((change) => {
+      const metadata = getHistoryTokenMetadata(change.coinType, networkConfig);
+
+      return {
+        coinType: change.coinType,
+        symbol: metadata.symbol,
+        formattedAmount: formatHistoryTokenAmount(change.rawAmount, metadata.decimals),
+        rawAmount: change.rawAmount,
+        direction: 'received' as const,
+      };
+    });
+
+  return { sentAmounts, receivedAmounts };
+};
+
+const getTransactionHistoryLabel = (
+  tx: any,
+  direction: HistoryDirection,
+): string => {
+  const moveCalls = extractMoveCalls(tx);
+  const functions = moveCalls.map(
+    (call) => `${call.module}::${call.functionName}`,
+  );
+  const eventTypes: string[] = (tx.events || []).map(
+    (event: any): string => String(event.type || ''),
+  );
+
+  if (functions.some((value) => value.endsWith('::member_deposit_security_deposit'))) {
+    return 'Security Deposit';
+  }
+
+  if (
+    functions.some(
+      (value) =>
+        value.endsWith('::contribute') ||
+        value.endsWith('::contribute_stablecoin') ||
+        value.endsWith('::contribute_to_circle'),
+    )
+  ) {
+    return 'Contribution';
+  }
+
+  if (
+    functions.some(
+      (value) =>
+        value.endsWith('::admin_payout_security_deposit_sui') ||
+        value.endsWith('::admin_payout_security_deposit_stablecoin'),
+    ) ||
+    eventTypes.some((value) => value.includes('SecurityDepositReturned'))
+  ) {
+    return 'Deposit Return';
+  }
+
+  if (
+    functions.some(
+      (value) =>
+        value.endsWith('::admin_trigger_payout') ||
+        value.endsWith('::admin_trigger_usdc_payout') ||
+        value.endsWith('::claim_payout'),
+    )
+  ) {
+    return 'Payout';
+  }
+
+  if (functions.some((value) => value.endsWith('::create_circle'))) {
+    return 'Create Circle';
+  }
+
+  if (
+    functions.some(
+      (value) =>
+        value.endsWith('::join_circle') ||
+        value.endsWith('::admin_approve_member') ||
+        value.endsWith('::admin_approve_members'),
+    )
+  ) {
+    return 'Join Circle';
+  }
+
+  if (functions.some((value) => value.endsWith('::delete_circle'))) {
+    return 'Delete Circle';
+  }
+
+  if (functions.some((value) => value.endsWith('::activate_circle'))) {
+    return 'Activate Circle';
+  }
+
+  if (
+    functions.some(
+      (value) =>
+        value.includes('swap') ||
+        value.endsWith('::deposit') ||
+        value.endsWith('::swap_b2a'),
+    )
+  ) {
+    return 'Swap';
+  }
+
+  if (functions.length > 0) {
+    return 'Contract Interaction';
+  }
+
+  if (direction === 'received') {
+    return 'Receive';
+  }
+
+  if (direction === 'sent') {
+    return 'Send';
+  }
+
+  return 'Transaction';
+};
 
 // Declare global wallet type - updated to include all possible wallet objects
 declare global {
@@ -1390,7 +1721,7 @@ export default function Dashboard() {
 
   // Add transaction history state
   const [isTransactionHistoryOpen, setIsTransactionHistoryOpen] = useState(false);
-  const [transactionHistory, setTransactionHistory] = useState<any[]>([]);
+  const [transactionHistory, setTransactionHistory] = useState<TransactionHistoryItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
@@ -1714,7 +2045,7 @@ export default function Dashboard() {
   const [isRefreshingBalance, setIsRefreshingBalance] = useState(false);
 
   // Extract fetchBalance into a reusable function
-  const fetchBalance = useCallback(async () => {
+  const fetchBalance = useCallback(async (showFailureToast: boolean = false) => {
     if (!userAddress) return false;
 
     const activeNetwork = getCurrentNetwork();
@@ -1804,7 +2135,9 @@ export default function Dashboard() {
     }
 
     console.warn(`Unable to fetch wallet balances on ${activeNetwork}: ${lastErrorMessage}`);
-    toast.error(`Failed to refresh balance on ${activeNetwork}`);
+    if (showFailureToast) {
+      toast.error(`Failed to refresh balance on ${activeNetwork}`);
+    }
     return false;
   }, [userAddress]);
 
@@ -1815,7 +2148,7 @@ export default function Dashboard() {
       if (userAddress) {
         clearWalletBalanceCache(userAddress);
       }
-      const didRefresh = await fetchBalance();
+      const didRefresh = await fetchBalance(true);
       if (didRefresh) {
         toast.success('Balance refreshed successfully');
       }
@@ -1828,8 +2161,8 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    fetchBalance();
-  }, [userAddress, fetchBalance]);
+    void fetchBalance(false);
+  }, [userAddress, network, fetchBalance]);
 
   useEffect(() => {
     if (!userAddress || !hasValidSwapAmount) {
@@ -2102,95 +2435,45 @@ export default function Dashboard() {
     const dynamicFields = objectData.data.dynamicFields || [];
     console.log('Dynamic fields for circle:', dynamicFields);
 
-    // Find the CircleConfig field first
-    const circleConfigField = dynamicFields.find(field => 
-      field && typeof field === 'object' && 
-      (('objectType' in field && typeof field.objectType === 'string' && 
-        field.objectType.includes('::njangi_circle_config::CircleConfig')) ||
-       ('type' in field && typeof field.type === 'string' && 
-        field.type.includes('::njangi_circle_config::CircleConfig')))
-    );
+    const configObjectId = getCircleConfigObjectId(dynamicFields);
+    if (configObjectId && client) {
+      console.log('Found CircleConfig field:', configObjectId);
 
-    // If we found a CircleConfig field, fetch its details using its objectId
-    if (circleConfigField && client) {
-      console.log('Found CircleConfig field:', circleConfigField);
-      
-      // Extract the objectId to fetch the complete CircleConfig object
-      const configObjectId = circleConfigField.objectId;
-      if (configObjectId && typeof configObjectId === 'string') {
-        try {
-          console.log(`Fetching complete CircleConfig object with ID: ${configObjectId}`);
-          
-          // Fetch the complete CircleConfig object
-          let configObjectResponse;
-          try {
-            configObjectResponse = await client.getObject({
-              id: configObjectId,
-              options: { 
-                showContent: true,
-                showDisplay: false,
-                showType: true
-              }
-            });
-          } catch (error) {
-            console.log(`CircleConfig object ${configObjectId} not accessible on ${getCurrentNetwork()}, using fallback values...`);
-            // Continue without the config object - we'll use fallback values
-            configObjectResponse = { data: null };
+      try {
+        const configFields = await getCircleConfigFieldsByObjectId(client, configObjectId);
+
+        if (configFields) {
+          console.log('CircleConfig fields:', configFields);
+
+          if ('max_members' in configFields) {
+            configValues.maxMembers = Number(configFields.max_members);
+            console.log('Successfully extracted max_members from fetched object:', configValues.maxMembers);
           }
-          
-          if (configObjectResponse.data && configObjectResponse.data.content) {
-            console.log('Fetched CircleConfig object:', configObjectResponse.data);
-            
-            // Access the fields in the fetched object
-            if ('fields' in configObjectResponse.data.content) {
-              const contentFields = configObjectResponse.data.content.fields;
-              console.log('CircleConfig content fields:', contentFields);
-              
-              // Now try to access the value.fields path
-              if (contentFields && typeof contentFields === 'object' && 'value' in contentFields) {
-                const valueObj = contentFields.value as Record<string, unknown>;
-                
-                if (valueObj && typeof valueObj === 'object' && 'fields' in valueObj) {
-                  const configFields = valueObj.fields as Record<string, unknown>;
-                  console.log('CircleConfig nested fields:', configFields);
-                  
-                  // Extract max_members value
-                  if ('max_members' in configFields) {
-                    configValues.maxMembers = Number(configFields.max_members);
-                    console.log('Successfully extracted max_members from fetched object:', configValues.maxMembers);
-                  }
-                  
-                  // Extract other config values
-                  if ('contribution_amount' in configFields) {
-                    configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
-                  }
-                  if ('contribution_amount_local' in configFields) {
-                    configValues.contributionAmountUsd = Number(configFields.contribution_amount_local) / 100;
-                  }
-                  if ('security_deposit' in configFields) {
-                    configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
-                  }
-                  if ('security_deposit_local' in configFields) {
-                    configValues.securityDepositUsd = Number(configFields.security_deposit_local) / 100;
-                  }
-                  if ('cycle_length' in configFields) {
-                    configValues.cycleLength = Number(configFields.cycle_length);
-                  }
-                  if ('cycle_day' in configFields) {
-                    configValues.cycleDay = Number(configFields.cycle_day);
-                    console.log('Found cycle_day in fetched object:', configValues.cycleDay);
-                  }
-                }
-              }
-            }
+          if ('contribution_amount' in configFields) {
+            configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
           }
-        } catch (error) {
-          console.error(`Error fetching CircleConfig object with ID ${configObjectId}:`, error);
-          
-          // If the error is a fetch error, it might be due to network mismatch
-          if (error instanceof Error && error.message.includes('Failed to fetch')) {
-            console.warn(`Circle config object ${configObjectId} not found on current network. This might be from a different network.`);
+          if ('contribution_amount_local' in configFields) {
+            configValues.contributionAmountUsd = Number(configFields.contribution_amount_local) / 100;
           }
+          if ('security_deposit' in configFields) {
+            configValues.securityDeposit = Number(configFields.security_deposit) / 1e9;
+          }
+          if ('security_deposit_local' in configFields) {
+            configValues.securityDepositUsd = Number(configFields.security_deposit_local) / 100;
+          }
+          if ('cycle_length' in configFields) {
+            configValues.cycleLength = Number(configFields.cycle_length);
+          }
+          if ('cycle_day' in configFields) {
+            configValues.cycleDay = Number(configFields.cycle_day);
+            console.log('Found cycle_day in fetched object:', configValues.cycleDay);
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching CircleConfig object with ID ${configObjectId}:`, error);
+
+        if (error instanceof Error && error.message.includes('Failed to fetch')) {
+          console.warn(`Circle config object ${configObjectId} not found on current network. This might be from a different network.`);
         }
       }
     }
@@ -2770,105 +3053,143 @@ export default function Dashboard() {
   // Fetch recent transaction history for display
   const fetchTransactionHistory = useCallback(async () => {
     if (!userAddress) return [];
-    
-    const rpcUrl = getCurrentRpcUrl();
-    const client = getSuiClientFromPool(rpcUrl);
+
+    const currentHistoryNetwork = network === 'mainnet' ? 'mainnet' : 'testnet';
+    const activeNetworkConfig = getCurrentNetworkConfig();
+    const officialRpcUrl = currentHistoryNetwork === 'mainnet'
+      ? 'https://fullnode.mainnet.sui.io:443'
+      : 'https://fullnode.testnet.sui.io:443';
+    const rpcCandidates = Array.from(new Set([
+      officialRpcUrl,
+      getCurrentRpcUrl(),
+      getJsonRpcUrl(0, true),
+      getJsonRpcUrl(1, true),
+    ].filter(Boolean)));
     
     setIsLoadingHistory(true);
     setHistoryError(null);
     
     try {
-      const response = await retryApiCall(
-        () => client.queryTransactionBlocks({
-          filter: { FromAddress: userAddress },
-          options: {
-            showInput: true,
-            showEvents: true,
-            showEffects: true,
-            showObjectChanges: false,
-            showBalanceChanges: true
-          },
-          limit: 1000, // No artificial limits with official Sui RPC
-          order: 'descending'
-        }),
-        3,
-        1000,
-        'fetchTransactionHistory'
-      );
-      
-      const processedTransactions = response.data.map((tx: any) => {
-        // Process transaction data for display
-        const txData = tx.transaction?.data?.transaction;
-        const balanceChanges = tx.balanceChanges || [];
-        const timestamp = tx.timestampMs ? new Date(parseInt(tx.timestampMs)) : new Date();
-        
-        // Determine transaction type and amount
-        let type = 'Unknown';
-        let amount = '0';
-        let tokenType = 'SUI';
-        let direction = 'neutral';
-        
-        // Check balance changes to determine direction and amount
-        const userBalanceChange = balanceChanges.find((change: any) => 
-          change.owner?.AddressOwner === userAddress
-        );
-        
-        if (userBalanceChange) {
-          amount = Math.abs(parseFloat(userBalanceChange.amount) / 1_000_000_000).toFixed(4);
-          tokenType = userBalanceChange.coinType?.split('::').pop() || 'SUI';
-          direction = parseFloat(userBalanceChange.amount) > 0 ? 'received' : 'sent';
-        }
-        
-        // Determine transaction type from function calls
-        if (txData?.transactions) {
-          for (const t of txData.transactions) {
-            if ('MoveCall' in t) {
-              const moveCall = t.MoveCall;
-              if (moveCall.module === 'njangi_circles') {
-                if (moveCall.function === 'create_circle') type = 'Create Circle';
-                else if (moveCall.function === 'join_circle') type = 'Join Circle';
-                else if (moveCall.function === 'contribute_to_circle') type = 'Contribute';
-                else if (moveCall.function === 'claim_payout') type = 'Claim Payout';
-                else if (moveCall.function === 'delete_circle') {
-                  type = 'Delete Circle';
-                  // For delete_circle, override direction since storage rebate shows as "received"
-                  // but it's actually a refund from deleting, not receiving tokens
-                  direction = 'neutral';
-                }
-                else type = 'Circle Action';
-              } else if (moveCall.module === 'pay' || moveCall.module === 'transfer') {
-                type = direction === 'sent' ? 'Send Tokens' : 'Receive Tokens';
-              }
-            } else if ('TransferObjects' in t) {
-              type = 'Transfer';
+      const queryHistoryWithFallback = async (
+        filter: { FromAddress: string } | { ToAddress: string },
+        operationName: string,
+      ): Promise<{ data: any[]; failed: boolean }> => {
+        let lastErrorMessage = 'Unknown error';
+
+        for (const rpcUrl of rpcCandidates) {
+          try {
+            const client = getSuiClientFromPool(rpcUrl);
+            const response = await retryApiCall(
+              () => client.queryTransactionBlocks({
+                filter,
+                options: {
+                  showInput: true,
+                  showEvents: true,
+                  showEffects: true,
+                  showObjectChanges: false,
+                  showBalanceChanges: true
+                },
+                limit: HISTORY_FETCH_LIMIT,
+                order: 'descending'
+              }),
+              2,
+              1000,
+              operationName,
+              5,
+              rpcUrl,
+              false,
+            );
+
+            return {
+              data: response?.data ?? [],
+              failed: false,
+            };
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            lastErrorMessage = errorMessage;
+
+            if (
+              error instanceof TypeError ||
+              errorMessage.includes('Failed to fetch') ||
+              errorMessage.includes('Network request failed')
+            ) {
+              blacklistEndpoint(rpcUrl, `${operationName} failed: ${errorMessage}`);
             }
+
+            console.warn(`${operationName} failed on ${rpcUrl}: ${errorMessage}`);
           }
         }
-        
-        return {
-          digest: tx.digest,
-          timestamp,
-          type,
-          amount,
-          tokenType,
-          direction,
-          status: tx.effects?.status?.status === 'success' ? 'Success' : 'Failed',
-          gasFee: tx.effects?.gasUsed ? 
-            (parseFloat(tx.effects.gasUsed.computationCost) + parseFloat(tx.effects.gasUsed.storageCost)) / 1_000_000_000 
-            : 0
-        };
-      });
+
+        console.warn(`${operationName} failed on all RPC endpoints: ${lastErrorMessage}`);
+        return { data: [], failed: true };
+      };
+
+      const sentResponse = await queryHistoryWithFallback(
+        { FromAddress: userAddress },
+        'fetchSentTransactionHistory',
+      );
+      const receivedResponse = await queryHistoryWithFallback(
+        { ToAddress: userAddress },
+        'fetchReceivedTransactionHistory',
+      );
+
+      if (sentResponse.failed && receivedResponse.failed) {
+        setTransactionHistory([]);
+        setHistoryError(`Failed to load transaction history on ${currentHistoryNetwork}`);
+        return [];
+      }
+
+      const mergedTransactions = new Map<string, any>();
+      for (const tx of [...sentResponse.data, ...receivedResponse.data]) {
+        if (!mergedTransactions.has(tx.digest)) {
+          mergedTransactions.set(tx.digest, tx);
+        }
+      }
+
+      const processedTransactions = Array.from(mergedTransactions.values())
+        .sort((a, b) => Number(b.timestampMs || 0) - Number(a.timestampMs || 0))
+        .slice(0, HISTORY_FETCH_LIMIT)
+        .map((tx: any): TransactionHistoryItem => {
+          const timestamp = tx.timestampMs ? new Date(Number(tx.timestampMs)) : new Date();
+          const { sentAmounts, receivedAmounts } = buildHistoryAmounts(
+            tx,
+            userAddress,
+            activeNetworkConfig,
+          );
+
+          const direction: HistoryDirection =
+            sentAmounts.length > 0 && receivedAmounts.length > 0
+              ? 'mixed'
+              : receivedAmounts.length > 0
+                ? 'received'
+                : sentAmounts.length > 0
+                  ? 'sent'
+                  : 'neutral';
+
+          return {
+            digest: tx.digest,
+            timestamp,
+            type: getTransactionHistoryLabel(tx, direction),
+            direction,
+            sentAmounts,
+            receivedAmounts,
+            status: tx.effects?.status?.status === 'success' ? 'Success' : 'Failed',
+            gasFee: Number(getNetGasFeeMist(tx)) / 1_000_000_000,
+            explorerUrl: getHistoryExplorerUrl(currentHistoryNetwork, tx.digest),
+          };
+        });
       
       setTransactionHistory(processedTransactions);
       return processedTransactions;
     } catch (error) {
       console.error('Error fetching transaction history:', error);
+      setTransactionHistory([]);
       setHistoryError('Failed to load transaction history');
       return [];
     } finally {
       setIsLoadingHistory(false);
     }
-  }, [userAddress]);
+  }, [userAddress, network]);
 
   // Extract circle events from contract-specific transactions
   const extractCircleEventsFromTransactions = useCallback(async (transactions: any[], userAddress: string) => {
@@ -5434,7 +5755,7 @@ export default function Dashboard() {
                             <button
                               onClick={() => {
                                 setIsTransactionHistoryOpen(true);
-                                fetchTransactionHistory();
+                                void fetchTransactionHistory();
                               }}
                               className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors duration-200"
                               aria-label="View transaction history"
@@ -7376,7 +7697,9 @@ export default function Dashboard() {
                     </svg>
                     <p className="text-gray-600 mb-2">{historyError}</p>
                     <button
-                      onClick={fetchTransactionHistory}
+                      onClick={() => {
+                        void fetchTransactionHistory();
+                      }}
                       className="text-blue-600 hover:text-blue-700 text-sm font-medium"
                     >
                       Try again
@@ -7395,7 +7718,21 @@ export default function Dashboard() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {transactionHistory.map((tx) => (
+                  {transactionHistory.map((tx) => {
+                    const amountLines = [
+                      ...tx.receivedAmounts.map((amount) => ({
+                        ...amount,
+                        prefix: '+',
+                        className: 'text-green-600',
+                      })),
+                      ...tx.sentAmounts.map((amount) => ({
+                        ...amount,
+                        prefix: '-',
+                        className: 'text-red-600',
+                      })),
+                    ];
+
+                    return (
                     <div key={tx.digest} className="bg-gray-50 rounded-lg p-4 hover:bg-gray-100 transition-colors">
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center space-x-3">
@@ -7424,13 +7761,20 @@ export default function Dashboard() {
                           </div>
                         </div>
                         <div className="text-right">
-                          <p className={`font-semibold ${
-                            tx.direction === 'received' ? 'text-green-600' :
-                            tx.direction === 'sent' ? 'text-red-600' :
-                            'text-gray-900'
-                          }`}>
-                            {tx.direction === 'received' ? '+' : tx.direction === 'sent' ? '-' : ''}{tx.amount} {tx.tokenType}
-                          </p>
+                          {amountLines.length > 0 ? (
+                            <div className="space-y-1">
+                              {amountLines.map((amount, index) => (
+                                <p
+                                  key={`${tx.digest}-${amount.direction}-${amount.coinType}-${index}`}
+                                  className={`font-semibold ${amount.className}`}
+                                >
+                                  {amount.prefix}{amount.formattedAmount} {amount.symbol}
+                                </p>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="font-semibold text-gray-900">No balance change</p>
+                          )}
                           <div className="flex items-center justify-end space-x-2 mt-1">
                             <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
                               tx.status === 'Success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
@@ -7444,7 +7788,7 @@ export default function Dashboard() {
                         <div className="flex items-center space-x-4">
                           <span>Gas: {tx.gasFee.toFixed(6)} SUI</span>
                           <a
-                            href={`https://${getCurrentNetwork() === 'mainnet' ? 'suiscan.xyz' : 'testnet.suivision.xyz'}/tx/${tx.digest}`}
+                            href={tx.explorerUrl}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-blue-600 hover:text-blue-700 inline-flex items-center"
@@ -7458,7 +7802,7 @@ export default function Dashboard() {
                         <span className="font-mono">{tx.digest.slice(0, 8)}...{tx.digest.slice(-8)}</span>
                       </div>
                     </div>
-                  ))}
+                  )})}
                 </div>
               )}
             </div>

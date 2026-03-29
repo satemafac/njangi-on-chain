@@ -1008,8 +1008,8 @@ module njangi::njangi_payments {
     }
     
     // ----------------------------------------------------------
-    // Admin function to pay out SUI security deposit to a member when the circle is paused
-    // This is a specialized version for SUI deposits
+    // Admin function to pay out SUI security deposit to a member when the circle
+    // is inactive or paused after a cycle. This is a specialized version for SUI deposits.
     // ----------------------------------------------------------
     public entry fun admin_payout_security_deposit_sui(
         circle: &mut Circle,
@@ -1022,8 +1022,8 @@ module njangi::njangi_payments {
         // Only admin can trigger security deposit payout
         assert!(sender == circles::get_admin(circle), 7);
         
-        // Circle must be paused after a cycle
-        assert!(circles::is_paused_after_cycle(circle), 58); // New error code for not paused
+        // Circle must be inactive or paused after a cycle
+        assert!(!circles::is_circle_active(circle) || circles::is_paused_after_cycle(circle), 58);
         
         // Verify member is a circle member
         assert!(circles::is_member(circle, member_addr), 8);
@@ -1093,8 +1093,8 @@ module njangi::njangi_payments {
     }
     
     // ----------------------------------------------------------
-    // Admin function to pay out stablecoin security deposit to a member when the circle is paused
-    // This is the generic version for stablecoin deposits
+    // Admin function to pay out stablecoin security deposit to a member when the circle
+    // is inactive or paused after a cycle. This is the generic version for stablecoin deposits.
     // ----------------------------------------------------------
     public entry fun admin_payout_security_deposit_stablecoin<CoinType>(
         circle: &mut Circle,
@@ -1108,8 +1108,8 @@ module njangi::njangi_payments {
         // Only admin can trigger security deposit payout
         assert!(sender == circles::get_admin(circle), 7);
         
-        // Circle must be paused after a cycle
-        assert!(circles::is_paused_after_cycle(circle), 58); // New error code for not paused
+        // Circle must be inactive or paused after a cycle
+        assert!(!circles::is_circle_active(circle) || circles::is_paused_after_cycle(circle), 58);
         
         // Verify member is a circle member
         assert!(circles::is_member(circle, member_addr), 8);

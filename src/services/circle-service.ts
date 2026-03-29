@@ -1,8 +1,18 @@
 import { Transaction as TransactionBlock } from '@mysten/sui/transactions';
 import { SuiClient } from '@mysten/sui/client';
 import { bcs } from '@mysten/sui/bcs';
+import {
+  extractPackageIdFromMoveType,
+  getPackageLookupIds,
+  normalizePackageId,
+  resolveUpgradeAwarePackageId,
+} from '@/lib/circle-chain';
 import type { CircleFormData, CycleLength, WeekDay } from '../types/circle';
-import { getCurrentNetwork, getCurrentPackageId, getCurrentRpcUrl } from './network-config';
+import {
+  getCurrentNetwork,
+  getCurrentPackageId,
+  getCurrentRpcUrl,
+} from './network-config';
 
 export function getPackageId(): string {
   return getCurrentPackageId();
@@ -10,6 +20,24 @@ export function getPackageId(): string {
 
 // Legacy constant for backward compatibility (will be dynamically resolved)
 export const PACKAGE_ID = getPackageId();
+
+function resolvePackageIdForCurrentNetwork(packageId: string): string {
+  return resolveUpgradeAwarePackageId({
+    network: getCurrentNetwork(),
+    objectPackageId: packageId,
+    currentPackageId: getPackageId(),
+  });
+}
+
+export function getPackageLookupIdsForCurrentNetwork(
+  packageId?: string | null,
+): string[] {
+  return getPackageLookupIds({
+    network: getCurrentNetwork(),
+    packageId,
+    currentPackageId: getPackageId(),
+  });
+}
 
 // Constants from Move contract
 const CIRCLE_TYPE_ROTATIONAL = 0;
@@ -204,13 +232,13 @@ export async function getCirclePackageId(circleId: string, userAddress?: string)
         id: circleId,
         options: { showType: true }
       });
-      
+
       if (circleObject.data?.type) {
-        // Extract package ID from object type like "0xpackage::module::Type"
-        const match = circleObject.data.type.match(/^(0x[a-f0-9]+)::/);
-        if (match && match[1]) {
-          console.log(`Found circle ${circleId} with package ${match[1]} from object type`);
-          return match[1];
+        const packageId = extractPackageIdFromMoveType(circleObject.data.type);
+        if (packageId) {
+          const normalizedPackageId = normalizePackageId(packageId) ?? packageId;
+          console.log(`Found circle ${circleId} with package ${normalizedPackageId} from object type`);
+          return normalizedPackageId;
         }
       }
     } catch (error) {
@@ -234,8 +262,9 @@ export async function getCirclePackageId(circleId: string, userAddress?: string)
           );
           
           if (foundEvent) {
-            console.log(`Found circle ${circleId} created with package ${packageId}`);
-            return packageId;
+            const normalizedPackageId = normalizePackageId(packageId) ?? packageId;
+            console.log(`Found circle ${circleId} created with package ${normalizedPackageId}`);
+            return normalizedPackageId;
           }
         } catch (error) {
           console.warn(`Error querying events for package ${packageId}:`, error);
@@ -273,6 +302,38 @@ export async function getCirclePackageId(circleId: string, userAddress?: string)
   }
 }
 
+export async function getCircleTransactionPackageId(
+  circleId: string,
+  userAddress?: string,
+): Promise<string> {
+  const circlePackageId = await getCirclePackageId(circleId, userAddress);
+  return resolvePackageIdForCurrentNetwork(circlePackageId);
+}
+
+export async function getObjectPackageId(objectId: string): Promise<string> {
+  try {
+    const client = new SuiClient({ url: getCurrentRpcUrl() });
+    const object = await client.getObject({
+      id: objectId,
+      options: { showType: true },
+    });
+
+    const packageId = extractPackageIdFromMoveType(object.data?.type);
+    if (packageId) {
+      return normalizePackageId(packageId) ?? packageId;
+    }
+  } catch (error) {
+    console.warn(`Error getting package ID for object ${objectId}:`, error);
+  }
+
+  return getPackageId();
+}
+
+export async function getObjectTransactionPackageId(objectId: string): Promise<string> {
+  const objectPackageId = await getObjectPackageId(objectId);
+  return resolvePackageIdForCurrentNetwork(objectPackageId);
+}
+
 /**
  * Known package IDs to always check for circles
  * This ensures users who are members-only (added by admin, never transacted) can still see their circles
@@ -283,6 +344,7 @@ const KNOWN_PACKAGE_IDS: Record<'testnet' | 'mainnet', string[]> = {
     '0x9f916ce4a0a4970e1d466a79ec2a916ec930feac10218e2b94c282a3906d7926', // Old testnet package (user requested)
     '0x8d44cd03809c95bd8b46c3f26cc9f7a62085d0f8b1bb22082b6ff768be0cb78f',
     '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc', // Previous testnet package
+    '0xafdc1beeda48394d47ecfacf2f03592af72dd59f54887099551ca8c369c460cd', // Original ID for current upgraded testnet package
     // Note: Current package ID is automatically added from getPackageId()
     // Add more old package IDs here after future upgrades
   ],
@@ -311,8 +373,8 @@ export async function getUserPackageIds(userAddress: string): Promise<string[]> 
     const client = new SuiClient({ url: officialRpcUrl });
     const packageIds = new Set<string>();
     
-    // Always include the current default package ID
-    packageIds.add(getPackageId());
+    // Always include the current package lineage IDs for lookup coverage.
+    getPackageLookupIdsForCurrentNetwork().forEach(id => packageIds.add(id));
     
     // Add all known package IDs for the current network
     const knownIds = KNOWN_PACKAGE_IDS[currentNetwork] || [];
@@ -335,7 +397,7 @@ export async function getUserPackageIds(userAddress: string): Promise<string[]> 
               // Extract package ID from the event type
               const match = event.type.match(/^(0x[a-f0-9]+)::/);
               if (match && match[1]) {
-                packageIds.add(match[1]);
+                packageIds.add(normalizePackageId(match[1]) ?? match[1]);
               }
             }
           }
@@ -348,7 +410,7 @@ export async function getUserPackageIds(userAddress: string): Promise<string[]> 
               // Extract package ID from the object type
               const match = change.objectType.match(/^(0x[a-f0-9]+)::/);
               if (match && match[1]) {
-                packageIds.add(match[1]);
+                packageIds.add(normalizePackageId(match[1]) ?? match[1]);
               }
             }
           }
