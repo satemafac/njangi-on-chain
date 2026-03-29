@@ -3769,6 +3769,11 @@ export default function ContributeToCircle() {
     const hasEnoughUsdcForSuiAssistSwap =
       userUsdcBalance !== null && userUsdcBalance >= estimatedUsdcNeededForSuiSwap;
     const showSuiDirectPayCard = selectedPaymentCurrency === 'SUI' && userBalance !== null;
+    const showUsdcDirectPayCard =
+      showDirectDepositOption &&
+      userUsdcBalance !== null &&
+      selectedPaymentCurrency === 'USDC';
+    const showPrimaryWalletActionCard = showSuiDirectPayCard || showUsdcDirectPayCard;
     const showUsdcSwapAssist =
       circle &&
       selectedPaymentCurrency === 'USDC' &&
@@ -4317,6 +4322,8 @@ export default function ContributeToCircle() {
             />
           </>
         ) : (
+          <>
+          {!showPrimaryWalletActionCard && (
           <div className="bg-gray-50 p-6 rounded-lg shadow-sm">
             <div className="mb-6">
               <p className="text-sm text-gray-600 mb-2">You are about to contribute:</p>
@@ -4537,10 +4544,6 @@ export default function ContributeToCircle() {
                `Contribute in ${selectedPaymentCurrency}`}
             </button>
             
-            <p className="mt-3 text-xs text-center text-gray-500">
-              By contributing, you agree to the circle&apos;s terms and conditions.
-            </p>
-            
             {/* Add inactive or paused circle message */}
             {circle && (!circle.isActive || circle.pausedAfterCycle) && (
               <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200">
@@ -4559,6 +4562,47 @@ export default function ContributeToCircle() {
               </div>
             )}
           </div>
+          )}
+
+          {showPrimaryWalletActionCard && (
+            <div className="space-y-3">
+              {!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause && (
+                <div className="p-3 bg-red-50 rounded-lg border border-red-200">
+                  <p className="text-sm text-red-700 font-medium flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    Security deposit already returned
+                  </p>
+                  <p className="text-xs text-red-600 mt-1">
+                    You have already received your security deposit for this cycle. You must wait for the admin to resume the cycle before paying a new deposit.
+                  </p>
+                </div>
+              )}
+
+              {circle && (!circle.isActive || circle.pausedAfterCycle) && (
+                <div className="p-3 bg-amber-50 rounded-lg border border-amber-200">
+                  <p className="text-sm text-amber-700 font-medium">
+                    {!circle.isActive
+                      ? "This circle is not active yet"
+                      : "This circle is paused after cycle completion"}
+                  </p>
+                  <p className="text-xs text-amber-600 mt-1">
+                    {!userDepositPaid
+                      ? "Security deposits can still be paid before activation or while paused."
+                      : circle.pausedAfterCycle
+                        ? "Regular contributions are disabled while the circle is paused. Please wait for the admin to resume the cycle."
+                        : "Regular contributions are disabled until the admin activates the circle. Please check back later."}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          <p className="text-xs text-center text-gray-500">
+            By contributing, you agree to the circle&apos;s terms and conditions.
+          </p>
+          </>
         )}
       </div>
     );
