@@ -981,6 +981,7 @@ const TokenIcon = ({ symbol }: { symbol: string }) => {
       src={iconPath(symbol)}
       alt={`${symbol} icon`}
       className="h-5 w-5"
+      loading="lazy"
       style={{ objectFit: 'contain' }}
       onError={(e) => {
         // Fallback if the image fails to load
@@ -1055,6 +1056,8 @@ interface RecentContact {
   lastUsed: number;
   frequency: number;
 }
+
+type CircleViewKey = 'all' | 'admin' | 'member';
 
 // Add caching interfaces and constants at the top after other interfaces
 interface CachedData<T> {
@@ -1654,6 +1657,28 @@ export default function Dashboard() {
   // Progressive loading and pagination state
   const [displayedCirclesCount, setDisplayedCirclesCount] = useState(3); // For UI display - start small
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [circleSortOrder, setCircleSortOrder] = useState<'newest' | 'oldest'>('newest');
+  const [circleViewIndex, setCircleViewIndex] = useState(0);
+  const [circleJumpSelections, setCircleJumpSelections] = useState<Record<CircleViewKey, string>>({
+    all: '',
+    admin: '',
+    member: '',
+  });
+  const [collapsedMobileCircleSections, setCollapsedMobileCircleSections] = useState<Record<CircleViewKey, boolean>>({
+    all: true,
+    admin: true,
+    member: true,
+  });
+  const [pendingCircleJump, setPendingCircleJump] = useState<{
+    viewKey: CircleViewKey;
+    circleId: string;
+  } | null>(null);
+  const [highlightedCircleRefKey, setHighlightedCircleRefKey] = useState<string | null>(null);
+  const [selectedMobileCircle, setSelectedMobileCircle] = useState<Circle | null>(null);
+  const [isMobileWalletDetailsOpen, setIsMobileWalletDetailsOpen] = useState(false);
+  const [isMobileWalletHoldingsOpen, setIsMobileWalletHoldingsOpen] = useState(false);
+  const circleCardRefs = useRef(new Map<string, HTMLElement>());
+  const circlePortfolioSectionRef = useRef<HTMLElement | null>(null);
   const CIRCLES_PER_PAGE = 6; // For UI display
   const INITIAL_LOAD_SIZE = 9999; // Fetch ALL circles across all packages (no artificial limit)
   const LOAD_MORE_SIZE = 3; // Load 3 more circles each time
@@ -4051,7 +4076,7 @@ export default function Dashboard() {
 
   // Enhanced utility function to sort circles chronologically (newest to oldest)
   const getSortedCircles = useCallback((circleList: Circle[]) => {
-    return [...circleList].sort((a, b) => {
+    const sorted = [...circleList].sort((a, b) => {
       // Priority 1: Use creation timestamp if available (most accurate)
       const createdAtA = a.createdAt || 0;
       const createdAtB = b.createdAt || 0;
@@ -4075,7 +4100,9 @@ export default function Dashboard() {
       // Priority 4: Final fallback to alphabetical by name for consistency
       return a.name.localeCompare(b.name);
     });
-  }, []);
+
+    return circleSortOrder === 'oldest' ? sorted.reverse() : sorted;
+  }, [circleSortOrder]);
   // Utility function to get paginated circles
   const getPaginatedCircles = useCallback((circleList: Circle[], count: number) => {
     const sortedCircles = getSortedCircles(circleList);
@@ -4671,11 +4698,13 @@ export default function Dashboard() {
       
       if (result.success) {
         toast.success("Funds have been withdrawn to your wallet");
-        
-        // Refresh the page to update balances
-        setTimeout(() => {
-          window.location.reload();
-        }, 3000);
+
+        invalidateCirclesCache();
+        if (userAddress) {
+          clearWalletBalanceCache(userAddress);
+        }
+        await fetchBalance();
+        fetchUserCircles(true);
       } else {
         toast.error(result.error || "Failed to withdraw funds");
       }
@@ -5400,10 +5429,10 @@ export default function Dashboard() {
         setRecentContacts(updatedContacts.slice(0, 10));
         localStorage.setItem('recentContacts', JSON.stringify(updatedContacts.slice(0, 10)));
 
-        // Refresh balances after successful transfer
-        setTimeout(() => {
-          window.location.reload();
-        }, 3000);
+        if (userAddress) {
+          clearWalletBalanceCache(userAddress);
+        }
+        await fetchBalance();
 
         toast.success('Transfer completed successfully!');
       } else {
@@ -5512,11 +5541,144 @@ export default function Dashboard() {
   const adminCircles = circles.filter((circle) => circle.isAdmin);
   const memberCircles = circles.filter((circle) => !circle.isAdmin);
   const activeCirclesCount = circles.filter((circle) => circle.isActive).length;
+  const inactiveCirclesCount = Math.max(0, circles.length - activeCirclesCount);
   const fundedTokens = allCoins.filter((coin) => Number(coin.balance) > 0);
   const networkLabel = network === 'mainnet' ? 'Mainnet' : 'Testnet';
   const walletValueDisplay = balanceVisible
     ? formatCurrency(totalWalletLocalValue, selectedCurrency)
     : formatBalanceDisplay(totalWalletLocalValue, true);
+  const walletAddressDisplay = showFullAddress ? userAddress : shortenAddress(userAddress);
+  const walletPreviewSymbols = (fundedTokens.length > 0 ? fundedTokens : allCoins)
+    .slice(0, 3)
+    .map((coin) => coin.symbol)
+    .join(', ');
+  const walletHoldingsSummary = allCoins.length > 0
+    ? `${allCoins.length} asset${allCoins.length === 1 ? '' : 's'} tracked${walletPreviewSymbols ? ` - ${walletPreviewSymbols}` : ''}`
+    : 'Holdings will appear after the wallet is funded.';
+
+  const openTransactionHistory = useCallback(() => {
+    setIsTransactionHistoryOpen(true);
+    void fetchTransactionHistory();
+  }, [fetchTransactionHistory]);
+
+  const getCircleListForView = useCallback((viewKey: CircleViewKey) => {
+    if (viewKey === 'admin') {
+      return adminCircles;
+    }
+    if (viewKey === 'member') {
+      return memberCircles;
+    }
+    return circles;
+  }, [adminCircles, memberCircles, circles]);
+
+  const scrollToCirclePortfolio = useCallback((viewKey: CircleViewKey = 'all') => {
+    const nextTabIndex = viewKey === 'admin' ? 1 : viewKey === 'member' ? 2 : 0;
+    setCircleViewIndex(nextTabIndex);
+    setCollapsedMobileCircleSections((current) => ({ ...current, [viewKey]: false }));
+
+    window.requestAnimationFrame(() => {
+      circlePortfolioSectionRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
+  }, []);
+
+  const getCirclePrimaryActionLabel = useCallback((circle: Circle) => {
+    if (circle.isActive) {
+      return 'Contribute';
+    }
+
+    if (circle.isAdmin) {
+      return 'Manage';
+    }
+
+    return 'Open';
+  }, []);
+
+  const handleCirclePrimaryAction = useCallback((circle: Circle) => {
+    if (circle.isActive) {
+      setSelectedMobileCircle(null);
+      router.push(`/circle/${circle.id}/contribute`);
+      return;
+    }
+
+    if (circle.isAdmin) {
+      setSelectedMobileCircle(null);
+      router.push(`/circle/${circle.id}/manage`);
+      return;
+    }
+
+    setSelectedMobileCircle(null);
+    router.push(`/circle/${circle.id}`);
+  }, [router]);
+
+  const getCircleMobileSummary = useCallback((circle: Circle) => {
+    if (circle.isActive) {
+      return circle.nextPayoutTime
+        ? `Next payout ${formatDate(circle.nextPayoutTime)}`
+        : 'Circle is active and ready for contributions.';
+    }
+
+    if (circle.currentMembers < circle.maxMembers) {
+      const membersNeeded = circle.maxMembers - circle.currentMembers;
+      return `Waiting for ${membersNeeded} more member${membersNeeded === 1 ? '' : 's'} before the circle fills.`;
+    }
+
+    return 'Circle is inactive right now. Open details to manage or review it.';
+  }, []);
+
+  const handleCircleJump = useCallback((circleId: string, viewKey: CircleViewKey) => {
+    if (!circleId) {
+      return;
+    }
+
+    const targetCircleList = getCircleListForView(viewKey);
+    const sortedCircles = getSortedCircles(targetCircleList);
+    const targetIndex = sortedCircles.findIndex((circle) => circle.id === circleId);
+
+    if (targetIndex === -1) {
+      return;
+    }
+
+    const requiredVisibleCount = targetIndex + 1;
+    if (displayedCirclesCount < requiredVisibleCount) {
+      setDisplayedCirclesCount(requiredVisibleCount);
+    }
+
+    setCollapsedMobileCircleSections((current) => ({ ...current, [viewKey]: false }));
+    setPendingCircleJump({ viewKey, circleId });
+    setCircleJumpSelections((current) => ({ ...current, [viewKey]: '' }));
+  }, [displayedCirclesCount, getCircleListForView, getSortedCircles]);
+
+  useEffect(() => {
+    if (!pendingCircleJump) {
+      return;
+    }
+
+    const refKey = `${pendingCircleJump.viewKey}:${pendingCircleJump.circleId}`;
+    const targetCard = circleCardRefs.current.get(refKey);
+
+    if (!targetCard) {
+      return;
+    }
+
+    const highlightedKey = refKey;
+    window.requestAnimationFrame(() => {
+      targetCard.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+      setHighlightedCircleRefKey(highlightedKey);
+      setPendingCircleJump(null);
+
+      window.setTimeout(() => {
+        setHighlightedCircleRefKey((current) =>
+          current === highlightedKey ? null : current
+        );
+      }, 1800);
+    });
+  }, [pendingCircleJump, displayedCirclesCount, circleViewIndex]);
 
   const primarySurfaceClass =
     'rounded-[32px] border border-stone-200 bg-white shadow-[0_24px_70px_-42px_rgba(15,23,42,0.32)]';
@@ -5526,6 +5688,26 @@ export default function Dashboard() {
     'inline-flex items-center justify-center rounded-full border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:border-stone-400 hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-stone-300 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
   const subtleIconButtonClass =
     'inline-flex h-9 w-9 items-center justify-center rounded-full border border-stone-200 bg-white text-slate-500 transition hover:border-stone-300 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-stone-300 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+  const dialogOverlayClass =
+    'fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-[2px]';
+  const dialogContentClass =
+    'fixed left-1/2 top-1/2 z-50 w-[min(calc(100vw-1.5rem),42rem)] max-h-[min(90vh,calc(100dvh-1.5rem))] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[28px] border border-stone-200 bg-white shadow-[0_32px_90px_-45px_rgba(15,23,42,0.45)] focus:outline-none';
+  const onrampDialogContentClass =
+    'fixed left-1/2 top-1/2 z-50 flex w-[min(calc(100vw-1rem),40rem)] max-h-[min(92dvh,calc(100dvh-1rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[28px] border border-[#ddd5c9] bg-[#fbfaf7] shadow-[0_32px_90px_-45px_rgba(15,23,42,0.45)] focus:outline-none sm:w-[min(calc(100vw-1.5rem),40rem)] sm:max-h-[min(90vh,calc(100dvh-1.5rem))] sm:rounded-[32px]';
+  const mobileSheetContentClass =
+    'fixed inset-x-0 bottom-0 z-50 max-h-[85dvh] overflow-hidden rounded-t-[32px] border border-stone-200 bg-white shadow-[0_-24px_70px_-42px_rgba(15,23,42,0.4)] focus:outline-none md:hidden';
+  const mobileSheetBodyClass =
+    'max-h-[calc(85dvh-112px)] overflow-y-auto px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]';
+  const transferDialogContentClass =
+    'fixed inset-x-3 top-[max(0.75rem,env(safe-area-inset-top))] bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-50 flex flex-col overflow-hidden rounded-[28px] border border-stone-200 bg-white shadow-[0_32px_90px_-45px_rgba(15,23,42,0.45)] focus:outline-none md:left-1/2 md:top-1/2 md:bottom-auto md:w-[min(calc(100vw-1.5rem),42rem)] md:max-h-[min(90vh,calc(100dvh-1.5rem))] md:-translate-x-1/2 md:-translate-y-1/2';
+  const dialogHeaderClass =
+    'flex items-start justify-between gap-4 border-b border-stone-200 px-5 py-5 sm:px-6';
+  const dialogBodyClass =
+    'min-h-0 overflow-y-auto overscroll-contain px-5 py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-6';
+  const dialogInputClass =
+    'w-full rounded-2xl border border-stone-300 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm outline-none transition focus:border-stone-400 focus:ring-2 focus:ring-stone-200';
+  const dialogSelectTokenClass =
+    'rounded-[20px] border px-4 py-3 text-left transition focus:outline-none focus:ring-2 focus:ring-stone-300 focus:ring-offset-2';
   const circleGhostActionClass =
     'inline-flex items-center justify-center rounded-full border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-stone-400 hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-stone-300 focus:ring-offset-2';
   const circlePrimaryActionClass =
@@ -5533,7 +5715,77 @@ export default function Dashboard() {
   const circleDangerActionClass =
     'inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-300 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
 
-  const renderCircleCard = (circle: Circle) => (
+  const renderHoldingsList = (variant: 'desktop' | 'sheet' = 'desktop') => {
+    if (allCoins.length === 0) {
+      return (
+        <p className={variant === 'desktop' ? 'mt-4 text-sm text-slate-500' : 'text-sm text-slate-500'}>
+          Token balances will appear here after your wallet is funded.
+        </p>
+      );
+    }
+
+    return (
+      <div className={variant === 'desktop' ? 'mt-4 space-y-3' : 'space-y-3'}>
+        {allCoins.map((coin, index) => {
+          const tokenBalance = Number(coin.balance) / getCoinDecimals(coin.coinType);
+          const convertedValue = convertedBalances[coin.symbol] || 0;
+
+          return (
+            <div
+              key={`${coin.coinType}-${index}`}
+              className={`flex items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-white ${
+                variant === 'desktop' ? 'px-4 py-3' : 'px-4 py-3.5'
+              }`}
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-stone-100">
+                  <TokenIcon symbol={coin.symbol} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-slate-900">{coin.symbol}</p>
+                  {(coin.symbol === 'SUI' || coin.symbol === 'USDC') && suiPrice && convertedValue > 0 && (
+                    <p className="text-xs text-slate-500">
+                      {balanceVisible
+                        ? formatCurrency(convertedValue, selectedCurrency)
+                        : formatBalanceDisplay(convertedValue)}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <div className="text-right">
+                  <div className="text-sm font-medium text-slate-900">
+                    {balanceVisible
+                      ? tokenBalance.toFixed(coin.symbol === 'USDC' ? 2 : 4)
+                      : formatBalanceDisplay(tokenBalance)}
+                  </div>
+                </div>
+                {(coin.symbol === 'USDC' || coin.symbol === 'SUI') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (variant === 'sheet') {
+                        setIsMobileWalletHoldingsOpen(false);
+                      }
+                      openBuyFlow(coin.symbol);
+                    }}
+                    className="inline-flex items-center rounded-full border border-stone-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:border-stone-400 hover:bg-stone-50"
+                    title={`Buy ${coin.symbol}`}
+                  >
+                    Buy
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderCircleCard = (circle: Circle) => {
+    return (
     <article
       key={circle.id}
       className="rounded-[28px] border border-stone-200 bg-white p-6 shadow-[0_18px_50px_-38px_rgba(15,23,42,0.32)]"
@@ -5640,11 +5892,11 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2 border-t border-stone-200 pt-5">
+        <div className="grid gap-2 border-t border-stone-200 pt-5 sm:flex sm:flex-wrap">
           <button
             type="button"
             onClick={() => router.push(`/circle/${circle.id}`)}
-            className={circleGhostActionClass}
+            className={`${circleGhostActionClass} w-full sm:w-auto`}
           >
             <Eye className="mr-2 h-4 w-4" />
             Open
@@ -5653,7 +5905,7 @@ export default function Dashboard() {
             <button
               type="button"
               onClick={() => router.push(`/circle/${circle.id}/manage`)}
-              className={circleGhostActionClass}
+              className={`${circleGhostActionClass} w-full sm:w-auto`}
             >
               <Settings className="mr-2 h-4 w-4" />
               Manage
@@ -5662,7 +5914,7 @@ export default function Dashboard() {
           <button
             type="button"
             onClick={() => router.push(`/circle/${circle.id}/contribute`)}
-            className={circlePrimaryActionClass}
+            className={`${circlePrimaryActionClass} w-full sm:w-auto`}
           >
             <CreditCard className="mr-2 h-4 w-4" />
             Contribute
@@ -5680,7 +5932,7 @@ export default function Dashboard() {
                 }
               }}
               disabled={isDeleting === circle.id}
-              className={circleDangerActionClass}
+              className={`${circleDangerActionClass} w-full sm:w-auto`}
             >
               <Trash2 className="mr-2 h-4 w-4" />
               {isDeleting === circle.id ? 'Deleting' : 'Delete'}
@@ -5689,7 +5941,85 @@ export default function Dashboard() {
         </div>
       </div>
     </article>
-  );
+    );
+  };
+
+  const renderMobileCircleRow = (circle: Circle, viewKey: CircleViewKey) => {
+    const refKey = `${viewKey}:${circle.id}`;
+    const contributionLabel = formatCurrency(
+      circle.contributionAmountUsd,
+      circle.currencyType || 'USD',
+    );
+    const primaryActionLabel = getCirclePrimaryActionLabel(circle);
+
+    return (
+      <article
+        key={circle.id}
+        ref={(node) => {
+          if (node) {
+            circleCardRefs.current.set(refKey, node);
+          } else {
+            circleCardRefs.current.delete(refKey);
+          }
+        }}
+        className={`rounded-[24px] border bg-white p-4 shadow-[0_16px_45px_-36px_rgba(15,23,42,0.3)] transition-all duration-300 ${
+          highlightedCircleRefKey === refKey
+            ? 'border-slate-400 ring-2 ring-slate-200'
+            : 'border-stone-200'
+        }`}
+      >
+        <div className="flex items-start gap-3">
+          <button
+            type="button"
+            onClick={() => setSelectedMobileCircle(circle)}
+            className="min-w-0 flex-1 text-left"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium ${
+                  circle.isAdmin
+                    ? 'bg-slate-950 text-white'
+                    : 'bg-stone-100 text-slate-700'
+                }`}
+              >
+                {circle.isAdmin ? 'Admin' : 'Member'}
+              </span>
+              <span
+                className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+                  circle.isActive
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'border-amber-200 bg-amber-50 text-amber-700'
+                }`}
+              >
+                {circle.isActive ? 'Active' : 'Inactive'}
+              </span>
+            </div>
+
+            <h4 className="mt-3 truncate text-base font-semibold text-slate-950">
+              {circle.name}
+            </h4>
+
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-600">
+              <span>{contributionLabel} contribution</span>
+              <span>{circle.currentMembers}/{circle.maxMembers} members</span>
+            </div>
+
+            <p className="mt-2 text-sm text-slate-500">
+              {getCircleMobileSummary(circle)}
+            </p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleCirclePrimaryAction(circle)}
+            className="shrink-0 rounded-full bg-slate-950 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
+          >
+            {primaryActionLabel}
+          </button>
+        </div>
+      </article>
+    );
+  };
 
   const renderLoadMoreButton = (
     circleList: Circle[],
@@ -5738,6 +6068,7 @@ export default function Dashboard() {
 
   const renderCirclePanel = (
     circleList: Circle[],
+    viewKey: CircleViewKey,
     options: { includeServerState?: boolean; emptyMessage: string } = {
       emptyMessage: 'No circles in this view yet.',
     },
@@ -5753,10 +6084,150 @@ export default function Dashboard() {
       );
     }
 
+    const sortedCircles = getSortedCircles(circleList);
+    const visibleCircles = getPaginatedCircles(circleList, displayedCirclesCount);
+    const mobilePrimaryCircles: Circle[] = [];
+
+    for (const circle of visibleCircles) {
+      if (circle.isActive && mobilePrimaryCircles.length < 4) {
+        mobilePrimaryCircles.push(circle);
+      }
+    }
+
+    for (const circle of visibleCircles) {
+      if (
+        mobilePrimaryCircles.length >= 4 ||
+        mobilePrimaryCircles.some((entry) => entry.id === circle.id)
+      ) {
+        continue;
+      }
+
+      mobilePrimaryCircles.push(circle);
+    }
+
+    const mobilePrimaryCircleIds = new Set(mobilePrimaryCircles.map((circle) => circle.id));
+    const mobileSecondaryCircles = visibleCircles.filter(
+      (circle) => !mobilePrimaryCircleIds.has(circle.id),
+    );
+    const isMobileSecondaryCollapsed = collapsedMobileCircleSections[viewKey];
+
     return (
       <div className="space-y-8">
-        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-          {getPaginatedCircles(circleList, displayedCirclesCount).map(renderCircleCard)}
+        <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-4 md:hidden">
+          <div className="grid gap-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Mobile Navigation
+              </p>
+              <p className="mt-1 text-sm text-slate-600">
+                Flip the order or jump straight to an older circle without scrolling through every card.
+              </p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-[auto,minmax(0,1fr)] sm:items-end">
+              <div>
+                <label className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                  Card order
+                </label>
+                <div className="mt-2 inline-flex rounded-full border border-stone-200 bg-white p-1">
+                  <button
+                    type="button"
+                    onClick={() => setCircleSortOrder('newest')}
+                    className={`rounded-full px-3 py-2 text-sm font-medium transition ${
+                      circleSortOrder === 'newest'
+                        ? 'bg-slate-950 text-white'
+                        : 'text-slate-500 hover:text-slate-900'
+                    }`}
+                  >
+                    Newest first
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCircleSortOrder('oldest')}
+                    className={`rounded-full px-3 py-2 text-sm font-medium transition ${
+                      circleSortOrder === 'oldest'
+                        ? 'bg-slate-950 text-white'
+                        : 'text-slate-500 hover:text-slate-900'
+                    }`}
+                  >
+                    Oldest first
+                  </button>
+                </div>
+              </div>
+
+              <div className="min-w-0">
+                <label className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                  Jump to circle
+                </label>
+                <div className="relative mt-2">
+                  <select
+                    value={circleJumpSelections[viewKey]}
+                    onChange={(event) => {
+                      const selectedCircleId = event.target.value;
+                      setCircleJumpSelections((current) => ({
+                        ...current,
+                        [viewKey]: selectedCircleId,
+                      }));
+                      handleCircleJump(selectedCircleId, viewKey);
+                    }}
+                    className="w-full appearance-none rounded-2xl border border-stone-300 bg-white px-4 py-3 pr-10 text-sm font-medium text-slate-700 outline-none transition focus:border-stone-400 focus:ring-2 focus:ring-stone-200"
+                  >
+                    <option value="">Choose a circle</option>
+                    {sortedCircles.map((circle) => (
+                      <option key={circle.id} value={circle.id}>
+                        {circle.name}
+                        {circle.isActive ? ' • Active' : ' • Inactive'}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-4 md:hidden">
+          {mobilePrimaryCircles.map((circle) => renderMobileCircleRow(circle, viewKey))}
+
+          {mobileSecondaryCircles.length > 0 && (
+            <div className="rounded-[24px] border border-stone-200 bg-stone-50/70 p-4">
+              <button
+                type="button"
+                onClick={() =>
+                  setCollapsedMobileCircleSections((current) => ({
+                    ...current,
+                    [viewKey]: !current[viewKey],
+                  }))
+                }
+                className="flex w-full items-center justify-between gap-3 text-left"
+              >
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                    Inactive / Older Circles
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {mobileSecondaryCircles.length} more circle{mobileSecondaryCircles.length === 1 ? '' : 's'}
+                  </p>
+                </div>
+                {isMobileSecondaryCollapsed ? (
+                  <ChevronDown className="h-4 w-4 text-slate-500" />
+                ) : (
+                  <ChevronUp className="h-4 w-4 text-slate-500" />
+                )}
+              </button>
+
+              {!isMobileSecondaryCollapsed && (
+                <div className="mt-4 space-y-3 border-t border-stone-200 pt-4">
+                  {mobileSecondaryCircles.map((circle) => renderMobileCircleRow(circle, viewKey))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="hidden gap-5 md:grid md:grid-cols-2 xl:grid-cols-3">
+          {visibleCircles.map((circle) => renderCircleCard(circle))}
         </div>
         {renderLoadMoreButton(circleList, options)}
       </div>
@@ -5766,6 +6237,8 @@ export default function Dashboard() {
   if (!isAuthenticated || !account) {
     return null;
   }
+  const onrampAssetLabel =
+    coinbaseAssetIntent === 'SUI' ? 'SUI' : 'USDC on Sui';
   return (
     <div className="min-h-screen bg-[#f6f3ee] text-slate-950 [background-image:radial-gradient(circle_at_top_left,_rgba(255,255,255,0.92),_transparent_30%),radial-gradient(circle_at_top_right,_rgba(226,232,240,0.7),_transparent_26%)]">
       {/* Toast Notification */}
@@ -5821,26 +6294,26 @@ export default function Dashboard() {
         </div>
       )}
 
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <main className="mx-auto max-w-7xl px-4 pt-8 pb-[max(2rem,env(safe-area-inset-bottom))] sm:px-6 lg:px-8">
         <div className="space-y-8">
           <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr),380px]">
             <section className={primarySurfaceClass}>
-              <div className="p-8 sm:p-10">
-                <div className="flex flex-col gap-10">
-                  <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:justify-between">
+              <div className="p-6 sm:p-10">
+                <div className="flex flex-col gap-7 sm:gap-10">
+                  <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
                     <div className="max-w-2xl">
                       <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
                         Njangi Dashboard
                       </p>
-                      <h1 className="mt-4 text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
+                      <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950 sm:mt-4 sm:text-4xl">
                         Welcome back{account.name ? `, ${account.name}` : ''}.
                       </h1>
-                      <p className="mt-4 max-w-xl text-sm leading-7 text-slate-600 sm:text-base">
+                      <p className="mt-3 max-w-xl text-sm leading-7 text-slate-600 sm:mt-4 sm:text-base">
                         Keep your circles, contributions, and cash movement organized in one quiet workspace.
                       </p>
                     </div>
 
-                    <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center lg:flex-col lg:items-end">
+                    <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center lg:flex-col lg:items-end">
                       <div className="inline-flex items-center rounded-full border border-stone-200 bg-white px-4 py-2 text-sm font-medium text-slate-600">
                         <span
                           className={`mr-2 h-2.5 w-2.5 rounded-full ${
@@ -5876,8 +6349,90 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  <div className="grid gap-4 sm:grid-cols-3">
-                    <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5">
+                  <div className="grid gap-3 md:hidden">
+                    <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                            Circle Types
+                          </p>
+                          <p className="mt-1 text-sm text-slate-600">
+                            Jump straight to the right circle view.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => scrollToCirclePortfolio('all')}
+                          className="text-sm font-medium text-slate-600 transition hover:text-slate-950"
+                        >
+                          Open list
+                        </button>
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => scrollToCirclePortfolio('all')}
+                          className="rounded-[20px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                        >
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            All
+                          </p>
+                          <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                            {circles.length}
+                          </p>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => scrollToCirclePortfolio('admin')}
+                          className="rounded-[20px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                        >
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Admin
+                          </p>
+                          <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                            {adminCircles.length}
+                          </p>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => scrollToCirclePortfolio('member')}
+                          className="rounded-[20px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                        >
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Member
+                          </p>
+                          <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                            {memberCircles.length}
+                          </p>
+                        </button>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => scrollToCirclePortfolio('all')}
+                          className="inline-flex items-center rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-stone-300 hover:bg-stone-50"
+                        >
+                          {activeCirclesCount} active
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => scrollToCirclePortfolio('all')}
+                          className="inline-flex items-center rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-stone-300 hover:bg-stone-50"
+                        >
+                          {inactiveCirclesCount} inactive
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="hidden gap-4 md:grid md:grid-cols-3">
+                    <button
+                      type="button"
+                      onClick={() => scrollToCirclePortfolio('all')}
+                      className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                    >
                       <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
                         Total circles
                       </p>
@@ -5889,8 +6444,12 @@ export default function Dashboard() {
                           ? `${memberCircles.length} member role${memberCircles.length === 1 ? '' : 's'}`
                           : 'No member-only roles yet'}
                       </p>
-                    </div>
-                    <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5">
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => scrollToCirclePortfolio('admin')}
+                      className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                    >
                       <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
                         Admin roles
                       </p>
@@ -5902,8 +6461,12 @@ export default function Dashboard() {
                           ? 'You can manage members, links, and payout flow here.'
                           : 'Create a circle to become an admin.'}
                       </p>
-                    </div>
-                    <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5">
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => scrollToCirclePortfolio('all')}
+                      className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                    >
                       <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
                         Active circles
                       </p>
@@ -5913,9 +6476,9 @@ export default function Dashboard() {
                       <p className="mt-2 text-sm text-slate-500">
                         {circles.length === 0
                           ? 'Your circle activity will appear once you join or create one.'
-                          : `${circles.length - activeCirclesCount} inactive circle${circles.length - activeCirclesCount === 1 ? '' : 's'}`}
+                          : `${inactiveCirclesCount} inactive circle${inactiveCirclesCount === 1 ? '' : 's'}`}
                       </p>
-                    </div>
+                    </button>
                   </div>
 
                   <div className="flex flex-wrap gap-3">
@@ -5967,12 +6530,56 @@ export default function Dashboard() {
                       Updating your circle data
                     </div>
                   )}
+
+                  <div className="hidden rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 md:block xl:hidden">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                          Wallet snapshot
+                        </p>
+                        <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
+                          {walletValueDisplay}
+                        </p>
+                        <p className="mt-2 text-sm text-slate-500">
+                          {fundedTokens.length} funded token{fundedTokens.length === 1 ? '' : 's'} tracked
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleRefreshBalance}
+                        disabled={isRefreshingBalance}
+                        className={secondaryActionClass}
+                      >
+                        <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshingBalance ? 'animate-spin' : ''}`} />
+                        Refresh balance
+                      </button>
+                    </div>
+
+                    <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsTransferDialogOpen(true)}
+                        className={primaryActionClass}
+                      >
+                        <Send className="mr-2 h-4 w-4" />
+                        Send
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openBuyFlow('usdc')}
+                        className={secondaryActionClass}
+                      >
+                        <CreditCard className="mr-2 h-4 w-4" />
+                        Buy crypto
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </section>
 
             <aside className={`${primarySurfaceClass} overflow-hidden`}>
-              <div className="border-b border-stone-200 px-6 py-6">
+              <div className="border-b border-stone-200 px-5 py-5 sm:px-6 sm:py-6">
                 <div className="flex items-center gap-4">
                   <div className="relative h-14 w-14 overflow-hidden rounded-full bg-stone-200">
                     {account.picture ? (
@@ -6011,176 +6618,291 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              <div className="space-y-5 px-6 py-6">
-                <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+              <div className="px-5 py-5 sm:px-6 sm:py-6">
+                <div className="grid gap-4 md:hidden">
+                  <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                          Wallet snapshot
+                        </p>
+                        <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                          {walletValueDisplay}
+                        </p>
+                        <p className="mt-2 text-sm text-slate-500">
+                          {fundedTokens.length} funded token{fundedTokens.length === 1 ? '' : 's'} tracked
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={toggleBalanceVisibility}
+                          className={subtleIconButtonClass}
+                          aria-label={balanceVisible ? 'Hide balance' : 'Show balance'}
+                        >
+                          {balanceVisible ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleRefreshBalance}
+                          disabled={isRefreshingBalance}
+                          className={subtleIconButtonClass}
+                          aria-label="Refresh balance"
+                        >
+                          <RefreshCw className={`h-4 w-4 ${isRefreshingBalance ? 'animate-spin' : ''}`} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(userAddress)}
+                          className={subtleIconButtonClass}
+                          aria-label="Copy wallet address"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-[20px] border border-stone-200 bg-white px-4 py-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                         Wallet address
                       </p>
-                      <p className="mt-3 break-all font-mono text-sm text-slate-900">
-                        {showFullAddress ? userAddress : shortenAddress(userAddress)}
+                      <p className="mt-2 font-mono text-sm text-slate-900">
+                        {shortenAddress(userAddress)}
                       </p>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <span className="inline-flex items-center rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
+                        {selectedCurrency}
+                      </span>
+                      <span className="inline-flex items-center rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
+                        {networkLabel}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setIsMobileWalletDetailsOpen(true)}
+                      className="rounded-[20px] border border-stone-200 bg-white px-4 py-4 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                    >
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                        Wallet details
+                      </p>
+                      <p className="mt-2 text-sm font-medium text-slate-950">
+                        Address and tools
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">
+                        Currency, history, and funding actions.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsMobileWalletHoldingsOpen(true)}
+                      className="rounded-[20px] border border-stone-200 bg-white px-4 py-4 text-left transition hover:border-stone-300 hover:bg-stone-50"
+                    >
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                        Holdings
+                      </p>
+                      <p className="mt-2 text-sm font-medium text-slate-950">
+                        {allCoins.length} asset{allCoins.length === 1 ? '' : 's'}
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">
+                        {walletHoldingsSummary}
+                      </p>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setIsTransferDialogOpen(true)}
+                      className={primaryActionClass}
+                    >
+                      <Send className="mr-2 h-4 w-4" />
+                      Send
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openBuyFlow('usdc')}
+                      className={secondaryActionClass}
+                    >
+                      <CreditCard className="mr-2 h-4 w-4" />
+                      Buy crypto
+                    </button>
+                  </div>
+                </div>
+
+                <div className="hidden space-y-5 md:block">
+                  <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                          Wallet address
+                        </p>
+                        <p className="mt-3 break-all font-mono text-sm text-slate-900">
+                          {walletAddressDisplay}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(userAddress)}
+                        className={subtleIconButtonClass}
+                        aria-label="Copy wallet address"
+                      >
+                        <Copy className="h-4 w-4" />
+                      </button>
                     </div>
                     <button
                       type="button"
-                      onClick={() => copyToClipboard(userAddress)}
-                      className={subtleIconButtonClass}
-                      aria-label="Copy wallet address"
+                      onClick={() => setShowFullAddress(!showFullAddress)}
+                      className="mt-3 text-sm font-medium text-slate-600 transition hover:text-slate-900"
                     >
-                      <Copy className="h-4 w-4" />
+                      {showFullAddress ? 'Show less' : 'Reveal full address'}
                     </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowFullAddress(!showFullAddress)}
-                    className="mt-3 text-sm font-medium text-slate-600 transition hover:text-slate-900"
-                  >
-                    {showFullAddress ? 'Show less' : 'Reveal full address'}
-                  </button>
-                </div>
 
-                <div className="rounded-[24px] border border-stone-200 bg-white p-5">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
-                        Estimated wallet value
-                      </p>
-                      <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
-                        {walletValueDisplay}
-                      </p>
-                      <p className="mt-2 text-sm text-slate-500">
-                        {fundedTokens.length} funded token{fundedTokens.length === 1 ? '' : 's'} tracked
-                      </p>
+                  <div className="rounded-[24px] border border-stone-200 bg-white p-5">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                          Estimated wallet value
+                        </p>
+                        <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">
+                          {walletValueDisplay}
+                        </p>
+                        <p className="mt-2 text-sm text-slate-500">
+                          {fundedTokens.length} funded token{fundedTokens.length === 1 ? '' : 's'} tracked
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Tooltip.Provider>
+                          <Tooltip.Root>
+                            <Tooltip.Trigger asChild>
+                              <button
+                                type="button"
+                                onClick={toggleBalanceVisibility}
+                                className={subtleIconButtonClass}
+                                aria-label={balanceVisible ? 'Hide balance' : 'Show balance'}
+                              >
+                                {balanceVisible ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                              </button>
+                            </Tooltip.Trigger>
+                            <Tooltip.Portal>
+                              <Tooltip.Content className="rounded-lg bg-slate-900 px-2 py-1 text-xs text-white" sideOffset={5}>
+                                {balanceVisible ? 'Hide balance' : 'Show balance'}
+                                <Tooltip.Arrow className="fill-slate-900" />
+                              </Tooltip.Content>
+                            </Tooltip.Portal>
+                          </Tooltip.Root>
+                        </Tooltip.Provider>
+                        <Tooltip.Provider>
+                          <Tooltip.Root>
+                            <Tooltip.Trigger asChild>
+                              <button
+                                type="button"
+                                onClick={handleRefreshBalance}
+                                disabled={isRefreshingBalance}
+                                className={subtleIconButtonClass}
+                                aria-label="Refresh balance"
+                              >
+                                <RefreshCw className={`h-4 w-4 ${isRefreshingBalance ? 'animate-spin' : ''}`} />
+                              </button>
+                            </Tooltip.Trigger>
+                            <Tooltip.Portal>
+                              <Tooltip.Content className="rounded-lg bg-slate-900 px-2 py-1 text-xs text-white" sideOffset={5}>
+                                {isRefreshingBalance ? 'Refreshing...' : 'Refresh balance'}
+                                <Tooltip.Arrow className="fill-slate-900" />
+                              </Tooltip.Content>
+                            </Tooltip.Portal>
+                          </Tooltip.Root>
+                        </Tooltip.Provider>
+                        <Tooltip.Provider>
+                          <Tooltip.Root>
+                            <Tooltip.Trigger asChild>
+                              <button
+                                type="button"
+                                onClick={openTransactionHistory}
+                                className={subtleIconButtonClass}
+                                aria-label="Open transaction history"
+                              >
+                                <Clock className="h-4 w-4" />
+                              </button>
+                            </Tooltip.Trigger>
+                            <Tooltip.Portal>
+                              <Tooltip.Content className="rounded-lg bg-slate-900 px-2 py-1 text-xs text-white" sideOffset={5}>
+                                Transaction history
+                                <Tooltip.Arrow className="fill-slate-900" />
+                              </Tooltip.Content>
+                            </Tooltip.Portal>
+                          </Tooltip.Root>
+                        </Tooltip.Provider>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Tooltip.Provider>
-                        <Tooltip.Root>
-                          <Tooltip.Trigger asChild>
-                            <button
-                              type="button"
-                              onClick={toggleBalanceVisibility}
-                              className={subtleIconButtonClass}
-                              aria-label={balanceVisible ? 'Hide balance' : 'Show balance'}
-                            >
-                              {balanceVisible ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                            </button>
-                          </Tooltip.Trigger>
-                          <Tooltip.Portal>
-                            <Tooltip.Content className="rounded-lg bg-slate-900 px-2 py-1 text-xs text-white" sideOffset={5}>
-                              {balanceVisible ? 'Hide balance' : 'Show balance'}
-                              <Tooltip.Arrow className="fill-slate-900" />
-                            </Tooltip.Content>
-                          </Tooltip.Portal>
-                        </Tooltip.Root>
-                      </Tooltip.Provider>
-                      <Tooltip.Provider>
-                        <Tooltip.Root>
-                          <Tooltip.Trigger asChild>
-                            <button
-                              type="button"
-                              onClick={handleRefreshBalance}
-                              disabled={isRefreshingBalance}
-                              className={subtleIconButtonClass}
-                              aria-label="Refresh balance"
-                            >
-                              <RefreshCw className={`h-4 w-4 ${isRefreshingBalance ? 'animate-spin' : ''}`} />
-                            </button>
-                          </Tooltip.Trigger>
-                          <Tooltip.Portal>
-                            <Tooltip.Content className="rounded-lg bg-slate-900 px-2 py-1 text-xs text-white" sideOffset={5}>
-                              {isRefreshingBalance ? 'Refreshing...' : 'Refresh balance'}
-                              <Tooltip.Arrow className="fill-slate-900" />
-                            </Tooltip.Content>
-                          </Tooltip.Portal>
-                        </Tooltip.Root>
-                      </Tooltip.Provider>
-                      <Tooltip.Provider>
-                        <Tooltip.Root>
-                          <Tooltip.Trigger asChild>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setIsTransactionHistoryOpen(true);
-                                void fetchTransactionHistory();
-                              }}
-                              className={subtleIconButtonClass}
-                              aria-label="Open transaction history"
-                            >
-                              <Clock className="h-4 w-4" />
-                            </button>
-                          </Tooltip.Trigger>
-                          <Tooltip.Portal>
-                            <Tooltip.Content className="rounded-lg bg-slate-900 px-2 py-1 text-xs text-white" sideOffset={5}>
-                              Transaction history
-                              <Tooltip.Arrow className="fill-slate-900" />
-                            </Tooltip.Content>
-                          </Tooltip.Portal>
-                        </Tooltip.Root>
-                      </Tooltip.Provider>
-                    </div>
-                  </div>
 
-                  <div className="mt-5">
-                    <label className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
-                      Display currency
-                    </label>
-                    <div className="relative mt-2">
-                      <select
-                        value={selectedCurrency}
-                        onChange={(e) => setSelectedCurrency(e.target.value)}
-                        className="w-full appearance-none rounded-2xl border border-stone-300 bg-stone-50 px-4 py-3 pr-10 text-sm font-medium text-slate-700 outline-none transition focus:border-stone-400"
-                      >
-                        <option value="USD">USD ($)</option>
-                        <option value="XAF">XAF (FCFA)</option>
-                        <option value="NGN">NGN (₦)</option>
-                        <option value="EUR">EUR (€)</option>
-                        <option value="GBP">GBP (£)</option>
-                        <option value="CAD">CAD (C$)</option>
-                        <option value="ZAR">ZAR (R)</option>
-                        <option value="KES">KES (KSh)</option>
-                        <option value="EGP">EGP (E£)</option>
-                        <option value="MAD">MAD</option>
-                        <option value="GHS">GHS (GH₵)</option>
-                      </select>
-                      <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <div className="mt-5">
+                      <label className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                        Display currency
+                      </label>
+                      <div className="relative mt-2">
+                        <select
+                          value={selectedCurrency}
+                          onChange={(e) => setSelectedCurrency(e.target.value)}
+                          className="w-full appearance-none rounded-2xl border border-stone-300 bg-stone-50 px-4 py-3 pr-10 text-sm font-medium text-slate-700 outline-none transition focus:border-stone-400"
+                        >
+                          <option value="USD">USD ($)</option>
+                          <option value="XAF">XAF (FCFA)</option>
+                          <option value="NGN">NGN (₦)</option>
+                          <option value="EUR">EUR (€)</option>
+                          <option value="GBP">GBP (£)</option>
+                          <option value="CAD">CAD (C$)</option>
+                          <option value="ZAR">ZAR (R)</option>
+                          <option value="KES">KES (KSh)</option>
+                          <option value="EGP">EGP (E£)</option>
+                          <option value="MAD">MAD</option>
+                          <option value="GHS">GHS (GH₵)</option>
+                        </select>
+                        <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsTransferDialogOpen(true)}
-                    className={primaryActionClass}
-                  >
-                    <Send className="mr-2 h-4 w-4" />
-                    Send
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => openBuyFlow('usdc')}
-                    className={secondaryActionClass}
-                  >
-                    <CreditCard className="mr-2 h-4 w-4" />
-                    Buy crypto
-                  </button>
-                  {network === 'testnet' && (
-                    <a
-                      href={`https://faucet.sui.io/?address=${userAddress || ''}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className={`sm:col-span-2 ${secondaryActionClass}`}
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsTransferDialogOpen(true)}
+                      className={primaryActionClass}
                     >
-                      <ExternalLink className="mr-2 h-4 w-4" />
-                      Open faucet
-                    </a>
-                  )}
+                      <Send className="mr-2 h-4 w-4" />
+                      Send
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openBuyFlow('usdc')}
+                      className={secondaryActionClass}
+                    >
+                      <CreditCard className="mr-2 h-4 w-4" />
+                      Buy crypto
+                    </button>
+                    {network === 'testnet' && (
+                      <a
+                        href={`https://faucet.sui.io/?address=${userAddress || ''}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`sm:col-span-2 ${secondaryActionClass}`}
+                      >
+                        <ExternalLink className="mr-2 h-4 w-4" />
+                        Open faucet
+                      </a>
+                    )}
+                  </div>
                 </div>
 
                 {onrampResultStatus !== 'idle' && onrampResultMessage && (
                   <div
-                    className={`rounded-[24px] border px-4 py-3 text-sm ${
+                    className={`mt-4 rounded-[24px] border px-4 py-3 text-sm ${
                       onrampResultStatus === 'success'
                         ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
                         : onrampResultStatus === 'pending'
@@ -6195,7 +6917,7 @@ export default function Dashboard() {
                   </div>
                 )}
 
-                <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-5">
+                <div className="mt-4 hidden rounded-[24px] border border-stone-200 bg-stone-50/80 p-5 md:block">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
@@ -6207,61 +6929,7 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  {allCoins.length > 0 ? (
-                    <div className="mt-4 space-y-3">
-                      {allCoins.map((coin, index) => {
-                        const tokenBalance = Number(coin.balance) / getCoinDecimals(coin.coinType);
-                        const convertedValue = convertedBalances[coin.symbol] || 0;
-
-                        return (
-                          <div
-                            key={index}
-                            className="flex items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-white px-4 py-3"
-                          >
-                            <div className="flex min-w-0 items-center gap-3">
-                              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-stone-100">
-                                <TokenIcon symbol={coin.symbol} />
-                              </div>
-                              <div className="min-w-0">
-                                <p className="text-sm font-medium text-slate-900">{coin.symbol}</p>
-                                {(coin.symbol === 'SUI' || coin.symbol === 'USDC') && suiPrice && convertedValue > 0 && (
-                                  <p className="text-xs text-slate-500">
-                                    {balanceVisible
-                                      ? formatCurrency(convertedValue, selectedCurrency)
-                                      : formatBalanceDisplay(convertedValue)}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-3">
-                              <div className="text-right">
-                                <div className="text-sm font-medium text-slate-900">
-                                  {balanceVisible
-                                    ? tokenBalance.toFixed(coin.symbol === 'USDC' ? 2 : 4)
-                                    : formatBalanceDisplay(tokenBalance)}
-                                </div>
-                              </div>
-                              {(coin.symbol === 'USDC' || coin.symbol === 'SUI') && (
-                                <button
-                                  type="button"
-                                  onClick={() => openBuyFlow(coin.symbol)}
-                                  className="inline-flex items-center rounded-full border border-stone-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:border-stone-400 hover:bg-stone-50"
-                                  title={`Buy ${coin.symbol}`}
-                                >
-                                  Buy
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <p className="mt-4 text-sm text-slate-500">
-                      Token balances will appear here after your wallet is funded.
-                    </p>
-                  )}
+                  {renderHoldingsList('desktop')}
                 </div>
               </div>
             </aside>
@@ -6539,7 +7207,10 @@ export default function Dashboard() {
           </div>
 
           {/* Njangi Circles Section */}
-          <section className={primarySurfaceClass}>
+          <section
+            ref={circlePortfolioSectionRef}
+            className={primarySurfaceClass}
+          >
             <div className="p-8 sm:p-10">
               <div className="flex flex-col gap-8">
                 <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
@@ -6624,7 +7295,12 @@ export default function Dashboard() {
                     </div>
                   </div>
                 ) : circles.length > 0 ? (
-                  <Tab.Group>
+                  <Tab.Group
+                    selectedIndex={circleViewIndex}
+                    onChange={(index) => {
+                      setCircleViewIndex(index);
+                    }}
+                  >
                     <Tab.List className="inline-flex w-full flex-col gap-2 rounded-[28px] border border-stone-200 bg-stone-50 p-2 sm:w-auto sm:flex-row">
                       <Tab
                         className={({ selected }) =>
@@ -6663,18 +7339,18 @@ export default function Dashboard() {
 
                     <Tab.Panels className="mt-8">
                       <Tab.Panel>
-                        {renderCirclePanel(circles, {
+                        {renderCirclePanel(circles, 'all', {
                           includeServerState: true,
                           emptyMessage: 'No circles match this view yet.',
                         })}
                       </Tab.Panel>
                       <Tab.Panel>
-                        {renderCirclePanel(adminCircles, {
+                        {renderCirclePanel(adminCircles, 'admin', {
                           emptyMessage: 'You are not administering any circles yet.',
                         })}
                       </Tab.Panel>
                       <Tab.Panel>
-                        {renderCirclePanel(memberCircles, {
+                        {renderCirclePanel(memberCircles, 'member', {
                           emptyMessage: 'You do not have member-only circles yet.',
                         })}
                       </Tab.Panel>
@@ -6740,25 +7416,445 @@ export default function Dashboard() {
           </section>
         </div>
       </main>
+
+      <Dialog.Root
+        open={!!selectedMobileCircle}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedMobileCircle(null);
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className={`${dialogOverlayClass} md:hidden`} />
+          <Dialog.Content className={mobileSheetContentClass}>
+            {selectedMobileCircle && (
+              <>
+                <div className="flex justify-center pt-3">
+                  <div className="h-1.5 w-12 rounded-full bg-stone-300" />
+                </div>
+
+                <div className="flex items-start justify-between gap-4 px-5 pb-4 pt-4">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${
+                          selectedMobileCircle.isAdmin
+                            ? 'bg-slate-950 text-white'
+                            : 'bg-stone-100 text-slate-700'
+                        }`}
+                      >
+                        {selectedMobileCircle.isAdmin ? 'Admin' : 'Member'}
+                      </span>
+                      <span
+                        className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${
+                          selectedMobileCircle.isActive
+                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                            : 'border-amber-200 bg-amber-50 text-amber-700'
+                        }`}
+                      >
+                        {selectedMobileCircle.isActive ? 'Active' : 'Inactive'}
+                      </span>
+                    </div>
+
+                    <Dialog.Title className="mt-3 text-xl font-semibold tracking-tight text-slate-950">
+                      {selectedMobileCircle.name}
+                    </Dialog.Title>
+                    <Dialog.Description className="mt-2 text-sm text-slate-500">
+                      {getCircleMobileSummary(selectedMobileCircle)}
+                    </Dialog.Description>
+                  </div>
+
+                  <Dialog.Close className={subtleIconButtonClass} aria-label="Close circle details">
+                    <X className="h-4 w-4" />
+                  </Dialog.Close>
+                </div>
+
+                <div className={mobileSheetBodyClass}>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="rounded-[20px] border border-stone-200 bg-stone-50/80 p-4">
+                      <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                        Contribution
+                      </p>
+                      <p className="mt-2 text-sm font-semibold text-slate-950">
+                        {formatCurrency(
+                          selectedMobileCircle.contributionAmountUsd,
+                          selectedMobileCircle.currencyType || 'USD',
+                        )}
+                      </p>
+                    </div>
+
+                    <div className="rounded-[20px] border border-stone-200 bg-stone-50/80 p-4">
+                      <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                        Members
+                      </p>
+                      <p className="mt-2 text-sm font-semibold text-slate-950">
+                        {selectedMobileCircle.currentMembers} / {selectedMobileCircle.maxMembers}
+                      </p>
+                    </div>
+
+                    <div className="rounded-[20px] border border-stone-200 bg-stone-50/80 p-4">
+                      <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                        Security deposit
+                      </p>
+                      <p className="mt-2 text-sm font-semibold text-slate-950">
+                        {formatCurrency(
+                          selectedMobileCircle.securityDepositUsd,
+                          selectedMobileCircle.currencyType || 'USD',
+                        )}
+                      </p>
+                    </div>
+
+                    <div className="rounded-[20px] border border-stone-200 bg-stone-50/80 p-4">
+                      <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                        Cycle
+                      </p>
+                      <p className="mt-2 text-sm font-semibold text-slate-950">
+                        {formatCycleInfo(selectedMobileCircle.cycleLength, selectedMobileCircle.cycleDay)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 rounded-[20px] border border-stone-200 bg-white p-4">
+                    <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                      Next payout
+                    </p>
+                    <p className="mt-2 text-sm font-semibold text-slate-950">
+                      {selectedMobileCircle.isActive
+                        ? formatDate(selectedMobileCircle.nextPayoutTime)
+                        : 'Activate circle to start'}
+                    </p>
+                  </div>
+
+                  <div className="mt-5 grid gap-3">
+                    <button
+                      type="button"
+                      onClick={() => handleCirclePrimaryAction(selectedMobileCircle)}
+                      className={primaryActionClass}
+                    >
+                      {selectedMobileCircle.isActive ? (
+                        <CreditCard className="mr-2 h-4 w-4" />
+                      ) : selectedMobileCircle.isAdmin ? (
+                        <Settings className="mr-2 h-4 w-4" />
+                      ) : (
+                        <Eye className="mr-2 h-4 w-4" />
+                      )}
+                      {getCirclePrimaryActionLabel(selectedMobileCircle)}
+                    </button>
+
+                    {getCirclePrimaryActionLabel(selectedMobileCircle) !== 'Open' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedMobileCircle(null);
+                          router.push(`/circle/${selectedMobileCircle.id}`);
+                        }}
+                        className={secondaryActionClass}
+                      >
+                        <Eye className="mr-2 h-4 w-4" />
+                        Open circle
+                      </button>
+                    )}
+
+                    {selectedMobileCircle.isAdmin && getCirclePrimaryActionLabel(selectedMobileCircle) !== 'Manage' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedMobileCircle(null);
+                          router.push(`/circle/${selectedMobileCircle.id}/manage`);
+                        }}
+                        className={secondaryActionClass}
+                      >
+                        <Settings className="mr-2 h-4 w-4" />
+                        Manage circle
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(selectedMobileCircle.id, 'circleId')}
+                      className={secondaryActionClass}
+                    >
+                      <Copy className="mr-2 h-4 w-4" />
+                      Copy circle ID
+                    </button>
+
+                    {selectedMobileCircle.isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => copyShareLink(selectedMobileCircle.id)}
+                        className={secondaryActionClass}
+                      >
+                        <Link className="mr-2 h-4 w-4" />
+                        Copy invite link
+                      </button>
+                    )}
+
+                    {selectedMobileCircle.isAdmin && deleteableCircles.has(selectedMobileCircle.id) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedMobileCircle(null);
+                          void deleteCircle(selectedMobileCircle.id);
+                        }}
+                        className={circleDangerActionClass}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Delete circle
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={isMobileWalletDetailsOpen} onOpenChange={setIsMobileWalletDetailsOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className={`${dialogOverlayClass} md:hidden`} />
+          <Dialog.Content className={mobileSheetContentClass}>
+            <div className="flex justify-center pt-3">
+              <div className="h-1.5 w-12 rounded-full bg-stone-300" />
+            </div>
+
+            <div className="flex items-start justify-between gap-4 px-5 pb-4 pt-4">
+              <div className="min-w-0">
+                <Dialog.Title className="text-xl font-semibold tracking-tight text-slate-950">
+                  Wallet details
+                </Dialog.Title>
+                <Dialog.Description className="mt-2 text-sm text-slate-500">
+                  Address, display preferences, and wallet tools for your {networkLabel.toLowerCase()} wallet.
+                </Dialog.Description>
+              </div>
+
+              <Dialog.Close className={subtleIconButtonClass} aria-label="Close wallet details">
+                <X className="h-4 w-4" />
+              </Dialog.Close>
+            </div>
+
+            <div className={mobileSheetBodyClass}>
+              <div className="rounded-[20px] border border-stone-200 bg-stone-50/80 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                      Wallet address
+                    </p>
+                    <p className="mt-2 break-all font-mono text-sm text-slate-900">
+                      {walletAddressDisplay}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(userAddress)}
+                    className={subtleIconButtonClass}
+                    aria-label="Copy wallet address"
+                  >
+                    <Copy className="h-4 w-4" />
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowFullAddress(!showFullAddress)}
+                  className="mt-3 text-sm font-medium text-slate-600 transition hover:text-slate-900"
+                >
+                  {showFullAddress ? 'Show less' : 'Reveal full address'}
+                </button>
+              </div>
+
+              <div className="mt-3 rounded-[20px] border border-stone-200 bg-white p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                      Estimated wallet value
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                      {walletValueDisplay}
+                    </p>
+                    <p className="mt-2 text-sm text-slate-500">
+                      {fundedTokens.length} funded token{fundedTokens.length === 1 ? '' : 's'} tracked
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={toggleBalanceVisibility}
+                    className="rounded-full border border-stone-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:border-stone-400 hover:bg-stone-50"
+                  >
+                    {balanceVisible ? 'Hide' : 'Show'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRefreshBalance}
+                    disabled={isRefreshingBalance}
+                    className="rounded-full border border-stone-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:border-stone-400 hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isRefreshingBalance ? 'Refreshing' : 'Refresh'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsMobileWalletDetailsOpen(false);
+                      openTransactionHistory();
+                    }}
+                    className="rounded-full border border-stone-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:border-stone-400 hover:bg-stone-50"
+                  >
+                    History
+                  </button>
+                </div>
+
+                <div className="mt-4">
+                  <label className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                    Display currency
+                  </label>
+                  <div className="relative mt-2">
+                    <select
+                      value={selectedCurrency}
+                      onChange={(e) => setSelectedCurrency(e.target.value)}
+                      className="w-full appearance-none rounded-2xl border border-stone-300 bg-stone-50 px-4 py-3 pr-10 text-sm font-medium text-slate-700 outline-none transition focus:border-stone-400"
+                    >
+                      <option value="USD">USD ($)</option>
+                      <option value="XAF">XAF (FCFA)</option>
+                      <option value="NGN">NGN (₦)</option>
+                      <option value="EUR">EUR (€)</option>
+                      <option value="GBP">GBP (£)</option>
+                      <option value="CAD">CAD (C$)</option>
+                      <option value="ZAR">ZAR (R)</option>
+                      <option value="KES">KES (KSh)</option>
+                      <option value="EGP">EGP (E£)</option>
+                      <option value="MAD">MAD</option>
+                      <option value="GHS">GHS (GH₵)</option>
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-3 rounded-[20px] border border-stone-200 bg-stone-50/80 p-4">
+                <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                  Funding tools
+                </p>
+                <div className="mt-4 grid gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsMobileWalletDetailsOpen(false);
+                      openBuyFlow('usdc');
+                    }}
+                    className={secondaryActionClass}
+                  >
+                    <CreditCard className="mr-2 h-4 w-4" />
+                    Buy crypto
+                  </button>
+                  {network === 'testnet' && (
+                    <a
+                      href={`https://faucet.sui.io/?address=${userAddress || ''}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={secondaryActionClass}
+                    >
+                      <ExternalLink className="mr-2 h-4 w-4" />
+                      Open faucet
+                    </a>
+                  )}
+                </div>
+              </div>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={isMobileWalletHoldingsOpen} onOpenChange={setIsMobileWalletHoldingsOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className={`${dialogOverlayClass} md:hidden`} />
+          <Dialog.Content className={mobileSheetContentClass}>
+            <div className="flex justify-center pt-3">
+              <div className="h-1.5 w-12 rounded-full bg-stone-300" />
+            </div>
+
+            <div className="flex items-start justify-between gap-4 px-5 pb-4 pt-4">
+              <div className="min-w-0">
+                <Dialog.Title className="text-xl font-semibold tracking-tight text-slate-950">
+                  Holdings
+                </Dialog.Title>
+                <Dialog.Description className="mt-2 text-sm text-slate-500">
+                  {walletHoldingsSummary}
+                </Dialog.Description>
+              </div>
+
+              <Dialog.Close className={subtleIconButtonClass} aria-label="Close holdings">
+                <X className="h-4 w-4" />
+              </Dialog.Close>
+            </div>
+
+            <div className={mobileSheetBodyClass}>
+              <div className="rounded-[20px] border border-stone-200 bg-stone-50/80 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                      Estimated wallet value
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+                      {walletValueDisplay}
+                    </p>
+                    <p className="mt-2 text-sm text-slate-500">
+                      {fundedTokens.length} funded token{fundedTokens.length === 1 ? '' : 's'} tracked
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRefreshBalance}
+                    disabled={isRefreshingBalance}
+                    className={subtleIconButtonClass}
+                    aria-label="Refresh balance"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${isRefreshingBalance ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                {renderHoldingsList('sheet')}
+              </div>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
       
       {/* Join Circle Dialog */}
       <Dialog.Root open={isJoinDialogOpen} onOpenChange={setIsJoinDialogOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/30 z-50" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-lg p-6 w-full max-w-md focus:outline-none z-50">
-            <div className="flex justify-between items-center mb-4">
-              <Dialog.Title className="text-lg font-medium text-gray-900">
-                Join a Circle
-              </Dialog.Title>
-              <Dialog.Close className="text-gray-400 hover:text-gray-500">
-                <X className="w-5 h-5" />
+          <Dialog.Overlay className={dialogOverlayClass} />
+          <Dialog.Content className={`${dialogContentClass} max-w-md`}>
+            <div className={dialogHeaderClass}>
+              <div className="flex min-w-0 items-start gap-4">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-stone-200 bg-stone-50 text-slate-700">
+                  <Users className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Circle Access
+                  </p>
+                  <Dialog.Title className="mt-1 text-xl font-semibold text-slate-950">
+                    Join a circle
+                  </Dialog.Title>
+                  <Dialog.Description className="mt-1 text-sm text-slate-500">
+                    Paste a circle ID or invite link to move directly into the join flow.
+                  </Dialog.Description>
+                </div>
+              </div>
+              <Dialog.Close className={subtleIconButtonClass} aria-label="Close join dialog">
+                <X className="h-4 w-4" />
               </Dialog.Close>
             </div>
-            
-            <form onSubmit={handleJoinCircle}>
-              <div className="mt-2">
-                <label htmlFor="circleId" className="block text-sm font-medium text-gray-700 mb-1">
-                  Enter Circle ID or Invite Link
+
+            <form onSubmit={handleJoinCircle} className={`${dialogBodyClass} space-y-5`}>
+              <div className="rounded-[24px] border border-stone-200 bg-stone-50/70 p-4">
+                <label htmlFor="circleId" className="block text-sm font-medium text-slate-700">
+                  Enter circle ID or invite link
                 </label>
                 <input
                   type="text"
@@ -6766,24 +7862,28 @@ export default function Dashboard() {
                   value={circleIdInput}
                   onChange={(e) => setCircleIdInput(e.target.value)}
                   placeholder="0x123... or full invite link"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  className={`${dialogInputClass} mt-3`}
                 />
-                <p className="mt-1 text-sm text-gray-500">
-                  Paste the circle ID or the complete invite link to join
+                <p className="mt-2 text-sm text-slate-500">
+                  Share links work too. The dashboard will extract the circle ID automatically.
                 </p>
               </div>
-              
-              <div className="mt-6 flex justify-end space-x-3">
+
+              <div className="rounded-[24px] border border-stone-200 bg-white px-4 py-3 text-sm text-slate-600">
+                You will be taken to the circle’s join page to review details before completing membership.
+              </div>
+
+              <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
                 <button
                   type="button"
                   onClick={() => setIsJoinDialogOpen(false)}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  className={secondaryActionClass}
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  className={primaryActionClass}
                 >
                   Join Circle
                 </button>
@@ -6808,91 +7908,99 @@ export default function Dashboard() {
       {/* Transfer Dialog */}
       <Dialog.Root open={isTransferDialogOpen} onOpenChange={resetTransferDialog}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto focus:outline-none z-50">
-            
-            {/* Header */}
-            <div className="flex justify-between items-center p-6 border-b border-gray-200">
-              <div className="flex items-center space-x-3">
-                <div className="p-2 bg-blue-100 rounded-lg">
-                  <Send className="w-5 h-5 text-blue-600" />
+          <Dialog.Overlay className={dialogOverlayClass} />
+          <Dialog.Content className={`${transferDialogContentClass} max-w-lg`}>
+            <div className={dialogHeaderClass}>
+              <div className="flex min-w-0 items-start gap-4">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-stone-200 bg-stone-50 text-slate-700">
+                  <Send className="h-5 w-5" />
                 </div>
-                <div>
-                  <Dialog.Title className="text-lg font-semibold text-gray-900">
-                    Send Tokens
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Wallet Transfer
+                  </p>
+                  <Dialog.Title className="mt-1 text-xl font-semibold text-slate-950">
+                    Send tokens
                   </Dialog.Title>
-                  <p className="text-sm text-gray-500">
+                  <Dialog.Description className="mt-1 text-sm text-slate-500">
                     {transferStep === 'form' && 'Enter transfer details'}
                     {transferStep === 'review' && 'Review your transfer'}
                     {transferStep === 'confirm' && 'Confirming transaction...'}
-                    {transferStep === 'success' && 'Transfer completed!'}
-                  </p>
+                    {transferStep === 'success' && 'Transfer completed'}
+                  </Dialog.Description>
                 </div>
               </div>
-              <Dialog.Close className="text-gray-400 hover:text-gray-500 p-1 rounded-full hover:bg-gray-100 transition-colors">
-                <X className="w-5 h-5" />
+              <Dialog.Close className={subtleIconButtonClass} aria-label="Close transfer dialog">
+                <X className="h-4 w-4" />
               </Dialog.Close>
             </div>
 
-            {/* Progress Steps */}
-            <div className="px-6 py-4 bg-gray-50">
-              <div className="flex items-center justify-between">
-                {['form', 'review', 'confirm', 'success'].map((step, index) => (
-                  <div key={step} className="flex items-center">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
-                      transferStep === step 
-                        ? 'bg-blue-600 text-white' 
-                        : ['review', 'confirm', 'success'].includes(transferStep) && index < ['form', 'review', 'confirm', 'success'].indexOf(transferStep)
-                          ? 'bg-green-500 text-white'
-                          : 'bg-gray-200 text-gray-500'
-                    }`}>
-                      {['review', 'confirm', 'success'].includes(transferStep) && index < ['form', 'review', 'confirm', 'success'].indexOf(transferStep) 
-                        ? <CheckCircle className="w-4 h-4" />
-                        : index + 1
-                      }
+            <div className="shrink-0 border-b border-stone-200 bg-stone-50/70 px-5 py-4 sm:px-6">
+              <div className="flex items-center justify-between gap-3">
+                {['form', 'review', 'confirm', 'success'].map((step, index, steps) => {
+                  const currentStepIndex = steps.indexOf(transferStep);
+                  const isActive = transferStep === step;
+                  const isComplete =
+                    ['review', 'confirm', 'success'].includes(transferStep) &&
+                    index < currentStepIndex;
+
+                  return (
+                    <div key={step} className="flex min-w-0 flex-1 items-center">
+                      <div
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-medium ${
+                          isActive
+                            ? 'bg-slate-950 text-white'
+                            : isComplete
+                              ? 'bg-emerald-500 text-white'
+                              : 'bg-stone-200 text-slate-500'
+                        }`}
+                      >
+                        {isComplete ? <CheckCircle className="h-4 w-4" /> : index + 1}
+                      </div>
+                      {index < steps.length - 1 && (
+                        <div
+                          className={`mx-2 h-0.5 flex-1 ${
+                            isComplete ? 'bg-emerald-500' : 'bg-stone-200'
+                          }`}
+                        />
+                      )}
                     </div>
-                    {index < 3 && (
-                      <div className={`w-12 h-0.5 mx-2 ${
-                        ['review', 'confirm', 'success'].includes(transferStep) && index < ['form', 'review', 'confirm', 'success'].indexOf(transferStep)
-                          ? 'bg-green-500'
-                          : 'bg-gray-200'
-                      }`} />
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
-            {/* Form Step */}
             {transferStep === 'form' && (
-              <div className="p-6 space-y-6">
-                {/* Token Selection */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Select Token
+              <div className={`${dialogBodyClass} flex-1 space-y-6`}>
+                <div className="space-y-3">
+                  <label className="block text-sm font-medium text-slate-700">
+                    Select token
                   </label>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     {allCoins.map((coin) => {
                       const decimals = getCoinDecimals(coin.coinType);
                       const balance = Number(coin.balance) / decimals;
                       return (
                         <button
                           key={coin.symbol}
+                          type="button"
                           onClick={() => {
-                            setGasError(null); // Clear gas error when switching tokens
+                            setGasError(null);
                             setTransferForm(prev => ({ ...prev, selectedToken: coin.symbol }));
                           }}
-                          className={`p-3 rounded-lg border-2 transition-all ${
+                          className={`${dialogSelectTokenClass} ${
                             transferForm.selectedToken === coin.symbol
-                              ? 'border-blue-500 bg-blue-50'
-                              : 'border-gray-200 hover:border-gray-300'
+                              ? 'border-slate-900 bg-stone-50 text-slate-950'
+                              : 'border-stone-200 bg-white text-slate-700 hover:border-stone-300 hover:bg-stone-50'
                           }`}
                         >
-                          <div className="flex items-center space-x-2">
-                            <TokenIcon symbol={coin.symbol} />
-                            <div className="text-left">
-                              <div className="font-medium text-sm">{coin.symbol}</div>
-                              <div className="text-xs text-gray-500">
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-stone-100">
+                              <TokenIcon symbol={coin.symbol} />
+                            </div>
+                            <div className="min-w-0 text-left">
+                              <div className="text-sm font-medium">{coin.symbol}</div>
+                              <div className="text-xs text-slate-500">
                                 {balance.toFixed(coin.symbol === 'SUI' ? 4 : 2)}
                               </div>
                             </div>
@@ -6903,41 +8011,40 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* Recipient Address */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Recipient Address
+                <div className="space-y-3">
+                  <label className="block text-sm font-medium text-slate-700">
+                    Recipient address
                   </label>
-                  <div className="space-y-2">
-                    <input
-                      type="text"
-                      value={transferForm.recipientAddress}
-                      onChange={(e) => setTransferForm(prev => ({ ...prev, recipientAddress: e.target.value }))}
-                      placeholder="0x... or paste full address"
-                      className={`w-full px-3 py-2 border rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                        transferValidation.errors.recipientAddress 
-                          ? 'border-red-300 focus:border-red-500 focus:ring-red-500' 
-                          : 'border-gray-300 focus:border-blue-500'
-                      }`}
-                    />
-                    {transferValidation.errors.recipientAddress && (
-                      <p className="text-sm text-red-600 flex items-center">
-                        <AlertCircle className="w-4 h-4 mr-1" />
-                        {transferValidation.errors.recipientAddress}
-                      </p>
-                    )}
-                  </div>
+                  <input
+                    type="text"
+                    value={transferForm.recipientAddress}
+                    onChange={(e) => setTransferForm(prev => ({ ...prev, recipientAddress: e.target.value }))}
+                    placeholder="0x... or paste full address"
+                    className={`${dialogInputClass} ${
+                      transferValidation.errors.recipientAddress
+                        ? 'border-red-300 focus:border-red-400 focus:ring-red-100'
+                        : ''
+                    }`}
+                  />
+                  {transferValidation.errors.recipientAddress && (
+                    <p className="flex items-center text-sm text-red-600">
+                      <AlertCircle className="mr-1.5 h-4 w-4" />
+                      {transferValidation.errors.recipientAddress}
+                    </p>
+                  )}
 
-                  {/* Recent Contacts */}
                   {recentContacts.length > 0 && (
-                    <div className="mt-3">
-                      <p className="text-xs font-medium text-gray-500 mb-2">Recent Contacts</p>
-                      <div className="flex flex-wrap gap-1">
+                    <div className="rounded-[20px] border border-stone-200 bg-stone-50/70 p-4">
+                      <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                        Recent contacts
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
                         {recentContacts.slice(0, 3).map((contact) => (
                           <button
                             key={contact.address}
+                            type="button"
                             onClick={() => setTransferForm(prev => ({ ...prev, recipientAddress: contact.address }))}
-                            className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+                            className="rounded-full border border-stone-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-stone-400 hover:bg-stone-50"
                           >
                             {contact.name || `${contact.address.slice(0, 6)}...${contact.address.slice(-4)}`}
                           </button>
@@ -6947,319 +8054,305 @@ export default function Dashboard() {
                   )}
                 </div>
 
-                {/* Amount */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                <div className="space-y-3">
+                  <label className="block text-sm font-medium text-slate-700">
                     Amount
                   </label>
-                  <div className="space-y-2">
-                    <div className="relative">
-                      <input
-                        type="number"
-                        step="any"
-                        value={transferForm.amount}
-                        onChange={(e) => {
-                          setGasError(null); // Clear gas error when user types
-                          setTransferForm(prev => ({ ...prev, amount: e.target.value }));
-                        }}
-                        placeholder="0.00"
-                        className={`w-full px-3 py-2 pr-16 border rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                          transferValidation.errors.amount || transferValidation.errors.balance
-                            ? 'border-red-300 focus:border-red-500 focus:ring-red-500' 
-                            : 'border-gray-300 focus:border-blue-500'
-                        }`}
-                      />
-                      <div className="absolute inset-y-0 right-0 flex items-center pr-3">
-                        <span className="text-sm text-gray-500">{transferForm.selectedToken}</span>
-                      </div>
+                  <div className="relative rounded-[24px] border border-stone-200 bg-stone-50/70 px-4 py-3">
+                    <input
+                      type="number"
+                      step="any"
+                      value={transferForm.amount}
+                      onChange={(e) => {
+                        setGasError(null);
+                        setTransferForm(prev => ({ ...prev, amount: e.target.value }));
+                      }}
+                      placeholder="0.00"
+                      className={`w-full border-0 bg-transparent p-0 pr-16 text-3xl font-semibold text-slate-950 focus:outline-none focus:ring-0 ${
+                        transferValidation.errors.amount || transferValidation.errors.balance ? 'text-red-600' : ''
+                      }`}
+                    />
+                    <div className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-sm font-medium text-slate-500">
+                      {transferForm.selectedToken}
                     </div>
-                    
-                    {/* Quick Amount Buttons */}
-                    <div className="space-y-2">
-                      <div className="flex space-x-2">
-                        {getQuickPercentages().map((percentage) => (
-                          <button
-                            key={percentage}
-                            onClick={() => setPercentageAmount(percentage)}
-                            className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded transition-colors"
-                          >
-                            {percentage}%
-                          </button>
-                        ))}
-                        <button
-                          onClick={setMaxAmount}
-                          className="px-2 py-1 text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 rounded transition-colors"
-                        >
-                          Max
-                        </button>
-                      </div>
-                      
-                      {/* Gas Information for SUI transfers */}
-                      {transferForm.selectedToken === 'SUI' && !gasError && (
-                        <div className="text-xs text-gray-500 flex items-center space-x-1">
-                          <span>ⓘ</span>
-                          <span>
-                            Percentages calculated after reserving {getCurrentNetwork() === 'mainnet' ? '0.015' : '0.01'} SUI for gas
-                          </span>
-                        </div>
-                      )}
-                      
-                      {/* Modern Gas Error Component */}
-                      {gasError && (
-                        <div className="flex items-start space-x-3 p-4 bg-red-50 border border-red-200 rounded-xl">
-                          <div className="flex-shrink-0">
-                            <div className="w-6 h-6 bg-red-100 rounded-full flex items-center justify-center">
-                              <AlertCircle className="w-4 h-4 text-red-600" />
-                            </div>
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-red-800">
-                              Insufficient Balance
-                            </p>
-                            <p className="text-sm text-red-700 mt-1">
-                              {gasError}
-                            </p>
-                          </div>
-                          <button
-                            onClick={() => setGasError(null)}
-                            className="flex-shrink-0 text-red-400 hover:text-red-600 transition-colors"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* USD Value Display */}
-                    {transferForm.amount && !isNaN(parseFloat(transferForm.amount)) && (
-                      <div className="text-sm text-gray-500">
-                        {transferForm.selectedToken === 'SUI' && suiPrice && (
-                          <>≈ ${(parseFloat(transferForm.amount) * suiPrice).toFixed(2)} USD</>
-                        )}
-                        {transferForm.selectedToken === 'USDC' && (
-                          <>≈ ${parseFloat(transferForm.amount).toFixed(2)} USD</>
-                        )}
-                      </div>
-                    )}
-
-                    {(transferValidation.errors.amount || transferValidation.errors.balance) && (
-                      <p className="text-sm text-red-600 flex items-center">
-                        <AlertCircle className="w-4 h-4 mr-1" />
-                        {transferValidation.errors.amount || transferValidation.errors.balance}
-                      </p>
-                    )}
                   </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {getQuickPercentages().map((percentage) => (
+                      <button
+                        key={percentage}
+                        type="button"
+                        onClick={() => setPercentageAmount(percentage)}
+                        className="rounded-full border border-stone-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-stone-400 hover:bg-stone-50"
+                      >
+                        {percentage}%
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={setMaxAmount}
+                      className="rounded-full border border-stone-300 bg-stone-100 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-stone-400 hover:bg-stone-200"
+                    >
+                      Max
+                    </button>
+                  </div>
+
+                  {transferForm.selectedToken === 'SUI' && !gasError && (
+                    <p className="text-xs text-slate-500">
+                      Percentages are calculated after reserving {getCurrentNetwork() === 'mainnet' ? '0.015' : '0.01'} SUI for gas.
+                    </p>
+                  )}
+
+                  {gasError && (
+                    <div className="flex items-start gap-3 rounded-[20px] border border-red-200 bg-red-50 px-4 py-4">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-100">
+                        <AlertCircle className="h-4 w-4 text-red-600" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-red-800">Insufficient balance</p>
+                        <p className="mt-1 text-sm text-red-700">{gasError}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setGasError(null)}
+                        className="text-red-400 transition hover:text-red-600"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
+
+                  {transferForm.amount && !isNaN(parseFloat(transferForm.amount)) && (
+                    <p className="text-sm text-slate-500">
+                      {transferForm.selectedToken === 'SUI' && suiPrice && (
+                        <>Approx. ${(parseFloat(transferForm.amount) * suiPrice).toFixed(2)} USD</>
+                      )}
+                      {transferForm.selectedToken === 'USDC' && (
+                        <>Approx. ${parseFloat(transferForm.amount).toFixed(2)} USD</>
+                      )}
+                    </p>
+                  )}
+
+                  {(transferValidation.errors.amount || transferValidation.errors.balance) && (
+                    <p className="flex items-center text-sm text-red-600">
+                      <AlertCircle className="mr-1.5 h-4 w-4" />
+                      {transferValidation.errors.amount || transferValidation.errors.balance}
+                    </p>
+                  )}
                 </div>
 
-                {/* Advanced Options */}
                 <div>
                   <button
+                    type="button"
                     onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
-                    className="flex items-center text-sm text-blue-600 hover:text-blue-700"
+                    className="inline-flex items-center text-sm font-medium text-slate-600 transition hover:text-slate-900"
                   >
-                    Advanced Options
-                    <svg className={`w-4 h-4 ml-1 transition-transform ${showAdvancedOptions ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    Advanced options
+                    <svg className={`ml-1 h-4 w-4 transition-transform ${showAdvancedOptions ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
                   </button>
-                  
+
                   {showAdvancedOptions && (
-                    <div className="mt-3 space-y-3">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Memo (Optional)
-                        </label>
-                        <input
-                          type="text"
-                          value={transferForm.memo || ''}
-                          onChange={(e) => setTransferForm(prev => ({ ...prev, memo: e.target.value }))}
-                          placeholder="Add a note for this transfer"
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                          maxLength={100}
-                        />
-                      </div>
+                    <div className="mt-3 rounded-[20px] border border-stone-200 bg-stone-50/70 p-4">
+                      <label className="block text-sm font-medium text-slate-700">
+                        Memo (optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={transferForm.memo || ''}
+                        onChange={(e) => setTransferForm(prev => ({ ...prev, memo: e.target.value }))}
+                        placeholder="Add a note for this transfer"
+                        className={`${dialogInputClass} mt-3`}
+                        maxLength={100}
+                      />
                     </div>
                   )}
                 </div>
 
-                {/* Warnings */}
                 {Object.keys(transferValidation.warnings).length > 0 && (
                   <div className="space-y-2">
                     {Object.entries(transferValidation.warnings).map(([key, warning]) => (
-                      <div key={key} className="flex items-start p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                        <Shield className="w-4 h-4 text-amber-600 mr-2 mt-0.5 flex-shrink-0" />
+                      <div key={key} className="flex items-start gap-3 rounded-[20px] border border-amber-200 bg-amber-50 px-4 py-3">
+                        <Shield className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
                         <p className="text-sm text-amber-800">{warning}</p>
                       </div>
                     ))}
                   </div>
                 )}
 
-                {/* Action Buttons */}
-                <div className="flex space-x-3 pt-4">
+                <div className="flex flex-col-reverse gap-3 border-t border-stone-200 pt-5 sm:flex-row">
                   <button
+                    type="button"
                     onClick={resetTransferDialog}
-                    className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+                    className={`flex-1 ${secondaryActionClass}`}
                   >
                     Cancel
                   </button>
                   <button
+                    type="button"
                     onClick={() => setTransferStep('review')}
                     disabled={!transferValidation.isValid}
-                    className="flex-1 px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    className={`flex-1 ${primaryActionClass}`}
                   >
-                    Review Transfer
+                    Review transfer
                   </button>
                 </div>
               </div>
             )}
 
-            {/* Review Step */}
             {transferStep === 'review' && (
-              <div className="p-6 space-y-6">
-                <div className="bg-gray-50 rounded-lg p-4 space-y-3">
-                  <h3 className="font-medium text-gray-900">Transfer Summary</h3>
-                  
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">From:</span>
-                      <span className="font-mono">{shortenAddress(userAddress)}</span>
+              <div className={`${dialogBodyClass} flex-1 space-y-6`}>
+                <div className="rounded-[24px] border border-stone-200 bg-stone-50/70 p-4">
+                  <h3 className="text-base font-semibold text-slate-950">Transfer summary</h3>
+                  <div className="mt-4 space-y-3 text-sm">
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="text-slate-500">From</span>
+                      <span className="font-mono text-right text-slate-900">{shortenAddress(userAddress)}</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">To:</span>
-                      <span className="font-mono">{shortenAddress(transferForm.recipientAddress)}</span>
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="text-slate-500">To</span>
+                      <span className="font-mono text-right text-slate-900">{shortenAddress(transferForm.recipientAddress)}</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Amount:</span>
-                      <span className="font-medium">{transferForm.amount} {transferForm.selectedToken}</span>
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="text-slate-500">Amount</span>
+                      <span className="font-medium text-right text-slate-950">
+                        {transferForm.amount} {transferForm.selectedToken}
+                      </span>
                     </div>
                     {transferForm.selectedToken === 'SUI' && suiPrice && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">USD Value:</span>
-                        <span>≈ ${(parseFloat(transferForm.amount) * suiPrice).toFixed(2)}</span>
+                      <div className="flex items-start justify-between gap-4">
+                        <span className="text-slate-500">USD value</span>
+                        <span className="text-right text-slate-900">
+                          ${(parseFloat(transferForm.amount) * suiPrice).toFixed(2)}
+                        </span>
                       </div>
                     )}
                     {transferForm.selectedToken === 'USDC' && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">USD Value:</span>
-                        <span>≈ ${parseFloat(transferForm.amount).toFixed(2)}</span>
+                      <div className="flex items-start justify-between gap-4">
+                        <span className="text-slate-500">USD value</span>
+                        <span className="text-right text-slate-900">
+                          ${parseFloat(transferForm.amount).toFixed(2)}
+                        </span>
                       </div>
                     )}
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Network:</span>
-                      <span>Sui {getCurrentNetwork() === 'mainnet' ? 'Mainnet' : 'Testnet'}</span>
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="text-slate-500">Network</span>
+                      <span className="text-right text-slate-900">
+                        Sui {getCurrentNetwork() === 'mainnet' ? 'Mainnet' : 'Testnet'}
+                      </span>
                     </div>
                     {transferForm.memo && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">Memo:</span>
-                        <span className="text-right max-w-32 truncate">{transferForm.memo}</span>
+                      <div className="flex items-start justify-between gap-4">
+                        <span className="text-slate-500">Memo</span>
+                        <span className="max-w-40 truncate text-right text-slate-900">{transferForm.memo}</span>
                       </div>
                     )}
                   </div>
                 </div>
 
-                {/* Security Checklist */}
-                <div className="bg-blue-50 rounded-lg p-4">
-                  <h4 className="font-medium text-blue-900 mb-2 flex items-center">
-                    <Shield className="w-4 h-4 mr-2" />
-                    Security Checklist
+                <div className="rounded-[24px] border border-stone-200 bg-white p-4">
+                  <h4 className="flex items-center text-base font-semibold text-slate-950">
+                    <Shield className="mr-2 h-4 w-4 text-slate-600" />
+                    Security checklist
                   </h4>
-                  <div className="space-y-2 text-sm text-blue-800">
+                  <div className="mt-4 space-y-3 text-sm text-slate-600">
                     <div className="flex items-center">
-                      <CheckCircle className="w-4 h-4 mr-2 text-green-600" />
+                      <CheckCircle className="mr-2 h-4 w-4 text-emerald-600" />
                       Recipient address format is valid
                     </div>
                     <div className="flex items-center">
-                      <CheckCircle className="w-4 h-4 mr-2 text-green-600" />
-                      Sufficient balance available
+                      <CheckCircle className="mr-2 h-4 w-4 text-emerald-600" />
+                      Sufficient balance is available
                     </div>
                     <div className="flex items-center">
-                      <CheckCircle className="w-4 h-4 mr-2 text-green-600" />
-                      Gas fees reserved (SUI transfers)
+                      <CheckCircle className="mr-2 h-4 w-4 text-emerald-600" />
+                      Gas fees are reserved for the transaction
                     </div>
                   </div>
                 </div>
 
-                <div className="flex space-x-3">
+                <div className="flex flex-col-reverse gap-3 border-t border-stone-200 pt-5 sm:flex-row">
                   <button
+                    type="button"
                     onClick={() => setTransferStep('form')}
-                    className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+                    className={`flex-1 ${secondaryActionClass}`}
                   >
                     Back
                   </button>
                   <button
+                    type="button"
                     onClick={handleTransferSubmit}
                     disabled={isTransferring}
-                    className="flex-1 px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    className={`flex-1 ${primaryActionClass}`}
                   >
-                    {isTransferring ? 'Confirming...' : 'Confirm Transfer'}
+                    {isTransferring ? 'Confirming...' : 'Confirm transfer'}
                   </button>
                 </div>
               </div>
             )}
 
-            {/* Confirm Step */}
             {transferStep === 'confirm' && (
-              <div className="p-6 text-center space-y-4">
-                <div className="w-16 h-16 mx-auto bg-blue-100 rounded-full flex items-center justify-center">
-                  <Clock className="w-8 h-8 text-blue-600 animate-pulse" />
+              <div className={`${dialogBodyClass} flex-1 py-10 text-center`}>
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-stone-100">
+                  <Clock className="h-8 w-8 animate-pulse text-slate-700" />
                 </div>
-                <div>
-                  <h3 className="text-lg font-medium text-gray-900">Processing Transfer</h3>
-                  <p className="text-sm text-gray-500 mt-1">
-                    Please wait while we process your transaction on the Sui network...
-                  </p>
-                </div>
+                <h3 className="mt-5 text-lg font-medium text-slate-950">Processing transfer</h3>
+                <p className="mt-2 text-sm text-slate-500">
+                  Please wait while the transaction is submitted to the Sui network.
+                </p>
               </div>
             )}
 
-            {/* Success Step */}
             {transferStep === 'success' && transferResult && (
-              <div className="p-6 text-center space-y-4">
-                <div className="w-16 h-16 mx-auto bg-green-100 rounded-full flex items-center justify-center">
-                  <CheckCircle className="w-8 h-8 text-green-600" />
+              <div className={`${dialogBodyClass} flex-1 py-8 text-center`}>
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
+                  <CheckCircle className="h-8 w-8 text-emerald-600" />
                 </div>
-                <div>
-                  <h3 className="text-lg font-medium text-gray-900">Transfer Successful!</h3>
-                  <p className="text-sm text-gray-500 mt-1">
-                    Your {transferForm.amount} {transferForm.selectedToken} has been sent successfully.
-                  </p>
-                </div>
+                <h3 className="mt-5 text-lg font-medium text-slate-950">Transfer successful</h3>
+                <p className="mt-2 text-sm text-slate-500">
+                  {transferForm.amount} {transferForm.selectedToken} has been sent successfully.
+                </p>
 
                 {transferResult.digest && (
-                  <div className="bg-gray-50 rounded-lg p-3">
-                    <p className="text-xs text-gray-500 mb-1">Transaction Hash:</p>
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono text-xs text-gray-700">
-                        {transferResult.digest.slice(0, 20)}...{transferResult.digest.slice(-10)}
+                  <div className="mt-5 rounded-[24px] border border-stone-200 bg-stone-50/70 p-4 text-left">
+                    <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                      Transaction hash
+                    </p>
+                    <div className="mt-3 flex items-start justify-between gap-3">
+                      <span className="break-all font-mono text-xs text-slate-700">
+                        {transferResult.digest}
                       </span>
                       <button
+                        type="button"
                         onClick={() => copyToClipboard(transferResult.digest || '')}
-                        className="text-blue-600 hover:text-blue-700 p-1"
+                        className={subtleIconButtonClass}
+                        aria-label="Copy transaction hash"
                       >
-                        <Copy className="w-4 h-4" />
+                        <Copy className="h-4 w-4" />
                       </button>
                     </div>
                     <a
-                      href={`https://testnet.suivision.xyz/txblock/${transferResult.digest}`}
+                      href={`https://${getCurrentNetwork() === 'mainnet' ? '' : 'testnet.'}suivision.xyz/txblock/${transferResult.digest}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center text-xs text-blue-600 hover:text-blue-700 mt-2"
+                      className="mt-4 inline-flex items-center text-sm font-medium text-slate-700 transition hover:text-slate-950"
                     >
-                      View on Explorer
-                      <ExternalLink className="w-3 h-3 ml-1" />
+                      View on explorer
+                      <ExternalLink className="ml-2 h-4 w-4" />
                     </a>
                   </div>
                 )}
 
                 <button
+                  type="button"
                   onClick={resetTransferDialog}
-                  className="w-full px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+                  className={`mt-6 w-full ${primaryActionClass}`}
                 >
                   Done
                 </button>
               </div>
             )}
-
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
@@ -7267,45 +8360,54 @@ export default function Dashboard() {
       {/* Transaction History Modal */}
       <Dialog.Root open={isTransactionHistoryOpen} onOpenChange={setIsTransactionHistoryOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black bg-opacity-50 z-40" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl z-50 w-full max-w-2xl mx-4 max-h-[90vh] overflow-hidden">
-            <div className="flex items-center justify-between p-6 border-b border-gray-200">
-              <div>
-                <Dialog.Title className="text-lg font-semibold text-gray-900">Transaction History</Dialog.Title>
-                <Dialog.Description className="text-sm text-gray-500 mt-1">
-                  Recent transactions from your wallet
-                </Dialog.Description>
+          <Dialog.Overlay className={dialogOverlayClass} />
+          <Dialog.Content className={`${dialogContentClass} max-w-2xl`}>
+            <div className={dialogHeaderClass}>
+              <div className="flex min-w-0 items-start gap-4">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-stone-200 bg-stone-50 text-slate-700">
+                  <Clock className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Wallet Activity
+                  </p>
+                  <Dialog.Title className="mt-1 text-xl font-semibold text-slate-950">
+                    Transaction history
+                  </Dialog.Title>
+                  <Dialog.Description className="mt-1 text-sm text-slate-500">
+                    Recent transactions from your wallet.
+                  </Dialog.Description>
+                </div>
               </div>
-              <Dialog.Close className="text-gray-400 hover:text-gray-600 focus:outline-none">
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
+              <Dialog.Close className={subtleIconButtonClass} aria-label="Close transaction history">
+                <X className="h-4 w-4" />
               </Dialog.Close>
             </div>
-            
-            <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
+
+            <div className={dialogBodyClass}>
               {isLoadingHistory ? (
                 <div className="flex items-center justify-center py-8">
-                  <div className="flex items-center space-x-3">
-                    <svg className="animate-spin h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <div className="flex items-center gap-3 text-slate-600">
+                    <svg className="h-5 w-5 animate-spin text-slate-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    <span className="text-gray-600">Loading transaction history...</span>
+                    <span>Loading transaction history...</span>
                   </div>
                 </div>
               ) : historyError ? (
                 <div className="flex items-center justify-center py-8">
                   <div className="text-center">
-                    <svg className="w-12 h-12 text-red-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="mx-auto mb-4 h-12 w-12 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
                     </svg>
-                    <p className="text-gray-600 mb-2">{historyError}</p>
+                    <p className="mb-2 text-slate-600">{historyError}</p>
                     <button
+                      type="button"
                       onClick={() => {
                         void fetchTransactionHistory();
                       }}
-                      className="text-blue-600 hover:text-blue-700 text-sm font-medium"
+                      className="text-sm font-medium text-slate-700 transition hover:text-slate-950"
                     >
                       Try again
                     </button>
@@ -7314,11 +8416,11 @@ export default function Dashboard() {
               ) : transactionHistory.length === 0 ? (
                 <div className="flex items-center justify-center py-8">
                   <div className="text-center">
-                    <svg className="w-12 h-12 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="mx-auto mb-4 h-12 w-12 text-stone-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                     </svg>
-                    <p className="text-gray-500">No transactions found</p>
-                    <p className="text-sm text-gray-400 mt-1">Your transaction history will appear here</p>
+                    <p className="text-slate-500">No transactions found</p>
+                    <p className="mt-1 text-sm text-slate-400">Your transaction history will appear here.</p>
                   </div>
                 </div>
               ) : (
@@ -7338,76 +8440,82 @@ export default function Dashboard() {
                     ];
 
                     return (
-                    <div key={tx.digest} className="bg-gray-50 rounded-lg p-4 hover:bg-gray-100 transition-colors">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center space-x-3">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                            tx.direction === 'received' ? 'bg-green-100 text-green-600' :
-                            tx.direction === 'sent' ? 'bg-red-100 text-red-600' :
-                            'bg-blue-100 text-blue-600'
-                          }`}>
-                            {tx.direction === 'received' ? (
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8l-8 8-8-8" />
-                              </svg>
-                            ) : tx.direction === 'sent' ? (
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 20V4m8 8l-8-8-8 8" />
-                              </svg>
-                            ) : (
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4" />
-                              </svg>
-                            )}
-                          </div>
-                          <div>
-                            <p className="font-medium text-gray-900">{tx.type}</p>
-                            <p className="text-sm text-gray-500">{tx.timestamp.toLocaleString()}</p>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          {amountLines.length > 0 ? (
-                            <div className="space-y-1">
-                              {amountLines.map((amount, index) => (
-                                <p
-                                  key={`${tx.digest}-${amount.direction}-${amount.coinType}-${index}`}
-                                  className={`font-semibold ${amount.className}`}
-                                >
-                                  {amount.prefix}{amount.formattedAmount} {amount.symbol}
-                                </p>
-                              ))}
-                            </div>
-                          ) : (
-                            <p className="font-semibold text-gray-900">No balance change</p>
-                          )}
-                          <div className="flex items-center justify-end space-x-2 mt-1">
-                            <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
-                              tx.status === 'Success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                      <div
+                        key={tx.digest}
+                        className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-4 transition hover:bg-stone-100/80"
+                      >
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="flex items-start gap-3">
+                            <div className={`flex h-9 w-9 items-center justify-center rounded-full ${
+                              tx.direction === 'received' ? 'bg-green-100 text-green-600' :
+                              tx.direction === 'sent' ? 'bg-red-100 text-red-600' :
+                              'bg-blue-100 text-blue-600'
                             }`}>
-                              {tx.status}
-                            </span>
+                              {tx.direction === 'received' ? (
+                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8l-8 8-8-8" />
+                                </svg>
+                              ) : tx.direction === 'sent' ? (
+                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 20V4m8 8l-8-8-8 8" />
+                                </svg>
+                              ) : (
+                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4" />
+                                </svg>
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-medium text-slate-900">{tx.type}</p>
+                              <p className="text-sm text-slate-500">{tx.timestamp.toLocaleString()}</p>
+                            </div>
+                          </div>
+
+                          <div className="text-left sm:text-right">
+                            {amountLines.length > 0 ? (
+                              <div className="space-y-1">
+                                {amountLines.map((amount, index) => (
+                                  <p
+                                    key={`${tx.digest}-${amount.direction}-${amount.coinType}-${index}`}
+                                    className={`font-semibold ${amount.className}`}
+                                  >
+                                    {amount.prefix}{amount.formattedAmount} {amount.symbol}
+                                  </p>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="font-semibold text-slate-900">No balance change</p>
+                            )}
+                            <div className="mt-2 flex items-center gap-2 sm:justify-end">
+                              <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${
+                                tx.status === 'Success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                              }`}>
+                                {tx.status}
+                              </span>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                      <div className="flex items-center justify-between text-xs text-gray-500">
-                        <div className="flex items-center space-x-4">
-                          <span>Gas: {tx.gasFee.toFixed(6)} SUI</span>
+
+                        <div className="mt-4 flex flex-col gap-2 border-t border-stone-200 pt-4 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex flex-wrap items-center gap-3">
+                            <span>Gas: {tx.gasFee.toFixed(6)} SUI</span>
+                            <span className="font-mono">{tx.digest.slice(0, 8)}...{tx.digest.slice(-8)}</span>
+                          </div>
                           <a
                             href={tx.explorerUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-blue-600 hover:text-blue-700 inline-flex items-center"
+                            className="inline-flex items-center font-medium text-slate-700 transition hover:text-slate-950"
                           >
                             View on explorer
-                            <svg className="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg className="ml-1 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                             </svg>
                           </a>
                         </div>
-                        <span className="font-mono">{tx.digest.slice(0, 8)}...{tx.digest.slice(-8)}</span>
                       </div>
-                    </div>
-                  )})}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -7424,23 +8532,37 @@ export default function Dashboard() {
         }}
       >
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-[2px]" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[94vw] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
-            <div className="bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 px-6 py-5 text-white">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-blue-100">
-                    Instant Onramp
+          <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/55 backdrop-blur-sm" />
+          <Dialog.Content className={onrampDialogContentClass}>
+            <div className="border-b border-[#e7dfd4] bg-[linear-gradient(135deg,rgba(243,246,251,0.96),rgba(251,250,247,0.94))] px-5 py-5 sm:px-7 sm:py-6">
+              <div className="flex items-start justify-between gap-3 sm:gap-4">
+                <div className="max-w-xl">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[#717784]">
+                    Instant onramp
                   </p>
-                  <Dialog.Title className="mt-1 text-2xl font-semibold leading-tight">
-                    Buy {coinbaseAssetIntent === 'SUI' ? 'SUI' : 'USDC on Sui'}
+                  <Dialog.Title className="mt-3 text-[1.75rem] font-semibold leading-[0.98] tracking-[-0.05em] text-[#171923] sm:text-[2rem] sm:leading-tight sm:tracking-[-0.04em]">
+                    Buy {onrampAssetLabel}
                   </Dialog.Title>
-                  <Dialog.Description className="mt-1 text-sm text-blue-100">
-                    Secure checkout with Coinbase. MoonPay fallback is coming soon.
+                  <Dialog.Description className="mt-3 max-w-lg text-sm leading-6 text-[#5f6674]">
+                    Secure checkout through Coinbase with a clean handoff back
+                    to your wallet. When the flow completes, the dashboard can
+                    refresh balances and onramp status.
                   </Dialog.Description>
+
+                  <div className="mt-5 flex flex-wrap gap-2 sm:gap-3">
+                    <span className="inline-flex items-center gap-2 rounded-full border border-[#dde5ef] bg-white px-3 py-1.5 text-xs font-medium text-[#51627b] sm:py-2 sm:text-sm">
+                      USD purchase flow
+                    </span>
+                    <span className="inline-flex items-center gap-2 rounded-full border border-[#dde5ef] bg-white px-3 py-1.5 text-xs font-medium text-[#51627b] sm:py-2 sm:text-sm">
+                      Opens in secure browser tab
+                    </span>
+                    <span className="inline-flex items-center gap-2 rounded-full border border-[#dde5ef] bg-white px-3 py-1.5 text-xs font-medium text-[#51627b] sm:py-2 sm:text-sm">
+                      Asset: {onrampAssetLabel}
+                    </span>
+                  </div>
                 </div>
                 <Dialog.Close
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/30 bg-white/10 text-white transition-colors hover:bg-white/20 focus:outline-none"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#d7cec1] bg-white text-[#667085] transition-colors hover:bg-[#f6f3ee] hover:text-[#171923] focus:outline-none sm:h-10 sm:w-10"
                   aria-label="Close"
                 >
                   <X className="h-4 w-4" />
@@ -7448,13 +8570,18 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <div className="space-y-4 bg-slate-50/70 px-6 py-5">
-              <div className="rounded-2xl border border-white bg-white p-4 shadow-sm">
-                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+            <div className="min-h-0 overflow-y-auto overscroll-contain space-y-3 bg-[#f6f3ee]/65 px-5 py-5 sm:space-y-4 sm:px-7 sm:py-6">
+              <div className="rounded-[22px] border border-[#e7dfd4] bg-white p-4 shadow-[0_24px_70px_-58px_rgba(15,23,42,0.3)] sm:rounded-[24px] sm:p-5">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[#717784]">
                   Preferred Provider
                 </p>
-                <p className="mt-1 text-sm text-slate-500">
-                  Coinbase checkout opens in a secure browser tab.
+                <h3 className="mt-3 text-lg font-semibold tracking-[-0.03em] text-[#171923] sm:text-xl">
+                  Coinbase checkout
+                </h3>
+                <p className="mt-2 text-sm leading-6 text-[#5f6674]">
+                  Start with Coinbase for the fastest path back into this
+                  wallet. If the provider is unavailable, you can move to the
+                  fallback path below.
                 </p>
 
                 <CoinbaseOnrampLauncher
@@ -7467,29 +8594,48 @@ export default function Dashboard() {
                   providerFlag={onrampProviderFlag}
                   disabled={!userAddress}
                   buttonLabel="Continue with Coinbase"
+                  uiVariant="refined"
                   onSuccess={handleCoinbaseLaunchSuccess}
                   onError={handleCoinbaseLaunchError}
                   onCancel={handleCoinbaseCancel}
                 />
               </div>
 
-              {isMoonPayEnabled ? (
-                <button
-                  type="button"
-                  onClick={handleMoonPayFallbackClick}
-                  className="inline-flex w-full items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100"
-                >
-                  Use MoonPay Instead
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleMoonPayFallbackClick}
-                  className="inline-flex w-full items-center justify-center rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800 transition-colors hover:bg-amber-100"
-                >
-                  MoonPay Coming Soon
-                </button>
-              )}
+              <div className="rounded-[22px] border border-[#e7dfd4] bg-[#fbfaf7] p-4 sm:rounded-[24px] sm:p-5">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[#717784]">
+                  Fallback
+                </p>
+                <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="max-w-md">
+                    <h3 className="text-base font-semibold text-[#171923]">
+                      {isMoonPayEnabled ? 'MoonPay alternative' : 'MoonPay coming soon'}
+                    </h3>
+                    <p className="mt-1 text-sm leading-6 text-[#5f6674]">
+                      {isMoonPayEnabled
+                        ? 'Use a secondary provider if Coinbase is unavailable for your session.'
+                        : 'A secondary provider will be added here for cases where Coinbase is not the right fit.'}
+                    </p>
+                  </div>
+
+                  {isMoonPayEnabled ? (
+                    <button
+                      type="button"
+                      onClick={handleMoonPayFallbackClick}
+                      className={secondaryActionClass}
+                    >
+                      Use MoonPay instead
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleMoonPayFallbackClick}
+                      className="inline-flex items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-800 transition hover:bg-amber-100"
+                    >
+                      MoonPay coming soon
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
           </Dialog.Content>
         </Dialog.Portal>

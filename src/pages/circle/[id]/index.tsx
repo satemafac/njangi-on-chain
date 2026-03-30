@@ -3,7 +3,18 @@ import { useRouter } from 'next/router';
 import { useAuth } from '../../../contexts/AuthContext';
 import { SuiClient } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
-import { ArrowLeft, Copy, Link } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  CalendarDays,
+  CheckCircle2,
+  CircleDot,
+  Copy,
+  Link2,
+  Shield,
+  Users,
+  Wallet,
+} from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { getCircleConfigFieldsFromDynamicFields } from '@/lib/circle-config';
 import { priceService } from '../../../services/price-service';
@@ -569,33 +580,33 @@ export default function CircleDetails() {
       <Tooltip.Provider>
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
-            <span className={`cursor-help ${className} flex items-center`}>
+            <span className={`inline-flex cursor-help items-center ${className}`}>
               {displayLocalAmount !== null ? formatCurrency(displayLocalAmount, currencyType) : `${formatCurrency(0, currencyType)}`} 
-              <span className="text-gray-500 mr-1">({formattedSui} SUI)</span>
+              <span className="ml-1 text-sm text-[#667085]">({formattedSui} SUI)</span>
               {isPriceStale && <span title="Using cached price">⚠️</span>}
             </span>
           </Tooltip.Trigger>
           <Tooltip.Portal>
             <Tooltip.Content
-              className="bg-gray-900 text-white px-3 py-2 rounded text-sm"
+              className="rounded-xl border border-[#d9d0c4] bg-[#1d2533] px-3 py-2 text-sm text-white shadow-[0_18px_48px_-24px_rgba(15,23,42,0.55)]"
               sideOffset={5}
             >
               <div className="space-y-1">
                 <p>Current SUI Conversion Rate:</p>
                 <p>1 SUI = {formatUSD(suiPrice)}</p>
-                <p className="text-xs text-gray-400">
+                <p className="text-xs text-white/70">
                   {isPriceStale 
                     ? "Using cached price - service temporarily unavailable" 
                     : "Updated price data from CoinGecko"}
                 </p>
-                <p className="text-xs text-blue-300">
+                <p className="text-xs text-[#b9c8dd]">
                   Currency: {currencyType}
                 </p>
-                <p className="text-xs text-gray-400">
+                <p className="text-xs text-white/70">
                   Note: SUI amount was calculated at circle creation time
                 </p>
               </div>
-              <Tooltip.Arrow className="fill-gray-900" />
+              <Tooltip.Arrow className="fill-[#1d2533]" />
             </Tooltip.Content>
           </Tooltip.Portal>
         </Tooltip.Root>
@@ -788,170 +799,302 @@ export default function CircleDetails() {
     return null;
   }
 
+  const isAdmin = circle?.admin === userAddress;
+  const estimatedNextPayout = circle
+    ? calculatePotentialNextPayoutDate(circle.cycleLength, circle.cycleDay)
+    : 0;
+  const pageSurfaceClass =
+    'rounded-[30px] border border-[#ddd5c9] bg-white/88 shadow-[0_30px_90px_-62px_rgba(15,23,42,0.42)] backdrop-blur';
+  const detailCardClass =
+    'rounded-[24px] border border-[#e9e1d6] bg-[#fbfaf7] shadow-[0_24px_60px_-56px_rgba(15,23,42,0.42)]';
+  const detailLabelClass =
+    'text-[11px] font-semibold uppercase tracking-[0.22em] text-[#7a818e]';
+  const pillBaseClass =
+    'inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium';
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        <div className="px-4 py-6 sm:px-0">
-          <div className="mb-6">
+    <div className="min-h-screen bg-[#f6f3ee] text-[#171923]">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-[420px] bg-[radial-gradient(circle_at_top_left,_rgba(108,122,147,0.16),_transparent_34%),radial-gradient(circle_at_85%_8%,_rgba(218,204,178,0.28),_transparent_24%),linear-gradient(180deg,_rgba(255,255,255,0.58)_0%,_rgba(246,243,238,0)_72%)]" />
+
+      <main className="relative mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
+        <div className="mb-6 flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => router.push('/dashboard')}
+            className="inline-flex items-center gap-2 rounded-full border border-[#d7cec1] bg-white px-4 py-2.5 text-sm font-semibold text-[#334155] shadow-[0_18px_36px_-30px_rgba(15,23,42,0.42)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#fbfaf7]"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to dashboard
+          </button>
+
+          {!loading && circle && (
+            <span
+              className={`${pillBaseClass} ${
+                circle.isActive
+                  ? 'border-[#cfe2d5] bg-[#eef7f0] text-[#24553a]'
+                  : 'border-[#e5dac9] bg-[#fcf7ef] text-[#8a5a21]'
+              }`}
+            >
+              {circle.isActive ? (
+                <CheckCircle2 className="h-4 w-4" />
+              ) : (
+                <CircleDot className="h-4 w-4" />
+              )}
+              {circle.isActive ? 'Active circle' : 'Awaiting activation'}
+            </span>
+          )}
+        </div>
+
+        {loading ? (
+          <div className={`${pageSurfaceClass} p-12 text-center`}>
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-[#d9d0c4] bg-white">
+              <svg
+                className="h-7 w-7 animate-spin text-[#6b7b92]"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                />
+              </svg>
+            </div>
+            <h2 className="mt-5 text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
+              Loading circle details
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-[#667085] sm:text-base">
+              Fetching membership, configuration, and payout timing from the
+              selected network.
+            </p>
+          </div>
+        ) : circle ? (
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_360px]">
+            <section className="space-y-6">
+              <div className={`${pageSurfaceClass} overflow-hidden`}>
+                <div className="border-b border-[#e7dfd4] bg-[linear-gradient(135deg,rgba(243,246,251,0.95),rgba(251,250,247,0.9))] px-6 py-6 sm:px-8 sm:py-8">
+                  <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="max-w-2xl">
+                      <span className={detailLabelClass}>Circle overview</span>
+                      <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-[#171923] sm:text-[2.4rem]">
+                        {circle.name}
+                      </h1>
+                      <p className="mt-3 max-w-xl text-sm leading-7 text-[#5f6674] sm:text-base">
+                        {isAdmin
+                          ? 'You manage this circle.'
+                          : 'You are viewing this circle as a member.'}{' '}
+                        Contributions follow a{' '}
+                        {formatCycleInfo(circle.cycleLength, circle.cycleDay).toLowerCase()}{' '}
+                        cadence and settle on the currently selected network.
+                      </p>
+
+                      <div className="mt-5 flex flex-wrap gap-3">
+                        <span className={`${pillBaseClass} border-[#dde5ef] bg-white text-[#51627b]`}>
+                          <Users className="h-4 w-4" />
+                          {circle.currentMembers}/{circle.maxMembers} members
+                        </span>
+                        <span className={`${pillBaseClass} border-[#dde5ef] bg-white text-[#51627b]`}>
+                          <CalendarDays className="h-4 w-4" />
+                          {formatCycleInfo(circle.cycleLength, circle.cycleDay)}
+                        </span>
+                        <span className={`${pillBaseClass} border-[#dde5ef] bg-white text-[#51627b]`}>
+                          <Wallet className="h-4 w-4" />
+                          {circle.currencyType || 'USD'} settlement
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className={`${detailCardClass} w-full max-w-sm p-5`}>
+                      <p className={detailLabelClass}>
+                        {circle.isActive ? 'Next payout' : 'Projected first payout'}
+                      </p>
+                      <div className="mt-4 flex items-start gap-3">
+                        <CalendarDays className="mt-1 h-5 w-5 text-[#70819a]" />
+                        <div>
+                          {circle.isActive ? (
+                            <>
+                              <p className="text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
+                                {formatDate(circle.nextPayoutTime)}
+                              </p>
+                              <p className="mt-2 text-sm leading-6 text-[#5f6674]">
+                                The current cycle is active and payout timing is
+                                already scheduled on-chain.
+                              </p>
+                            </>
+                          ) : (
+                            <>
+                              <p className="text-lg font-semibold tracking-[-0.03em] text-[#171923]">
+                                Activate circle to start
+                              </p>
+                              <p className="mt-2 text-sm leading-6 text-[#5f6674]">
+                                Estimated first payout: {formatDate(estimatedNextPayout)}
+                              </p>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-6 sm:p-8">
+                  <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                    <div className={`${detailCardClass} p-5`}>
+                      <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-[#e3dbcf] bg-white text-[#6b7b92]">
+                        <Wallet className="h-4 w-4" />
+                      </div>
+                      <p className={`mt-5 ${detailLabelClass}`}>Contribution amount</p>
+                      <CurrencyDisplay
+                        usd={circle.contributionAmountUsd}
+                        sui={circle.contributionAmount}
+                        currencyType={circle.currencyType}
+                        className="mt-3 text-lg font-semibold text-[#171923]"
+                      />
+                    </div>
+
+                    <div className={`${detailCardClass} p-5`}>
+                      <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-[#e3dbcf] bg-white text-[#6b7b92]">
+                        <Shield className="h-4 w-4" />
+                      </div>
+                      <p className={`mt-5 ${detailLabelClass}`}>Security deposit</p>
+                      <CurrencyDisplay
+                        usd={circle.securityDepositUsd}
+                        sui={circle.securityDeposit}
+                        currencyType={circle.currencyType}
+                        className="mt-3 text-lg font-semibold text-[#171923]"
+                      />
+                    </div>
+
+                    <div className={`${detailCardClass} p-5`}>
+                      <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-[#e3dbcf] bg-white text-[#6b7b92]">
+                        <Users className="h-4 w-4" />
+                      </div>
+                      <p className={`mt-5 ${detailLabelClass}`}>Members</p>
+                      <p className="mt-3 text-lg font-semibold text-[#171923]">
+                        {circle.currentMembers} / {circle.maxMembers}
+                      </p>
+                    </div>
+
+                    <div className={`${detailCardClass} p-5`}>
+                      <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-[#e3dbcf] bg-white text-[#6b7b92]">
+                        <CalendarDays className="h-4 w-4" />
+                      </div>
+                      <p className={`mt-5 ${detailLabelClass}`}>Cycle cadence</p>
+                      <p className="mt-3 text-lg font-semibold text-[#171923]">
+                        {formatCycleInfo(circle.cycleLength, circle.cycleDay)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <aside className="space-y-6">
+              <div className={`${pageSurfaceClass} p-6`}>
+                <p className={detailLabelClass}>Circle access</p>
+                <div className="mt-5 space-y-4">
+                  <div className={`${detailCardClass} p-4`}>
+                    <p className={detailLabelClass}>Circle ID</p>
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <p className="text-sm font-semibold text-[#171923]">
+                        {shortenId(circle.id)}
+                      </p>
+                      <button
+                        onClick={() => copyToClipboard(circle.id, 'id')}
+                        className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold transition-colors duration-200 ${
+                          copiedId
+                            ? 'border-[#cfe2d5] bg-[#eef7f0] text-[#24553a]'
+                            : 'border-[#d7cec1] bg-white text-[#334155] hover:bg-[#fbfaf7]'
+                        }`}
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                        {copiedId ? 'Copied' : 'Copy'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className={`${detailCardClass} p-4`}>
+                    <p className={detailLabelClass}>Admin wallet</p>
+                    <p className="mt-3 break-all text-sm font-medium leading-6 text-[#334155]">
+                      {circle.admin}
+                    </p>
+                  </div>
+
+                  {isAdmin && (
+                    <button
+                      onClick={() => copyToClipboard(circle.id, 'link')}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-[#d7cec1] bg-white px-4 py-3 text-sm font-semibold text-[#334155] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#fbfaf7]"
+                    >
+                      <Link2 className="h-4 w-4" />
+                      Copy invite link
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className={`${pageSurfaceClass} p-6`}>
+                <p className={detailLabelClass}>Actions</p>
+                <h2 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-[#171923]">
+                  {isAdmin ? 'Run this circle' : 'Stay current on your turn'}
+                </h2>
+                <p className="mt-3 text-sm leading-6 text-[#5f6674]">
+                  Move into the contribution flow, and if you are the admin,
+                  step directly into circle management from here.
+                </p>
+
+                <div className="mt-6 space-y-3">
+                  <button
+                    onClick={() => router.push(`/circle/${circle.id}/contribute`)}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#1d2533] px-4 py-3.5 text-sm font-semibold text-white transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#101723]"
+                  >
+                    Contribute
+                    <ArrowUpRight className="h-4 w-4" />
+                  </button>
+
+                  {isAdmin && (
+                    <button
+                      onClick={() => router.push(`/circle/${circle.id}/manage`)}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-[#d7cec1] bg-white px-4 py-3.5 text-sm font-semibold text-[#334155] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#fbfaf7]"
+                    >
+                      Manage circle
+                      <ArrowUpRight className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+
+                <p className="mt-4 text-xs leading-5 text-[#7a818e]">
+                  Contributions, balances, and payouts remain tied to the
+                  network selected in your current session.
+                </p>
+              </div>
+            </aside>
+          </div>
+        ) : (
+          <div className={`${pageSurfaceClass} p-12 text-center`}>
+            <h2 className="text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
+              Circle not found
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-[#667085] sm:text-base">
+              This circle is unavailable or you no longer have access to view it.
+            </p>
             <button
               onClick={() => router.push('/dashboard')}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm text-sm text-gray-700 font-medium"
+              className="mt-6 inline-flex items-center gap-2 rounded-full border border-[#d7cec1] bg-white px-4 py-2.5 text-sm font-semibold text-[#334155] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#fbfaf7]"
             >
-              <ArrowLeft className="w-4 h-4" />
-              Back to Dashboard
+              <ArrowLeft className="h-4 w-4" />
+              Back to dashboard
             </button>
           </div>
-
-          <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100">
-            <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
-              <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-bold text-gray-900">
-                  {!loading && circle ? circle.name : 'Circle Details'}
-                </h2>
-                {!loading && circle && (
-                  <div className="flex items-center space-x-2 text-sm">
-                    <span className="text-gray-500 bg-gray-100 py-1 px-2 rounded-md">{shortenId(id as string)}</span>
-                    <Tooltip.Provider>
-                      <Tooltip.Root>
-                        <Tooltip.Trigger asChild>
-                          <button
-                            onClick={() => copyToClipboard(id as string, 'id')}
-                            className={`text-gray-500 hover:text-blue-600 p-1.5 rounded-full hover:bg-blue-50 transition-colors duration-200 ${copiedId ? 'text-green-500 bg-green-50' : ''}`}
-                          >
-                            <Copy size={16} />
-                          </button>
-                        </Tooltip.Trigger>
-                        <Tooltip.Portal>
-                          <Tooltip.Content
-                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                            sideOffset={5}
-                          >
-                            {copiedId ? 'Copied!' : 'Copy Circle ID'}
-                            <Tooltip.Arrow className="fill-gray-800" />
-                          </Tooltip.Content>
-                        </Tooltip.Portal>
-                      </Tooltip.Root>
-                    </Tooltip.Provider>
-                    
-                    {!loading && circle && circle.admin === userAddress && (
-                      <Tooltip.Provider>
-                        <Tooltip.Root>
-                          <Tooltip.Trigger asChild>
-                            <button
-                              onClick={() => copyToClipboard(id as string, 'link')}
-                              className="text-gray-500 hover:text-blue-600 p-1.5 rounded-full hover:bg-blue-50 transition-colors duration-200"
-                            >
-                              <Link size={16} />
-                            </button>
-                          </Tooltip.Trigger>
-                          <Tooltip.Portal>
-                            <Tooltip.Content
-                              className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                              sideOffset={5}
-                            >
-                              Copy Invite Link
-                              <Tooltip.Arrow className="fill-gray-800" />
-                            </Tooltip.Content>
-                          </Tooltip.Portal>
-                        </Tooltip.Root>
-                      </Tooltip.Provider>
-                    )}
-                  </div>
-                )}
-              </div>
-              {loading ? (
-                <div className="py-8 flex justify-center">
-                  <svg className="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                </div>
-              ) : circle ? (
-                <div className="py-4 space-y-8">
-                  {/* Circle Details Section - Original style but improved layout */}
-                  <div className="px-2">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Details</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Circle Name</p>
-                        <p className="text-lg font-medium">{circle.name}</p>
-                      </div>
-                      
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Admin</p>
-                        <p className="text-sm font-medium text-gray-700 truncate">{circle.admin}</p>
-                      </div>
-                      
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
-                        <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} currencyType={circle.currencyType} className="font-medium" />
-                      </div>
-                      
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Security Deposit</p>
-                        <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} currencyType={circle.currencyType} className="font-medium" />
-                      </div>
-                      
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Members</p>
-                        <p className="text-lg font-medium">{circle.currentMembers} / {circle.maxMembers}</p>
-                      </div>
-                      
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                        <p className="text-sm text-gray-500 mb-1">Cycle</p>
-                        <p className="text-lg font-medium">{formatCycleInfo(circle.cycleLength, circle.cycleDay)}</p>
-                      </div>
-                      
-                      <div className="bg-gray-50 p-4 rounded-lg shadow-sm col-span-1 md:col-span-2">
-                        <p className="text-sm text-gray-500 mb-1">
-                          {circle.isActive ? 'Next Payout' : 'Potential Next Payout'}
-                        </p>
-                        <p className="text-lg font-medium">
-                          {circle.isActive 
-                            ? formatDate(circle.nextPayoutTime)
-                            : <span className="text-blue-600">Activate Circle to Start</span>
-                          }
-                          {!circle.isActive && 
-                            <span className="ml-2 text-sm text-gray-500">
-                              (Estimated: {formatDate(calculatePotentialNextPayoutDate(circle.cycleLength, circle.cycleDay))})
-                            </span>
-                          }
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  {/* Actions */}
-                  <div className="pt-6 border-t border-gray-200 px-2">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Actions</h3>
-                    <div className="flex flex-col space-y-4 sm:flex-row sm:space-x-4 sm:space-y-0">
-                      <button
-                        onClick={() => router.push(`/circle/${circle.id}/contribute`)}
-                        className="px-5 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg text-sm hover:from-blue-700 hover:to-blue-800 transition-all shadow-md font-medium flex items-center justify-center"
-                      >
-                        Contribute
-                      </button>
-                      
-                      {circle.admin === userAddress && (
-                        <button
-                          onClick={() => router.push(`/circle/${circle.id}/manage`)}
-                          className="px-5 py-3 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg text-sm hover:from-purple-700 hover:to-purple-800 transition-all shadow-md font-medium flex items-center justify-center"
-                        >
-                          Manage Circle
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="py-8 text-center">
-                  <p className="text-gray-500">Circle not found</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        )}
       </main>
     </div>
   );
-} 
+}

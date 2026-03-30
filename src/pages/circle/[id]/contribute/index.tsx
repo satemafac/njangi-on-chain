@@ -122,6 +122,8 @@ interface ContributionProgressData {
   currentRecipientAddress?: string | null; // Add recipient address
 }
 
+type ContributeSectionKey = 'wallet' | 'circle' | 'payment';
+
 // IMPORTANT: The values in CircleConfig are stored as follows:
 // - contribution_amount: SUI amount with 9 decimals (MIST)
 // - contribution_amount_usd: USD amount in cents (e.g., 20 = $0.20)
@@ -949,6 +951,7 @@ export default function ContributeToCircle() {
 
   // Circle token mode tab index: 0 = USDC, 1 = SUI
   const [currencyTabIndex, setCurrencyTabIndex] = useState<number>(0);
+  const contributeSectionRefs = useRef<Partial<Record<ContributeSectionKey, HTMLDivElement | null>>>({});
 
   const selectedPaymentCurrency: PaymentCurrency = currencyTabIndex === 0 ? 'USDC' : 'SUI';
   const isSuiCircleModeEnabled = Boolean(circle?.autoSwapEnabled);
@@ -3740,14 +3743,26 @@ export default function ContributeToCircle() {
     }
   };
 
+  const setContributeSectionRef = (key: ContributeSectionKey, element: HTMLDivElement | null) => {
+    contributeSectionRefs.current[key] = element;
+  };
+
+  const scrollToContributeSection = (key: ContributeSectionKey) => {
+    const target = contributeSectionRefs.current[key];
+    if (!target || typeof window === 'undefined') return;
+
+    const top = target.getBoundingClientRect().top + window.scrollY - 88;
+    window.scrollTo({ top: Math.max(top, 0), behavior: 'smooth' });
+  };
+
   const pageSurfaceClass =
-    'rounded-[32px] border border-stone-200 bg-white shadow-[0_24px_70px_-42px_rgba(15,23,42,0.32)]';
+    'rounded-[28px] border border-stone-200 bg-white shadow-[0_24px_70px_-42px_rgba(15,23,42,0.32)] sm:rounded-[32px]';
   const sectionCardClass =
-    'rounded-[28px] border border-stone-200 bg-white px-5 py-5 sm:px-6 sm:py-6 shadow-[0_18px_50px_-38px_rgba(15,23,42,0.24)]';
-  const mutedPanelClass = 'rounded-[24px] border border-stone-200 bg-stone-50/80 p-4 sm:p-5';
-  const warningPanelClass = 'rounded-[24px] border border-amber-200 bg-amber-50/75 p-4 sm:p-5';
-  const successPanelClass = 'rounded-[24px] border border-emerald-200 bg-emerald-50/70 p-4 sm:p-5';
-  const infoPanelClass = 'rounded-[24px] border border-sky-200 bg-sky-50/65 p-4 sm:p-5';
+    'rounded-[24px] border border-stone-200 bg-white px-4 py-4 shadow-[0_18px_50px_-38px_rgba(15,23,42,0.24)] sm:rounded-[28px] sm:px-6 sm:py-6';
+  const mutedPanelClass = 'rounded-[20px] border border-stone-200 bg-stone-50/80 p-3 sm:rounded-[24px] sm:p-5';
+  const warningPanelClass = 'rounded-[20px] border border-amber-200 bg-amber-50/75 p-3 sm:rounded-[24px] sm:p-5';
+  const successPanelClass = 'rounded-[20px] border border-emerald-200 bg-emerald-50/70 p-3 sm:rounded-[24px] sm:p-5';
+  const infoPanelClass = 'rounded-[20px] border border-sky-200 bg-sky-50/65 p-3 sm:rounded-[24px] sm:p-5';
   const sectionTitleClass = 'text-xl font-semibold tracking-tight text-slate-950';
   const sectionEyebrowClass = 'text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500';
   const primaryActionClass =
@@ -3756,6 +3771,8 @@ export default function ContributeToCircle() {
     'inline-flex items-center justify-center rounded-full border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:border-stone-400 hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-stone-300 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
   const subtleTagClass =
     'inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-3 py-1.5 text-sm font-medium text-slate-600';
+  const mobileWorkspaceButtonClass =
+    'rounded-[18px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50 sm:rounded-[20px]';
   const circleStatusLabel = circle?.pausedAfterCycle ? 'Paused' : circle?.isActive ? 'Active' : 'Inactive';
   const paymentStatusLabel = !userDepositPaid
     ? 'Deposit required'
@@ -3765,6 +3782,21 @@ export default function ContributeToCircle() {
         ? 'Recipient'
         : 'Ready';
   const circleModeLabel = isSuiCircleModeEnabled ? 'SUI' : 'USDC';
+  const walletSummaryLabel = fetchingBalance ? 'Refreshing' : userAddress ? 'Connected' : 'Not ready';
+  const walletSummaryDetail = userAddress
+    ? `${userAddress.substring(0, 6)}...${userAddress.substring(userAddress.length - 4)}`
+    : 'Wallet unavailable';
+  const cycleSummaryLabel = currentCycle > 0 ? `Cycle ${currentCycle}` : 'Setup';
+  const cycleSummaryDetail = circle?.pausedAfterCycle
+    ? 'Paused after payout'
+    : circle?.isActive
+      ? 'Payments open'
+      : 'Waiting for activation';
+  const mobilePaymentAmountLabel = !circle
+    ? 'Unavailable'
+    : selectedPaymentCurrency === 'SUI'
+      ? `${(!userDepositPaid ? getSecurityDepositInSui() : getValidContributionAmount()).toFixed(4)} SUI`
+      : formatUsdCentsAsUsdc(!userDepositPaid ? circle.securityDepositUsd || 0 : circle.contributionAmountUsd || 0);
 
   // Update the renderContributionOptions function to show a message when user is the current recipient
   const renderContributionOptions = () => {
@@ -3830,7 +3862,7 @@ export default function ContributeToCircle() {
     );
 
     return (
-      <div className={sectionCardClass}>
+      <div className={sectionCardClass} ref={(element) => setContributeSectionRef('payment', element)}>
         <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className={sectionEyebrowClass}>Payment</p>
@@ -3862,7 +3894,7 @@ export default function ContributeToCircle() {
                 Token mode is admin-managed. {isSuiCircleModeEnabled ? 'This circle currently routes active-cycle payments in SUI.' : 'This circle currently routes active-cycle payments in USDC.'}
               </p>
             </div>
-            <div className="inline-flex rounded-full border border-stone-200 bg-white p-1 shadow-sm">
+            <div className="inline-flex w-full rounded-full border border-stone-200 bg-white p-1 shadow-sm sm:w-auto">
               <button
                 type="button"
                 onClick={() => {
@@ -3873,7 +3905,7 @@ export default function ContributeToCircle() {
                   setCurrencyTabIndex(0);
                 }}
                 disabled={isSuiCircleModeEnabled}
-                className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+                className={`flex-1 rounded-full px-4 py-2 text-sm font-medium transition-colors sm:flex-none ${
                   currencyTabIndex === 0
                     ? 'bg-slate-950 text-white'
                     : isSuiCircleModeEnabled
@@ -3901,7 +3933,7 @@ export default function ContributeToCircle() {
                   setCurrencyTabIndex(1);
                 }}
                 disabled={!isSuiCircleModeEnabled}
-                className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+                className={`flex-1 rounded-full px-4 py-2 text-sm font-medium transition-colors sm:flex-none ${
                   currencyTabIndex === 1
                     ? 'bg-slate-950 text-white'
                     : isSuiCircleModeEnabled
@@ -4257,8 +4289,8 @@ export default function ContributeToCircle() {
               </div>
 
               {showInlineOnrampLauncher && (
-                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                  <div className="flex items-center justify-between gap-4">
+                <div className="rounded-[18px] border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
                         Instant Onramp
@@ -4342,7 +4374,7 @@ export default function ContributeToCircle() {
         ) : (
           <>
           {!showPrimaryWalletActionCard && (
-          <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-6">
+          <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-4 sm:p-6">
             <div className="mb-6">
               <p className="mb-2 text-sm text-slate-600">You are about to contribute:</p>
               <div className="flex items-center">
@@ -4411,8 +4443,8 @@ export default function ContributeToCircle() {
 
             {/* Show warning if security deposit is not paid */}
             {!userDepositPaid && (
-              <div className="mb-4 p-4 bg-amber-50 rounded-lg border-2 border-amber-300">
-                <div className="flex flex-col gap-4">
+                <div className="mb-4 rounded-lg border-2 border-amber-300 bg-amber-50 p-3 sm:p-4">
+                  <div className="flex flex-col gap-4">
                   <div>
                     <p className="text-base font-medium text-amber-700 mb-1">
                       ⚠️ Security deposit required
@@ -4436,7 +4468,7 @@ export default function ContributeToCircle() {
                   
                   {/* Show the required amount including slippage and fees */}
                   {selectedPaymentCurrency === 'SUI' && userBalance !== null && circle && circle.securityDeposit > 0 && (
-                    <div className="bg-blue-50 p-2 rounded border border-blue-100 text-sm">
+                    <div className="rounded border border-blue-100 bg-blue-50 p-2 text-sm">
                       <p className="font-medium text-blue-800">Estimated amount needed:</p>
                       <div className="text-blue-700 text-xs space-y-1 mt-1">
                         <p>Base deposit: {getSecurityDepositInSui().toFixed(4)} SUI</p>
@@ -4452,7 +4484,7 @@ export default function ContributeToCircle() {
                   
                   {/* Show combined insufficient balance warning for both security deposit and contribution */}
                   {selectedPaymentCurrency === 'SUI' && userBalance !== null && circle && userBalance < getRequiredDepositAmount() && (
-                    <div className="p-2 bg-red-50 text-red-700 rounded border border-red-200 text-sm">
+                    <div className="rounded border border-red-200 bg-red-50 p-2 text-sm text-red-700">
                       <p className="font-medium">Insufficient funds for security deposit</p>
                       <p className="text-xs mt-1">
                         You need {getRequiredDepositAmount().toFixed(4)} SUI for the security deposit (including slippage & fees), but your balance is only {userBalance.toFixed(4)} SUI.
@@ -4492,8 +4524,8 @@ export default function ContributeToCircle() {
             )}
 
             {/* Add info message explaining why security deposit button is disabled */}
-            {!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause && (
-              <div className="mt-3 p-3 bg-red-50 rounded-lg border border-red-200">
+              {!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause && (
+              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3">
                 <p className="text-sm text-red-700 font-medium flex items-center">
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
@@ -4508,9 +4540,9 @@ export default function ContributeToCircle() {
 
             {/* Add contribution source indicator */}
             {userDepositPaid && (
-              <div className="mb-4 p-3 rounded-lg border">
+              <div className="mb-4 rounded-lg border p-3">
                 {selectedPaymentCurrency === 'USDC' ? (
-                  <div className="bg-emerald-50 border-emerald-200 p-3 rounded-lg flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
+                  <div className="flex flex-col items-start space-y-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 sm:flex-row sm:space-x-3 sm:space-y-0">
                     <div className="bg-green-100 rounded-full p-1 self-start">
                       <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-600" viewBox="0 0 20 20" fill="currentColor">
                         <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
@@ -4525,7 +4557,7 @@ export default function ContributeToCircle() {
                     </div>
                   </div>
                 ) : (
-                  <div className="bg-blue-50 border-blue-200 p-3 rounded-lg flex flex-col sm:flex-row items-start space-y-2 sm:space-y-0 sm:space-x-3">
+                  <div className="flex flex-col items-start space-y-2 rounded-lg border border-blue-200 bg-blue-50 p-3 sm:flex-row sm:space-x-3 sm:space-y-0">
                     <div className="bg-blue-100 rounded-full p-1 self-start">
                       <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-blue-600" viewBox="0 0 20 20" fill="currentColor">
                         <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
@@ -4585,7 +4617,7 @@ export default function ContributeToCircle() {
           {showPrimaryWalletActionCard && (
             <div className="space-y-3">
               {!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause && (
-                <div className="p-3 bg-red-50 rounded-lg border border-red-200">
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3">
                   <p className="text-sm text-red-700 font-medium flex items-center">
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
@@ -4599,7 +4631,7 @@ export default function ContributeToCircle() {
               )}
 
               {circle && (!circle.isActive || circle.pausedAfterCycle) && (
-                <div className="p-3 bg-amber-50 rounded-lg border border-amber-200">
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
                   <p className="text-sm text-amber-700 font-medium">
                     {!circle.isActive
                       ? "This circle is not active yet"
@@ -4632,7 +4664,7 @@ export default function ContributeToCircle() {
 
   return (
     <div className="min-h-screen bg-[#f6f3ee] text-slate-950 [background-image:radial-gradient(circle_at_top_left,_rgba(255,255,255,0.92),_transparent_30%),radial-gradient(circle_at_top_right,_rgba(226,232,240,0.7),_transparent_26%)]">
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <main className="mx-auto max-w-7xl px-3 py-6 sm:px-6 lg:px-8">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <button
             onClick={() => router.push('/dashboard')}
@@ -4648,7 +4680,7 @@ export default function ContributeToCircle() {
         </div>
 
         <div className={`${pageSurfaceClass} overflow-hidden`}>
-          <div className="border-b border-stone-200 px-6 py-6 sm:px-8 sm:py-8">
+          <div className="border-b border-stone-200 px-4 py-5 sm:px-8 sm:py-8">
             <div className="flex flex-col gap-6">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div>
@@ -4670,7 +4702,76 @@ export default function ContributeToCircle() {
               </div>
 
               {!loading && circle && (
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="grid gap-3 md:hidden">
+                  <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-3 sm:p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className={sectionEyebrowClass}>Payment Snapshot</p>
+                        <p className="mt-1 text-sm text-slate-600">
+                          Jump to wallet, circle, or payment details without stepping through the whole page.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => scrollToContributeSection('payment')}
+                        className="text-sm font-medium text-slate-600 transition hover:text-slate-950"
+                      >
+                        Open payment
+                      </button>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => scrollToContributeSection('wallet')}
+                        className={mobileWorkspaceButtonClass}
+                      >
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                          Wallet
+                        </p>
+                        <p className="mt-2 text-sm font-semibold text-slate-950">{walletSummaryLabel}</p>
+                        <p className="mt-1 truncate text-xs text-slate-500">{walletSummaryDetail}</p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => scrollToContributeSection('circle')}
+                        className={mobileWorkspaceButtonClass}
+                      >
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                          Circle
+                        </p>
+                        <p className="mt-2 text-sm font-semibold text-slate-950">{circleStatusLabel}</p>
+                        <p className="mt-1 text-xs text-slate-500">Mode {circleModeLabel}</p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => scrollToContributeSection('circle')}
+                        className={mobileWorkspaceButtonClass}
+                      >
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                          Cycle
+                        </p>
+                        <p className="mt-2 text-sm font-semibold text-slate-950">{cycleSummaryLabel}</p>
+                        <p className="mt-1 text-xs text-slate-500">{cycleSummaryDetail}</p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => scrollToContributeSection('payment')}
+                        className={mobileWorkspaceButtonClass}
+                      >
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                          Payment
+                        </p>
+                        <p className="mt-2 text-sm font-semibold text-slate-950">{paymentStatusLabel}</p>
+                        <p className="mt-1 text-xs text-slate-500">{mobilePaymentAmountLabel}</p>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {!loading && circle && (
+                <div className="hidden gap-4 md:grid md:grid-cols-2 xl:grid-cols-4">
                   <div className={mutedPanelClass}>
                     <p className={sectionEyebrowClass}>Contribution</p>
                     <div className="mt-3 text-lg font-semibold text-slate-950">
@@ -4723,8 +4824,8 @@ export default function ContributeToCircle() {
                 </svg>
               </div>
             ) : circle ? (
-              <div className="space-y-6 bg-stone-50/60 px-4 py-6 sm:px-6 sm:py-8">
-                <div className={sectionCardClass}>
+              <div className="space-y-6 bg-stone-50/60 px-3 py-5 sm:px-6 sm:py-8">
+                <div className={sectionCardClass} ref={(element) => setContributeSectionRef('wallet', element)}>
                   <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <p className={sectionEyebrowClass}>Wallet</p>
@@ -4782,7 +4883,7 @@ export default function ContributeToCircle() {
                   </div>
                 </div>
 
-                <div className={sectionCardClass}>
+                <div className={sectionCardClass} ref={(element) => setContributeSectionRef('circle', element)}>
                   <div className="mb-5">
                     <p className={sectionEyebrowClass}>Circle Overview</p>
                     <h3 className={`${sectionTitleClass} mt-2`}>Circle Details</h3>
@@ -4900,9 +5001,9 @@ export default function ContributeToCircle() {
                         </button>
                       </div>
 
-                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                         {(fetchingSuiBalance || custodySuiBalance !== null) && (
-                          <div className="rounded-[20px] border border-stone-200 bg-white p-4">
+                          <div className="rounded-[20px] border border-stone-200 bg-white p-3 sm:p-4">
                             <p className={sectionEyebrowClass}>SUI</p>
                             {fetchingSuiBalance ? (
                               <div className="mt-3 h-6 w-32 animate-pulse rounded bg-stone-200"></div>
@@ -4932,7 +5033,7 @@ export default function ContributeToCircle() {
                         )}
 
                         {(loadingStablecoinBalance || custodyStablecoinBalance !== null) && (
-                          <div className="rounded-[20px] border border-stone-200 bg-white p-4">
+                          <div className="rounded-[20px] border border-stone-200 bg-white p-3 sm:p-4">
                             <p className={sectionEyebrowClass}>USDC</p>
                             {loadingStablecoinBalance ? (
                               <div className="mt-3 h-6 w-32 animate-pulse rounded bg-stone-200"></div>

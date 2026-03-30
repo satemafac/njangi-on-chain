@@ -236,6 +236,7 @@ const socialLinkClass =
 export default function Home() {
   const router = useRouter();
   const { account } = useAuth();
+  const [isAuthDialogOpen, setIsAuthDialogOpen] = useState(false);
   const [openFaqItems, setOpenFaqItems] = useState<Record<string, boolean>>({
     'what-is-njangi': true,
   });
@@ -502,6 +503,8 @@ export default function Home() {
   const shellCardClass =
     'rounded-[30px] border border-[#ddd5c9] bg-white/88 shadow-[0_30px_90px_-62px_rgba(15,23,42,0.42)] backdrop-blur';
   const mutedCardClass = 'rounded-[24px] border border-[#e9e1d6] bg-[#fbfaf7]';
+  const topNavPrimaryActionClass =
+    'inline-flex items-center gap-2 rounded-full bg-[#1d2533] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_18px_44px_-34px_rgba(15,23,42,0.45)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#101723]';
 
   return (
     <>
@@ -710,6 +713,51 @@ export default function Home() {
           </Dialog.Portal>
         </Dialog.Root>
 
+        <Dialog.Root open={isAuthDialogOpen} onOpenChange={setIsAuthDialogOpen}>
+          <Dialog.Portal>
+            <Dialog.Overlay className="fixed inset-0 z-50 bg-[#14161c]/45 backdrop-blur-sm" />
+            <Dialog.Content
+              className={`fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 -translate-y-1/2 rounded-[28px] border border-[#dfd6ca] bg-[#fbfaf7] p-5 shadow-[0_28px_80px_-40px_rgba(15,23,42,0.45)] sm:p-7 ${bodyFont.className}`}
+            >
+              <div className="pr-10">
+                <Dialog.Title className="text-xl font-semibold tracking-[-0.03em] text-[#171923]">
+                  Sign in with a familiar account
+                </Dialog.Title>
+                <Dialog.Description className="mt-3 text-sm leading-6 text-[#5d6674]">
+                  Use Google, Facebook, or Apple with zkLogin. Wallet creation
+                  happens in the background so you can enter the app without a
+                  separate crypto onboarding step.
+                </Dialog.Description>
+              </div>
+
+              <div className={`${mutedCardClass} mt-6 p-4 sm:p-5`}>
+                <LoginButton variant="landing" />
+              </div>
+
+              <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-[#667085]">
+                <span className="inline-flex items-center gap-2">
+                  <BadgeCheck className="h-4 w-4 text-[#71839a]" />
+                  No seed phrase required to begin
+                </span>
+                <span className="inline-flex items-center gap-2">
+                  <BadgeCheck className="h-4 w-4 text-[#71839a]" />
+                  Built for member-run circles, not generic accounts
+                </span>
+              </div>
+
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  className="absolute right-5 top-5 rounded-full border border-[#e5ddd2] bg-white p-2 text-[#667085] transition-colors duration-200 hover:text-[#171923]"
+                >
+                  <X className="h-4 w-4" />
+                  <span className="sr-only">Close sign-in options</span>
+                </button>
+              </Dialog.Close>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+
         <div className="relative">
           <header className="border-b border-[#e6ddd1]/90">
             <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
@@ -780,6 +828,22 @@ export default function Home() {
                     <CircleDot className="h-4 w-4 text-[#6b7b92]" />
                     Viewing {currentNetworkName}
                   </div>
+
+                  {account ? (
+                    <Link href="/dashboard" className={topNavPrimaryActionClass}>
+                      Open dashboard
+                      <ArrowRight className="h-4 w-4" />
+                    </Link>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setIsAuthDialogOpen(true)}
+                      className={topNavPrimaryActionClass}
+                    >
+                      Log in
+                      <ArrowRight className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

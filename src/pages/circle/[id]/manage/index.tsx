@@ -1,10 +1,11 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 import { SuiClient, SuiEvent } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
 import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle, Edit3, Users, Crown, RefreshCw } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
+import * as Dialog from '@radix-ui/react-dialog';
 import { getCircleConfigFieldsFromDynamicFields } from '@/lib/circle-config';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
@@ -72,6 +73,8 @@ interface Member {
   depositBalanceRaw?: bigint;
   lastContributionRaw?: bigint;
 }
+
+type ManageSectionKey = 'overview' | 'members' | 'approvals' | 'invite' | 'actions' | 'tools';
 
 // Debug logging utility
 const DEBUG = process.env.NODE_ENV === 'development';
@@ -670,6 +673,16 @@ export default function ManageCircle() {
   const [selectedMembersForPayout, setSelectedMembersForPayout] = useState<Set<string>>(new Set());
   const [isProcessingPayout, setIsProcessingPayout] = useState(false);
   const [payoutProgress, setPayoutProgress] = useState<{current: number, total: number}>({current: 0, total: 0});
+  const [isMobileOverviewSheetOpen, setIsMobileOverviewSheetOpen] = useState(false);
+  const [selectedMobileMember, setSelectedMobileMember] = useState<Member | null>(null);
+  const manageSectionRefs = useRef<Record<ManageSectionKey, HTMLElement | null>>({
+    overview: null,
+    members: null,
+    approvals: null,
+    invite: null,
+    actions: null,
+    tools: null,
+  });
 
   const [emberSourceAsset, setEmberSourceAsset] = useState<EmberSourceAsset>('SUI_USDE');
   const [emberDepositAmount, setEmberDepositAmount] = useState('');
@@ -1856,6 +1869,73 @@ export default function ManageCircle() {
     };
   };
 
+  const getMemberContributionState = useCallback((member: Member): {
+    label: string;
+    tone: 'stone' | 'amber' | 'emerald' | 'sky';
+    detail: string;
+    isRecipient: boolean;
+  } => {
+    if (!circle || !circle.isActive || contributionStatus.currentCycle <= 0) {
+      return {
+        label: member.depositPaid ? 'Waiting for cycle' : 'Deposit pending',
+        tone: member.depositPaid ? 'stone' : 'amber',
+        detail: member.depositPaid ? 'Contribution tracking starts after activation.' : 'Member must settle the deposit first.',
+        isRecipient: false,
+      };
+    }
+
+    const currentRecipient = contributionStatus.currentPosition !== null && contributionStatus.currentPosition !== undefined
+      ? contributionStatus.activeMembersInRotation[contributionStatus.currentPosition] || null
+      : null;
+
+    if (currentRecipient === member.address) {
+      return {
+        label: `Receiving payout`,
+        tone: 'sky',
+        detail: `Current cycle ${contributionStatus.currentCycle} recipient.`,
+        isRecipient: true,
+      };
+    }
+
+    if (contributionStatus.contributedMembers.has(member.address)) {
+      return {
+        label: 'Contributed',
+        tone: 'emerald',
+        detail: `Contribution recorded for cycle ${contributionStatus.currentCycle}.`,
+        isRecipient: false,
+      };
+    }
+
+    if (contributionStatus.activeMembersInRotation.includes(member.address)) {
+      return {
+        label: 'Pending contribution',
+        tone: 'amber',
+        detail: `Still expected to contribute in cycle ${contributionStatus.currentCycle}.`,
+        isRecipient: false,
+      };
+    }
+
+    return {
+      label: member.depositPaid ? 'Out of rotation' : 'Deposit pending',
+      tone: member.depositPaid ? 'stone' : 'amber',
+      detail: member.depositPaid ? 'Not participating in the active rotation yet.' : 'Member must settle the deposit first.',
+      isRecipient: false,
+    };
+  }, [circle, contributionStatus]);
+
+  const getContributionToneClasses = useCallback((tone: 'stone' | 'amber' | 'emerald' | 'sky') => {
+    if (tone === 'emerald') {
+      return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+    }
+    if (tone === 'amber') {
+      return 'border-amber-200 bg-amber-50 text-amber-700';
+    }
+    if (tone === 'sky') {
+      return 'border-sky-200 bg-sky-50 text-sky-700';
+    }
+    return 'border-stone-200 bg-stone-100 text-slate-600';
+  }, []);
+
   const handleJoinRequest = async (request: JoinRequest, approve: boolean) => {
     try {
       console.log(`[ManagePage] ${approve ? 'Approving' : 'Rejecting'} join request for user ${request.user_address} in circle ${request.circle_id}`);
@@ -2667,10 +2747,33 @@ export default function ManageCircle() {
     }
   };
 
+  const copyPlainText = useCallback(async (text: string, successMessage: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(successMessage);
+    } catch (err: unknown) {
+      console.error('Failed to copy:', err);
+      toast.error('Failed to copy to clipboard');
+    }
+  }, []);
+
   const shortenId = (id: string) => {
     if (!id) return '';
     return `${id.slice(0, 10)}...${id.slice(-8)}`;
   };
+
+  const setManageSectionRef = useCallback((key: ManageSectionKey, element: HTMLElement | null) => {
+    manageSectionRefs.current[key] = element;
+  }, []);
+
+  const scrollToManageSection = useCallback((key: ManageSectionKey) => {
+    window.requestAnimationFrame(() => {
+      manageSectionRefs.current[key]?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
+  }, []);
 
   // Circle-level routing policy toggle persisted on-chain.
   // We currently reuse the existing `toggleAutoSwap` endpoint for this flag.
@@ -3071,22 +3174,22 @@ export default function ManageCircle() {
 
     
     return (
-      <div className="bg-white rounded-lg shadow-md overflow-hidden">
-        <div className="bg-blue-50 px-4 py-3 border-b border-blue-100">
+      <div className="overflow-hidden rounded-[22px] border border-stone-200 bg-white">
+        <div className="border-b border-blue-100 bg-blue-50 px-3 py-3 sm:px-4">
           <h3 className="text-lg font-semibold text-blue-800">Circle Token Routing Settings</h3>
           <p className="text-sm text-blue-600">Set one circle-wide token mode for active-cycle contributions and payouts. Once a cycle is active, this mode is locked until cycle completion and payouts finish.</p>
         </div>
         
-        <div className="p-4">
+        <div className="p-3 sm:p-4">
           {!circle.custody?.walletId ? (
-            <div className="text-center p-4 text-gray-500">
+            <div className="rounded-[20px] border border-stone-200 bg-stone-50/80 p-4 text-center text-gray-500">
               <p>Custody wallet information not available</p>
             </div>
           ) : (
-            <div className="space-y-6">
+            <div className="space-y-5">
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
                     <h4 className="font-medium text-gray-800">Use SUI For Active Circle</h4>
                     <p className="text-sm text-gray-500">If enabled, all active-cycle contributions and payouts run in SUI for all members. This setting cannot be changed mid-cycle.</p>
                   </div>
@@ -3106,14 +3209,14 @@ export default function ManageCircle() {
                 </div>
 
                 {isTokenModeLockedForActiveCycle && (
-                  <div className="bg-amber-50 p-3 rounded-lg border border-amber-200">
+                  <div className="rounded-[18px] border border-amber-200 bg-amber-50 p-3">
                     <p className="text-sm text-amber-700">
                       <strong>Locked:</strong> Token mode cannot be changed while cycle {circle.currentCycle} is active. Update it after the cycle completes and payouts are done.
                     </p>
                   </div>
                 )}
                 
-                <div className="bg-yellow-50 p-3 rounded-lg border border-yellow-200">
+                <div className="rounded-[18px] border border-yellow-200 bg-yellow-50 p-3">
                   <p className="text-sm text-yellow-700">
                     <strong>Note:</strong> This setting applies to every member in the circle.
                     Enabling SUI mode increases exposure to token price volatility.
@@ -3121,13 +3224,13 @@ export default function ManageCircle() {
                 </div>
                 
                 {circle.custody && (
-                  <div className="mt-4 border-t border-gray-100 pt-4">
-                    <div className="flex justify-between items-center mb-3">
+                  <div className="mt-4 rounded-[22px] border border-stone-200 bg-stone-50/80 p-3 sm:p-4">
+                    <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <h5 className="font-medium text-gray-700">Wallet Balances</h5>
                       <button 
                         onClick={refreshAllBalances}
                         disabled={fetchingSuiBalance || fetchingUsdcBalance}
-                        className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-600 py-1 px-2 rounded flex items-center transition-colors disabled:opacity-50"
+                        className="inline-flex w-full items-center justify-center rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-600 transition-colors hover:bg-indigo-100 disabled:opacity-50 sm:w-auto"
                       >
                         {fetchingSuiBalance || fetchingUsdcBalance ? (
                           <span className="flex items-center">
@@ -3148,16 +3251,16 @@ export default function ManageCircle() {
                       </button>
                     </div>
 
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-1 gap-2 sm:gap-3 md:grid-cols-2">
+                        <div className="rounded-[18px] border border-gray-100 bg-gray-50 p-3">
                           <p className="text-xs text-gray-500 mb-1">USDC/SUI Value Ratio</p>
                           <p className="text-sm font-semibold text-gray-800">
                             {usdcToSuiValueRatio !== null ? `${usdcToSuiValueRatio.toFixed(2)}x` : 'USDC-only treasury'}
                           </p>
                           <p className="text-xs text-gray-500 mt-1">USDC share: {usdcTreasuryShare.toFixed(1)}%</p>
                         </div>
-                        <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                        <div className="rounded-[18px] border border-gray-100 bg-gray-50 p-3">
                           <p className="text-xs text-gray-500 mb-1">Treasury Health</p>
                           <div className="flex items-center gap-2">
                             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${treasuryHealth.className}`}>
@@ -3169,9 +3272,9 @@ export default function ManageCircle() {
                       </div>
 
                       {/* USDC Balance Section (Primary) */}
-                      <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                        <div className="flex justify-between items-start mb-3">
-                          <div>
+                      <div className="rounded-[20px] border border-blue-200 bg-blue-50 p-3 sm:p-4">
+                        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0">
                             <p className="text-xs font-semibold text-blue-700 tracking-wide">USDC (PRIMARY)</p>
                             <p className="text-3xl font-bold text-blue-900 leading-tight">
                               {formatUSD(usdcTotalBalance)}
@@ -3194,26 +3297,26 @@ export default function ManageCircle() {
                                                (usdcSecurityDepositBalance !== null && usdcSecurityDepositBalance > 0)) && (
                           <div className="space-y-2">
                             {usdcContributionBalance !== null && usdcContributionBalance > 0 && (
-                              <div className="flex items-center">
+                              <div className="flex flex-wrap items-center gap-2">
                                 <div className="w-3 h-3 bg-green-300 rounded-sm mr-2"></div>
                                 <span className="text-sm text-gray-700">
                                   {formatUSD(usdcContributionBalance)}
                                   {contributionLocalDisplay && ` (~= ${contributionLocalDisplay})`}
                                 </span>
-                                <span className="ml-2 px-1.5 py-0.5 bg-green-100 text-green-800 text-xs font-medium rounded-full">
+                                <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-800">
                                   Contributions
                                 </span>
                               </div>
                             )}
 
                             {usdcSecurityDepositBalance !== null && usdcSecurityDepositBalance > 0 && (
-                              <div className="flex items-center">
+                              <div className="flex flex-wrap items-center gap-2">
                                 <div className="w-3 h-3 bg-amber-300 rounded-sm mr-2"></div>
                                 <span className="text-sm text-gray-700">
                                   {formatUSD(usdcSecurityDepositBalance)}
                                   {securityDepositLocalDisplay && ` (~= ${securityDepositLocalDisplay})`}
                                 </span>
-                                <span className="ml-2 px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs font-medium rounded-full">
+                                <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800">
                                   Security Deposits
                                 </span>
                               </div>
@@ -3226,7 +3329,7 @@ export default function ManageCircle() {
                           <p className="text-sm text-gray-500 mt-1">No USDC balances available</p>
                         )}
 
-                        <div className="mt-3 p-3 bg-white rounded-lg border border-blue-100">
+                        <div className="mt-3 rounded-[18px] border border-blue-100 bg-white p-3">
                           <div className="flex justify-between items-center mb-2">
                             <p className="text-xs font-semibold text-blue-700">USDC Contribution Trend</p>
                             <p className="text-xs text-blue-700">{usdcContributionProgress.toFixed(1)}%</p>
@@ -3237,7 +3340,7 @@ export default function ManageCircle() {
                               style={{ width: `${usdcContributionProgress}%` }}
                             />
                           </div>
-                          <div className="mt-2 flex justify-between text-xs text-gray-500">
+                          <div className="mt-2 flex flex-col gap-1 text-xs text-gray-500 sm:flex-row sm:items-center sm:justify-between">
                             <span>{formatUSD(usdcContributedThisCycle)} tracked</span>
                             <span>
                               {expectedCycleUsdcContributions > 0
@@ -3249,9 +3352,9 @@ export default function ManageCircle() {
                       </div>
 
                       {/* SUI Balance Section */}
-                      <div className="p-3 bg-gray-50 rounded-lg">
-                        <div className="flex justify-between items-center mb-2">
-                          <div>
+                      <div className="rounded-[20px] bg-gray-50 p-3">
+                        <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0">
                             <p className="text-xs text-gray-500 font-medium">SUI</p>
                             <p className="text-xs text-gray-500">
                               USD equivalent at {formatUSD(suiPrice)} / SUI: {formatUSD(suiUsdEquivalent)}
@@ -3270,32 +3373,32 @@ export default function ManageCircle() {
                                                (suiSecurityDepositBalance !== null && suiSecurityDepositBalance > 0)) && (
                           <div className="space-y-2">
                             {suiContributionBalance !== null && suiContributionBalance > 0 && (
-                              <div className="flex items-center">
+                              <div className="flex flex-wrap items-center gap-2">
                                 <div className="w-3 h-3 bg-green-300 rounded-sm mr-2"></div>
                                 <span className="text-sm text-gray-700">
                                   {suiContributionBalance.toFixed(6)} SUI
                                 </span>
-                                <span className="ml-2 px-1.5 py-0.5 bg-green-100 text-green-800 text-xs font-medium rounded-full">
+                                <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-800">
                                   Contributions
                                 </span>
                               </div>
                             )}
 
                             {suiSecurityDepositBalance !== null && suiSecurityDepositBalance > 0 && (
-                              <div className="flex items-center">
+                              <div className="flex flex-wrap items-center gap-2">
                                 <div className="w-3 h-3 bg-amber-300 rounded-sm mr-2"></div>
                                 <span className="text-sm text-gray-700">
                                   {suiSecurityDepositBalance.toFixed(6)} SUI
                                 </span>
-                                <span className="ml-2 px-1.5 py-0.5 bg-amber-100 text-amber-800 text-xs font-medium rounded-full">
+                                <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800">
                                   Security Deposits
                                 </span>
                               </div>
                             )}
 
                             {(circle?.custody?.suiUsdeBalance || circle?.custody?.emberReceiptBalance || circle?.custody?.emberHasPendingRedemption) && (
-                              <div className="mt-2 p-2 bg-gradient-to-r from-amber-50 to-indigo-50 rounded-md border border-amber-200">
-                                <div className="flex items-center justify-between">
+                              <div className="mt-2 rounded-md border border-amber-200 bg-gradient-to-r from-amber-50 to-indigo-50 p-2">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                   <div className="flex items-center">
                                     <div className="w-3 h-3 bg-gradient-to-r from-amber-400 to-indigo-400 rounded-full mr-2"></div>
                                     <span className="text-xs font-medium text-amber-900">
@@ -4366,16 +4469,16 @@ export default function ManageCircle() {
     };
     
     return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
-          <div className="bg-blue-600 text-white px-6 py-4">
+      <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 md:items-center md:p-4">
+        <div className="flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-[28px] bg-white shadow-xl md:max-h-[90vh] md:max-w-2xl md:rounded-xl">
+          <div className="bg-blue-600 px-5 py-4 text-white md:px-6">
             <h2 className="text-xl font-semibold">Manage Deposits</h2>
             <p className="text-blue-100 text-sm mt-1">
               Return paid deposits in one batch. Member removals stay in the Members table.
             </p>
           </div>
           
-          <div className="px-6 py-4 flex-grow overflow-y-auto">
+          <div className="flex-grow overflow-y-auto px-5 py-4 md:px-6">
             {eligibleMembers.length === 0 ? (
               <div className="text-center py-8">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4503,7 +4606,7 @@ export default function ManageCircle() {
             )}
           </div>
           
-          <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex justify-end space-x-3">
+          <div className="flex justify-end space-x-3 border-t border-gray-200 bg-gray-50 px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:px-6">
             <button
               className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
               onClick={() => {
@@ -4736,13 +4839,13 @@ export default function ManageCircle() {
   };
 
   const pageSurfaceClass =
-    'rounded-[32px] border border-stone-200 bg-white shadow-[0_24px_70px_-42px_rgba(15,23,42,0.32)]';
+    'rounded-[28px] border border-stone-200 bg-white shadow-[0_24px_70px_-42px_rgba(15,23,42,0.32)] sm:rounded-[32px]';
   const sectionCardClass =
-    'rounded-[28px] border border-stone-200 bg-white px-5 py-5 sm:px-6 sm:py-6 shadow-[0_18px_50px_-38px_rgba(15,23,42,0.24)]';
-  const mutedPanelClass = 'rounded-[24px] border border-stone-200 bg-stone-50/80 p-4 sm:p-5';
-  const panelCardClass = 'rounded-[24px] border border-stone-200 bg-stone-50/85 p-4 sm:p-5';
+    'rounded-[24px] border border-stone-200 bg-white px-4 py-4 shadow-[0_18px_50px_-38px_rgba(15,23,42,0.24)] sm:rounded-[28px] sm:px-6 sm:py-6';
+  const mutedPanelClass = 'rounded-[20px] border border-stone-200 bg-stone-50/80 p-3 sm:rounded-[24px] sm:p-5';
+  const panelCardClass = 'rounded-[20px] border border-stone-200 bg-stone-50/85 p-3 sm:rounded-[24px] sm:p-5';
   const tableCardClass =
-    'overflow-hidden rounded-[24px] border border-stone-200 bg-white shadow-[0_14px_34px_-26px_rgba(15,23,42,0.22)]';
+    'overflow-hidden rounded-[20px] border border-stone-200 bg-white shadow-[0_14px_34px_-26px_rgba(15,23,42,0.22)] sm:rounded-[24px]';
   const sectionTitleClass = 'text-xl font-semibold tracking-tight text-slate-950';
   const sectionEyebrowClass = 'text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500';
   const primaryActionClass =
@@ -4759,11 +4862,22 @@ export default function ManageCircle() {
     'inline-flex items-center justify-center rounded-full bg-red-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-300 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
   const subtleTagClass =
     'inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-3 py-1.5 text-sm font-medium text-slate-600';
+  const subtleIconButtonClass =
+    'inline-flex h-10 w-10 items-center justify-center rounded-full border border-stone-200 bg-white text-slate-500 transition hover:border-stone-300 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-stone-300 focus:ring-offset-2';
+  const dialogOverlayClass =
+    'fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-[2px]';
+  const mobileSheetContentClass =
+    'fixed inset-x-0 bottom-0 z-50 max-h-[85dvh] overflow-hidden rounded-t-[32px] border border-stone-200 bg-white shadow-[0_-24px_70px_-42px_rgba(15,23,42,0.4)] focus:outline-none md:hidden';
+  const mobileSheetBodyClass =
+    'max-h-[calc(85dvh-112px)] overflow-y-auto px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-5';
+  const mobileWorkspaceButtonClass =
+    'rounded-[18px] border border-stone-200 bg-white px-3 py-3 text-left transition hover:border-stone-300 hover:bg-stone-50 sm:rounded-[20px]';
+  const activeMembersCount = members.filter((member) => member.status === 'active').length;
   const circleStatusLabel = circle?.paused ? 'Paused' : circle?.isActive ? 'Active' : 'Inactive';
 
   return (
     <div className="min-h-screen bg-[#f6f3ee] text-slate-950 [background-image:radial-gradient(circle_at_top_left,_rgba(255,255,255,0.92),_transparent_30%),radial-gradient(circle_at_top_right,_rgba(226,232,240,0.7),_transparent_26%)]">
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <main className="mx-auto max-w-7xl px-3 py-6 sm:px-6 lg:px-8">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <button
             onClick={() => router.push('/dashboard')}
@@ -4779,7 +4893,7 @@ export default function ManageCircle() {
         </div>
 
         <div className={`${pageSurfaceClass} overflow-hidden`}>
-          <div className="border-b border-stone-200 px-6 py-6 sm:px-8 sm:py-8">
+          <div className="border-b border-stone-200 px-4 py-5 sm:px-8 sm:py-8">
             <div className="flex flex-col gap-6">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div>
@@ -4851,55 +4965,154 @@ export default function ManageCircle() {
               )}
             </div>
               {!loading && circle && (
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                  <div className={mutedPanelClass}>
-                    <p className={sectionEyebrowClass}>Members</p>
-                    <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
-                      {circle.currentMembers}/{circle.maxMembers}
-                    </p>
-                    <p className="mt-2 text-sm text-slate-500">Current capacity</p>
-                  </div>
-                  <div className={mutedPanelClass}>
-                    <p className={sectionEyebrowClass}>Status</p>
-                    <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
-                      {circleStatusLabel}
-                    </p>
-                    <p className="mt-2 text-sm text-slate-500">
-                      {circle.paused ? 'Cycle completed and awaiting admin action' : circle.isActive ? 'Contributions and payouts are live' : 'Setup is still in progress'}
-                    </p>
-                  </div>
-                  <div className={mutedPanelClass}>
-                    <p className={sectionEyebrowClass}>Contribution</p>
-                    <div className="mt-3 text-lg font-semibold text-slate-950">
-                      <CurrencyDisplay
-                        usd={circle.contributionAmountUsd}
-                        sui={circle.contributionAmount}
-                        currencyType={circle.currencyType}
-                        className="font-semibold"
-                      />
+                <>
+                  <div className="grid gap-3 md:hidden">
+                    <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-3 sm:p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className={sectionEyebrowClass}>Manage Sections</p>
+                          <p className="mt-1 text-sm text-slate-600">
+                            Jump straight to the task you need without walking the whole page.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => scrollToManageSection('members')}
+                          className="text-sm font-medium text-slate-600 transition hover:text-slate-950"
+                        >
+                          Open roster
+                        </button>
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => scrollToManageSection('overview')}
+                          className={mobileWorkspaceButtonClass}
+                        >
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Overview
+                          </p>
+                          <p className="mt-2 text-sm font-semibold text-slate-950">{circleStatusLabel}</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {circle.currentMembers}/{circle.maxMembers} members
+                          </p>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => scrollToManageSection('members')}
+                          className={mobileWorkspaceButtonClass}
+                        >
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Members
+                          </p>
+                          <p className="mt-2 text-sm font-semibold text-slate-950">{activeMembersCount} active</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {paidDepositMembers.length} deposits settled
+                          </p>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => scrollToManageSection(pendingRequests.length > 0 ? 'approvals' : 'invite')}
+                          className={mobileWorkspaceButtonClass}
+                        >
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Approvals
+                          </p>
+                          <p className="mt-2 text-sm font-semibold text-slate-950">{pendingRequests.length}</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {pendingRequests.length > 0 ? 'Requests waiting' : 'No pending requests'}
+                          </p>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => scrollToManageSection('actions')}
+                          className={mobileWorkspaceButtonClass}
+                        >
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Actions
+                          </p>
+                          <p className="mt-2 text-sm font-semibold text-slate-950">
+                            {circle.isActive ? 'Payout flow' : 'Activation setup'}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">Open admin controls</p>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => scrollToManageSection('invite')}
+                          className={mobileWorkspaceButtonClass}
+                        >
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Invite
+                          </p>
+                          <p className="mt-2 text-sm font-semibold text-slate-950">Share join link</p>
+                          <p className="mt-1 text-xs text-slate-500">Bring new members in</p>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => scrollToManageSection('tools')}
+                          className={mobileWorkspaceButtonClass}
+                        >
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Tools
+                          </p>
+                          <p className="mt-2 text-sm font-semibold text-slate-950">Routing and vault</p>
+                          <p className="mt-1 text-xs text-slate-500">Advanced admin setup</p>
+                        </button>
+                      </div>
                     </div>
-                    <p className="mt-2 text-sm text-slate-500">Per member, per cycle</p>
                   </div>
-                  <div className={mutedPanelClass}>
-                    <p className={sectionEyebrowClass}>Next payout</p>
-                    <p className="mt-3 text-lg font-semibold text-slate-950">
-                      {circle.isActive
-                        ? formatNextPayoutDate(circle.nextPayoutTime)
-                        : formatNextPayoutDate(calculatePotentialNextPayoutDate(circle.cycleLength, circle.cycleDay))}
-                    </p>
-                    <p className="mt-2 text-sm text-slate-500">
-                      {circle.isActive ? 'Scheduled cycle payout' : 'Estimated if activated now'}
-                    </p>
+
+                  <div className="hidden gap-4 md:grid md:grid-cols-2 xl:grid-cols-4">
+                    <div className={mutedPanelClass}>
+                      <p className={sectionEyebrowClass}>Members</p>
+                      <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
+                        {circle.currentMembers}/{circle.maxMembers}
+                      </p>
+                      <p className="mt-2 text-sm text-slate-500">Current capacity</p>
+                    </div>
+                    <div className={mutedPanelClass}>
+                      <p className={sectionEyebrowClass}>Status</p>
+                      <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">
+                        {circleStatusLabel}
+                      </p>
+                      <p className="mt-2 text-sm text-slate-500">
+                        {circle.paused ? 'Cycle completed and awaiting admin action' : circle.isActive ? 'Contributions and payouts are live' : 'Setup is still in progress'}
+                      </p>
+                    </div>
+                    <div className={mutedPanelClass}>
+                      <p className={sectionEyebrowClass}>Contribution</p>
+                      <div className="mt-3 text-lg font-semibold text-slate-950">
+                        <CurrencyDisplay
+                          usd={circle.contributionAmountUsd}
+                          sui={circle.contributionAmount}
+                          currencyType={circle.currencyType}
+                          className="font-semibold"
+                        />
+                      </div>
+                      <p className="mt-2 text-sm text-slate-500">Per member, per cycle</p>
+                    </div>
+                    <div className={mutedPanelClass}>
+                      <p className={sectionEyebrowClass}>Next payout</p>
+                      <p className="mt-3 text-lg font-semibold text-slate-950">
+                        {circle.isActive
+                          ? formatNextPayoutDate(circle.nextPayoutTime)
+                          : formatNextPayoutDate(calculatePotentialNextPayoutDate(circle.cycleLength, circle.cycleDay))}
+                      </p>
+                      <p className="mt-2 text-sm text-slate-500">
+                        {circle.isActive ? 'Scheduled cycle payout' : 'Estimated if activated now'}
+                      </p>
+                    </div>
                   </div>
-                </div>
+                </>
               )}
             </div>
             {loading ? (
               <ManageCircleSkeleton />
             ) : circle ? (
-              <div className="space-y-6 bg-stone-50/60 px-4 py-6 sm:px-6 sm:py-8">
+              <div className="space-y-6 bg-stone-50/60 px-3 py-5 sm:px-6 sm:py-8">
                 {/* Circle Details */}
-                <div className={sectionCardClass}>
+                <div className={sectionCardClass} ref={(element) => setManageSectionRef('overview', element)}>
                   <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <p className={sectionEyebrowClass}>Overview</p>
@@ -4927,7 +5140,89 @@ export default function ManageCircle() {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div className="md:hidden">
+                    <div className="rounded-[24px] border border-stone-200 bg-stone-50/80 p-3 sm:p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className={sectionEyebrowClass}>Circle snapshot</p>
+                          <p className="mt-2 text-xl font-semibold tracking-tight text-slate-950">
+                            {circleStatusLabel}
+                          </p>
+                          <p className="mt-1 text-sm text-slate-500">
+                            {circle.currentMembers}/{circle.maxMembers} members
+                          </p>
+                        </div>
+                        {circle.isActive && (
+                          <button
+                            type="button"
+                            onClick={() => fetchContributionStatus()}
+                            disabled={loadingContributions}
+                            className={subtleIconButtonClass}
+                            aria-label="Refresh contribution status"
+                          >
+                            <RefreshCw className={`h-4 w-4 ${loadingContributions ? 'animate-spin' : ''}`} />
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <div className="rounded-[18px] border border-stone-200 bg-white px-3 py-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Contribution
+                          </p>
+                          <div className="mt-2 text-sm font-semibold text-slate-950">
+                            <CurrencyDisplay
+                              usd={circle.contributionAmountUsd}
+                              sui={circle.contributionAmount}
+                              currencyType={circle.currencyType}
+                              className="font-semibold"
+                            />
+                          </div>
+                        </div>
+                        <div className="rounded-[18px] border border-stone-200 bg-white px-3 py-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Deposit
+                          </p>
+                          <div className="mt-2 text-sm font-semibold text-slate-950">
+                            <CurrencyDisplay
+                              usd={circle.securityDepositUsd}
+                              sui={circle.securityDeposit}
+                              currencyType={circle.currencyType}
+                              className="font-semibold"
+                            />
+                          </div>
+                        </div>
+                        <div className="rounded-[18px] border border-stone-200 bg-white px-3 py-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Next payout
+                          </p>
+                          <p className="mt-2 text-sm font-semibold text-slate-950">
+                            {circle.isActive
+                              ? formatNextPayoutDate(circle.nextPayoutTime)
+                              : formatNextPayoutDate(calculatePotentialNextPayoutDate(circle.cycleLength, circle.cycleDay))}
+                          </p>
+                        </div>
+                        <div className="rounded-[18px] border border-stone-200 bg-white px-3 py-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Capacity
+                          </p>
+                          <p className="mt-2 text-sm font-semibold text-slate-950">
+                            {circle.currentMembers}/{circle.maxMembers}
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setIsMobileOverviewSheetOpen(true)}
+                        className={`${secondaryActionClass} mt-4 w-full`}
+                      >
+                        View full setup
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="hidden grid-cols-1 gap-4 md:grid md:grid-cols-2">
                     <div className={panelCardClass}>
                       <p className={sectionEyebrowClass}>Circle Name</p>
                       <p className="mt-3 text-lg font-semibold tracking-tight text-slate-950">{circle.name}</p>
@@ -5086,7 +5381,7 @@ export default function ManageCircle() {
                                   {newMaxMembersValue} members maximum
                                 </span>
                                 <span className="text-xs text-slate-500">
-                                  Min {Math.max(3, circle.currentMembers)} · Max 20
+                                  Min {Math.max(3, circle.currentMembers)} / Max 20
                                 </span>
                               </div>
                               <input
@@ -5262,7 +5557,7 @@ export default function ManageCircle() {
                 )}
                 
                 {/* Members Management */}
-                <div className={sectionCardClass}>
+                <div className={sectionCardClass} ref={(element) => setManageSectionRef('members', element)}>
                   <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                       <p className={sectionEyebrowClass}>Roster</p>
@@ -5418,7 +5713,94 @@ export default function ManageCircle() {
                       />
                     </div>
                   ) : (
-                    <div className="overflow-x-auto -mx-4 sm:mx-0">
+                    <>
+                    <div className="space-y-3 md:hidden">
+                      {members.map((member) => {
+                        const contributionState = getMemberContributionState(member);
+                        const memberManagementAction = getMemberManagementAction(member);
+
+                        return (
+                          <div
+                            key={member.address}
+                            className="rounded-[22px] border border-stone-200 bg-white p-3 sm:p-4 shadow-[0_12px_30px_-24px_rgba(15,23,42,0.24)]"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="font-mono text-sm font-medium text-slate-950">
+                                    {shortenAddress(member.address)}
+                                  </p>
+                                  {member.address === circle?.admin && (
+                                    <span className="inline-flex rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
+                                      Admin
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="mt-1 text-xs text-slate-500">
+                                  Joined {member.joinDate ? formatDate(member.joinDate) : 'Unknown'}
+                                </p>
+                              </div>
+
+                              <div className="flex h-9 min-w-[2.25rem] items-center justify-center rounded-full bg-slate-950 px-3 text-sm font-semibold text-white">
+                                {member.position !== undefined ? member.position + 1 : '?'}
+                              </div>
+                            </div>
+
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <span className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${
+                                member.status === 'active'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : member.status === 'suspended'
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : 'bg-red-100 text-red-800'
+                              }`}>
+                                {member.status.charAt(0).toUpperCase() + member.status.slice(1)}
+                              </span>
+                              <span className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${
+                                member.depositPaid
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}>
+                                {member.depositPaid ? 'Deposit paid' : 'Deposit pending'}
+                              </span>
+                              <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium ${getContributionToneClasses(contributionState.tone)}`}>
+                                {contributionState.label}
+                              </span>
+                            </div>
+
+                            <div className="mt-4 grid grid-cols-2 gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedMobileMember(member)}
+                                className={secondaryActionClass}
+                              >
+                                Details
+                              </button>
+                              {memberManagementAction ? (
+                                <button
+                                  type="button"
+                                  onClick={memberManagementAction.onClick}
+                                  disabled={memberManagementAction.isDisabled}
+                                  className={`inline-flex items-center justify-center rounded-full border px-4 py-2.5 text-sm font-medium transition ${
+                                    memberManagementAction.isDisabled
+                                      ? 'cursor-not-allowed border-stone-200 bg-stone-100 text-stone-400'
+                                      : 'border-stone-300 bg-white text-slate-700 hover:border-stone-400 hover:bg-stone-50'
+                                  }`}
+                                >
+                                  {memberManagementAction.buttonText}
+                                </button>
+                              ) : (
+                                <div className="inline-flex items-center justify-center rounded-full border border-stone-200 bg-stone-50 px-4 py-2.5 text-sm font-medium text-slate-400">
+                                  No action
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="hidden overflow-x-auto -mx-4 md:block sm:mx-0">
                       <div className="inline-block min-w-full align-middle">
                         <div className={tableCardClass}>
                           <table className="min-w-full divide-y divide-stone-200">
@@ -5451,155 +5833,151 @@ export default function ManageCircle() {
                             </thead>
                             <tbody className="divide-y divide-stone-200 bg-white">
                               {members.map((member) => {
-                                const isRecipientThisCycle = contributionStatus.currentPosition !== null && 
-                                                             contributionStatus.currentPosition !== undefined && 
+                                const isRecipientThisCycle = contributionStatus.currentPosition !== null &&
+                                                             contributionStatus.currentPosition !== undefined &&
                                                              contributionStatus.activeMembersInRotation[contributionStatus.currentPosition] === member.address &&
-                                                             contributionStatus.currentCycle > 0; // Only if cycle is active
+                                                             contributionStatus.currentCycle > 0;
                                 const memberManagementAction = getMemberManagementAction(member);
 
                                 return (
-                                <tr key={member.address} className="transition-colors hover:bg-stone-50/70">
-                                  <td className="whitespace-nowrap py-3 pl-4 pr-3 text-xs font-medium text-slate-900 sm:pl-6 sm:text-sm">
-                                    <span className="flex flex-col sm:flex-row sm:items-center">
-                                      <span className="font-mono text-xs truncate max-w-[100px] sm:max-w-none">{shortenAddress(member.address)}</span>
-                                      {member.address === circle?.admin && (
-                                        <span className="ml-0 mt-1 inline-block rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-700 sm:ml-2 sm:mt-0">Admin</span>
-                                      )}
-                                    </span>
-                                  </td>
-                                  <td className="hidden whitespace-nowrap px-3 py-3 text-xs sm:table-cell">
-                                    <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
-                                      member.status === 'active' ? 'bg-emerald-100 text-emerald-800' : 
-                                      member.status === 'suspended' ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'
-                                    }`}>
-                                      {member.status.charAt(0).toUpperCase() + member.status.slice(1)}
-                                    </span>
-                                  </td>
-                                  <td className="whitespace-nowrap px-3 py-3 text-xs">
-                                    <Tooltip.Provider>
-                                      <Tooltip.Root>
-                                        <Tooltip.Trigger asChild>
-                                          <span className={`inline-flex items-center rounded-full p-1 ${member.depositPaid ? 'bg-emerald-100' : 'bg-amber-100'}`}>
-                                            {member.depositPaid ? 
-                                              <CheckCircle size={16} className="text-emerald-600" /> : 
-                                              <AlertTriangle size={16} className="text-amber-600" />
-                                            }
-                                          </span>
-                                        </Tooltip.Trigger>
-                                        <Tooltip.Portal>
-                                          <Tooltip.Content
-                                            className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
-                                            sideOffset={5}
-                                          >
-                                            {member.depositPaid ? 'Security Deposit Paid' : 'Security Deposit Pending'}
-                                            <Tooltip.Arrow className="fill-gray-800" />
-                                          </Tooltip.Content>
-                                        </Tooltip.Portal>
-                                      </Tooltip.Root>
-                                    </Tooltip.Provider>
-                                  </td>
-                                  
-                                  {/* Contribution Status Column */}
-                                  {circle && circle.isActive && contributionStatus.currentCycle > 0 && (
+                                  <tr key={member.address} className="transition-colors hover:bg-stone-50/70">
+                                    <td className="whitespace-nowrap py-3 pl-4 pr-3 text-xs font-medium text-slate-900 sm:pl-6 sm:text-sm">
+                                      <span className="flex flex-col sm:flex-row sm:items-center">
+                                        <span className="font-mono text-xs truncate max-w-[100px] sm:max-w-none">{shortenAddress(member.address)}</span>
+                                        {member.address === circle?.admin && (
+                                          <span className="ml-0 mt-1 inline-block rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-700 sm:ml-2 sm:mt-0">Admin</span>
+                                        )}
+                                      </span>
+                                    </td>
+                                    <td className="hidden whitespace-nowrap px-3 py-3 text-xs sm:table-cell">
+                                      <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
+                                        member.status === 'active' ? 'bg-emerald-100 text-emerald-800' :
+                                        member.status === 'suspended' ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'
+                                      }`}>
+                                        {member.status.charAt(0).toUpperCase() + member.status.slice(1)}
+                                      </span>
+                                    </td>
                                     <td className="whitespace-nowrap px-3 py-3 text-xs">
                                       <Tooltip.Provider>
-                                      <Tooltip.Root>
-                                        <Tooltip.Trigger asChild>
-                                          <span className={`inline-flex items-center p-1 rounded-full ${
-                                              isRecipientThisCycle 
-                                                ? 'bg-sky-100' 
-                                                : contributionStatus.contributedMembers.has(member.address) 
-                                                  ? 'bg-emerald-100' 
-                                                  : contributionStatus.activeMembersInRotation.includes(member.address)
-                                                    ? 'bg-amber-100'
-                                                    : 'bg-stone-100'
-                                            }`}>
-                                              {isRecipientThisCycle ? (
-                                                <Crown size={16} className="text-sky-600" />
-                                              ) : contributionStatus.contributedMembers.has(member.address) ? (
-                                                <CheckCircle size={16} className="text-emerald-600" />
-                                              ) : contributionStatus.activeMembersInRotation.includes(member.address) ? (
+                                        <Tooltip.Root>
+                                          <Tooltip.Trigger asChild>
+                                            <span className={`inline-flex items-center rounded-full p-1 ${member.depositPaid ? 'bg-emerald-100' : 'bg-amber-100'}`}>
+                                              {member.depositPaid ?
+                                                <CheckCircle size={16} className="text-emerald-600" /> :
                                                 <AlertTriangle size={16} className="text-amber-600" />
-                                              ) : (
-                                                <X size={16} className="text-stone-400" />
-                                              )}
+                                              }
                                             </span>
                                           </Tooltip.Trigger>
                                           <Tooltip.Portal>
                                             <Tooltip.Content
-                                              className="bg-gray-800 text-white px-2 py-1 rounded text-xs z-10"
+                                              className="bg-gray-800 text-white px-2 py-1 rounded text-xs"
                                               sideOffset={5}
                                             >
-                                              {isRecipientThisCycle
-                                                ? `Receiving Payout (Cycle ${contributionStatus.currentCycle})`
-                                                : contributionStatus.contributedMembers.has(member.address) 
-                                                ? `Contribution made for cycle ${contributionStatus.currentCycle}`
-                                                : contributionStatus.activeMembersInRotation.includes(member.address)
-                                                  ? `Contribution pending for cycle ${contributionStatus.currentCycle}`
-                                                  : 'Member not in active rotation or deposit not paid'
-                                              }
+                                              {member.depositPaid ? 'Security Deposit Paid' : 'Security Deposit Pending'}
                                               <Tooltip.Arrow className="fill-gray-800" />
                                             </Tooltip.Content>
                                           </Tooltip.Portal>
                                         </Tooltip.Root>
                                       </Tooltip.Provider>
                                     </td>
-                                  )}
-                                  
-                                  <td className="hidden whitespace-nowrap px-3 py-3 text-xs text-slate-500 sm:table-cell">
-                                    {member.joinDate ? formatDate(member.joinDate) : 'Unknown'}
-                                  </td>
-                                  <td className="whitespace-nowrap px-3 py-3 text-xs">
-                                    <div className="flex items-center">
-                                      {!isRotationOrderSet(members) ? (
-                                        // Display when rotation order is not set
-                                        <div className="flex items-center">
-                                          <div className="mr-2 flex h-6 w-6 items-center justify-center rounded-full bg-stone-100 text-stone-400 sm:h-8 sm:w-8">
-                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 sm:h-4 sm:w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                            </svg>
+
+                                    {circle && circle.isActive && contributionStatus.currentCycle > 0 && (
+                                      <td className="whitespace-nowrap px-3 py-3 text-xs">
+                                        <Tooltip.Provider>
+                                          <Tooltip.Root>
+                                            <Tooltip.Trigger asChild>
+                                              <span className={`inline-flex items-center p-1 rounded-full ${
+                                                isRecipientThisCycle
+                                                  ? 'bg-sky-100'
+                                                  : contributionStatus.contributedMembers.has(member.address)
+                                                    ? 'bg-emerald-100'
+                                                    : contributionStatus.activeMembersInRotation.includes(member.address)
+                                                      ? 'bg-amber-100'
+                                                      : 'bg-stone-100'
+                                              }`}>
+                                                {isRecipientThisCycle ? (
+                                                  <Crown size={16} className="text-sky-600" />
+                                                ) : contributionStatus.contributedMembers.has(member.address) ? (
+                                                  <CheckCircle size={16} className="text-emerald-600" />
+                                                ) : contributionStatus.activeMembersInRotation.includes(member.address) ? (
+                                                  <AlertTriangle size={16} className="text-amber-600" />
+                                                ) : (
+                                                  <X size={16} className="text-stone-400" />
+                                                )}
+                                              </span>
+                                            </Tooltip.Trigger>
+                                            <Tooltip.Portal>
+                                              <Tooltip.Content
+                                                className="bg-gray-800 text-white px-2 py-1 rounded text-xs z-10"
+                                                sideOffset={5}
+                                              >
+                                                {isRecipientThisCycle
+                                                  ? `Receiving Payout (Cycle ${contributionStatus.currentCycle})`
+                                                  : contributionStatus.contributedMembers.has(member.address)
+                                                    ? `Contribution made for cycle ${contributionStatus.currentCycle}`
+                                                    : contributionStatus.activeMembersInRotation.includes(member.address)
+                                                      ? `Contribution pending for cycle ${contributionStatus.currentCycle}`
+                                                      : 'Member not in active rotation or deposit not paid'
+                                                }
+                                                <Tooltip.Arrow className="fill-gray-800" />
+                                              </Tooltip.Content>
+                                            </Tooltip.Portal>
+                                          </Tooltip.Root>
+                                        </Tooltip.Provider>
+                                      </td>
+                                    )}
+
+                                    <td className="hidden whitespace-nowrap px-3 py-3 text-xs text-slate-500 sm:table-cell">
+                                      {member.joinDate ? formatDate(member.joinDate) : 'Unknown'}
+                                    </td>
+                                    <td className="whitespace-nowrap px-3 py-3 text-xs">
+                                      <div className="flex items-center">
+                                        {!isRotationOrderSet(members) ? (
+                                          <div className="flex items-center">
+                                            <div className="mr-2 flex h-6 w-6 items-center justify-center rounded-full bg-stone-100 text-stone-400 sm:h-8 sm:w-8">
+                                              <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 sm:h-4 sm:w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                              </svg>
+                                            </div>
+                                            <span className="text-amber-600 text-xs">Not set</span>
                                           </div>
-                                          <span className="text-amber-600 text-xs">Not set</span>
+                                        ) : (
+                                          <div className="flex items-center">
+                                            <div className="mr-2 flex h-6 w-6 items-center justify-center rounded-full bg-stone-900 text-white sm:h-8 sm:w-8">
+                                              {member.position !== undefined ? member.position + 1 : '?'}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </td>
+                                    <td className="relative whitespace-nowrap py-3 pl-3 pr-4 text-right text-xs font-medium sm:pr-6">
+                                      {memberManagementAction ? (
+                                        <div className="flex flex-col items-end gap-1">
+                                          <button
+                                            onClick={memberManagementAction.onClick}
+                                            disabled={memberManagementAction.isDisabled}
+                                            title={memberManagementAction.helperText}
+                                            className={`inline-flex items-center justify-center rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                                              memberManagementAction.isDisabled
+                                                ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'
+                                                : 'border-stone-300 bg-white text-slate-700 hover:border-stone-400 hover:bg-stone-50'
+                                            }`}
+                                          >
+                                            {memberManagementAction.buttonText}
+                                          </button>
+                                          <span
+                                            className={`hidden sm:block text-[11px] ${
+                                              memberManagementAction.isDisabled ? 'text-slate-400' : 'text-slate-500'
+                                            }`}
+                                          >
+                                            {memberManagementAction.helperText}
+                                          </span>
                                         </div>
                                       ) : (
-                                        // Display when rotation order is set properly
-                                        <div className="flex items-center">
-                                          <div className="mr-2 flex h-6 w-6 items-center justify-center rounded-full bg-stone-900 text-white sm:h-8 sm:w-8">
-                                            {member.position !== undefined ? member.position + 1 : '?'}
-                                          </div>
-                                          {/* Textual description of position removed as per request */}
-                                        </div>
+                                        <span className="text-xs text-slate-400">No action</span>
                                       )}
-                                    </div>
-                                  </td>
-                                  <td className="relative whitespace-nowrap py-3 pl-3 pr-4 text-right text-xs font-medium sm:pr-6">
-                                    {memberManagementAction ? (
-                                      <div className="flex flex-col items-end gap-1">
-                                        <button
-                                          onClick={memberManagementAction.onClick}
-                                          disabled={memberManagementAction.isDisabled}
-                                          title={memberManagementAction.helperText}
-                                          className={`inline-flex items-center justify-center rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
-                                            memberManagementAction.isDisabled
-                                              ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'
-                                              : 'border-stone-300 bg-white text-slate-700 hover:border-stone-400 hover:bg-stone-50'
-                                          }`}
-                                        >
-                                          {memberManagementAction.buttonText}
-                                        </button>
-                                        <span
-                                          className={`hidden sm:block text-[11px] ${
-                                            memberManagementAction.isDisabled ? 'text-slate-400' : 'text-slate-500'
-                                          }`}
-                                        >
-                                          {memberManagementAction.helperText}
-                                        </span>
-                                      </div>
-                                    ) : (
-                                      <span className="text-xs text-slate-400">No action</span>
-                                    )}
-                                  </td>
-                                </tr>
+                                    </td>
+                                  </tr>
                                 );
                               })}
                             </tbody>
@@ -5607,11 +5985,12 @@ export default function ManageCircle() {
                         </div>
                       </div>
                     </div>
+                    </>
                   )}
                 </div>
                 
                 {/* Invite Members */}
-                <div className={sectionCardClass}>
+                <div className={sectionCardClass} ref={(element) => setManageSectionRef('invite', element)}>
                   <p className={sectionEyebrowClass}>Invitations</p>
                   <h3 className={`${sectionTitleClass} mt-2`}>Invite New Members</h3>
                   <p className="mt-2 text-sm text-slate-500">
@@ -5640,7 +6019,7 @@ export default function ManageCircle() {
                 
                 {/* Pending Join Requests Section */}
                 {pendingRequests.length > 0 && (
-                  <div className={sectionCardClass}>
+                  <div className={sectionCardClass} ref={(element) => setManageSectionRef('approvals', element)}>
                     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                       <div>
                           <p className={sectionEyebrowClass}>Approvals</p>
@@ -5665,74 +6044,123 @@ export default function ManageCircle() {
                           Approve All ({pendingRequests.length})
                         </button>
                     </div>
-                      <div className="mt-5 overflow-x-auto -mx-3 sm:mx-0">
-                          <div className="inline-block min-w-full align-middle">
-                            <div className={tableCardClass}>
-                              <table className="min-w-full divide-y divide-stone-200">
-                                <thead className="bg-stone-50/80">
-                                  <tr>
-                                    <th scope="col" className="py-3 pl-4 pr-3 text-left text-xs font-semibold text-slate-900 sm:pl-6 sm:text-sm">
-                                      User
-                                    </th>
-                                    <th scope="col" className="hidden px-3 py-3 text-left text-xs font-semibold text-slate-900 sm:table-cell sm:text-sm">
-                                      Requested On
-                                    </th>
-                                    <th scope="col" className="relative py-3 pl-3 pr-4 sm:pr-6">
-                                      <span className="sr-only">Actions</span>
-                                    </th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-stone-200 bg-white">
-                                  {pendingRequests.map((request) => (
-                                    <tr key={`${request.circle_id}-${request.user_address}`} className="transition-colors hover:bg-stone-50/70">
-                                      <td className="px-4 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
-                                        <div className="flex flex-col sm:flex-row sm:items-center gap-1">
-                                          <div className="text-xs font-medium text-slate-900 sm:text-sm">{request.user_name || 'Unknown User'}</div>
-                                          <span className="font-mono text-xs text-slate-500">{shortenAddress(request.user_address)}</span>
-                                        </div>
-                                      </td>
-                                      <td className="hidden whitespace-nowrap px-3 py-3 text-xs text-slate-500 sm:table-cell">
-                                        {formatDate(request.created_at || new Date())}
-                                      </td>
-                                      <td className="relative whitespace-nowrap py-3 pl-3 pr-4 text-right text-xs font-medium sm:pr-6">
-                                        <div className="flex justify-end space-x-2">
-                                          <button
-                                            onClick={() => handleJoinRequest(request, true)}
-                                            className={`${successActionClass} px-3 py-2 text-xs ${isApproving ? 'cursor-not-allowed opacity-50' : ''}`}
-                                            disabled={isApproving}
-                                          >
-                                            {isApproving ? (
-                                              <svg className="animate-spin h-3 w-3 sm:h-4 sm:w-4 mr-1.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                              </svg>
-                                            ) : (
-                                              <Check className="w-3 h-3 sm:w-4 sm:h-4 mr-1.5" />
-                                            )}
-                                            <span className="hidden sm:inline">Approve</span>
-                                          </button>
-                                          <button
-                                            onClick={() => handleJoinRequest(request, false)}
-                                            className={`${dangerActionClass} px-3 py-2 text-xs`}
-                                            disabled={isApproving}
-                                          >
-                                            <X className="w-3 h-3 sm:w-4 sm:h-4 mr-1.5" />
-                                            <span className="hidden sm:inline">Reject</span>
-                                          </button>
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
+                      <div className="mt-5 space-y-3 md:hidden">
+                        {pendingRequests.map((request) => (
+                          <div
+                            key={`${request.circle_id}-${request.user_address}`}
+                            className="rounded-[22px] border border-stone-200 bg-white p-4 shadow-[0_12px_30px_-24px_rgba(15,23,42,0.24)]"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-sm font-semibold text-slate-950">
+                                  {request.user_name || 'Unknown User'}
+                                </p>
+                                <p className="mt-1 font-mono text-xs text-slate-500">
+                                  {shortenAddress(request.user_address)}
+                                </p>
+                              </div>
+                              <span className="rounded-full border border-stone-200 bg-stone-50 px-3 py-1 text-xs font-medium text-slate-600">
+                                {formatDate(request.created_at || new Date())}
+                              </span>
+                            </div>
+
+                            <div className="mt-4 grid grid-cols-2 gap-2">
+                              <button
+                                onClick={() => handleJoinRequest(request, true)}
+                                className={`${successActionClass} ${isApproving ? 'cursor-not-allowed opacity-50' : ''}`}
+                                disabled={isApproving}
+                              >
+                                {isApproving ? (
+                                  <svg className="animate-spin h-3 w-3 mr-1.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                  </svg>
+                                ) : (
+                                  <Check className="mr-1.5 h-3 w-3" />
+                                )}
+                                Approve
+                              </button>
+                              <button
+                                onClick={() => handleJoinRequest(request, false)}
+                                className={dangerActionClass}
+                                disabled={isApproving}
+                              >
+                                <X className="mr-1.5 h-3 w-3" />
+                                Reject
+                              </button>
                             </div>
                           </div>
+                        ))}
+                      </div>
+
+                      <div className="mt-5 hidden overflow-x-auto -mx-3 md:block sm:mx-0">
+                        <div className="inline-block min-w-full align-middle">
+                          <div className={tableCardClass}>
+                            <table className="min-w-full divide-y divide-stone-200">
+                              <thead className="bg-stone-50/80">
+                                <tr>
+                                  <th scope="col" className="py-3 pl-4 pr-3 text-left text-xs font-semibold text-slate-900 sm:pl-6 sm:text-sm">
+                                    User
+                                  </th>
+                                  <th scope="col" className="hidden px-3 py-3 text-left text-xs font-semibold text-slate-900 sm:table-cell sm:text-sm">
+                                    Requested On
+                                  </th>
+                                  <th scope="col" className="relative py-3 pl-3 pr-4 sm:pr-6">
+                                    <span className="sr-only">Actions</span>
+                                  </th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-stone-200 bg-white">
+                                {pendingRequests.map((request) => (
+                                  <tr key={`${request.circle_id}-${request.user_address}`} className="transition-colors hover:bg-stone-50/70">
+                                    <td className="px-4 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
+                                      <div className="flex flex-col sm:flex-row sm:items-center gap-1">
+                                        <div className="text-xs font-medium text-slate-900 sm:text-sm">{request.user_name || 'Unknown User'}</div>
+                                        <span className="font-mono text-xs text-slate-500">{shortenAddress(request.user_address)}</span>
+                                      </div>
+                                    </td>
+                                    <td className="hidden whitespace-nowrap px-3 py-3 text-xs text-slate-500 sm:table-cell">
+                                      {formatDate(request.created_at || new Date())}
+                                    </td>
+                                    <td className="relative whitespace-nowrap py-3 pl-3 pr-4 text-right text-xs font-medium sm:pr-6">
+                                      <div className="flex justify-end space-x-2">
+                                        <button
+                                          onClick={() => handleJoinRequest(request, true)}
+                                          className={`${successActionClass} px-3 py-2 text-xs ${isApproving ? 'cursor-not-allowed opacity-50' : ''}`}
+                                          disabled={isApproving}
+                                        >
+                                          {isApproving ? (
+                                            <svg className="animate-spin h-3 w-3 sm:h-4 sm:w-4 mr-1.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                            </svg>
+                                          ) : (
+                                            <Check className="w-3 h-3 sm:w-4 sm:h-4 mr-1.5" />
+                                          )}
+                                          <span className="hidden sm:inline">Approve</span>
+                                        </button>
+                                        <button
+                                          onClick={() => handleJoinRequest(request, false)}
+                                          className={`${dangerActionClass} px-3 py-2 text-xs`}
+                                          disabled={isApproving}
+                                        >
+                                          <X className="w-3 h-3 sm:w-4 sm:h-4 mr-1.5" />
+                                          <span className="hidden sm:inline">Reject</span>
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
+                      </div>
                   </div>
                 )}
                 
                 {/* Circle Management Actions */}
-                <div className={sectionCardClass}>
+                <div className={sectionCardClass} ref={(element) => setManageSectionRef('actions', element)}>
                   <div className="mb-5">
                     <p className={sectionEyebrowClass}>Operations</p>
                     <h3 className={`${sectionTitleClass} mt-2`}>Circle Management</h3>
@@ -6076,7 +6504,7 @@ export default function ManageCircle() {
                 </div>
                 
                 {/* Circle Token Routing Configuration */}
-                <div className={sectionCardClass}>
+                <div className={sectionCardClass} ref={(element) => setManageSectionRef('tools', element)}>
                   {circle && <CircleRoutingSettings 
                     circle={circle} 
                     totalLocalDisplay={manageCustodyUsdcTotalLocalDisplay}
@@ -6088,7 +6516,7 @@ export default function ManageCircle() {
                 {/* Ember Vault Operations */}
                 <div className={sectionCardClass}>
                   {circle && (
-                    <div className="rounded-[24px] border border-amber-200 bg-amber-50/50 p-5 sm:p-6">
+                    <div className="rounded-[24px] border border-amber-200 bg-amber-50/50 p-4 sm:p-6">
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div>
                           <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-700">Yield Routing</p>
@@ -6107,8 +6535,8 @@ export default function ManageCircle() {
                       </p>
 
                       <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-5">
-                        <div className="xl:col-span-3 rounded-[22px] border border-stone-200 bg-white p-4 sm:p-5">
-                          <div className="flex items-center justify-between gap-3">
+                        <div className="xl:col-span-3 rounded-[22px] border border-stone-200 bg-white p-3 sm:p-5">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <h4 className="text-base font-semibold text-slate-950">1) Convert and Deposit</h4>
                             <span className="rounded-full bg-stone-100 px-2 py-1 text-xs font-medium text-slate-700">
                               Guided Flow
@@ -6213,7 +6641,7 @@ export default function ManageCircle() {
                           )}
                         </div>
 
-                        <div className="xl:col-span-2 rounded-[22px] border border-stone-200 bg-white p-4 sm:p-5">
+                        <div className="xl:col-span-2 rounded-[22px] border border-stone-200 bg-white p-3 sm:p-5">
                           <h4 className="text-base font-semibold text-slate-950">2) Request Redemption</h4>
                           <p className="mt-1 text-xs text-slate-600 sm:text-sm">
                             Submit the shares to redeem. Processing is operator-driven; custody receives returned suiUSDe after settlement.
@@ -6376,6 +6804,404 @@ export default function ManageCircle() {
           </div>
         </div>
       </main>
+
+      <Dialog.Root open={isMobileOverviewSheetOpen} onOpenChange={setIsMobileOverviewSheetOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className={`${dialogOverlayClass} md:hidden`} />
+          <Dialog.Content className={mobileSheetContentClass}>
+            {circle && (
+              <>
+                <div className="flex justify-center pt-3">
+                  <div className="h-1.5 w-12 rounded-full bg-stone-300" />
+                </div>
+
+                <div className="flex items-start justify-between gap-4 px-5 pb-4 pt-4">
+                  <div className="min-w-0">
+                    <Dialog.Title className="text-xl font-semibold tracking-tight text-slate-950">
+                      Circle setup
+                    </Dialog.Title>
+                    <Dialog.Description className="mt-2 text-sm text-slate-500">
+                      Review cadence, contribution settings, and capacity without keeping the full section open.
+                    </Dialog.Description>
+                  </div>
+
+                  <Dialog.Close className={subtleIconButtonClass} aria-label="Close circle setup">
+                    <X className="h-4 w-4" />
+                  </Dialog.Close>
+                </div>
+
+                <div className={mobileSheetBodyClass}>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="rounded-[20px] border border-stone-200 bg-stone-50/80 p-4 sm:col-span-2">
+                      <p className={sectionEyebrowClass}>Circle Name</p>
+                      <p className="mt-2 text-lg font-semibold tracking-tight text-slate-950">{circle.name}</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <span className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${
+                          circleStatusLabel === 'Active'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : circleStatusLabel === 'Paused'
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-stone-100 text-slate-700'
+                        }`}>
+                          {circleStatusLabel}
+                        </span>
+                        <span className="inline-flex rounded-full border border-stone-200 bg-white px-3 py-1 text-xs font-medium text-slate-600">
+                          {circle.currentMembers}/{circle.maxMembers} members
+                        </span>
+                      </div>
+                    </div>
+
+                    {circle.isActive && (
+                      <div className="rounded-[20px] border border-stone-200 bg-white p-4 sm:col-span-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className={sectionEyebrowClass}>Contribution Progress</p>
+                          <button
+                            type="button"
+                            onClick={() => fetchContributionStatus()}
+                            disabled={loadingContributions}
+                            className="text-xs font-medium text-slate-600 transition hover:text-slate-950 disabled:text-stone-400"
+                          >
+                            {loadingContributions ? 'Refreshing...' : 'Refresh'}
+                          </button>
+                        </div>
+                        <p className="mt-3 text-sm font-medium text-slate-700">
+                          Cycle {contributionStatus.currentCycle || 0}
+                        </p>
+                        <div className="mt-3 h-2.5 w-full rounded-full bg-stone-200">
+                          <div
+                            className={`${allContributionsMadeThisCycle ? 'bg-emerald-500' : 'bg-slate-900'} h-2.5 rounded-full transition-all duration-500`}
+                            style={{
+                              width: `${loadingContributions
+                                ? '0'
+                                : contributionStatus.totalActiveInRotation <= 1
+                                  ? '0'
+                                  : `${(contributionStatus.contributedMembers.size / (contributionStatus.totalActiveInRotation - 1)) * 100}%`}`,
+                            }}
+                          ></div>
+                        </div>
+                        <p className="mt-2 text-xs text-slate-500">
+                          {loadingContributions
+                            ? 'Loading contribution status...'
+                            : contributionStatus.totalActiveInRotation > 1
+                              ? `${contributionStatus.contributedMembers.size}/${contributionStatus.totalActiveInRotation - 1} contributors recorded`
+                              : 'Waiting for more active members in the rotation.'}
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="rounded-[20px] border border-stone-200 bg-white p-4">
+                      <p className={sectionEyebrowClass}>Contribution</p>
+                      <div className="mt-2 text-sm font-semibold text-slate-950">
+                        <CurrencyDisplay
+                          usd={circle.contributionAmountUsd}
+                          sui={circle.contributionAmount}
+                          currencyType={circle.currencyType}
+                          className="font-semibold"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="rounded-[20px] border border-stone-200 bg-white p-4">
+                      <p className={sectionEyebrowClass}>Security Deposit</p>
+                      <div className="mt-2 text-sm font-semibold text-slate-950">
+                        <CurrencyDisplay
+                          usd={circle.securityDepositUsd}
+                          sui={circle.securityDeposit}
+                          currencyType={circle.currencyType}
+                          className="font-semibold"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="rounded-[20px] border border-stone-200 bg-white p-4 sm:col-span-2">
+                      <p className={sectionEyebrowClass}>
+                        {circle.isActive ? 'Next payout' : 'Potential next payout'}
+                      </p>
+                      <p className="mt-2 text-sm font-semibold text-slate-950">
+                        {circle.isActive
+                          ? formatNextPayoutDate(circle.nextPayoutTime)
+                          : formatNextPayoutDate(calculatePotentialNextPayoutDate(circle.cycleLength, circle.cycleDay))}
+                      </p>
+                    </div>
+
+                    <div className="rounded-[20px] border border-stone-200 bg-stone-50/80 p-4 sm:col-span-2">
+                      <div className="flex flex-col gap-3">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <p className={sectionEyebrowClass}>Capacity</p>
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <p className="text-sm font-semibold text-slate-950">
+                                {circle.currentMembers} / {circle.maxMembers} members
+                              </p>
+                              <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${
+                                getCircleSizeCategory(isEditingMaxMembers ? Number(newMaxMembersValue) : circle.maxMembers) === 'small'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : getCircleSizeCategory(isEditingMaxMembers ? Number(newMaxMembersValue) : circle.maxMembers) === 'medium'
+                                    ? 'bg-sky-100 text-sky-800'
+                                    : 'bg-violet-100 text-violet-800'
+                              }`}>
+                                {getCircleSizeCategory(isEditingMaxMembers ? Number(newMaxMembersValue) : circle.maxMembers) === 'small'
+                                  ? 'Small Circle'
+                                  : getCircleSizeCategory(isEditingMaxMembers ? Number(newMaxMembersValue) : circle.maxMembers) === 'medium'
+                                    ? 'Medium Circle'
+                                    : 'Large Circle'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {!circle.isActive && !isEditingMaxMembers && (
+                            <button
+                              type="button"
+                              onClick={() => setIsEditingMaxMembers(true)}
+                              className={`${secondaryActionClass} w-full sm:w-auto`}
+                            >
+                              <Edit3 className="mr-2 h-4 w-4" />
+                              Edit Max Capacity
+                            </button>
+                          )}
+                        </div>
+
+                        {isEditingMaxMembers ? (
+                          <div className="space-y-4">
+                            <div className={`flex flex-wrap gap-2 transition-opacity duration-300 ${animateMembers ? 'animate-pulse' : ''}`}>
+                              {[...Array(Number(newMaxMembersValue))].map((_, i) => (
+                                <div
+                                  key={i}
+                                  className={`flex h-8 w-8 items-center justify-center rounded-full ${
+                                    i < circle.currentMembers
+                                      ? 'border-2 border-slate-300 bg-white text-slate-700'
+                                      : 'border border-stone-200 bg-stone-100 text-stone-400'
+                                  } ${animateMembers ? 'animate-bounce' : ''}`}
+                                  style={{ animationDelay: `${i * 50}ms` }}
+                                >
+                                  <Users size={14} />
+                                </div>
+                              ))}
+                            </div>
+
+                            <div className="space-y-3">
+                              <div className="flex flex-wrap items-center justify-between gap-3">
+                                <span className="text-sm font-medium text-slate-700">
+                                  {newMaxMembersValue} members maximum
+                                </span>
+                                <span className="text-xs text-slate-500">
+                                  Min {Math.max(3, circle.currentMembers)} · Max 20
+                                </span>
+                              </div>
+                              <input
+                                type="range"
+                                min={Math.max(3, circle.currentMembers)}
+                                max={20}
+                                value={newMaxMembersValue}
+                                onChange={(e) => {
+                                  setNewMaxMembersValue(e.target.value);
+                                  setAnimateMembers(true);
+                                  setTimeout(() => setAnimateMembers(false), 600);
+                                }}
+                                className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-stone-200 accent-slate-900"
+                              />
+                            </div>
+
+                            <div className={`rounded-[18px] border p-3 text-sm ${
+                              getCircleSizeCategory(Number(newMaxMembersValue)) === 'small'
+                                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                                : getCircleSizeCategory(Number(newMaxMembersValue)) === 'medium'
+                                  ? 'border-sky-200 bg-sky-50 text-sky-800'
+                                  : 'border-violet-200 bg-violet-50 text-violet-800'
+                            }`}>
+                              <p className="font-medium">
+                                {recommendedRanges[getCircleSizeCategory(Number(newMaxMembersValue))].label}
+                              </p>
+                              <p className="mt-1">
+                                {recommendedRanges[getCircleSizeCategory(Number(newMaxMembersValue))].description}
+                              </p>
+                            </div>
+
+                            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsEditingMaxMembers(false);
+                                  setNewMaxMembersValue(circle.maxMembers);
+                                }}
+                                disabled={isSavingMaxMembers}
+                                className={secondaryActionClass}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleSaveMaxMembers}
+                                disabled={isSavingMaxMembers || Number(newMaxMembersValue) === circle.maxMembers}
+                                className={primaryActionClass}
+                              >
+                                {isSavingMaxMembers ? 'Saving...' : 'Save'}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          circle.isActive && (
+                            <p className="text-xs text-slate-500">
+                              Capacity cannot be changed while the circle is active.
+                            </p>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root
+        open={!!selectedMobileMember}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedMobileMember(null);
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className={`${dialogOverlayClass} md:hidden`} />
+          <Dialog.Content className={mobileSheetContentClass}>
+            {selectedMobileMember && (
+              <>
+                <div className="flex justify-center pt-3">
+                  <div className="h-1.5 w-12 rounded-full bg-stone-300" />
+                </div>
+
+                <div className="flex items-start justify-between gap-4 px-5 pb-4 pt-4">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {selectedMobileMember.address === circle?.admin && (
+                        <span className="inline-flex rounded-full bg-violet-100 px-3 py-1 text-xs font-medium text-violet-700">
+                          Admin
+                        </span>
+                      )}
+                      <span className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${
+                        selectedMobileMember.status === 'active'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : selectedMobileMember.status === 'suspended'
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-red-100 text-red-800'
+                      }`}>
+                        {selectedMobileMember.status.charAt(0).toUpperCase() + selectedMobileMember.status.slice(1)}
+                      </span>
+                    </div>
+                    <Dialog.Title className="mt-3 font-mono text-base font-semibold tracking-tight text-slate-950">
+                      {shortenAddress(selectedMobileMember.address)}
+                    </Dialog.Title>
+                    <Dialog.Description className="mt-2 text-sm text-slate-500">
+                      Member details, contribution state, and available admin action.
+                    </Dialog.Description>
+                  </div>
+
+                  <Dialog.Close className={subtleIconButtonClass} aria-label="Close member details">
+                    <X className="h-4 w-4" />
+                  </Dialog.Close>
+                </div>
+
+                <div className={mobileSheetBodyClass}>
+                  <div className="rounded-[20px] border border-stone-200 bg-stone-50/80 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className={sectionEyebrowClass}>Member Address</p>
+                        <p className="mt-2 break-all font-mono text-sm text-slate-950">
+                          {selectedMobileMember.address}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => copyPlainText(selectedMobileMember.address, 'Member address copied to clipboard!')}
+                        className={subtleIconButtonClass}
+                        aria-label="Copy member address"
+                      >
+                        <Copy className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    <div className="rounded-[20px] border border-stone-200 bg-white p-4">
+                      <p className={sectionEyebrowClass}>Deposit</p>
+                      <p className="mt-2 text-sm font-semibold text-slate-950">
+                        {selectedMobileMember.depositPaid ? 'Paid' : 'Pending'}
+                      </p>
+                    </div>
+                    <div className="rounded-[20px] border border-stone-200 bg-white p-4">
+                      <p className={sectionEyebrowClass}>Position</p>
+                      <p className="mt-2 text-sm font-semibold text-slate-950">
+                        {selectedMobileMember.position !== undefined ? selectedMobileMember.position + 1 : 'Not set'}
+                      </p>
+                    </div>
+                    <div className="col-span-2 rounded-[20px] border border-stone-200 bg-white p-4">
+                      <p className={sectionEyebrowClass}>Contribution</p>
+                      {(() => {
+                        const contributionState = getMemberContributionState(selectedMobileMember);
+                        return (
+                          <>
+                            <span className={`mt-2 inline-flex rounded-full border px-3 py-1 text-xs font-medium ${getContributionToneClasses(contributionState.tone)}`}>
+                              {contributionState.label}
+                            </span>
+                            <p className="mt-3 text-sm text-slate-600">
+                              {contributionState.detail}
+                            </p>
+                          </>
+                        );
+                      })()}
+                    </div>
+                    <div className="col-span-2 rounded-[20px] border border-stone-200 bg-white p-4">
+                      <p className={sectionEyebrowClass}>Joined</p>
+                      <p className="mt-2 text-sm font-semibold text-slate-950">
+                        {selectedMobileMember.joinDate ? formatDate(selectedMobileMember.joinDate) : 'Unknown'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {(() => {
+                    const memberManagementAction = getMemberManagementAction(selectedMobileMember);
+
+                    if (!memberManagementAction) {
+                      return (
+                        <div className="mt-4 rounded-[20px] border border-stone-200 bg-stone-50/80 p-4 text-sm text-slate-500">
+                          No member action is currently available for this record.
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="mt-4 rounded-[20px] border border-stone-200 bg-stone-50/80 p-4">
+                        <p className={sectionEyebrowClass}>Admin Action</p>
+                        <p className="mt-2 text-sm text-slate-600">
+                          {memberManagementAction.helperText}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedMobileMember(null);
+                            memberManagementAction.onClick();
+                          }}
+                          disabled={memberManagementAction.isDisabled}
+                          className={`mt-4 w-full ${
+                            memberManagementAction.isDisabled
+                              ? 'inline-flex cursor-not-allowed items-center justify-center rounded-full bg-stone-300 px-4 py-2.5 text-sm font-medium text-white/90'
+                              : primaryActionClass
+                          }`}
+                        >
+                          {memberManagementAction.buttonText}
+                        </button>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </>
+            )}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
       {/* Add the confirmation modal at the end of the component */}
       <ConfirmationModal

@@ -24,6 +24,7 @@ export interface CoinbaseOnrampLauncherProps {
   disabled?: boolean;
   className?: string;
   buttonLabel?: string;
+  uiVariant?: 'default' | 'refined';
   onSuccess?: (payload: CoinbaseOnrampLauncherSuccess) => void;
   onError?: (
     error: CoinbaseSessionClientError | CoinbaseApiErrorPayload | Error,
@@ -268,6 +269,7 @@ export default function CoinbaseOnrampLauncher({
   disabled = false,
   className,
   buttonLabel = 'Buy with Coinbase',
+  uiVariant = 'default',
   onSuccess,
   onError,
   onCancel,
@@ -463,30 +465,60 @@ export default function CoinbaseOnrampLauncher({
     onCancel?.();
   };
 
+  const isRefined = uiVariant === 'refined';
+  const launchPanelClass = isRefined
+    ? ''
+    : 'rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-cyan-50 p-3 shadow-sm';
+  const primaryButtonClass = isRefined
+    ? 'inline-flex w-full items-center justify-center rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-[0_18px_42px_-28px_rgba(15,23,42,0.55)] transition-all hover:-translate-y-0.5 hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 sm:rounded-2xl sm:py-3.5'
+    : 'inline-flex w-full items-center justify-center rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:from-blue-500 hover:to-indigo-500 hover:shadow-md disabled:cursor-not-allowed disabled:from-slate-300 disabled:to-slate-400';
+  const statusTextClass = isRefined
+    ? 'mt-3 text-xs font-medium text-slate-500'
+    : 'mt-2 text-xs font-medium text-blue-700';
+  const cancelButtonClass = isRefined
+    ? 'inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-stone-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-stone-50 sm:min-h-[46px] sm:rounded-2xl'
+    : 'inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50';
+  const retryButtonClass = isRefined
+    ? 'inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-stone-300 bg-stone-50 px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-[46px] sm:rounded-2xl'
+    : 'inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60';
+  const errorClass = isRefined
+    ? 'rounded-xl border border-red-200 bg-red-50/90 px-3 py-2.5 text-sm text-red-700 sm:rounded-2xl sm:px-4 sm:py-3'
+    : 'rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700';
+  const providerFlagNoticeClass = isRefined
+    ? 'rounded-xl border border-amber-200 bg-amber-50/90 px-3 py-2.5 text-sm text-amber-700 sm:rounded-2xl sm:px-4 sm:py-3'
+    : 'rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700';
+  const sessionTextClass = isRefined
+    ? 'text-[11px] text-slate-400'
+    : 'text-xs text-slate-500';
+
   return (
-    <div className={`space-y-3 ${className ?? ''}`}>
-      <div className="rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-cyan-50 p-3 shadow-sm">
+    <div
+      className={`${isRefined ? 'space-y-2.5 sm:space-y-3' : 'space-y-3'} ${
+        className ?? ''
+      }`.trim()}
+    >
+      <div className={launchPanelClass}>
         <button
           type="button"
           onClick={handleLaunch}
           disabled={isButtonDisabled}
-          className="inline-flex w-full items-center justify-center rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:from-blue-500 hover:to-indigo-500 hover:shadow-md disabled:cursor-not-allowed disabled:from-slate-300 disabled:to-slate-400"
+          className={primaryButtonClass}
         >
           {loading ? 'Setting up...' : buttonLabel}
         </button>
 
         {statusText && (
-          <p className="mt-2 text-xs font-medium text-blue-700" role="status">
+          <p className={statusTextClass} role="status">
             {statusText}
           </p>
         )}
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className={`flex flex-wrap gap-2 ${isRefined ? 'pt-0.5 sm:pt-1' : ''}`}>
         <button
           type="button"
           onClick={handleCancel}
-          className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+          className={cancelButtonClass}
         >
           Cancel
         </button>
@@ -496,7 +528,7 @@ export default function CoinbaseOnrampLauncher({
             type="button"
             onClick={handleRetry}
             disabled={loading}
-            className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+            className={retryButtonClass}
           >
             Retry
           </button>
@@ -504,19 +536,19 @@ export default function CoinbaseOnrampLauncher({
       </div>
 
       {effectiveError && (
-        <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+        <p className={errorClass} role="alert">
           {mapErrorMessage(effectiveError)}
         </p>
       )}
 
       {!isProviderEnabled && (
-        <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+        <p className={providerFlagNoticeClass}>
           Coinbase is disabled by provider flag.
         </p>
       )}
 
       {data?.channelId && (
-        <p className="text-xs text-slate-500">Session channel: {data.channelId}</p>
+        <p className={sessionTextClass}>Session channel: {data.channelId}</p>
       )}
     </div>
   );

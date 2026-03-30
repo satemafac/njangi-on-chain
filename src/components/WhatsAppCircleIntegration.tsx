@@ -308,8 +308,8 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   }
 
   return (
-    <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg p-4 border border-green-200">
-      <div className="flex items-center justify-between mb-4">
+    <div className="rounded-[22px] border border-green-200 bg-gradient-to-r from-green-50 to-emerald-50 p-3 sm:p-4">
+      <div className="mb-3 flex flex-col gap-2 sm:mb-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center space-x-2">
           <MessageCircle className="w-5 h-5 text-green-600" />
           <h3 className="font-semibold text-gray-900">WhatsApp Integration</h3>
@@ -324,7 +324,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
       {linkedStatus.isLinked ? (
         // Show linked status
         <div className="space-y-3">
-          <div className="bg-white rounded p-3 space-y-2">
+          <div className="space-y-2 rounded-[18px] border border-white/80 bg-white p-3 shadow-[0_10px_24px_-22px_rgba(15,23,42,0.28)]">
             <p className="text-sm text-gray-600">
               <strong>Link Type:</strong> {linkedStatus.linkType === 1 ? '📱 Individual' : '👥 Group'}
             </p>
@@ -380,7 +380,10 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
               Link to WhatsApp
             </button>
           ) : (
-            <form onSubmit={handleLinkCircle} className="space-y-3 bg-white p-3 rounded">
+            <form
+              onSubmit={handleLinkCircle}
+              className="space-y-3 rounded-[18px] border border-white/80 bg-white p-3 shadow-[0_10px_24px_-22px_rgba(15,23,42,0.28)] sm:p-4"
+            >
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Chat Type
@@ -426,18 +429,34 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
                     <style jsx global>{`
                       .phone-input-wrapper .PhoneInput {
                         display: flex;
-                        align-items: center;
-                        gap: 8px;
+                        flex-direction: column;
+                        align-items: stretch;
+                        gap: 10px;
+                      }
+                      @media (min-width: 640px) {
+                        .phone-input-wrapper .PhoneInput {
+                          flex-direction: row;
+                          align-items: center;
+                          gap: 8px;
+                        }
                       }
                       .phone-input-wrapper .PhoneInputCountry {
                         display: flex;
                         align-items: center;
+                        justify-content: space-between;
+                        width: 100%;
                         padding: 8px 12px;
                         background: #f9fafb;
                         border: 1px solid #d1d5db;
                         border-radius: 8px;
                         cursor: pointer;
                         transition: all 0.2s;
+                      }
+                      @media (min-width: 640px) {
+                        .phone-input-wrapper .PhoneInputCountry {
+                          justify-content: flex-start;
+                          width: auto;
+                        }
                       }
                       .phone-input-wrapper .PhoneInputCountry:hover {
                         background: #f3f4f6;
@@ -466,6 +485,8 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
                       }
                       .phone-input-wrapper .PhoneInputInput {
                         flex: 1;
+                        width: 100%;
+                        min-width: 0;
                         padding: 10px 14px;
                         border: 1px solid #d1d5db;
                         border-radius: 8px;
@@ -525,12 +546,12 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
                 )}
               </div>
 
-              <div className="bg-blue-50 border border-blue-200 p-2 rounded text-xs text-blue-700 space-y-1">
+              <div className="rounded-[16px] border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 space-y-1">
                 <p>💡 <strong>Tip:</strong> Circle admins will receive WhatsApp notifications for circle events.</p>
                 <p className="text-xs text-blue-600">Group ID formats: <code className="bg-blue-100 px-1 rounded">123456789-1234567890@g.us</code> or <code className="bg-blue-100 px-1 rounded">120363043968066561@g.us</code></p>
               </div>
 
-              <div className="flex space-x-2">
+              <div className="flex flex-col-reverse gap-2 sm:flex-row">
                 <button
                   type="submit"
                   disabled={linking || !phoneOrGroup.trim() || !!validationError}
