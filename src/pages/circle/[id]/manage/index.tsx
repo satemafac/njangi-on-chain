@@ -487,6 +487,7 @@ const parseMoveError = (error: string): { code: number; message: string } => {
                 case 21: return { code, message: 'Circle activation failed: Some members have not paid their security deposits yet.' };
                 case 22: return { code, message: 'Circle activation failed: The circle needs to have at least 3 members before activation.' }; // Updated based on Move code
                 case 54: return { code, message: 'Circle activation failed: The circle is already active.' }; // ECircleNotActive
+                case 71: return { code, message: 'Circle activation failed: Next in command must be an active non-admin member before the circle goes live.' };
                 default: return { code, message: `Activation Error ${code}: Operation failed.` };
             }
         }
@@ -535,7 +536,7 @@ const parseMoveError = (error: string): { code: number; message: string } => {
             case 65: return { code, message: 'Recovery proposal data is missing for this circle.' };
             case 66: return { code, message: 'The recovery deadline is invalid.' };
             case 67: return { code, message: 'This recovery state transition is not allowed.' };
-            case 68: return { code, message: 'Auto-release circles must keep a valid next-in-command wallet configured.' };
+            case 68: return { code, message: 'Auto-release circles need a next-in-command before activation and while active.' };
             default:
               break;
           }
@@ -3848,6 +3849,10 @@ export default function ManageCircle() {
   const canActivate = useMemo(() => {
     // 1. Check if we have a circle object
     if (!circle) return false;
+
+    if (loadingRecoveryStatus || !recoveryStatus) {
+      return false;
+    }
     
     // 2. Check if all members have paid their security deposits
     const depositsPaid = allDepositsPaid === true;
@@ -3857,6 +3862,14 @@ export default function ManageCircle() {
     
     // 4. Circle should have at least the minimum required members (3 according to Move contract)
     const hasMinimumMembers = circle.currentMembers >= 3;
+
+    const normalizedConfiguredDelegate = normalizeRecoveryDelegateAddress(recoveryStatus.nextInCommand ?? null);
+    const hasEligibleRecoveryDelegate =
+      !recoveryStatus.autoReleaseEnabled || members.some((member) =>
+        member.status === 'active'
+          && normalizeAddress(member.address) === normalizedConfiguredDelegate
+          && normalizeAddress(member.address) !== normalizeAddress(circle.admin),
+      );
     
     // 5. Circle should not already be active
     const notAlreadyActive = !circle.isActive;
@@ -3866,13 +3879,14 @@ export default function ManageCircle() {
       depositsPaid,
       rotationSet,
       hasMinimumMembers,
+      hasEligibleRecoveryDelegate,
       notAlreadyActive,
       currentMembers: circle.currentMembers,
     });
     
     // All conditions must be true
-    return depositsPaid && rotationSet && hasMinimumMembers && notAlreadyActive;
-  }, [circle, allDepositsPaid, members]);
+    return depositsPaid && rotationSet && hasMinimumMembers && hasEligibleRecoveryDelegate && notAlreadyActive;
+  }, [circle, allDepositsPaid, loadingRecoveryStatus, members, recoveryStatus]);
 
   // Add this function to debug member deposit status
   const debugMemberDeposits = () => {
@@ -4738,6 +4752,14 @@ export default function ManageCircle() {
   // Helper to get activation requirement message
   const getActivationRequirementMessage = () => {
     if (!circle) return "Circle data not loaded.";
+
+    if (loadingRecoveryStatus) {
+      return 'Recovery configuration is still loading.';
+    }
+
+    if (!recoveryStatus) {
+      return 'Recovery configuration could not be loaded. Refresh and try again.';
+    }
     
     if (circle.isActive) {
       return "Circle is already active.";
@@ -4745,6 +4767,41 @@ export default function ManageCircle() {
     
     if (circle.currentMembers < 3) {
       return `Need at least 3 members to activate (currently have ${circle.currentMembers}).`;
+    }
+
+    if (recoveryStatus.autoReleaseEnabled) {
+      const normalizedConfiguredDelegate = normalizeRecoveryDelegateAddress(recoveryStatus.nextInCommand ?? null);
+      const eligibleRecoveryMembers = members.filter((member) =>
+        member.status === 'active'
+          && normalizeAddress(member.address) !== normalizeAddress(circle.admin),
+      );
+      const delegateIsEligibleMember = eligibleRecoveryMembers.some((member) =>
+        normalizeAddress(member.address) === normalizedConfiguredDelegate,
+      );
+
+      if (!normalizedConfiguredDelegate) {
+        return 'Admin liveness fallback is enabled. Set a next in command before activation.';
+      }
+
+      if (!delegateIsEligibleMember) {
+        return (
+          <div>
+            <p>The next in command must be an active non-admin member before activation.</p>
+            {eligibleRecoveryMembers.length > 0 ? (
+              <>
+                <p className="mt-2 font-medium">Eligible members:</p>
+                <ul className="mt-1 list-disc pl-5 text-xs">
+                  {eligibleRecoveryMembers.map((member) => (
+                    <li key={member.address}>{shortenAddress(member.address)}</li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <p className="mt-2 text-xs">Approve members first, then assign one as next in command.</p>
+            )}
+          </div>
+        );
+      }
     }
     
     if (!allDepositsPaid) {
@@ -6494,7 +6551,9 @@ export default function ManageCircle() {
                                     ? 'This wallet gets a 24-hour exclusive response window after heartbeat expiry before member fallback opens.'
                                     : autoReleaseUi.delegateStatus === 'invalid'
                                       ? 'This wallet is configured but is no longer an eligible active member.'
-                                      : 'Auto-release circles must always keep a valid next-in-command wallet configured.'}
+                                      : circle?.isActive
+                                        ? 'Active auto-release circles must keep a valid next-in-command wallet configured.'
+                                        : 'Set a valid next-in-command before activating the circle.'}
                               </p>
                             </div>
                             {!isEditingRecoveryDelegate && (
@@ -6537,7 +6596,9 @@ export default function ManageCircle() {
                                     ? recoveryDelegateValidationError
                                     : normalizedRecoveryDelegateDraft
                                       ? `Normalized wallet: ${normalizedRecoveryDelegateDraft}`
-                                      : 'Required: auto-release circles must always keep a valid next-in-command wallet configured.'}
+                                      : circle?.isActive
+                                        ? 'Required: active auto-release circles must keep a valid next-in-command wallet configured.'
+                                        : 'Required before activation: choose an active non-admin member as next in command.'}
                                 </p>
                               </div>
 
@@ -6582,7 +6643,7 @@ export default function ManageCircle() {
                                   ? autoReleaseUi.delegateStatus === 'valid'
                                     ? 'If your heartbeat expires, this wallet gets a 24-hour exclusive recovery window before eligible active members can trigger.'
                                     : 'Because this delegate is no longer eligible, active non-admin members will become the fallback once the heartbeat expires.'
-                                  : 'Set a valid delegate before depending on the admin-liveness fallback path.'}
+                                  : 'Set a valid delegate before activating this circle so the admin-liveness fallback path is fully armed.'}
                               </p>
                             </div>
                           )}

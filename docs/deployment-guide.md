@@ -223,6 +223,7 @@ The deployment script automatically:
 - ✅ Updates `.env.local` with appropriate variables:
   - `NEXT_PUBLIC_TESTNET_PACKAGE_ID` (testnet)
   - `NEXT_PUBLIC_MAINNET_PACKAGE_ID` (mainnet)
+- ✅ Syncs the browser package-lineage mirror in `src/lib/circle-chain.ts`
 - ✅ Displays deployment summary
 
 **Manual verification:**
@@ -283,6 +284,42 @@ grep "PACKAGE_ID" ../.env.local
 # Deploy with debug output
 ./deploy.sh mainnet --debug --gas-budget 500000000
 ```
+
+## **Publish vs Upgrade Flow**
+
+Use the flows below consistently so app config stays aligned with the onchain package lineage.
+
+### **Fresh Publish**
+
+Use this when the package has never been published on the target network before.
+
+```bash
+cd move
+./build_and_test.sh --network=testnet
+```
+
+On success, the script now updates:
+- `.env.local`
+- `src/lib/circle-chain.ts`
+
+### **Upgrade Existing Package**
+
+Use this when `Published.toml` already has an entry for the active network. In that case, do not run a fresh `publish` again.
+
+```bash
+cd move
+sui client upgrade . \
+  --upgrade-capability <UPGRADE_CAPABILITY_ID> \
+  --gas-budget <GAS_BUDGET>
+```
+
+After a successful upgrade:
+- confirm `move/Published.toml` has the new `published-at`
+- update `.env.local` network package IDs
+- update `src/lib/circle-chain.ts` so `publishedAt` matches the new package and `originalId` preserves the package lineage root
+- redeploy app config, including Heroku vars if that environment serves the updated frontend
+
+The `build_and_test.sh` script will now warn when you hit an upgrade-only path, but the upgrade transaction itself is still executed separately with `sui client upgrade`.
 
 ### **Network Configuration Backup**
 

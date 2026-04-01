@@ -222,10 +222,6 @@ export function buildCreateCircleTx({
     if (autoReleaseDelayMs <= BigInt(minimumAutoReleaseDelayMs)) {
       throw new Error('Auto-release delay must be greater than the selected cycle length.');
     }
-
-    if (!nextInCommand) {
-      throw new Error('Next-in-command wallet address is required when auto-release is enabled.');
-    }
   }
 
   const tx = new Transaction();

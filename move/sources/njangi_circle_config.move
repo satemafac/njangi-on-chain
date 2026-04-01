@@ -117,7 +117,6 @@ module njangi::njangi_circle_config {
             auto_release_enabled,
             auto_release_delay_ms
         );
-        assert_auto_release_delegate_requirement(auto_release_enabled, &next_in_command);
         let current_time = clock::timestamp_ms(clock);
 
         CircleConfig {
@@ -526,7 +525,6 @@ module njangi::njangi_circle_config {
         if (config.auto_release_enabled) {
             let minimum_delay = min_auto_release_delay_ms(cycle_length);
             assert!(config.auto_release_delay_ms > minimum_delay, EInvalidAutoReleaseDelay);
-            assert_auto_release_delegate_requirement(config.auto_release_enabled, &config.next_in_command);
         };
         config.cycle_length = cycle_length;
         config.cycle_day = cycle_day;
@@ -538,7 +536,6 @@ module njangi::njangi_circle_config {
         auto_release_delay_ms: u64
     ) {
         let config = get_circle_config_mut(obj);
-        assert_auto_release_delegate_requirement(auto_release_enabled, &config.next_in_command);
         config.auto_release_enabled = auto_release_enabled;
         config.auto_release_delay_ms = normalize_auto_release_delay_ms(
             config.cycle_length,
@@ -549,7 +546,6 @@ module njangi::njangi_circle_config {
 
     public fun set_next_in_command(obj: &mut UID, next_in_command: Option<address>) {
         let config = get_circle_config_mut(obj);
-        assert_auto_release_delegate_requirement(config.auto_release_enabled, &next_in_command);
         config.next_in_command = next_in_command;
     }
 
@@ -741,14 +737,14 @@ module njangi::njangi_circle_config {
         auto_release_delay_ms
     }
 
-    fun has_required_auto_release_delegate(
+    public fun has_required_auto_release_delegate(
         auto_release_enabled: bool,
         next_in_command: &Option<address>
     ): bool {
         !auto_release_enabled || option::is_some(next_in_command)
     }
 
-    fun assert_auto_release_delegate_requirement(
+    public fun assert_auto_release_delegate_requirement(
         auto_release_enabled: bool,
         next_in_command: &Option<address>
     ) {
@@ -908,6 +904,37 @@ module njangi::njangi_circle_config {
         assert!(has_required_auto_release_delegate(false, &delegate), 9010);
         assert!(!has_required_auto_release_delegate(true, &no_delegate), 9011);
         assert!(has_required_auto_release_delegate(true, &delegate), 9012);
+    }
+
+    #[test]
+    fun test_create_circle_config_allows_missing_delegate_before_activation() {
+        let mut ctx = tx_context::dummy();
+        let clock = clock::create_for_testing(&mut ctx);
+
+        let config = create_circle_config(
+            1,
+            1,
+            string::utf8(b"USD"),
+            1,
+            1,
+            100,
+            100,
+            0,
+            1,
+            0,
+            0,
+            5,
+            false,
+            true,
+            core::ms_per_week() + 1,
+            option::none(),
+            &clock
+        );
+
+        assert!(config.auto_release_enabled, 9013);
+        assert!(option::is_none(&config.next_in_command), 9014);
+
+        clock::destroy_for_testing(clock);
     }
 
     #[test]

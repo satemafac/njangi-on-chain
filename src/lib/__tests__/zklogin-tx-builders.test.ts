@@ -70,16 +70,19 @@ describe('zklogin transaction builders', () => {
     ).toThrow('Auto-release delay must be greater than the selected cycle length.');
   });
 
-  it('requires a next-in-command when auto-release is enabled', () => {
-    expect(() =>
-      buildCreateCircleTx({
-        packageId: '0xabc',
-        circleData: {
-          ...createCircleData(),
-          next_in_command: null,
-        },
-      }),
-    ).toThrow('Next-in-command wallet address is required when auto-release is enabled.');
+  it('allows create-circle transactions without a next-in-command', () => {
+    const tx = buildCreateCircleTx({
+      packageId: '0xabc',
+      circleData: {
+        ...createCircleData(),
+        next_in_command: null,
+      },
+    });
+    const serialized = JSON.parse(tx.serialize());
+
+    expect(serialized.transactions[0].target).toBe(
+      '0x0000000000000000000000000000000000000000000000000000000000000abc::njangi_circles::create_circle',
+    );
   });
 
   it('rejects invalid next-in-command addresses', () => {

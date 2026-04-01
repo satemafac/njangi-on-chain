@@ -146,6 +146,22 @@ sui move test
 sui client publish . --gas-budget 200000000 --skip-fetch-latest-git-deps
 ```
 
+### **Upgrading an Existing Deployment**
+
+If `Published.toml` already has an entry for the active network, use `upgrade` instead of a fresh `publish`.
+
+```bash
+cd move
+sui client upgrade . \
+  --upgrade-capability <UPGRADE_CAPABILITY_ID> \
+  --gas-budget <GAS_BUDGET>
+```
+
+After upgrade, sync:
+- `Published.toml`
+- `../.env.local`
+- `../src/lib/circle-chain.ts`
+
 ## 💰 **Wallet Setup for Deployment**
 
 ### **Current Wallet Address**

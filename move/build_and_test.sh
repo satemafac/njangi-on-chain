@@ -68,6 +68,58 @@ ensure_network_consistency() {
     return 0
 }
 
+extract_published_metadata_value() {
+    local network="$1"
+    local key="$2"
+    local published_file="Published.toml"
+
+    if [ ! -f "$published_file" ]; then
+        return 0
+    fi
+
+    awk -v section="[published.${network}]" -v key="$key" '
+        $0 == section { in_section = 1; next }
+        in_section && /^\[/ { in_section = 0 }
+        in_section && $1 == key {
+            gsub(/"/, "", $3)
+            print $3
+            exit
+        }
+    ' "$published_file"
+}
+
+update_circle_chain_lineage() {
+    local network="$1"
+    local package_id="$2"
+    local lineage_file="../src/lib/circle-chain.ts"
+
+    if [[ "$network" != "testnet" && "$network" != "mainnet" ]]; then
+        echo -e "${YELLOW}Skipping circle-chain.ts sync because the active Sui env is unknown.${NC}"
+        return 0
+    fi
+
+    if [ ! -f "$lineage_file" ]; then
+        echo -e "${YELLOW}Note: ${lineage_file} not found. Skipping package lineage sync.${NC}"
+        return 0
+    fi
+
+    local published_at
+    local original_id
+    published_at=$(extract_published_metadata_value "$network" "published-at")
+    original_id=$(extract_published_metadata_value "$network" "original-id")
+
+    published_at=${published_at:-$package_id}
+    original_id=${original_id:-$package_id}
+
+    perl -0pi -e "s/(\\b${network}: \\{\\n\\s+publishedAt: ')[^']+(',\\n\\s+originalId: ')[^']+(',\\n\\s+\\},)/\$1${published_at}\$2${original_id}\$3/s" "$lineage_file"
+
+    if grep -A3 "  ${network}: {" "$lineage_file" | grep -q "$published_at"; then
+        echo -e "${GREEN}✅ Updated src/lib/circle-chain.ts ${network} lineage: publishedAt=${published_at}, originalId=${original_id}${NC}"
+    else
+        echo -e "${YELLOW}Warning: attempted to sync src/lib/circle-chain.ts for ${network}, but could not verify the update.${NC}"
+    fi
+}
+
 # Function to display usage
 display_usage() {
     echo -e "${CYAN}Usage: $0 [--build-only] [--debug-publish] [--network=<network>]${NC}"
@@ -306,6 +358,10 @@ if [[ "$publish_response" == "y" || "$publish_response" == "Y" ]]; then
         if echo "$PUBLISH_OUTPUT" | grep -q "client api version"; then
             echo -e "${YELLOW}Your local Sui CLI is older than the connected network. Upgrade the CLI before retrying publish to avoid protocol/dependency verification issues.${NC}"
         fi
+
+        if echo "$PUBLISH_OUTPUT" | grep -qi "already published"; then
+            echo -e "${YELLOW}This package already has a published lineage entry. Use 'sui client upgrade' with the upgrade capability from Published.toml instead of running a fresh publish again.${NC}"
+        fi
         
         # Print full error output for debugging
         echo -e "${RED}Full error output:${NC}"
@@ -391,6 +447,8 @@ if [[ "$publish_response" == "y" || "$publish_response" == "Y" ]]; then
             echo -e "${GREEN}✅ Created new .env.local file with package ID${NC}"
         fi
     fi
+
+    update_circle_chain_lineage "$ACTIVE_ENV" "$PACKAGE_ID"
     
     # Prompt user to test one of the module's functions
     echo -e "${YELLOW}Do you want to test a function from the published modules? (y/n)${NC}"

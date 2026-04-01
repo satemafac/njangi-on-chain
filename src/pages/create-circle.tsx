@@ -17,10 +17,6 @@ import {
   isValidAutoReleaseDelayMs,
   type AutoReleaseCycleLength,
 } from '../lib/auto-release';
-import {
-  getRecoveryDelegateValidationError,
-  normalizeRecoveryDelegateAddress,
-} from '../lib/recovery-delegate';
 import { getCurrentPackageId, getCurrentRpcUrl, getCurrentNetwork } from '../services/network-config';
 
 // Add batch optimization imports
@@ -127,7 +123,6 @@ interface CircleFormData {
   securityDepositLocal: number; // NEW: Amount in selected currency
   autoReleaseEnabled: boolean;
   autoReleaseDelayMs: number;
-  nextInCommand: string;
   penaltyRules: {
     latePayment: boolean;
     missedMeeting: boolean;
@@ -178,7 +173,6 @@ const WEEKDAY_MAP = {
 // Validation function for form data
 const validateFormData = (
   formData: CircleFormData,
-  adminAddress?: string | null,
 ): string[] => {
   const errors: string[] = [];
   
@@ -221,15 +215,6 @@ const validateFormData = (
     );
   }
 
-  const delegateValidationError = getRecoveryDelegateValidationError({
-    value: formData.nextInCommand,
-    adminAddress,
-    required: formData.autoReleaseEnabled,
-  });
-  if (delegateValidationError) {
-    errors.push(delegateValidationError);
-  }
-  
   if (formData.cycleType === 'smart-goal' && formData.smartGoal) {
     if (formData.smartGoal.goalType === 'amount' && (!formData.smartGoal.targetAmount || formData.smartGoal.targetAmount <= 0)) {
       errors.push('Target amount must be greater than 0');
@@ -324,7 +309,7 @@ const prepareCircleCreationData = (formData: CircleFormData) => {
     verification_required: formData.smartGoal?.verificationRequired || false,
     auto_release_enabled: formData.autoReleaseEnabled,
     auto_release_delay_ms: formData.autoReleaseDelayMs,
-    next_in_command: normalizeRecoveryDelegateAddress(formData.nextInCommand),
+    next_in_command: null,
   };
 };
 
@@ -356,7 +341,6 @@ export default function CreateCircle() {
     securityDepositLocal: 0,
     autoReleaseEnabled: false,
     autoReleaseDelayMs: 0,
-    nextInCommand: '',
     penaltyRules: {
       latePayment: false,
       missedMeeting: false,
@@ -559,15 +543,6 @@ export default function CreateCircle() {
   const minimumAutoReleaseDelayDays = autoReleaseDelayMsToDays(minimumAutoReleaseDelayMs);
   const minimumAllowedAutoReleaseDelayDays = minimumAutoReleaseDelayDays + 1;
   const selectedAutoReleaseDelayDays = autoReleaseDelayMsToDays(formData.autoReleaseDelayMs);
-  const normalizedNextInCommand = normalizeRecoveryDelegateAddress(formData.nextInCommand);
-  const nextInCommandValidationError = getRecoveryDelegateValidationError({
-    value: formData.nextInCommand,
-    adminAddress: account?.userAddr ?? userAddress ?? null,
-    required: formData.autoReleaseEnabled,
-  });
-  const nextInCommandInlineError = formData.nextInCommand.trim()
-    ? nextInCommandValidationError
-    : null;
   const autoReleasePresetOptions = [
     {
       label: 'Minimum + 1 day',
@@ -614,7 +589,7 @@ export default function CreateCircle() {
     setError(null);
     
     // Validate form data
-    const errors = validateFormData(formData, account?.userAddr ?? userAddress ?? null);
+    const errors = validateFormData(formData);
     if (errors.length > 0) {
       setValidationErrors(errors);
       return;
@@ -2118,7 +2093,7 @@ The Njangi On-Chain Team`;
                             : 'Set a delay'}
                         </p>
                         <p className="mt-2 text-sm leading-6 text-[#51627b]">
-                          The delegate-exclusive recovery window can only open after this delay from circle creation. The onchain rule requires it to be longer than the selected {formData.cycleLength} cycle.
+                          The delegate-exclusive recovery window can only open after this delay from circle creation. You can leave the delegate blank for now, but the circle cannot go live until one is assigned in manage.
                         </p>
                         <p className="mt-3 text-xs text-[#70819a]">
                           Minimum allowed: {formatAutoReleaseDurationDays(minimumAllowedAutoReleaseDelayDays)}
@@ -2126,60 +2101,16 @@ The Njangi On-Chain Team`;
                       </div>
                     </div>
 
-                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_300px]">
-                      <div className="space-y-3 rounded-[20px] border border-stone-200 bg-white p-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <label htmlFor="next-in-command" className="text-sm font-medium text-gray-700">
-                            Next in command
-                          </label>
-                          <span className="rounded-full bg-stone-100 px-3 py-1 text-xs font-medium text-slate-700">
-                            First recovery right
-                          </span>
-                        </div>
-                        <input
-                          id="next-in-command"
-                          type="text"
-                          value={formData.nextInCommand}
-                          onChange={(e) => handleInputChange('nextInCommand', e.target.value)}
-                          className={`block w-full rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 ${
-                            nextInCommandInlineError
-                              ? 'border-red-300 text-red-900 placeholder:text-red-300'
-                              : 'border-gray-300'
-                          }`}
-                          placeholder="0x..."
-                          autoCapitalize="off"
-                          autoCorrect="off"
-                          spellCheck={false}
-                        />
-                        <p className="text-sm text-gray-500">
-                          This wallet gets the first 24 hours of exclusive trigger authority after the admin heartbeat expires. It does not need to be a member yet, but it must be an active, unsuspended member when recovery is triggered.
-                        </p>
-                        {nextInCommandInlineError ? (
-                          <p className="text-sm font-medium text-red-600">
-                            {nextInCommandInlineError}
-                          </p>
-                        ) : !normalizedNextInCommand ? (
-                          <p className="text-xs text-[#70819a]">
-                            Required before creation when admin liveness fallback is enabled.
-                          </p>
-                        ) : normalizedNextInCommand ? (
-                          <p className="text-xs text-[#51627b] break-all">
-                            Normalized delegate address: {normalizedNextInCommand}
-                          </p>
-                        ) : null}
+                    <div className="rounded-[20px] border border-[#dbe2ec] bg-[#f3f6fb] p-4">
+                      <p className="text-sm font-medium text-[#1d2533]">Trigger order</p>
+                      <div className="mt-3 space-y-3 text-sm leading-6 text-[#51627b]">
+                        <p>1. Admin heartbeat expires after {formatAutoReleaseDurationDays(selectedAutoReleaseDelayDays || minimumAllowedAutoReleaseDelayDays)}.</p>
+                        <p>2. Once members join, the admin assigns an active member as next in command from manage.</p>
+                        <p>3. That delegate gets 24 hours of exclusive recovery authority, then eligible active members can trigger the same unwind path.</p>
                       </div>
-
-                      <div className="rounded-[20px] border border-[#dbe2ec] bg-[#f3f6fb] p-4">
-                        <p className="text-sm font-medium text-[#1d2533]">Trigger order</p>
-                        <div className="mt-3 space-y-3 text-sm leading-6 text-[#51627b]">
-                          <p>1. Admin heartbeat expires after {formatAutoReleaseDurationDays(selectedAutoReleaseDelayDays || minimumAllowedAutoReleaseDelayDays)}.</p>
-                          <p>2. The next in command gets 24 hours of exclusive recovery authority.</p>
-                          <p>3. If that delegate is invalid at expiry or does not respond within 24 hours, eligible active members can trigger the same unwind path.</p>
-                        </div>
-                        <p className="mt-3 text-xs text-[#70819a]">
-                          Recovery stops the circle and returns custody funds to their recorded owners.
-                        </p>
-                      </div>
+                      <p className="mt-3 text-xs text-[#70819a]">
+                        Recovery stops the circle and returns custody funds to their recorded owners.
+                      </p>
                     </div>
                   </div>
                 )}

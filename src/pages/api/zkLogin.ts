@@ -1392,11 +1392,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               });
             }
 
-            if (!normalizedNextInCommand) {
-              return res.status(400).json({
-                error: 'Invalid next-in-command wallet: A valid delegate address is required when auto-release is enabled'
-              });
-            }
           } else if (rawNextInCommand.trim().length > 0 && !normalizedNextInCommand) {
             return res.status(400).json({
               error: 'Invalid next-in-command wallet: Enter a valid Sui wallet address'

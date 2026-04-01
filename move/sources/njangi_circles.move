@@ -585,6 +585,15 @@ module njangi::njangi_circles {
             i = i + 1;
         };
         // --- End of deposit check --- 
+
+        if (config::is_auto_release_enabled(&circle.id)) {
+            let next_in_command = config::get_next_in_command(&circle.id);
+            config::assert_auto_release_delegate_requirement(true, &next_in_command);
+
+            let delegate = *option::borrow(&next_in_command);
+            assert!(delegate != circle.admin, EInvalidRecoveryDelegate);
+            assert!(can_active_member_trigger_auto_release(circle, delegate), EInvalidRecoveryDelegate);
+        };
         
         // Set the circle to active
         circle.is_active = true;
@@ -2031,6 +2040,12 @@ module njangi::njangi_circles {
         );
         if (option::is_some(&next_in_command)) {
             assert!(*option::borrow(&next_in_command) != circle.admin, EInvalidRecoveryDelegate);
+        };
+
+        if (circle.is_active && config::is_auto_release_enabled(&circle.id)) {
+            config::assert_auto_release_delegate_requirement(true, &next_in_command);
+            let delegate = *option::borrow(&next_in_command);
+            assert!(can_active_member_trigger_auto_release(circle, delegate), EInvalidRecoveryDelegate);
         };
 
         config::set_next_in_command(&mut circle.id, next_in_command);

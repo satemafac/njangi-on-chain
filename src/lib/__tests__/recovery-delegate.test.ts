@@ -13,6 +13,16 @@ describe('recovery delegate helpers', () => {
     expect(normalizeRecoveryDelegateAddress(VALID_DELEGATE_ADDRESS)).toBe(VALID_DELEGATE_ADDRESS);
   });
 
+  it('allows an empty delegate when the field is not required', () => {
+    expect(
+      getRecoveryDelegateValidationError({
+        value: '',
+        adminAddress: VALID_ADMIN_ADDRESS,
+        required: false,
+      }),
+    ).toBeNull();
+  });
+
   it('requires a delegate when auto-release is enabled', () => {
     expect(
       getRecoveryDelegateValidationError({
