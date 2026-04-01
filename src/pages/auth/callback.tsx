@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
+import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
+import { CallbackStatusShell } from '@/components/ui/CallbackStatusShell';
 
 export default function AuthCallback() {
   const router = useRouter();
@@ -231,35 +233,40 @@ export default function AuthCallback() {
     processCallback();
   }, [handleCallback, router, router.isReady, setError]);
 
+  const tone = isError ? 'error' : progress >= 100 ? 'success' : 'processing';
+  const isWhatsAppReady = !isError && status.includes('return to WhatsApp');
+  const pageTitle = isError
+    ? 'Sign-in failed - Njangi on-chain'
+    : 'Completing sign in - Njangi on-chain';
+  const lead = isError
+    ? 'We could not complete the secure sign-in handoff. The app is keeping the session clean and will send you back to the starting point shortly.'
+    : isWhatsAppReady
+      ? 'Your wallet session is ready. Return to WhatsApp and continue using Njangi commands there.'
+      : 'We’re validating the provider response, generating your zero-knowledge proof, and restoring the correct destination before returning you to the app.';
+  const helperText = isError
+    ? 'Redirecting you back to the sign-in entry point.'
+    : isWhatsAppReady
+      ? 'You can switch back to WhatsApp once you are ready.'
+      : tone === 'success'
+        ? 'Your wallet session is ready. Redirecting you now.'
+        : 'Keep this tab open while the secure handoff completes.';
+  const chips = isWhatsAppReady
+    ? ['WhatsApp handoff', 'zkLogin proof', 'Wallet ready']
+    : ['OAuth callback', 'zkLogin proof', 'Secure redirect'];
+
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4">
-      <div className="max-w-md w-full bg-white shadow-lg rounded-lg p-8 text-center">
-        {!isError ? (
-          <>
-            <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent mx-auto mb-4"></div>
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">{status}</h2>
-            <p className="text-sm text-gray-500 mb-4">This may take up to 20 seconds...</p>
-            
-            {/* Progress bar */}
-            <div className="w-full bg-gray-200 rounded-full h-2.5 mb-4">
-              <div 
-                className="bg-blue-600 h-2.5 rounded-full transition-all duration-300 ease-in-out"
-                style={{ width: `${progress}%` }}
-              ></div>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100 mb-4">
-              <svg className="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </div>
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">{status}</h2>
-            <p className="text-sm text-gray-500">Redirecting to login page...</p>
-          </>
-        )}
-      </div>
-    </div>
+    <>
+      <Head>
+        <title>{pageTitle}</title>
+      </Head>
+      <CallbackStatusShell
+        tone={tone}
+        status={status}
+        progress={progress}
+        lead={lead}
+        helper={helperText}
+        chips={chips}
+      />
+    </>
   );
-} 
+}

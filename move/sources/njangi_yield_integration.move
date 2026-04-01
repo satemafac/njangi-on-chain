@@ -1,22 +1,12 @@
 module njangi::njangi_yield_integration {
-    use sui::object::{Self, UID, ID};
-    use sui::tx_context::{Self, TxContext};
     use sui::coin::{Self, Coin};
-    use sui::balance::{Self, Balance};
     use sui::clock::{Self, Clock};
     use sui::event;
     use sui::sui::SUI;
-    use sui::transfer;
     use sui::dynamic_field;
-    use sui::address;
-    use sui::bcs;
-    use std::option::{Self, Option};
     use std::string::{Self, String};
-    use std::vector;
     
-    use njangi::njangi_core as core;
     use njangi::njangi_circles::{Self as circles, Circle};
-    use njangi::njangi_members::{Self as members, Member};
     use njangi::njangi_custody::{Self as custody, CustodyWallet};
     
     // Migration staging note:
@@ -28,14 +18,10 @@ module njangi::njangi_yield_integration {
     // ----------------------------------------------------------
     // Error codes
     // ----------------------------------------------------------
-    const ENotCircleAdmin: u64 = 100;
+const ENotCircleAdmin: u64 = 100;
 const EYieldStrategyNotActive: u64 = 101;
-const EInsufficientYieldBalance: u64 = 102;
 const EInvalidYieldStrategy: u64 = 103;
-const EProtocolIntegrationFailed: u64 = 104;
 const EEmergencyWithdrawalFailed: u64 = 105;
-const EYieldCollectionFailed: u64 = 106;
-const EInvalidAllocationPercentage: u64 = 107;
 const ECircleNotCompleted: u64 = 108;
 const EInsufficientFunds: u64 = 109;
     
@@ -49,9 +35,6 @@ const EInsufficientFunds: u64 = 109;
     const FLOW_STATUS_IDLE: u8 = 0;
     const FLOW_STATUS_SWAP_ONLY: u8 = 1;
     const FLOW_STATUS_VAULT_DEPLOYED: u8 = 2;
-    const FLOW_STATUS_REDEEM_REQUESTED: u8 = 3;
-    const FLOW_STATUS_REDEEM_SETTLED: u8 = 4;
-    
     const BASIS_POINTS: u64 = 10000; // 100% = 10000 basis points
     // Ember vault package for the eSui Dollar route.
     // Until a distinct testnet package is confirmed, default to the same
@@ -557,7 +540,7 @@ const EInsufficientFunds: u64 = 109;
     
     /// Collect yields from all member positions
     fun collect_all_member_yields(
-        config: &mut YieldConfig,
+        _config: &YieldConfig,
         clock: &Clock,
         ctx: &mut TxContext
     ): (Coin<SUI>, Coin<SUI>) {

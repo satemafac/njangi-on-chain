@@ -1,19 +1,12 @@
 module njangi::whatsapp_integration {
-    use sui::object::{Self, UID, ID};
     use sui::table::{Self, Table};
-    use std::vector;
     use sui::event;
-    use sui::tx_context::{Self, TxContext};
-    use sui::transfer;
-    use std::string::{Self, String};
-    use std::option::{Self, Option};
+    use std::string::String;
 
     // ----------------------------------------------------------
     // Error codes
     // ----------------------------------------------------------
-    const E_CIRCLE_NOT_LINKED: u64 = 1;
     const E_NOT_CIRCLE_ADMIN: u64 = 2;
-    const E_RATE_LIMITED: u64 = 3;
     const E_LINK_NOT_FOUND: u64 = 4;
     const E_INVALID_LINK_TYPE: u64 = 5;
     const E_ALREADY_LINKED: u64 = 6;
@@ -26,18 +19,9 @@ module njangi::whatsapp_integration {
     const LINK_TYPE_INDIVIDUAL: u8 = 1;
     const LINK_TYPE_GROUP: u8 = 2;
     
-    const NOTIFICATION_NEW_CYCLE: u8 = 1;
-    const NOTIFICATION_MEMBER_CONTRIBUTED: u8 = 2;
-    const NOTIFICATION_ALL_CONTRIBUTED: u8 = 3;
-    const NOTIFICATION_DEADLINE_APPROACHING: u8 = 4;
-    const NOTIFICATION_PAYOUT_OVERDUE: u8 = 5;
-    const NOTIFICATION_CONTRIBUTOR_OVERDUE: u8 = 6;
-    const NOTIFICATION_PAYOUT_REMINDER: u8 = 7;
-
     const MAX_MESSAGES_PER_HOUR: u64 = 10;
     const MAX_MESSAGES_PER_DAY: u64 = 100;
     const SECONDS_PER_HOUR: u64 = 3600;
-    const MS_PER_HOUR: u64 = 3_600_000;
 
     const ADMIN_ACTION_LINK: u8 = 1;
     const ADMIN_ACTION_UNLINK: u8 = 2;
@@ -48,6 +32,7 @@ module njangi::whatsapp_integration {
     // ----------------------------------------------------------
 
     /// Individual WhatsApp link entry
+    #[allow(lint(missing_key))]
     public struct WhatsAppLink has store {
         id: UID,
         circle_id: ID,
@@ -62,6 +47,7 @@ module njangi::whatsapp_integration {
     }
 
     /// Message log entry
+    #[allow(unused_field)]
     public struct LogEntry has store, copy, drop {
         message_type: u8,
         recipient: String,
@@ -120,6 +106,7 @@ module njangi::whatsapp_integration {
         success: bool,
     }
 
+    #[allow(unused_field)]
     public struct RateLimitExceeded has copy, drop {
         link_id: ID,
         circle_id: ID,

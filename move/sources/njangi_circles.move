@@ -1,27 +1,20 @@
 module njangi::njangi_circles {
-    use sui::object::{Self, UID, ID};
-    use sui::transfer;
-    use sui::tx_context::{Self, TxContext};
     use sui::coin::{Self, Coin};
     use sui::balance::{Self, Balance};
     use sui::table::{Self, Table};
     use sui::clock::{Self, Clock};
+    use sui::dynamic_field;
     use sui::event;
     use sui::sui::SUI;
-    use sui::dynamic_field;
     use std::string::{Self, String};
-    use std::vector;
-    use std::option::{Self, Option};
-    use std::type_name;
     use std::ascii;
-    use std::debug;
-    
+    use std::type_name;
+
     use njangi::njangi_core::{Self as core};
     use njangi::njangi_members::{Self as members, Member};
-    use njangi::njangi_custody::{Self as custody, CustodyWallet, CoinDeposited, CustodyDeposited};
+    use njangi::njangi_custody::{Self as custody, CustodyWallet};
     use njangi::njangi_circle_config::{Self as config};
-    use njangi::njangi_milestones::{Self as milestones, MilestoneData};
-    
+
     use pyth::price_info::PriceInfoObject;
     use njangi::njangi_price_validator as price_validator;
     
@@ -41,13 +34,30 @@ module njangi::njangi_circles {
     const ENotMember: u64 = 8;                 // From core
     const EMemberNotActive: u64 = 14;          // From members
     const EMemberSuspended: u64 = 13;          // From members
-    const EDepositAlreadyPaid: u64 = 21;       // From members
     const EIncorrectDepositAmount: u64 = 2;    // From core
     const ENoValidOraclePrice: u64 = 61;
-    
+    const ENoRecoveryEligibleVoters: u64 = 62;
+    const ERecoveryVoteNotEligible: u64 = 63;
+    const ERecoveryVoteAlreadyCast: u64 = 64;
+    const ERecoveryProposalExpired: u64 = 65;
+    const ERecoveryVotingClosed: u64 = 66;
+    const ERecoveryProposalMissing: u64 = 67;
+    const ERecoveryExecutionNotReady: u64 = 68;
+    const ERecoveryInsufficientWalletBalance: u64 = 69;
+    const ERecoveryMemberSnapshotMismatch: u64 = 70;
+    const EInvalidRecoveryDelegate: u64 = 71;
+    const ERecoveryDelegateUpdateLocked: u64 = 72;
+    const ERecoveryAutoReleaseUnauthorized: u64 = 73;
+
     // Time constants (in milliseconds)
     const THIRTY_DAYS_MS: u64 = 2_592_000_000; // 30 days in milliseconds
     const SEVEN_DAYS_MS: u64 = 604_800_000;    // 7 days in milliseconds
+    const EMERGENCY_STOP_VOTING_WINDOW_MS: u64 = SEVEN_DAYS_MS;
+    const AUTO_RELEASE_DELEGATE_GRACE_PERIOD_MS: u64 = 86_400_000; // 24 hours
+
+    const RECOVERY_TRIGGER_ROLE_VOTE_EXECUTION: u8 = 0;
+    const RECOVERY_TRIGGER_ROLE_DELEGATE: u8 = 1;
+    const RECOVERY_TRIGGER_ROLE_MEMBER_FALLBACK: u8 = 2;
 
     // Oracle safety constants.
     const ORACLE_MAX_STALE_SECONDS: u64 = 3_600; // 1 hour
@@ -136,6 +146,69 @@ module njangi::njangi_circles {
         circle_id: ID,
         enabled: bool,
         toggled_by: address,
+    }
+
+    public struct EmergencyStopProposed has copy, drop {
+        circle_id: ID,
+        proposer: address,
+        eligible_voter_count: u64,
+        majority_threshold: u64,
+        deadline: u64,
+        timestamp: u64,
+    }
+
+    public struct EmergencyStopVoteCast has copy, drop {
+        circle_id: ID,
+        voter: address,
+        approved: bool,
+        yes_votes: u64,
+        no_votes: u64,
+        majority_threshold: u64,
+        timestamp: u64,
+    }
+
+    public struct EmergencyStopMajorityReached has copy, drop {
+        circle_id: ID,
+        yes_votes: u64,
+        majority_threshold: u64,
+        reached_at: u64,
+    }
+
+    public struct RecoveryDelegateUpdated has copy, drop {
+        circle_id: ID,
+        admin: address,
+        next_in_command: Option<address>,
+        timestamp: u64,
+    }
+
+    public struct RecoveryExecutionStarted has copy, drop {
+        circle_id: ID,
+        executor: address,
+        member_count: u64,
+        total_sui_refund: u64,
+        total_stablecoin_refund: u64,
+        used_auto_release: bool,
+        trigger_role: u8,
+        timestamp: u64,
+    }
+
+    public struct RecoveryMemberRefunded has copy, drop {
+        circle_id: ID,
+        member: address,
+        sui_contributions_refunded: u64,
+        sui_deposit_refunded: u64,
+        stablecoin_contributions_refunded: u64,
+        stablecoin_deposit_refunded: u64,
+        timestamp: u64,
+    }
+
+    public struct RecoveryExecutionCompleted has copy, drop {
+        circle_id: ID,
+        executor: address,
+        refunded_members: u64,
+        total_sui_refund: u64,
+        total_stablecoin_refund: u64,
+        timestamp: u64,
     }
     
     // Enhanced MemberJoined event with comprehensive member information
@@ -323,6 +396,9 @@ module njangi::njangi_circles {
         target_amount_local: Option<u64>, // Amount in local currency
         target_date: Option<u64>,
         verification_required: bool,
+        auto_release_enabled: bool,
+        auto_release_delay_ms: u64,
+        next_in_command: Option<address>,
         clock: &Clock,
         ctx: &mut TxContext
     ) {
@@ -350,6 +426,9 @@ module njangi::njangi_circles {
         // Get admin address
         let admin = tx_context::sender(ctx);
         let current_time = clock::timestamp_ms(clock);
+        if (option::is_some(&next_in_command)) {
+            assert!(*option::borrow(&next_in_command) != admin, EInvalidRecoveryDelegate);
+        };
 
         // Create the circle with minimal fields
         let mut circle = Circle {
@@ -387,7 +466,11 @@ module njangi::njangi_circles {
             circle_type,
             rotation_style,
             max_members,
-            false // auto_swap_enabled starts as false
+            false, // auto_swap_enabled starts as false
+            auto_release_enabled,
+            auto_release_delay_ms,
+            if (auto_release_enabled) { next_in_command } else { option::none() },
+            clock
         );
         
         let milestone_config = config::create_milestone_config(
@@ -463,8 +546,9 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     // Admin activates the circle, requiring all members to have deposits
     // ----------------------------------------------------------
-    public entry fun activate_circle(
+    public fun activate_circle(
         circle: &mut Circle,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
@@ -472,14 +556,8 @@ module njangi::njangi_circles {
         // Only admin can activate the circle
         assert!(sender == circle.admin, 7);
         
-        // Get max members from config
-        let max_members = config::get_max_members(&circle.id);
-        
         // Circle must have at least 3 members (minimum required)
         assert!(circle.current_members >= 3, 22);
-        
-        // Get security deposit amount from config
-        let security_deposit = config::get_security_deposit(&circle.id);
         
         // Check if admin has paid deposit
         if (table::contains(&circle.members, circle.admin)) {
@@ -524,6 +602,7 @@ module njangi::njangi_circles {
         
         // Start cycle
         circle.current_cycle = 1;
+        touch_admin_heartbeat(circle, clock);
         
         event::emit(CircleActivated {
             circle_id: object::uid_to_inner(&circle.id),
@@ -537,6 +616,7 @@ module njangi::njangi_circles {
     public fun toggle_auto_swap(
         circle: &mut Circle,
         enabled: bool,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
@@ -553,6 +633,7 @@ module njangi::njangi_circles {
         
         // Update config using the config module
         config::toggle_auto_swap(&mut circle.id, enabled);
+        touch_admin_heartbeat(circle, clock);
         
         // Emit an event so frontend can track changes
         event::emit(AutoSwapToggled {
@@ -567,6 +648,7 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     public fun manage_treasury_balances(
         circle: &mut Circle,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
         assert!(tx_context::sender(ctx) == circle.admin, 7);
@@ -577,6 +659,7 @@ module njangi::njangi_circles {
         let contributions = balance::value(&circle.contributions);
         let deposits = balance::value(&circle.deposits);
         let penalties = balance::value(&circle.penalties);
+        touch_admin_heartbeat(circle, clock);
         
         event::emit(TreasuryUpdated {
             circle_id: object::uid_to_inner(&circle.id),
@@ -609,6 +692,7 @@ module njangi::njangi_circles {
                 current_time
             );
         };
+        touch_admin_heartbeat(circle, clock);
     }
     
     // ----------------------------------------------------------
@@ -663,7 +747,7 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     // Delete Circle
     // ----------------------------------------------------------
-    public entry fun delete_circle(
+    public fun delete_circle(
         mut circle: Circle,
         wallet: &CustodyWallet,
         ctx: &mut TxContext
@@ -758,13 +842,11 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     // Rotation management
     // ----------------------------------------------------------
-    public fun set_rotation_position(
+    public(package) fun set_rotation_position_internal(
         circle: &mut Circle,
         member_addr: address,
-        position: u64,
-        ctx: &mut TxContext
+        position: u64
     ) {
-        assert!(tx_context::sender(ctx) == circle.admin, 7);
         assert!(position < config::get_max_members(&circle.id), 29);
         assert!(table::contains(&circle.members, member_addr), 8);
         
@@ -788,18 +870,28 @@ module njangi::njangi_circles {
         let member = table::borrow_mut(&mut circle.members, member_addr);
         members::set_payout_position(member, option::some(position));
     }
+
+    public fun set_rotation_position(
+        circle: &mut Circle,
+        member_addr: address,
+        position: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        assert!(tx_context::sender(ctx) == circle.admin, 7);
+        set_rotation_position_internal(circle, member_addr, position);
+        touch_admin_heartbeat(circle, clock);
+    }
     
     // ----------------------------------------------------------
     // Replace the entire rotation order at once
     // ----------------------------------------------------------
-    public fun reorder_rotation_positions(
+    fun reorder_rotation_positions_internal(
         circle: &mut Circle,
         new_order: vector<address>,
-        ctx: &mut TxContext
+        admin: address,
+        timestamp: u64
     ) {
-        // Only admin can reorder positions
-        assert!(tx_context::sender(ctx) == circle.admin, 7);
-        
         // Order can't be larger than max members
         let order_length = vector::length(&new_order);
         assert!(order_length <= config::get_max_members(&circle.id), 29);
@@ -827,22 +919,40 @@ module njangi::njangi_circles {
         // Emit RotationOrderChanged event
         event::emit(RotationOrderChanged {
             circle_id: object::id(circle),
-            admin: tx_context::sender(ctx),
+            admin,
             new_order: circle.rotation_order,
             member_count: order_length,
-            timestamp: tx_context::epoch_timestamp_ms(ctx),
+            timestamp,
         });
+    }
+
+    public fun reorder_rotation_positions(
+        circle: &mut Circle,
+        new_order: vector<address>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert!(sender == circle.admin, 7);
+        reorder_rotation_positions_internal(
+            circle,
+            new_order,
+            sender,
+            tx_context::epoch_timestamp_ms(ctx)
+        );
+        touch_admin_heartbeat(circle, clock);
     }
     
     // ----------------------------------------------------------
     // Replace the entire rotation order at once (entry function for frontend)
     // ----------------------------------------------------------
-    public entry fun reorder_rotation_positions_entry(
+    public fun reorder_rotation_positions_entry(
         circle: &mut Circle,
         new_order: vector<address>,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
-        reorder_rotation_positions(circle, new_order, ctx);
+        reorder_rotation_positions(circle, new_order, clock, ctx);
     }
     
     // ----------------------------------------------------------
@@ -1081,6 +1191,114 @@ module njangi::njangi_circles {
         core::from_decimals(config::get_warning_penalty_amount(&circle.id))
     }
 
+    public fun get_recovery_state(circle: &Circle): u8 {
+        config::get_recovery_state(&circle.id)
+    }
+
+    public fun get_recovery_state_updated_at(circle: &Circle): u64 {
+        config::get_recovery_state_updated_at(&circle.id)
+    }
+
+    public fun has_recovery_proposal(circle: &Circle): bool {
+        config::has_recovery_proposal(&circle.id)
+    }
+
+    public fun get_recovery_proposal(circle: &Circle): Option<config::RecoveryProposal> {
+        config::get_recovery_proposal(&circle.id)
+    }
+
+    public fun get_recovery_proposal_proposer(circle: &Circle): Option<address> {
+        config::get_recovery_proposal_proposer(&circle.id)
+    }
+
+    public fun get_recovery_proposal_created_at(circle: &Circle): Option<u64> {
+        config::get_recovery_proposal_created_at(&circle.id)
+    }
+
+    public fun get_recovery_proposal_deadline(circle: &Circle): Option<u64> {
+        config::get_recovery_proposal_deadline(&circle.id)
+    }
+
+    public fun get_recovery_proposal_passed_at(circle: &Circle): Option<u64> {
+        config::get_recovery_proposal_passed_at(&circle.id)
+    }
+
+    public fun get_recovery_majority_threshold(circle: &Circle): Option<u64> {
+        config::get_recovery_majority_threshold(&circle.id)
+    }
+
+    public fun get_recovery_yes_votes(circle: &Circle): u64 {
+        config::get_recovery_yes_votes(&circle.id)
+    }
+
+    public fun get_recovery_no_votes(circle: &Circle): u64 {
+        config::get_recovery_no_votes(&circle.id)
+    }
+
+    public fun get_recovery_vote_count(circle: &Circle): u64 {
+        config::get_recovery_vote_count(&circle.id)
+    }
+
+    public fun get_recovery_eligible_voters(circle: &Circle): vector<address> {
+        config::get_recovery_eligible_voters(&circle.id)
+    }
+
+    public fun get_recovery_votes(circle: &Circle): vector<config::RecoveryVote> {
+        config::get_recovery_votes(&circle.id)
+    }
+
+    public fun is_recovery_majority_reached(circle: &Circle): bool {
+        config::is_recovery_majority_reached(&circle.id)
+    }
+
+    public fun is_recovery_proposal_passed(circle: &Circle): bool {
+        config::is_recovery_proposal_passed(&circle.id)
+    }
+
+    public fun is_auto_release_enabled(circle: &Circle): bool {
+        config::is_auto_release_enabled(&circle.id)
+    }
+
+    public fun get_auto_release_delay_ms(circle: &Circle): u64 {
+        config::get_auto_release_delay_ms(&circle.id)
+    }
+
+    public fun has_next_in_command(circle: &Circle): bool {
+        config::has_next_in_command(&circle.id)
+    }
+
+    public fun get_next_in_command(circle: &Circle): Option<address> {
+        config::get_next_in_command(&circle.id)
+    }
+
+    public fun get_last_admin_heartbeat_at(circle: &Circle): u64 {
+        config::get_last_admin_heartbeat_at(&circle.id)
+    }
+
+    public fun get_auto_release_start_time(circle: &Circle): u64 {
+        config::get_auto_release_start_time(&circle.id)
+    }
+
+    public fun get_auto_release_trigger_time(circle: &Circle): Option<u64> {
+        config::get_auto_release_trigger_time(&circle.id)
+    }
+
+    public fun get_min_auto_release_delay_ms(circle: &Circle): u64 {
+        config::get_min_auto_release_delay_ms_for_circle(&circle.id)
+    }
+
+    public fun is_auto_release_ready(circle: &Circle, clock: &Clock): bool {
+        config::is_auto_release_ready(&circle.id, clock)
+    }
+
+    public fun can_execute_recovery(circle: &Circle, clock: &Clock): bool {
+        config::can_execute_recovery(&circle.id, clock)
+    }
+
+    fun touch_admin_heartbeat(circle: &mut Circle, clock: &Clock) {
+        config::touch_admin_heartbeat(&mut circle.id, clock);
+    }
+
     // Add functions for auction management
     public fun has_active_auction(circle: &Circle): bool {
         option::is_some(&circle.active_auction)
@@ -1176,7 +1394,7 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     // Admin approve member to join circle - entry function for frontend use
     // ----------------------------------------------------------
-    public entry fun admin_approve_member(
+    public fun admin_approve_member(
         circle: &mut Circle,
         member_addr: address,
         clock: &Clock,
@@ -1203,6 +1421,7 @@ module njangi::njangi_circles {
         
         // Add the member to the circle
         add_member(circle, member_addr, member);
+        touch_admin_heartbeat(circle, clock);
         
         // Emit enhanced MemberJoined event so the dashboard can detect this user's membership with full details
         event::emit(MemberJoined {
@@ -1221,7 +1440,7 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     // Admin approve multiple members to join circle at once - entry function for frontend
     // ----------------------------------------------------------
-    public entry fun admin_approve_members(
+    public fun admin_approve_members(
         circle: &mut Circle,
         member_addrs: vector<address>,
         clock: &Clock,
@@ -1274,12 +1493,14 @@ module njangi::njangi_circles {
             
             i = i + 1;
         };
+
+        touch_admin_heartbeat(circle, clock);
     }
 
     // ----------------------------------------------------------
     // Admin remove member from inactive circle and return security deposit
     // ----------------------------------------------------------
-    public entry fun admin_remove_member(
+    public fun admin_remove_member(
         circle: &mut Circle,
         member_addr: address,
         wallet: &mut custody::CustodyWallet,
@@ -1305,7 +1526,7 @@ module njangi::njangi_circles {
         let has_deposit = members::has_paid_deposit(member);
         
         // Remove member from the circle's members table
-        let removed_member = table::remove(&mut circle.members, member_addr);
+        table::remove(&mut circle.members, member_addr);
         
         // Update current members count
         circle.current_members = circle.current_members - 1;
@@ -1368,6 +1589,8 @@ module njangi::njangi_circles {
             deposit_amount: if (has_deposit && deposit_amount > 0) { deposit_amount } else { 0 },
             timestamp: clock::timestamp_ms(clock),
         });
+
+        touch_admin_heartbeat(circle, clock);
     }
 
     // ----------------------------------------------------------
@@ -1381,7 +1604,7 @@ module njangi::njangi_circles {
     // Member Entry function to deposit security deposit
     // Performs checks and updates Member state, then calls custody to store the coin.
     // ----------------------------------------------------------
-    public entry fun member_deposit_security_deposit<CoinType>(
+    public fun member_deposit_security_deposit<CoinType>(
         circle: &mut Circle,
         wallet: &mut custody::CustodyWallet,
         deposit_coin: Coin<CoinType>,
@@ -1424,9 +1647,10 @@ module njangi::njangi_circles {
         // --- Simplified Validation Logic ---
         // For USDC (6 decimals): Convert USD cents (2dp) to microUSDC (6dp) via custody helper.
         // For SUI (9 decimals): Use the raw security_deposit amount.
+        let is_sui_deposit = std::type_name::get<CoinType>() == std::type_name::get<SUI>();
         
         // Check if it's SUI or stablecoin by comparing with SUI type
-        if (std::type_name::get<CoinType>() == std::type_name::get<SUI>()) {
+        if (is_sui_deposit) {
             // For SUI, validate against the SUI amount
             assert!(amount == required_sui_amount, 2); // EIncorrectDepositAmount
         } else {
@@ -1439,6 +1663,13 @@ module njangi::njangi_circles {
         // --- Update Member State --- 
         members::set_deposit_balance(member, amount);
         members::set_deposit_paid(member, true);
+        if (is_sui_deposit) {
+            members::set_recovery_sui_deposit(member, amount);
+            members::clear_recovery_stablecoin_deposit(member);
+        } else {
+            members::set_recovery_stablecoin_deposit(member, amount);
+            members::clear_recovery_sui_deposit(member);
+        };
 
         // --- Call Custody to Store Coin --- 
         custody::internal_store_security_deposit_without_validation<CoinType>(
@@ -1453,7 +1684,7 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     // Deposit stablecoin to circle with price validation
     // ----------------------------------------------------------
-    public entry fun deposit_stablecoin_with_price_validation<CoinType>(
+    public fun deposit_stablecoin_with_price_validation<CoinType>(
         circle: &mut Circle,
         wallet: &mut custody::CustodyWallet,
         stablecoin: coin::Coin<CoinType>,
@@ -1488,22 +1719,33 @@ module njangi::njangi_circles {
         );
         
         // Update member status (deposit amount already oracle-validated in custody module).
-        update_member_status_after_deposit(circle, sender, deposit_amount, ctx);
+        update_member_status_after_deposit<CoinType>(circle, sender, deposit_amount, ctx);
     }
     
     // ----------------------------------------------------------
     // Update member status after deposit
     // ----------------------------------------------------------
-    fun update_member_status_after_deposit(
+    fun update_member_status_after_deposit<CoinType>(
         circle: &mut Circle,
         member_addr: address,
         deposit_amount: u64,
-        ctx: &mut tx_context::TxContext
+        ctx: &tx_context::TxContext
     ) {
         let current_time = tx_context::epoch_timestamp_ms(ctx);
         
         // Get the member record
         let member = table::borrow_mut(&mut circle.members, member_addr);
+        let is_sui_deposit = std::type_name::get<CoinType>() == std::type_name::get<SUI>();
+
+        members::set_deposit_balance(member, deposit_amount);
+        members::set_deposit_paid(member, true);
+        if (is_sui_deposit) {
+            members::set_recovery_sui_deposit(member, deposit_amount);
+            members::clear_recovery_stablecoin_deposit(member);
+        } else {
+            members::set_recovery_stablecoin_deposit(member, deposit_amount);
+            members::clear_recovery_sui_deposit(member);
+        };
 
         // If the member is pending, activate them.
         let member_status = members::get_status(member);
@@ -1511,9 +1753,6 @@ module njangi::njangi_circles {
             // Change status to active - use core values consistently
             members::set_status(member, core::member_status_active());
             members::set_activated_at(member, current_time);
-            
-            // Store actual deposited amount in the coin's native units.
-            members::set_deposit_balance(member, deposit_amount);
             
             // Emit member activated event
             event::emit(MemberActivated {
@@ -1531,15 +1770,13 @@ module njangi::njangi_circles {
         circle: &mut Circle, 
         deposit_amount: u64,
         member_addr: address,
-        ctx: &mut TxContext
+        _ctx: &mut TxContext
     ): bool {
         // Make sure member exists in the circle
         assert!(is_member(circle, member_addr), 8);
         
         // Get security deposit requirement and USD value before getting mutable references
         let security_deposit = config::get_security_deposit(&circle.id);
-        let security_deposit_usd = config::get_security_deposit_usd(&circle.id);
-        
         // Now get the member object (after the immutable borrow is done)
         let member = get_member_mut(circle, member_addr);
         
@@ -1549,6 +1786,8 @@ module njangi::njangi_circles {
 
         // --- Update Member State --- 
         members::set_deposit_balance(member, deposit_amount);
+        members::set_recovery_sui_deposit(member, deposit_amount);
+        members::clear_recovery_stablecoin_deposit(member);
 
         // Emit member activated event
         event::emit(MemberActivated {
@@ -1562,9 +1801,10 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     // Update wallet ID for the circle - for admin use
     // ----------------------------------------------------------
-    public entry fun update_wallet_id(
+    public fun update_wallet_id(
         circle: &mut Circle,
         wallet_id: ID,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
         // Only the admin can update the wallet ID
@@ -1577,6 +1817,8 @@ module njangi::njangi_circles {
         } else {
             dynamic_field::add(&mut circle.id, key, wallet_id);
         };
+
+        touch_admin_heartbeat(circle, clock);
     }
     
     // ----------------------------------------------------------
@@ -1594,7 +1836,7 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     // Member Entry function to deposit stablecoin contribution
     // ----------------------------------------------------------
-    public entry fun contribute_stablecoin<CoinType>(
+    public fun contribute_stablecoin<CoinType>(
         circle: &mut Circle,
         wallet: &mut custody::CustodyWallet,
         payment: Coin<CoinType>,
@@ -1642,6 +1884,7 @@ module njangi::njangi_circles {
         let member_mut = get_member_mut(circle, sender);
         // Use the *required* amount for recording, not the potentially larger payment amount
         members::record_contribution(member_mut, required_stablecoin_amount, clock::timestamp_ms(clock));
+        members::add_recovery_stablecoin_contributions(member_mut, amount);
 
         // Update cycle tracking in USD cents (definitive accounting unit).
         add_to_contributions_this_cycle(circle, required_contribution_usd_cents);
@@ -1666,9 +1909,10 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     // Admin function to set maximum members for an inactive circle
     // ----------------------------------------------------------
-    public entry fun admin_set_max_members(
+    public fun admin_set_max_members(
         circle: &mut Circle,
         new_max_members: u64,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
@@ -1688,6 +1932,7 @@ module njangi::njangi_circles {
         
         // Update the config
         config::set_max_members(&mut circle.id, new_max_members);
+        touch_admin_heartbeat(circle, clock);
         
         // Emit event
         event::emit(CircleMaxMembersUpdated {
@@ -1702,7 +1947,7 @@ module njangi::njangi_circles {
     // Admin function to update cycle limits and contribution requirements.
     // USD cents are the source of truth; native amounts are derived for display paths.
     // ----------------------------------------------------------
-    public entry fun update_cycle_limits(
+    public fun update_cycle_limits(
         circle: &mut Circle,
         cycle_length: u64,
         cycle_day: u64,
@@ -1711,6 +1956,7 @@ module njangi::njangi_circles {
         contribution_amount_local: u64,
         security_deposit_local: u64,
         sui_price_usd_cents: u64,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
@@ -1755,6 +2001,7 @@ module njangi::njangi_circles {
             cycle_day,
             tx_context::epoch_timestamp_ms(ctx)
         );
+        touch_admin_heartbeat(circle, clock);
 
         event::emit(CycleLimitsUpdated {
             circle_id: object::uid_to_inner(&circle.id),
@@ -1770,9 +2017,45 @@ module njangi::njangi_circles {
         });
     }
 
+    public fun update_next_in_command(
+        circle: &mut Circle,
+        next_in_command: Option<address>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert!(sender == circle.admin, ENotAdmin);
+        assert!(
+            config::get_recovery_state(&circle.id) == config::recovery_state_active(),
+            ERecoveryDelegateUpdateLocked
+        );
+        if (option::is_some(&next_in_command)) {
+            assert!(*option::borrow(&next_in_command) != circle.admin, EInvalidRecoveryDelegate);
+        };
+
+        config::set_next_in_command(&mut circle.id, next_in_command);
+        touch_admin_heartbeat(circle, clock);
+
+        event::emit(RecoveryDelegateUpdated {
+            circle_id: object::uid_to_inner(&circle.id),
+            admin: sender,
+            next_in_command,
+            timestamp: clock::timestamp_ms(clock),
+        });
+    }
+
+    public fun heartbeat_admin_liveness(
+        circle: &mut Circle,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        assert!(tx_context::sender(ctx) == circle.admin, ENotAdmin);
+        touch_admin_heartbeat(circle, clock);
+    }
+
     // Same as update_cycle_limits, but resolves SUI/USD price from oracle
     // with stale-price fallback and volatility circuit-breaker.
-    public entry fun update_cycle_limits_with_oracle(
+    public fun update_cycle_limits_with_oracle(
         circle: &mut Circle,
         cycle_length: u64,
         cycle_day: u64,
@@ -1799,6 +2082,7 @@ module njangi::njangi_circles {
             contribution_amount_local,
             security_deposit_local,
             sui_price_usd_cents,
+            clock,
             ctx
         );
     }
@@ -1807,9 +2091,10 @@ module njangi::njangi_circles {
     // Admin function to refresh native display amounts from USD
     // without changing USD-centric logic thresholds.
     // ----------------------------------------------------------
-    public entry fun sync_native_display_amounts(
+    public fun sync_native_display_amounts(
         circle: &mut Circle,
         sui_price_usd_cents: u64,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
@@ -1828,6 +2113,7 @@ module njangi::njangi_circles {
             contribution_native_amount,
             security_deposit_native_amount
         );
+        touch_admin_heartbeat(circle, clock);
 
         event::emit(NativeDisplayAmountsSynced {
             circle_id: object::uid_to_inner(&circle.id),
@@ -1841,7 +2127,7 @@ module njangi::njangi_circles {
     }
 
     // Resolve price from oracle and sync native display amounts.
-    public entry fun sync_native_display_amounts_with_oracle(
+    public fun sync_native_display_amounts_with_oracle(
         circle: &mut Circle,
         price_info_object: &PriceInfoObject,
         clock: &Clock,
@@ -1852,7 +2138,7 @@ module njangi::njangi_circles {
             price_info_object,
             clock
         );
-        sync_native_display_amounts(circle, sui_price_usd_cents, ctx);
+        sync_native_display_amounts(circle, sui_price_usd_cents, clock, ctx);
     }
 
     // ----------------------------------------------------------
@@ -1907,7 +2193,7 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     // Reset deposit status for all members in the rotation (for a new cycle)
     // ----------------------------------------------------------
-    public(package) fun reset_all_members_deposit_status(circle: &mut Circle, ctx: &mut TxContext) {
+    public(package) fun reset_all_members_deposit_status(circle: &mut Circle, ctx: &TxContext) {
         // Get all the non-zero addresses from rotation_order
         let rotation = &circle.rotation_order;
         let len = vector::length(rotation);
@@ -2040,22 +2326,20 @@ module njangi::njangi_circles {
                 // We're advancing positions within the same cycle
                 
                 // Calculate the proper interval based on cycle type
-                let mut interval_ms = 0;
-                
-                if (cycle_length == 0) { // Weekly cycle
+                let interval_ms = if (cycle_length == 0) { // Weekly cycle
                     // For weekly cycles, we maintain the same weekday
                     // Calculate days until the next instance of the same weekday
-                    interval_ms = core::ms_per_day() * 7 / rotation_len;
+                    core::ms_per_day() * 7 / rotation_len
                 } else if (cycle_length == 3) { // Bi-weekly cycle
                     // For bi-weekly, same as weekly but with 14 days
-                    interval_ms = core::ms_per_day() * 14 / rotation_len;
+                    core::ms_per_day() * 14 / rotation_len
                 } else if (cycle_length == 1) { // Monthly cycle 
                     // For monthly, we try to keep the same day of month
                     // An average month is 30 days
-                    interval_ms = core::ms_per_day() * 30 / rotation_len;
+                    core::ms_per_day() * 30 / rotation_len
                 } else { // Quarterly cycle
                     // For quarterly cycles (90 days)
-                    interval_ms = core::ms_per_day() * 90 / rotation_len;
+                    core::ms_per_day() * 90 / rotation_len
                 };
                 
                 // Update next_payout_time by adding the interval
@@ -2107,7 +2391,7 @@ module njangi::njangi_circles {
     // ----------------------------------------------------------
     // Admin function to resume cycle after pause
     // ----------------------------------------------------------
-    public entry fun resume_cycle(
+    public fun resume_cycle(
         circle: &mut Circle,
         clock: &Clock,
         ctx: &mut TxContext
@@ -2140,6 +2424,7 @@ module njangi::njangi_circles {
         
         // Clear pause flag
         circle.paused_after_cycle = false;
+        touch_admin_heartbeat(circle, clock);
         
         // Emit event for cycle resumed
         event::emit(CycleResumed {
@@ -2153,10 +2438,460 @@ module njangi::njangi_circles {
     }
 
     // ----------------------------------------------------------
+    // Emergency stop proposal and voting
+    // ----------------------------------------------------------
+    public fun propose_emergency_stop(
+        circle: &mut Circle,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert!(sender == circle.admin, ENotAdmin);
+
+        clear_expired_recovery_proposal_if_needed(circle, clock);
+
+        let eligible_voters = snapshot_recovery_voters(circle);
+        let eligible_voter_count = vector::length(&eligible_voters);
+        assert!(eligible_voter_count > 0, ENoRecoveryEligibleVoters);
+
+        let majority_threshold = recovery_majority_threshold(eligible_voter_count);
+        let created_at = clock::timestamp_ms(clock);
+        let deadline = created_at + EMERGENCY_STOP_VOTING_WINDOW_MS;
+
+        config::begin_recovery_proposal(
+            &mut circle.id,
+            sender,
+            eligible_voters,
+            majority_threshold,
+            deadline,
+            clock
+        );
+        touch_admin_heartbeat(circle, clock);
+
+        event::emit(EmergencyStopProposed {
+            circle_id: object::uid_to_inner(&circle.id),
+            proposer: sender,
+            eligible_voter_count,
+            majority_threshold,
+            deadline,
+            timestamp: created_at,
+        });
+    }
+
+    public fun vote_emergency_stop(
+        circle: &mut Circle,
+        yes_vote: bool,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert!(config::has_recovery_proposal(&circle.id), ERecoveryProposalMissing);
+
+        let current_time = clock::timestamp_ms(clock);
+        let deadline_opt = config::get_recovery_proposal_deadline(&circle.id);
+        assert!(option::is_some(&deadline_opt), ERecoveryProposalMissing);
+        let deadline = *option::borrow(&deadline_opt);
+        if (current_time > deadline && !config::is_recovery_proposal_passed(&circle.id)) {
+            config::clear_recovery_proposal(&mut circle.id, clock);
+            abort ERecoveryProposalExpired
+        };
+
+        assert!(!config::is_recovery_proposal_passed(&circle.id), ERecoveryVotingClosed);
+        assert!(config::has_recovery_eligible_voter(&circle.id, sender), ERecoveryVoteNotEligible);
+        assert!(!config::has_recovery_vote_from(&circle.id, sender), ERecoveryVoteAlreadyCast);
+
+        config::append_recovery_vote(&mut circle.id, sender, yes_vote, clock);
+
+        let yes_votes = config::get_recovery_yes_votes(&circle.id);
+        let no_votes = config::get_recovery_no_votes(&circle.id);
+        let threshold_opt = config::get_recovery_majority_threshold(&circle.id);
+        assert!(option::is_some(&threshold_opt), ERecoveryProposalMissing);
+        let majority_threshold = *option::borrow(&threshold_opt);
+
+        event::emit(EmergencyStopVoteCast {
+            circle_id: object::uid_to_inner(&circle.id),
+            voter: sender,
+            approved: yes_vote,
+            yes_votes,
+            no_votes,
+            majority_threshold,
+            timestamp: current_time,
+        });
+
+        if (config::is_recovery_proposal_passed(&circle.id)) {
+            event::emit(EmergencyStopMajorityReached {
+                circle_id: object::uid_to_inner(&circle.id),
+                yes_votes,
+                majority_threshold,
+                reached_at: current_time,
+            });
+        };
+    }
+
+    public fun execute_recovery<CoinType>(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        assert!(
+            config::can_execute_recovery(&circle.id, clock)
+                && config::is_recovery_proposal_passed(&circle.id),
+            ERecoveryExecutionNotReady
+        );
+        execute_recovery_internal<CoinType>(
+            circle,
+            wallet,
+            false,
+            RECOVERY_TRIGGER_ROLE_VOTE_EXECUTION,
+            clock,
+            ctx
+        );
+    }
+
+    public fun trigger_auto_release<CoinType>(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        assert!(config::is_auto_release_ready(&circle.id, clock), ERecoveryExecutionNotReady);
+        let current_time = clock::timestamp_ms(clock);
+        let trigger_role = resolve_auto_release_trigger_role(circle, tx_context::sender(ctx), current_time);
+        execute_recovery_internal<CoinType>(circle, wallet, true, trigger_role, clock, ctx);
+    }
+
+    fun execute_recovery_internal<CoinType>(
+        circle: &mut Circle,
+        wallet: &mut CustodyWallet,
+        used_auto_release: bool,
+        trigger_role: u8,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let executor = tx_context::sender(ctx);
+        let current_time = clock::timestamp_ms(clock);
+
+        assert!(custody::get_circle_id(wallet) == get_id(circle), EWalletCircleMismatch);
+
+        let member_addresses = recovery_member_addresses(circle);
+        assert!(vector::length(&member_addresses) == circle.current_members, ERecoveryMemberSnapshotMismatch);
+
+        let (total_sui_refund, total_stablecoin_refund) = get_recovery_refund_totals(circle, &member_addresses);
+        assert!(custody::get_total_wallet_balance(wallet) >= total_sui_refund, ERecoveryInsufficientWalletBalance);
+        assert!(custody::get_stablecoin_balance<CoinType>(wallet) >= total_stablecoin_refund, ERecoveryInsufficientWalletBalance);
+
+        event::emit(RecoveryExecutionStarted {
+            circle_id: object::uid_to_inner(&circle.id),
+            executor,
+            member_count: vector::length(&member_addresses),
+            total_sui_refund,
+            total_stablecoin_refund,
+            used_auto_release,
+            trigger_role,
+            timestamp: current_time,
+        });
+
+        config::mark_recovery_stopped(&mut circle.id, clock);
+        circle.is_active = false;
+        circle.paused_after_cycle = false;
+        circle.contributions_this_cycle = 0;
+        circle.next_payout_time = current_time;
+        circle.active_auction = option::none();
+
+        let mut refunded_members = 0;
+        let member_count = vector::length(&member_addresses);
+        let mut i = 0;
+        while (i < member_count) {
+            let member_addr = *vector::borrow(&member_addresses, i);
+            let member = get_member(circle, member_addr);
+            let sui_contributions_refunded = members::get_recovery_sui_contributions(member);
+            let sui_deposit_refunded = members::get_recovery_sui_deposit(member);
+            let stablecoin_contributions_refunded = members::get_recovery_stablecoin_contributions(member);
+            let stablecoin_deposit_refunded = members::get_recovery_stablecoin_deposit(member);
+            let member_sui_refund = sui_contributions_refunded + sui_deposit_refunded;
+            let member_stablecoin_refund = stablecoin_contributions_refunded + stablecoin_deposit_refunded;
+
+            if (member_sui_refund > 0) {
+                let refund_coin = custody::withdraw_sui_for_recovery(
+                    wallet,
+                    member_sui_refund,
+                    member_addr,
+                    clock,
+                    ctx
+                );
+                transfer::public_transfer(refund_coin, member_addr);
+            };
+
+            if (member_stablecoin_refund > 0) {
+                let refund_coin = custody::withdraw_stablecoin_for_recovery<CoinType>(
+                    wallet,
+                    member_stablecoin_refund,
+                    member_addr,
+                    clock,
+                    ctx
+                );
+                transfer::public_transfer(refund_coin, member_addr);
+            };
+
+            if (member_sui_refund > 0 || member_stablecoin_refund > 0) {
+                refunded_members = refunded_members + 1;
+            };
+
+            if (
+                member_sui_refund > 0
+                    || member_stablecoin_refund > 0
+                    || sui_deposit_refunded > 0
+                    || stablecoin_deposit_refunded > 0
+            ) {
+                let member_mut = get_member_mut(circle, member_addr);
+                if (sui_deposit_refunded > 0 || stablecoin_deposit_refunded > 0) {
+                    members::set_deposit_balance(member_mut, 0);
+                    members::set_deposit_paid(member_mut, false);
+                };
+                members::clear_all_recovery_balances(member_mut);
+            };
+
+            if (
+                sui_contributions_refunded > 0
+                    || sui_deposit_refunded > 0
+                    || stablecoin_contributions_refunded > 0
+                    || stablecoin_deposit_refunded > 0
+            ) {
+                event::emit(RecoveryMemberRefunded {
+                    circle_id: object::uid_to_inner(&circle.id),
+                    member: member_addr,
+                    sui_contributions_refunded,
+                    sui_deposit_refunded,
+                    stablecoin_contributions_refunded,
+                    stablecoin_deposit_refunded,
+                    timestamp: current_time,
+                });
+            };
+
+            i = i + 1;
+        };
+
+        config::mark_recovery_refunded(&mut circle.id, clock);
+
+        event::emit(RecoveryExecutionCompleted {
+            circle_id: object::uid_to_inner(&circle.id),
+            executor,
+            refunded_members,
+            total_sui_refund,
+            total_stablecoin_refund,
+            timestamp: current_time,
+        });
+    }
+
+    // ----------------------------------------------------------
     // Check if circle is paused after cycle
     // ----------------------------------------------------------
     public fun is_paused_after_cycle(circle: &Circle): bool {
         circle.paused_after_cycle
+    }
+
+    fun resolve_auto_release_trigger_role(circle: &Circle, caller: address, current_time: u64): u8 {
+        let valid_delegate = get_valid_auto_release_delegate(circle);
+        let has_valid_delegate = option::is_some(&valid_delegate);
+        let caller_is_delegate = if (has_valid_delegate) {
+            *option::borrow(&valid_delegate) == caller
+        } else {
+            false
+        };
+        let caller_can_fallback = can_active_member_trigger_auto_release(circle, caller);
+        let trigger_time = config::get_auto_release_trigger_time(&circle.id);
+        assert!(option::is_some(&trigger_time), ERecoveryExecutionNotReady);
+        let member_fallback_open = is_auto_release_member_fallback_open_internal(
+            has_valid_delegate,
+            *option::borrow(&trigger_time),
+            current_time
+        );
+
+        resolve_auto_release_trigger_role_internal(
+            has_valid_delegate,
+            caller_is_delegate,
+            caller_can_fallback,
+            member_fallback_open
+        )
+    }
+
+    fun resolve_auto_release_trigger_role_internal(
+        has_valid_delegate: bool,
+        caller_is_delegate: bool,
+        caller_can_fallback: bool,
+        member_fallback_open: bool
+    ): u8 {
+        assert!(
+            can_trigger_auto_release_internal(
+                has_valid_delegate,
+                caller_is_delegate,
+                caller_can_fallback,
+                member_fallback_open
+            ),
+            ERecoveryAutoReleaseUnauthorized
+        );
+
+        if (has_valid_delegate && !member_fallback_open && caller_is_delegate) {
+            RECOVERY_TRIGGER_ROLE_DELEGATE
+        } else {
+            RECOVERY_TRIGGER_ROLE_MEMBER_FALLBACK
+        }
+    }
+
+    fun get_valid_auto_release_delegate(circle: &Circle): Option<address> {
+        let next_in_command = config::get_next_in_command(&circle.id);
+        if (option::is_none(&next_in_command)) {
+            return option::none()
+        };
+
+        let delegate = *option::borrow(&next_in_command);
+        if (delegate == circle.admin || !can_active_member_trigger_auto_release(circle, delegate)) {
+            option::none()
+        } else {
+            option::some(delegate)
+        }
+    }
+
+    fun can_active_member_trigger_auto_release(circle: &Circle, caller: address): bool {
+        can_active_member_trigger_auto_release_internal(
+            caller == circle.admin,
+            is_recovery_snapshot_eligible(circle, caller)
+        )
+    }
+
+    fun can_trigger_auto_release_internal(
+        has_valid_delegate: bool,
+        caller_is_delegate: bool,
+        caller_can_fallback: bool,
+        member_fallback_open: bool
+    ): bool {
+        if (has_valid_delegate && !member_fallback_open) {
+            caller_is_delegate
+        } else {
+            caller_can_fallback
+        }
+    }
+
+    fun is_auto_release_member_fallback_open_internal(
+        has_valid_delegate: bool,
+        trigger_time: u64,
+        current_time: u64
+    ): bool {
+        !has_valid_delegate || current_time >= trigger_time + AUTO_RELEASE_DELEGATE_GRACE_PERIOD_MS
+    }
+
+    fun can_active_member_trigger_auto_release_internal(
+        caller_is_admin: bool,
+        caller_is_snapshot_eligible: bool
+    ): bool {
+        !caller_is_admin && caller_is_snapshot_eligible
+    }
+
+    fun snapshot_recovery_voters(circle: &Circle): vector<address> {
+        let mut eligible_voters = vector::empty<address>();
+        let members_list = get_circle_members(circle);
+        let mut i = 0;
+        let member_count = vector::length(&members_list);
+
+        while (i < member_count) {
+            let member_addr = *vector::borrow(&members_list, i);
+            if (
+                member_addr != @0x0
+                    && table::contains(&circle.members, member_addr)
+                    && is_recovery_snapshot_eligible(circle, member_addr)
+                    && !vector::contains(&eligible_voters, &member_addr)
+            ) {
+                vector::push_back(&mut eligible_voters, member_addr);
+            };
+            i = i + 1;
+        };
+
+        eligible_voters
+    }
+
+    fun is_recovery_snapshot_eligible(circle: &Circle, member_addr: address): bool {
+        if (!table::contains(&circle.members, member_addr)) {
+            return false
+        };
+
+        let member = table::borrow(&circle.members, member_addr);
+        members::get_status(member) == core::member_status_active()
+            && option::is_none(&members::get_suspension_end_time(member))
+    }
+
+    fun recovery_majority_threshold(member_count: u64): u64 {
+        if (member_count == 0) {
+            0
+        } else {
+            (member_count / 2) + 1
+        }
+    }
+
+    fun clear_expired_recovery_proposal_if_needed(circle: &mut Circle, clock: &Clock) {
+        if (!config::has_recovery_proposal(&circle.id)) {
+            return
+        };
+        if (config::is_recovery_majority_reached(&circle.id)) {
+            return
+        };
+
+        let deadline_opt = config::get_recovery_proposal_deadline(&circle.id);
+        if (option::is_none(&deadline_opt)) {
+            return
+        };
+
+        let deadline = *option::borrow(&deadline_opt);
+        if (clock::timestamp_ms(clock) > deadline) {
+            config::clear_recovery_proposal(&mut circle.id, clock);
+        };
+    }
+
+    fun recovery_member_addresses(circle: &Circle): vector<address> {
+        let mut member_addresses = vector::empty<address>();
+        let rotation = &circle.rotation_order;
+        let len = vector::length(rotation);
+        let mut i = 0;
+
+        while (i < len) {
+            let member_addr = *vector::borrow(rotation, i);
+            if (
+                member_addr != @0x0
+                    && table::contains(&circle.members, member_addr)
+                    && !vector::contains(&member_addresses, &member_addr)
+            ) {
+                vector::push_back(&mut member_addresses, member_addr);
+            };
+            i = i + 1;
+        };
+
+        member_addresses
+    }
+
+    fun get_recovery_refund_totals(
+        circle: &Circle,
+        member_addresses: &vector<address>
+    ): (u64, u64) {
+        let mut total_sui_refund = 0;
+        let mut total_stablecoin_refund = 0;
+        let member_count = vector::length(member_addresses);
+        let mut i = 0;
+
+        while (i < member_count) {
+            let member_addr = *vector::borrow(member_addresses, i);
+            let member = get_member(circle, member_addr);
+            total_sui_refund =
+                total_sui_refund
+                    + members::get_recovery_sui_contributions(member)
+                    + members::get_recovery_sui_deposit(member);
+            total_stablecoin_refund =
+                total_stablecoin_refund
+                    + members::get_recovery_stablecoin_contributions(member)
+                    + members::get_recovery_stablecoin_deposit(member);
+            i = i + 1;
+        };
+
+        (total_sui_refund, total_stablecoin_refund)
     }
 
     // ----------------------------------------------------------
@@ -2780,4 +3515,88 @@ module njangi::njangi_circles {
         assert!(!fresh_used_fallback, 9031);
         assert!(fresh_reason == PRICE_FALLBACK_NONE, 9032);
     }
-} 
+
+    #[test]
+    fun test_recovery_majority_threshold_rules() {
+        assert!(recovery_majority_threshold(0) == 0, 9033);
+        assert!(recovery_majority_threshold(1) == 1, 9034);
+        assert!(recovery_majority_threshold(2) == 2, 9035);
+        assert!(recovery_majority_threshold(3) == 2, 9036);
+        assert!(recovery_majority_threshold(4) == 3, 9037);
+        assert!(recovery_majority_threshold(5) == 3, 9038);
+    }
+
+    #[test]
+    fun test_auto_release_member_fallback_excludes_admin() {
+        assert!(!can_active_member_trigger_auto_release_internal(true, true), 9039);
+        assert!(!can_active_member_trigger_auto_release_internal(false, false), 9040);
+        assert!(can_active_member_trigger_auto_release_internal(false, true), 9041);
+    }
+
+    #[test]
+    fun test_auto_release_delegate_priority_and_member_fallback_matrix() {
+        assert!(can_trigger_auto_release_internal(true, true, true, false), 9042);
+        assert!(!can_trigger_auto_release_internal(true, false, true, false), 9043);
+        assert!(!can_trigger_auto_release_internal(true, false, false, false), 9044);
+        assert!(can_trigger_auto_release_internal(true, false, true, true), 9045);
+        assert!(can_trigger_auto_release_internal(false, false, true, true), 9046);
+        assert!(!can_trigger_auto_release_internal(false, false, false, true), 9047);
+    }
+
+    #[test]
+    fun test_auto_release_trigger_role_annotation_constants() {
+        assert!(
+            resolve_auto_release_trigger_role_internal(true, true, false, false)
+                == RECOVERY_TRIGGER_ROLE_DELEGATE,
+            9048
+        );
+        assert!(
+            resolve_auto_release_trigger_role_internal(false, false, true, true)
+                == RECOVERY_TRIGGER_ROLE_MEMBER_FALLBACK,
+            9049
+        );
+        assert!(
+            resolve_auto_release_trigger_role_internal(true, true, true, true)
+                == RECOVERY_TRIGGER_ROLE_MEMBER_FALLBACK,
+            9050
+        );
+        assert!(RECOVERY_TRIGGER_ROLE_VOTE_EXECUTION == 0, 9051);
+    }
+
+    #[test]
+    fun test_delegate_invalidation_reopens_member_fallback_authority() {
+        // When a valid delegate exists, fallback members are blocked.
+        assert!(!can_trigger_auto_release_internal(true, false, true, false), 9052);
+
+        // Once the delegate is invalidated and removed from the effective auth set,
+        // the same eligible member can trigger via fallback authority.
+        assert!(can_trigger_auto_release_internal(false, false, true, false), 9053);
+
+        // No delegate and no eligible member still means no caller is authorized.
+        assert!(!can_trigger_auto_release_internal(false, false, false, false), 9054);
+    }
+
+    #[test]
+    fun test_delegate_grace_window_reopens_member_fallback_after_timeout() {
+        let trigger_time = 1_000;
+
+        assert!(!is_auto_release_member_fallback_open_internal(true, trigger_time, trigger_time), 9055);
+        assert!(
+            !is_auto_release_member_fallback_open_internal(
+                true,
+                trigger_time,
+                trigger_time + AUTO_RELEASE_DELEGATE_GRACE_PERIOD_MS - 1
+            ),
+            9056
+        );
+        assert!(
+            is_auto_release_member_fallback_open_internal(
+                true,
+                trigger_time,
+                trigger_time + AUTO_RELEASE_DELEGATE_GRACE_PERIOD_MS
+            ),
+            9057
+        );
+        assert!(is_auto_release_member_fallback_open_internal(false, trigger_time, trigger_time), 9058);
+    }
+}

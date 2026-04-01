@@ -1,16 +1,8 @@
 module njangi::njangi_milestones {
-    use sui::object::{Self, UID, ID};
-    use sui::transfer;
-    use sui::tx_context::{Self, TxContext};
-    use sui::table::{Self, Table};
-    use sui::dynamic_field as df;
     use std::string::{Self, String};
-    use sui::event;
-    use std::vector;
-    use std::option::{Self, Option};
     
-    use njangi::njangi_core::{Self as core};
-    use njangi::njangi_circles::{Self as circles};
+    use njangi::njangi_core as core;
+    use njangi::njangi_circles as circles;
     
     // ----------------------------------------------------------
     // Error codes specific to milestones
@@ -21,11 +13,6 @@ module njangi::njangi_milestones {
     const EMilestoneVerificationFailed: u64 = 33;
     const EMilestoneDeadlinePassed: u64 = 34;
     const EMilestoneAlreadyVerified: u64 = 35;
-    const EMilestonePrerequisiteNotMet: u64 = 36;
-    
-    // Key for dynamic field
-    public struct MilestoneDataKey has copy, drop, store {}
-    
     // ----------------------------------------------------------
     // Main Milestone struct - moved from njangi_circles
     // ----------------------------------------------------------
@@ -135,7 +122,7 @@ module njangi::njangi_milestones {
     // ----------------------------------------------------------
     public fun verify_milestone(
         milestone_data: &mut MilestoneData,
-        circle: &mut circles::Circle,
+        _circle: &mut circles::Circle,
         milestone_number: u64,
         current_time: u64,
         verifier: address
@@ -148,7 +135,7 @@ module njangi::njangi_milestones {
         
         // Based on milestone type
         if (milestone.milestone_type == core::milestone_type_monetary()) {
-            let target = *option::borrow(&milestone.target_amount);
+            let _target = *option::borrow(&milestone.target_amount);
             // We need to get the balance from the circle
             // assert!(balance::value(&circle.contributions) >= target, EMilestoneTargetInvalid);
             // TODO: Implement a way to check circle's contribution balance
@@ -203,8 +190,8 @@ module njangi::njangi_milestones {
         milestone_data: &mut MilestoneData,
         milestone_number: u64,
         verification_proof: vector<u8>,
-        timestamp: u64,
-        sender: address
+        _timestamp: u64,
+        _sender: address
     ) {
         assert!(milestone_number < vector::length(&milestone_data.milestones), EInvalidMilestone);
         
@@ -243,7 +230,7 @@ module njangi::njangi_milestones {
     // ----------------------------------------------------------
     // Delete milestone data - called when circle is deleted
     // ----------------------------------------------------------
-    public fun delete_milestone_data(milestone_data: MilestoneData, ctx: &TxContext) {
+    public fun delete_milestone_data(milestone_data: MilestoneData, _ctx: &TxContext) {
         let MilestoneData { 
             id,
             circle_id: _,

@@ -8361,7 +8361,7 @@ export default function Dashboard() {
       <Dialog.Root open={isTransactionHistoryOpen} onOpenChange={setIsTransactionHistoryOpen}>
         <Dialog.Portal>
           <Dialog.Overlay className={dialogOverlayClass} />
-          <Dialog.Content className={`${dialogContentClass} max-w-2xl`}>
+          <Dialog.Content className={`${transferDialogContentClass} max-w-2xl`}>
             <div className={dialogHeaderClass}>
               <div className="flex min-w-0 items-start gap-4">
                 <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-stone-200 bg-stone-50 text-slate-700">
@@ -8384,7 +8384,7 @@ export default function Dashboard() {
               </Dialog.Close>
             </div>
 
-            <div className={dialogBodyClass}>
+            <div className={`${dialogBodyClass} flex-1`}>
               {isLoadingHistory ? (
                 <div className="flex items-center justify-center py-8">
                   <div className="flex items-center gap-3 text-slate-600">

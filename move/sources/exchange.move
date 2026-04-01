@@ -43,13 +43,6 @@ module njangi::exchange {
     const E_INSUFFICIENT_ANTI_GRIEFING_FEE: u64 = 8;
     const E_INVALID_ATTESTOR: u64 = 9;
     const E_INSUFFICIENT_ATTESTATIONS: u64 = 10;
-    const E_INVALID_SIGNATURE: u64 = 11;
-
-    // ======== NJEX Agent Constants ========
-    
-    /// NJEX Agent package ID on SuiAIFun
-    const NJEX_PACKAGE_ID: address = @0x19dce611d7b2022c90b64fec1d8728cf72f9c712c48a996a2942937ead5e8974;
-
     // ======== Structs ========
 
     /// Off-chain file commitment stored on-chain
@@ -195,6 +188,7 @@ module njangi::exchange {
     // ======== Public Functions ========
 
     /// Create a new exchange chamber with an initial offer
+    #[allow(lint(self_transfer))]
     public fun create_offer(
         commitment: AssetCommitment,
         timeout_ms: u64,
@@ -259,6 +253,7 @@ module njangi::exchange {
     }
 
     /// Join an existing exchange chamber
+    #[allow(lint(self_transfer))]
     public fun join_offer(
         chamber: &mut ExchangeChamber,
         commitment: AssetCommitment,
@@ -319,7 +314,7 @@ module njangi::exchange {
         cap: &ChamberCap,
         payment: Coin<SUI>,
         clock: &Clock,
-        ctx: &mut TxContext
+        ctx: &TxContext
     ) {
         let sender = tx_context::sender(ctx);
         let current_time = clock::timestamp_ms(clock);
@@ -390,7 +385,7 @@ module njangi::exchange {
         cap: &ChamberCap,
         payment: Coin<CoinType>,
         clock: &Clock,
-        ctx: &mut TxContext
+        ctx: &TxContext
     ) {
         let sender = tx_context::sender(ctx);
         let current_time = clock::timestamp_ms(clock);
@@ -465,7 +460,7 @@ module njangi::exchange {
         thumbnail_hash: vector<u8>, // Can be empty if no thumbnail
         metadata_digest: vector<u8>, // Can be empty if no metadata
         clock: &Clock,
-        ctx: &mut TxContext
+        ctx: &TxContext
     ) {
         let sender = tx_context::sender(ctx);
         let current_time = clock::timestamp_ms(clock);
@@ -568,7 +563,7 @@ module njangi::exchange {
         attestation_content: vector<u8>, // The actual attestation message
         signature: vector<u8>,           // Agent's signature over attestation
         clock: &Clock,
-        ctx: &mut TxContext
+        ctx: &TxContext
     ) {
         let agent = tx_context::sender(ctx);
         let current_time = clock::timestamp_ms(clock);
@@ -745,7 +740,7 @@ module njangi::exchange {
         cap: &ChamberCap,
         reason: String,
         clock: &Clock,
-        ctx: &mut TxContext
+        ctx: &TxContext
     ) {
         let sender = tx_context::sender(ctx);
         let current_time = clock::timestamp_ms(clock);
@@ -951,7 +946,7 @@ module njangi::exchange {
     entry fun add_authorized_agent(
         registry: &mut AttestorRegistry,
         agent_address: address,
-        ctx: &mut TxContext
+        ctx: &TxContext
     ) {
         assert!(registry.admin == tx_context::sender(ctx), E_UNAUTHORIZED);
         
@@ -964,7 +959,7 @@ module njangi::exchange {
     entry fun remove_authorized_agent(
         registry: &mut AttestorRegistry,
         agent_address: address,
-        ctx: &mut TxContext
+        ctx: &TxContext
     ) {
         assert!(registry.admin == tx_context::sender(ctx), E_UNAUTHORIZED);
         
@@ -983,7 +978,7 @@ module njangi::exchange {
     entry fun register_njex_agent(
         registry: &mut AttestorRegistry,
         njex_agent_address: address,
-        ctx: &mut TxContext
+        ctx: &TxContext
     ) {
         assert!(registry.admin == tx_context::sender(ctx), E_UNAUTHORIZED);
         
@@ -1003,7 +998,7 @@ module njangi::exchange {
         confidence_score: u8,           // 0-100 confidence in response
         signature: vector<u8>,          // Agent signature
         clock: &Clock,
-        ctx: &mut TxContext
+        ctx: &TxContext
     ) {
         let agent = tx_context::sender(ctx);
         let current_time = clock::timestamp_ms(clock);

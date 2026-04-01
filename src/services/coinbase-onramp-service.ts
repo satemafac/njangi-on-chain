@@ -151,8 +151,7 @@ async function loadCdpGenerateJwt():
   }
 
   try {
-    const moduleName = '@coinbase/cdp-sdk/auth';
-    const mod = (await import(moduleName)) as CdpSdkAuthModule;
+    const mod = (await import('@coinbase/cdp-sdk/auth')) as CdpSdkAuthModule;
     if (typeof mod.generateJwt === 'function') {
       cachedCdpGenerateJwt = mod.generateJwt;
       return cachedCdpGenerateJwt;

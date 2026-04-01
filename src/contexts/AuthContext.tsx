@@ -3,6 +3,7 @@ import { AccountData, OAuthProvider } from '@/services/zkLoginService';
 import { ZkLoginClient } from '@/services/zkLoginClient';
 import { useIdleTimer } from '@/hooks/useIdleTimer';
 import { getCurrentNetwork } from '@/services/network-config';
+import { refreshAdminHeartbeatsAfterAuth } from '@/lib/admin-heartbeat-refresh';
 
 // Define CircleData interface based on required parameters
 interface CircleData {
@@ -123,9 +124,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       const savedUserAddress = localStorage.getItem('userAddress');
 
       if (savedAccount && savedIsAuthenticated && savedUserAddress) {
-        setAccount(JSON.parse(savedAccount));
+        const parsedAccount = JSON.parse(savedAccount) as AccountData;
+        setAccount(parsedAccount);
         setIsAuthenticated(true);
         setUserAddress(savedUserAddress);
+        void refreshAdminHeartbeatsAfterAuth({
+          account: parsedAccount,
+          heartbeatClient: zkLogin,
+          source: 'session_restore',
+        });
       }
     } catch (err) {
       console.warn('Failed to restore saved authentication state:', err);
@@ -136,7 +143,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setHasHydratedAuth(true);
       setIsLoading(false);
     }
-  }, []);
+  }, [zkLogin]);
 
   // Persist state changes to localStorage
   useEffect(() => {
@@ -223,6 +230,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     // Reset idle timer after successful login
     resetIdleTimerWithLogging();
+
+    void refreshAdminHeartbeatsAfterAuth({
+      account: accountData,
+      heartbeatClient: zkLogin,
+      source: 'login_success',
+    });
     
     // Check for WhatsApp phone number and send notification
     const whatsappPhone = sessionStorage.getItem('whatsapp_phone');

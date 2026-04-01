@@ -1,39 +1,12 @@
 module njangi::njangi_members {
-    use sui::object::ID;
-    use sui::tx_context::{Self, TxContext};
     use sui::clock::{Self, Clock};
-    use sui::coin::{Self, Coin};
-    use sui::balance::{Self, Balance};
-    use sui::event;
-    use sui::sui::SUI;
-    use std::option::{Self, Option};
-    use std::string::{Self, String};
-    use std::vector;
+    use std::string::String;
     
     use njangi::njangi_core as core;
     
     // ----------------------------------------------------------
     // Error codes specific to members
     // ----------------------------------------------------------
-    const EMemberAlreadyExists: u64 = 39;
-    const EMemberNotPending: u64 = 40;
-    const EMemberNotActive: u64 = 14;
-    const EMemberSuspended: u64 = 13;
-    const EMemberHasOutstandingObligations: u64 = 18;
-    const ENoWarningToClear: u64 = 20;
-    const EPenaltyAlreadyPaid: u64 = 21;
-    const EInsufficientPenaltyPayment: u64 = 19;
-    
-    // ----------------------------------------------------------
-    // Local constants (from core)
-    // ----------------------------------------------------------
-    // Replace with direct calls to core functions
-    //const MEMBER_STATUS_ACTIVE: u8 = 0;
-    //const MEMBER_STATUS_PENDING: u8 = 1; 
-    //const MEMBER_STATUS_SUSPENDED: u8 = 2;
-    //const MEMBER_STATUS_EXITED: u8 = 3;
-    //const MS_PER_MONTH: u64 = 2_419_200_000;
-    
     // ----------------------------------------------------------
     // Member struct
     // ----------------------------------------------------------
@@ -41,9 +14,13 @@ module njangi::njangi_members {
         joined_at: u64,
         last_contribution: u64,
         total_contributed: u64,   // in SUI decimals
+        recovery_sui_contributions: u64,
+        recovery_stablecoin_contributions: u64,
         received_payout: bool,
         payout_position: Option<u64>,
         deposit_balance: u64,     // in SUI decimals
+        recovery_sui_deposit: u64,
+        recovery_stablecoin_deposit: u64,
         missed_payments: u64,
         missed_meetings: u64,
         status: u8,
@@ -71,6 +48,7 @@ module njangi::njangi_members {
         position: Option<u64>,
     }
     
+    #[allow(unused_field)]
     public struct MemberApproved has copy, drop {
         circle_id: ID,
         member: address,
@@ -83,6 +61,7 @@ module njangi::njangi_members {
         deposit_amount: u64,
     }
     
+    #[allow(unused_field)]
     public struct WarningIssued has copy, drop {
         circle_id: ID,
         member: address,
@@ -91,6 +70,7 @@ module njangi::njangi_members {
         reason: String,
     }
     
+    #[allow(unused_field)]
     public struct PenaltyPaid has copy, drop {
         circle_id: ID,
         member: address,
@@ -111,9 +91,13 @@ module njangi::njangi_members {
             joined_at,
             last_contribution: 0,
             total_contributed: 0,
+            recovery_sui_contributions: 0,
+            recovery_stablecoin_contributions: 0,
             received_payout: false,
             payout_position,
             deposit_balance,
+            recovery_sui_deposit: 0,
+            recovery_stablecoin_deposit: 0,
             missed_payments: 0,
             missed_meetings: 0,
             status,
@@ -305,6 +289,81 @@ module njangi::njangi_members {
         // Reset last_contribution to indicate they need to contribute again
         member.last_contribution = 0;
     }
+
+    public fun get_recovery_sui_contributions(member: &Member): u64 {
+        member.recovery_sui_contributions
+    }
+
+    public fun add_recovery_sui_contributions(member: &mut Member, amount: u64) {
+        member.recovery_sui_contributions = member.recovery_sui_contributions + amount;
+    }
+
+    public fun subtract_recovery_sui_contributions(member: &mut Member, amount: u64) {
+        assert!(member.recovery_sui_contributions >= amount, 12);
+        member.recovery_sui_contributions = member.recovery_sui_contributions - amount;
+    }
+
+    public fun clear_recovery_sui_contributions(member: &mut Member) {
+        member.recovery_sui_contributions = 0;
+    }
+
+    public fun get_recovery_stablecoin_contributions(member: &Member): u64 {
+        member.recovery_stablecoin_contributions
+    }
+
+    public fun add_recovery_stablecoin_contributions(member: &mut Member, amount: u64) {
+        member.recovery_stablecoin_contributions = member.recovery_stablecoin_contributions + amount;
+    }
+
+    public fun subtract_recovery_stablecoin_contributions(member: &mut Member, amount: u64) {
+        assert!(member.recovery_stablecoin_contributions >= amount, 12);
+        member.recovery_stablecoin_contributions = member.recovery_stablecoin_contributions - amount;
+    }
+
+    public fun clear_recovery_stablecoin_contributions(member: &mut Member) {
+        member.recovery_stablecoin_contributions = 0;
+    }
+
+    public fun get_recovery_sui_deposit(member: &Member): u64 {
+        member.recovery_sui_deposit
+    }
+
+    public fun set_recovery_sui_deposit(member: &mut Member, amount: u64) {
+        member.recovery_sui_deposit = amount;
+    }
+
+    public fun subtract_recovery_sui_deposit(member: &mut Member, amount: u64) {
+        assert!(member.recovery_sui_deposit >= amount, 12);
+        member.recovery_sui_deposit = member.recovery_sui_deposit - amount;
+    }
+
+    public fun clear_recovery_sui_deposit(member: &mut Member) {
+        member.recovery_sui_deposit = 0;
+    }
+
+    public fun get_recovery_stablecoin_deposit(member: &Member): u64 {
+        member.recovery_stablecoin_deposit
+    }
+
+    public fun set_recovery_stablecoin_deposit(member: &mut Member, amount: u64) {
+        member.recovery_stablecoin_deposit = amount;
+    }
+
+    public fun subtract_recovery_stablecoin_deposit(member: &mut Member, amount: u64) {
+        assert!(member.recovery_stablecoin_deposit >= amount, 12);
+        member.recovery_stablecoin_deposit = member.recovery_stablecoin_deposit - amount;
+    }
+
+    public fun clear_recovery_stablecoin_deposit(member: &mut Member) {
+        member.recovery_stablecoin_deposit = 0;
+    }
+
+    public fun clear_all_recovery_balances(member: &mut Member) {
+        member.recovery_sui_contributions = 0;
+        member.recovery_stablecoin_contributions = 0;
+        member.recovery_sui_deposit = 0;
+        member.recovery_stablecoin_deposit = 0;
+    }
     
     // ----------------------------------------------------------
     // Member payment verification
@@ -312,7 +371,7 @@ module njangi::njangi_members {
     public fun has_missed_payment(
         member: &Member, 
         cycle_start: u64, 
-        cycle_end: u64
+        _cycle_end: u64
     ): bool {
         // If last contribution is 0, check if the member has just joined
         if (member.last_contribution == 0) {

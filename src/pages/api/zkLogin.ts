@@ -35,6 +35,8 @@ import {
   resolveUpgradeAwarePackageId,
 } from '@/lib/circle-chain';
 import { getCircleConfigFields } from '@/lib/circle-config';
+import { getMinimumAutoReleaseDelayMsForMoveCycleLength } from '@/lib/auto-release';
+import { normalizeRecoveryDelegateAddress } from '@/lib/recovery-delegate';
 
 // Add at the top with other imports
 interface RPCError extends Error {
@@ -418,6 +420,14 @@ function normalizeSerializedTransactionBytes(input: unknown): Uint8Array {
   }
 
   throw new Error('Unsupported serialized transaction payload.');
+}
+
+function deserializeTransactionPayload(input: unknown): Transaction {
+  if (typeof input === 'string' && input.trim().startsWith('{')) {
+    return Transaction.from(input.trim());
+  }
+
+  return Transaction.from(normalizeSerializedTransactionBytes(input));
 }
 
 // When using swapAndDepositCetus, replace accessing the private suiClient directly with the proper API
@@ -1040,6 +1050,22 @@ async function resolveMemberSecurityDepositContext(args: {
   };
 }
 
+async function resolveRecoveryWalletCoinType(
+  suiClient: SuiClient,
+  walletId: string,
+): Promise<string> {
+  const walletResponse = await suiClient.getObject({
+    id: walletId,
+    options: { showContent: true },
+  });
+
+  if (!walletResponse.data?.content) {
+    throw new Error('Failed to load custody wallet for recovery execution');
+  }
+
+  return resolveStablecoinCoinType(getWalletStablecoinTarget(walletResponse.data.content));
+}
+
 function mapSecurityDepositErrorMessage(errorStr: string, fallback = 'Transaction failed'): string {
   if (errorStr.includes(', 12)')) {
     return 'Insufficient security deposit balance available to return this deposit.';
@@ -1290,6 +1316,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const deposit = BigInt(circleData.security_deposit);
           const depositLocal = BigInt(circleData.security_deposit_local || 0);
           const depositUsd = BigInt(circleData.security_deposit_usd || 0);
+          const autoReleaseEnabled =
+            circleData.auto_release_enabled === true || circleData.auto_release_enabled === 'true';
+          const autoReleaseDelayMs = BigInt(circleData.auto_release_delay_ms || 0);
+          const cycleLengthValue = Number(circleData.cycle_length);
+          const rawNextInCommand =
+            typeof circleData.next_in_command === 'string' ? circleData.next_in_command : '';
+          const normalizedNextInCommand = normalizeRecoveryDelegateAddress(rawNextInCommand);
+          const rawTargetAmountLocal =
+            typeof circleData.target_amount_local === 'object' && circleData.target_amount_local !== null
+              ? circleData.target_amount_local.some
+              : circleData.target_amount_local;
+          const targetAmountLocalValue =
+            rawTargetAmountLocal === undefined ||
+            rawTargetAmountLocal === null ||
+            rawTargetAmountLocal === '' ||
+            rawTargetAmountLocal === 0 ||
+            rawTargetAmountLocal === '0'
+              ? null
+              : BigInt(rawTargetAmountLocal);
           
           // Debug logging to understand value conversions
           console.log("Circle Creation - Monetary Values:", {
@@ -1304,6 +1349,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             securityDepositLocalAmount: Number(depositLocal) / 100,
             securityDepositUSD: Number(depositUsd) / 100,
             currencyType: circleData.currency_type || 'USD',
+            autoReleaseEnabled,
+            autoReleaseDelayMs: autoReleaseDelayMs.toString(),
             expectedFormat: "The contract expects SUI values in MIST format (9 decimals)"
           });
           
@@ -1322,6 +1369,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (contributionLocal <= BigInt(0) || depositLocal <= BigInt(0)) {
             return res.status(400).json({ 
               error: 'Invalid local currency amount: Contribution and security deposit local currency values must be greater than 0'
+            });
+          }
+
+          if (autoReleaseEnabled && autoReleaseDelayMs <= BigInt(0)) {
+            return res.status(400).json({
+              error: 'Invalid auto-release delay: Delay must be greater than 0 when auto-release is enabled'
+            });
+          }
+
+          if (autoReleaseEnabled) {
+            const minimumAutoReleaseDelayMs = getMinimumAutoReleaseDelayMsForMoveCycleLength(cycleLengthValue);
+            if (minimumAutoReleaseDelayMs === null) {
+              return res.status(400).json({
+                error: 'Invalid cycle length: Unable to validate auto-release delay for this circle cadence'
+              });
+            }
+
+            if (autoReleaseDelayMs <= BigInt(minimumAutoReleaseDelayMs)) {
+              return res.status(400).json({
+                error: `Invalid auto-release delay: Delay must be greater than the selected cycle length (${Math.round(minimumAutoReleaseDelayMs / (24 * 60 * 60 * 1000))} days minimum)`
+              });
+            }
+
+            if (!normalizedNextInCommand) {
+              return res.status(400).json({
+                error: 'Invalid next-in-command wallet: A valid delegate address is required when auto-release is enabled'
+              });
+            }
+          } else if (rawNextInCommand.trim().length > 0 && !normalizedNextInCommand) {
+            return res.status(400).json({
+              error: 'Invalid next-in-command wallet: Enter a valid Sui wallet address'
             });
           }
 
@@ -1376,7 +1454,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             // Add cycle debugging
             cycleLength: circleData.cycle_length,
             cycleDay: circleData.cycle_day,
-            currencyType: circleData.currency_type
+            currencyType: circleData.currency_type,
+            autoReleaseEnabled,
+            autoReleaseDelayMs: autoReleaseDelayMs.toString()
           });
 
           // Attempt to send the transaction with network override support
@@ -1425,9 +1505,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                       txb.pure.vector('bool', circleData.penalty_rules),
                       txb.pure.option('u8', circleData.goal_type?.some),
                       txb.pure.option('u64', circleData.target_amount?.some ? BigInt(circleData.target_amount.some) : null),
-                      txb.pure.option('u64', circleData.target_amount_local?.some ? BigInt(circleData.target_amount_local.some) : null),
+                      txb.pure.option('u64', targetAmountLocalValue),
                       txb.pure.option('u64', circleData.target_date?.some ? BigInt(circleData.target_date.some) : null),
                       txb.pure.bool(circleData.verification_required),
+                      txb.pure.bool(autoReleaseEnabled),
+                      txb.pure.u64(autoReleaseDelayMs),
                       txb.object("0x6")  // Clock object
                     ]
                   });
@@ -4504,6 +4586,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
       case 'executeSwap':
+      case 'sendSerializedTransaction':
         if (!account) {
           return res.status(400).json({ error: 'Account data is required' });
         }
@@ -4542,8 +4625,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
           
           // Deserialize the transaction
-          const txBytes = normalizeSerializedTransactionBytes(req.body.txb);
-          const tx = Transaction.from(txBytes);
+          const tx = deserializeTransactionPayload(req.body.txb);
           tx.setSender(session.account.userAddr);
           
           // Execute the transaction
@@ -4560,7 +4642,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             gasUsed: txResult.gasUsed
           });
         } catch (error) {
-          console.error('Error executing DEX swap:', error);
+          const serializedActionLabel = action === 'executeSwap' ? 'DEX swap' : 'serialized transaction';
+          console.error(`Error executing ${serializedActionLabel}:`, error);
           
           if (error instanceof Error && 
               (error.message.includes('proof verify failed') ||
@@ -4577,7 +4660,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
           
           // Check for common DEX errors
-          if (error instanceof Error) {
+          if (action === 'executeSwap' && error instanceof Error) {
             if (error.message.includes('insufficient liquidity')) {
               return res.status(400).json({ 
                 error: 'Insufficient liquidity in DEX pool. Try a smaller amount.'
@@ -4592,7 +4675,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
           
           return res.status(500).json({ 
-            error: error instanceof Error ? error.message : 'Failed to execute swap'
+            error: error instanceof Error
+              ? error.message
+              : action === 'executeSwap'
+                ? 'Failed to execute swap'
+                : 'Failed to execute serialized transaction'
           });
         }
 
@@ -4650,7 +4737,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   target: `${packageIdToUse}::njangi_circles::toggle_auto_swap`,
                   arguments: [
                     txb.object(circleId),
-                    txb.pure.bool(enabled)
+                    txb.pure.bool(enabled),
+                    txb.object(CLOCK_OBJECT_ID),
                   ]
                 });
               }
@@ -5447,7 +5535,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               txb.moveCall({
                 target: `${packageIdToUse}::njangi_circles::activate_circle`,
                 arguments: [
-                  txb.object(circleId)
+                  txb.object(circleId),
+                  txb.object(CLOCK_OBJECT_ID),
                 ],
               });
             }
@@ -5532,6 +5621,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   txb.object(circleId), // circle
                   txb.pure.address(memberAddress.toLowerCase().startsWith('0x') ? memberAddress.toLowerCase() : `0x${memberAddress.toLowerCase()}`), // Normalize the address
                   txb.pure.u64(position), // position as u64 integer
+                  txb.object(CLOCK_OBJECT_ID),
                 ],
               });
             }
@@ -5629,6 +5719,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 arguments: [
                   txb.object(circleId), // circle
                   txb.makeMoveVec({ elements: addressArgs, type: 'address' }),
+                  txb.object(CLOCK_OBJECT_ID),
                 ],
               });
             }
@@ -6538,6 +6629,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 arguments: [
                   txb.object(circleId),
                   txb.pure.u64(newMaxMembers),
+                  txb.object(CLOCK_OBJECT_ID),
                 ],
               });
             },
@@ -6966,6 +7058,329 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
         }
         break;
+
+      case 'proposeEmergencyStop':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!circleId) {
+          return res.status(400).json({ error: 'Circle ID is required' });
+        }
+
+        try {
+          try {
+            if (!sessionId) {
+              throw new Error('No session ID provided');
+            }
+            validateSession(sessionId, 'sendTransaction');
+          } catch (validationError) {
+            console.error('Session validation failed:', validationError);
+            clearSessionCookie(res);
+            return res.status(401).json({
+              error: validationError instanceof Error ? validationError.message : 'Session validation failed',
+              requireRelogin: true
+            });
+          }
+
+          const packageIdToUse = await resolveCirclePackageIdForTransaction({
+            context: 'proposeEmergencyStop',
+            network: getCurrentNetwork(),
+            circleId,
+            userAddress: account.userAddr,
+          });
+
+          const txResult = await instance.sendTransaction(
+            account,
+            (txb: Transaction) => {
+              txb.setSender(account.userAddr);
+              txb.moveCall({
+                target: `${packageIdToUse}::njangi_circles::propose_emergency_stop`,
+                arguments: [
+                  txb.object(circleId),
+                  txb.object(CLOCK_OBJECT_ID)
+                ]
+              });
+            },
+            { gasBudget: 50000000 }
+          );
+
+          return res.status(200).json({
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+        } catch (error) {
+          console.error('Error proposing emergency stop:', error);
+
+          if (error instanceof Error &&
+              (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired') ||
+              error.message.includes('re-authenticate'))) {
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to propose emergency stop',
+            requireRelogin: false
+          });
+        }
+
+      case 'voteEmergencyStop':
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!circleId) {
+          return res.status(400).json({ error: 'Circle ID is required' });
+        }
+
+        if (typeof req.body.yesVote !== 'boolean') {
+          return res.status(400).json({ error: 'yesVote must be a boolean' });
+        }
+
+        try {
+          try {
+            if (!sessionId) {
+              throw new Error('No session ID provided');
+            }
+            validateSession(sessionId, 'sendTransaction');
+          } catch (validationError) {
+            console.error('Session validation failed:', validationError);
+            clearSessionCookie(res);
+            return res.status(401).json({
+              error: validationError instanceof Error ? validationError.message : 'Session validation failed',
+              requireRelogin: true
+            });
+          }
+
+          const packageIdToUse = await resolveCirclePackageIdForTransaction({
+            context: 'voteEmergencyStop',
+            network: getCurrentNetwork(),
+            circleId,
+            userAddress: account.userAddr,
+          });
+
+          const txResult = await instance.sendTransaction(
+            account,
+            (txb: Transaction) => {
+              txb.setSender(account.userAddr);
+              txb.moveCall({
+                target: `${packageIdToUse}::njangi_circles::vote_emergency_stop`,
+                arguments: [
+                  txb.object(circleId),
+                  txb.pure.bool(req.body.yesVote),
+                  txb.object(CLOCK_OBJECT_ID)
+                ]
+              });
+            },
+            { gasBudget: 50000000 }
+          );
+
+          return res.status(200).json({
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+        } catch (error) {
+          console.error('Error voting on emergency stop:', error);
+
+          if (error instanceof Error &&
+              (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired') ||
+              error.message.includes('re-authenticate'))) {
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to vote on emergency stop',
+            requireRelogin: false
+          });
+        }
+
+      case 'executeRecovery': {
+        const recoveryWalletId = req.body.walletId;
+
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!circleId) {
+          return res.status(400).json({ error: 'Circle ID is required' });
+        }
+
+        if (!recoveryWalletId || typeof recoveryWalletId !== 'string') {
+          return res.status(400).json({ error: 'Custody wallet ID is required' });
+        }
+
+        try {
+          try {
+            if (!sessionId) {
+              throw new Error('No session ID provided');
+            }
+            validateSession(sessionId, 'sendTransaction');
+          } catch (validationError) {
+            console.error('Session validation failed:', validationError);
+            clearSessionCookie(res);
+            return res.status(401).json({
+              error: validationError instanceof Error ? validationError.message : 'Session validation failed',
+              requireRelogin: true
+            });
+          }
+
+          const packageIdToUse = await resolveCirclePackageIdForTransaction({
+            context: 'executeRecovery',
+            network: getCurrentNetwork(),
+            circleId,
+            userAddress: account.userAddr,
+          });
+          const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+          const stablecoinTypeArg = await resolveRecoveryWalletCoinType(suiClient, recoveryWalletId);
+
+          const txResult = await instance.sendTransaction(
+            account,
+            (txb: Transaction) => {
+              txb.setSender(account.userAddr);
+              txb.moveCall({
+                target: `${packageIdToUse}::njangi_circles::execute_recovery`,
+                typeArguments: [stablecoinTypeArg],
+                arguments: [
+                  txb.object(circleId),
+                  txb.object(recoveryWalletId),
+                  txb.object(CLOCK_OBJECT_ID)
+                ]
+              });
+            },
+            { gasBudget: 100000000 }
+          );
+
+          return res.status(200).json({
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+        } catch (error) {
+          console.error('Error executing recovery:', error);
+
+          if (error instanceof Error &&
+              (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired') ||
+              error.message.includes('re-authenticate'))) {
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to execute recovery',
+            requireRelogin: false
+          });
+        }
+      }
+
+      case 'triggerAutoRelease': {
+        const recoveryWalletId = req.body.walletId;
+
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+
+        if (!circleId) {
+          return res.status(400).json({ error: 'Circle ID is required' });
+        }
+
+        if (!recoveryWalletId || typeof recoveryWalletId !== 'string') {
+          return res.status(400).json({ error: 'Custody wallet ID is required' });
+        }
+
+        try {
+          try {
+            if (!sessionId) {
+              throw new Error('No session ID provided');
+            }
+            validateSession(sessionId, 'sendTransaction');
+          } catch (validationError) {
+            console.error('Session validation failed:', validationError);
+            clearSessionCookie(res);
+            return res.status(401).json({
+              error: validationError instanceof Error ? validationError.message : 'Session validation failed',
+              requireRelogin: true
+            });
+          }
+
+          const packageIdToUse = await resolveCirclePackageIdForTransaction({
+            context: 'triggerAutoRelease',
+            network: getCurrentNetwork(),
+            circleId,
+            userAddress: account.userAddr,
+          });
+          const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+          const stablecoinTypeArg = await resolveRecoveryWalletCoinType(suiClient, recoveryWalletId);
+
+          const txResult = await instance.sendTransaction(
+            account,
+            (txb: Transaction) => {
+              txb.setSender(account.userAddr);
+              txb.moveCall({
+                target: `${packageIdToUse}::njangi_circles::trigger_auto_release`,
+                typeArguments: [stablecoinTypeArg],
+                arguments: [
+                  txb.object(circleId),
+                  txb.object(recoveryWalletId),
+                  txb.object(CLOCK_OBJECT_ID)
+                ]
+              });
+            },
+            { gasBudget: 100000000 }
+          );
+
+          return res.status(200).json({
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed
+          });
+        } catch (error) {
+          console.error('Error triggering auto-release:', error);
+
+          if (error instanceof Error &&
+              (error.message.includes('proof verify failed') ||
+              error.message.includes('Session expired') ||
+              error.message.includes('re-authenticate'))) {
+            if (sessionId) {
+              sessions.delete(sessionId);
+              clearSessionCookie(res);
+            }
+            return res.status(401).json({
+              error: 'Your session has expired. Please login again.',
+              requireRelogin: true
+            });
+          }
+
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to trigger auto-release',
+            requireRelogin: false
+          });
+        }
+      }
 
       case 'payoutSecurityDepositSui':
         // Validate required parameters

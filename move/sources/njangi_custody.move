@@ -1,6 +1,4 @@
 module njangi::njangi_custody {
-    use sui::object::{Self, UID, ID};
-    use sui::tx_context::{Self, TxContext};
     use sui::coin::{Self, Coin};
     use sui::balance::{Self, Balance};
     use sui::clock::{Self, Clock};
@@ -8,10 +6,7 @@ module njangi::njangi_custody {
     use sui::sui::SUI;
     use sui::dynamic_field;
     use sui::dynamic_object_field;
-    use sui::transfer;
-    use std::option::{Self, Option};
     use std::string::{Self, String};
-    use std::vector;
     use std::type_name;
     use std::ascii;
     
@@ -39,11 +34,6 @@ module njangi::njangi_custody {
     // ----------------------------------------------------------
     // Local constants from core
     // ----------------------------------------------------------
-    const CUSTODY_OP_DEPOSIT: u8 = 0;
-    const CUSTODY_OP_WITHDRAWAL: u8 = 1;
-    const CUSTODY_OP_PAYOUT: u8 = 2;
-    const CUSTODY_OP_STABLECOIN_DEPOSIT: u8 = 3;
-    const MS_PER_DAY: u64 = 86_400_000;
     const SUI_DECIMALS: u8 = 9;
     const USDC_DECIMALS: u8 = 6;
     const USD_CENTS_DECIMALS: u8 = 2;
@@ -80,6 +70,7 @@ module njangi::njangi_custody {
     // ----------------------------------------------------------
     // New structure to hold a stablecoin balance
     // ----------------------------------------------------------
+    #[allow(unused_field)]
     public struct StablecoinBalance has store {
         balance: Balance<SUI>, // Placeholder type as we'll use dynamic fields
         coin_type: String,     // String representation of the coin type
@@ -195,6 +186,54 @@ module njangi::njangi_custody {
             timestamp
         }
     }
+
+    fun assert_wallet_can_release_funds(
+        wallet: &CustodyWallet,
+        amount: u64,
+        current_time: u64
+    ) {
+        assert!(wallet.is_active, EWalletNotActive);
+        assert!(amount > 0, EInsufficientAmount);
+
+        if (option::is_some(&wallet.locked_until)) {
+            let lock_time = *option::borrow(&wallet.locked_until);
+            assert!(current_time >= lock_time, EFundsTimeLocked);
+        };
+    }
+
+    fun withdraw_sui_from_all_storage(
+        wallet: &mut CustodyWallet,
+        amount: u64,
+        ctx: &mut TxContext
+    ): Coin<SUI> {
+        assert!(amount > 0, EInsufficientAmount);
+
+        let available_main_balance = balance::value(&wallet.balance);
+        let available_dynamic_balance = get_stablecoin_balance<SUI>(wallet);
+        assert!(available_main_balance + available_dynamic_balance >= amount, 12);
+
+        let mut amount_left = amount;
+        let mut payout_balance = balance::zero<SUI>();
+
+        let amount_from_main = if (available_main_balance >= amount_left) {
+            amount_left
+        } else {
+            available_main_balance
+        };
+
+        if (amount_from_main > 0) {
+            let main_piece = balance::split(&mut wallet.balance, amount_from_main);
+            balance::join(&mut payout_balance, main_piece);
+            amount_left = amount_left - amount_from_main;
+        };
+
+        if (amount_left > 0) {
+            let dynamic_piece = withdraw_coin_from_storage<SUI>(wallet, amount_left, ctx);
+            balance::join(&mut payout_balance, coin::into_balance(dynamic_piece));
+        };
+
+        coin::from_balance(payout_balance, ctx)
+    }
     
     // ----------------------------------------------------------
     // Deposit to custody wallet
@@ -306,6 +345,37 @@ module njangi::njangi_custody {
             operation_type: core::custody_op_withdrawal(),
         });
         
+        withdrawal_coin
+    }
+
+    public(package) fun withdraw_sui_for_recovery(
+        wallet: &mut CustodyWallet,
+        amount: u64,
+        recipient: address,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): Coin<SUI> {
+        let current_time = clock::timestamp_ms(clock);
+
+        assert_wallet_can_release_funds(wallet, amount, current_time);
+        let withdrawal_coin = withdraw_sui_from_all_storage(wallet, amount, ctx);
+
+        let txn = create_transaction(
+            core::custody_op_withdrawal(),
+            recipient,
+            amount,
+            current_time
+        );
+        vector::push_back(&mut wallet.transaction_history, txn);
+
+        event::emit(CustodyWithdrawn {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            recipient,
+            amount,
+            operation_type: core::custody_op_withdrawal(),
+        });
+
         withdrawal_coin
     }
     
@@ -594,7 +664,7 @@ module njangi::njangi_custody {
     }
     
     // Generate a key for storing coin objects
-    fun coin_field_name<CoinType>(): String {
+    fun coin_field_name(): String {
         // Legacy key used by dynamic_object_field<Coin<T>> storage.
         string::utf8(b"coin_objects")
     }
@@ -607,7 +677,7 @@ module njangi::njangi_custody {
     
     // Check if a stablecoin balance exists
     public fun has_stablecoin_balance<CoinType>(wallet: &CustodyWallet): bool {
-        let legacy_field = coin_field_name<CoinType>();
+        let legacy_field = coin_field_name();
         let balance_field = balance_field_name<CoinType>();
         dynamic_object_field::exists_(&wallet.id, legacy_field) || dynamic_field::exists_(&wallet.id, balance_field)
     }
@@ -624,7 +694,7 @@ module njangi::njangi_custody {
         };
 
         // Legacy storage path: dynamic_object_field<String, Coin<CoinType>>
-        let legacy_field = coin_field_name<CoinType>();
+        let legacy_field = coin_field_name();
         let legacy_balance = if (dynamic_object_field::exists_(&wallet.id, legacy_field)) {
             let coin = dynamic_object_field::borrow<String, Coin<CoinType>>(&wallet.id, legacy_field);
             coin::value(coin)
@@ -659,7 +729,7 @@ module njangi::njangi_custody {
         ctx: &mut TxContext
     ): Coin<CoinType> {
         assert!(amount > 0, EInsufficientAmount);
-        let has_legacy_storage = dynamic_object_field::exists_(&wallet.id, coin_field_name<CoinType>());
+        let has_legacy_storage = dynamic_object_field::exists_(&wallet.id, coin_field_name());
         let has_balance_storage = dynamic_field::exists_(&wallet.id, balance_field_name<CoinType>());
         assert!(has_legacy_storage || has_balance_storage, EUnsupportedToken);
 
@@ -688,10 +758,10 @@ module njangi::njangi_custody {
         };
 
         if (amount_left > 0) {
-            assert!(dynamic_object_field::exists_(&wallet.id, coin_field_name<CoinType>()), 12);
+            assert!(dynamic_object_field::exists_(&wallet.id, coin_field_name()), 12);
             let mut stored_coin = dynamic_object_field::remove<String, Coin<CoinType>>(
                 &mut wallet.id,
-                coin_field_name<CoinType>()
+                coin_field_name()
             );
             assert!(coin::value(&stored_coin) >= amount_left, 12);
 
@@ -699,7 +769,7 @@ module njangi::njangi_custody {
             balance::join(&mut payout_balance, coin::into_balance(legacy_piece));
 
             if (coin::value(&stored_coin) > 0) {
-                dynamic_object_field::add(&mut wallet.id, coin_field_name<CoinType>(), stored_coin);
+                dynamic_object_field::add(&mut wallet.id, coin_field_name(), stored_coin);
             } else {
                 coin::destroy_zero(stored_coin);
             };
@@ -808,7 +878,6 @@ module njangi::njangi_custody {
         clock: &Clock,
         ctx: &mut TxContext
     ) {
-        let sender = tx_context::sender(ctx);
         let amount = coin::value(&stablecoin);
         let current_time = clock::timestamp_ms(clock);
 
@@ -891,7 +960,7 @@ module njangi::njangi_custody {
     public fun withdraw_stablecoin<CoinType>(
         wallet: &mut CustodyWallet,
         amount: u64,
-        recipient: address,
+        _recipient: address,
         clock: &Clock,
         ctx: &mut TxContext
     ): Coin<CoinType> {
@@ -942,6 +1011,52 @@ module njangi::njangi_custody {
             timestamp: current_time,
         });
         
+        coin_to_send
+    }
+
+    public(package) fun withdraw_stablecoin_for_recovery<CoinType>(
+        wallet: &mut CustodyWallet,
+        amount: u64,
+        recipient: address,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): Coin<CoinType> {
+        let current_time = clock::timestamp_ms(clock);
+
+        assert_wallet_can_release_funds(wallet, amount, current_time);
+
+        let previous_balance = get_stablecoin_balance<CoinType>(wallet);
+        assert!(previous_balance >= amount, 12);
+
+        let coin_to_send = withdraw_coin_from_storage<CoinType>(wallet, amount, ctx);
+        let new_balance = get_stablecoin_balance<CoinType>(wallet);
+        let coin_type_str = balance_field_name<CoinType>();
+
+        let txn = create_transaction(
+            core::custody_op_withdrawal(),
+            recipient,
+            amount,
+            current_time
+        );
+        vector::push_back(&mut wallet.transaction_history, txn);
+
+        event::emit(CustodyWithdrawn {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            recipient,
+            amount,
+            operation_type: core::custody_op_withdrawal(),
+        });
+
+        event::emit(StablecoinHoldingUpdated {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            coin_type: coin_type_str,
+            previous_balance,
+            new_balance,
+            timestamp: current_time,
+        });
+
         coin_to_send
     }
 
@@ -1032,9 +1147,8 @@ module njangi::njangi_custody {
         stablecoin: Coin<CoinType>,
         member_addr: address,
         clock: &Clock,
-        ctx: &mut TxContext
+        _ctx: &TxContext
     ) {
-        let sender = tx_context::sender(ctx);
         let amount = coin::value(&stablecoin);
         let current_time = clock::timestamp_ms(clock);
 
@@ -1092,7 +1206,7 @@ module njangi::njangi_custody {
         contribution_coin: Coin<CoinType>,
         member_addr: address,
         clock: &Clock,
-        ctx: &mut TxContext
+        _ctx: &TxContext
     ) {
         let amount = coin::value(&contribution_coin);
         let current_time = clock::timestamp_ms(clock);

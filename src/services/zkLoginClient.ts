@@ -1,6 +1,19 @@
 import { AccountData } from './zkLoginService';
 import type { OAuthProvider } from './zkLoginService';
-import { getCurrentNetwork } from './network-config';
+import { Transaction } from '@mysten/sui/transactions';
+import {
+  buildBatchHeartbeatAdminLivenessTx,
+  buildCreateCircleTx,
+  buildExecuteRecoveryTx,
+  buildHeartbeatAdminLivenessTx,
+  buildProposeEmergencyStopTx,
+  buildTriggerAutoReleaseTx,
+  buildUpdateNextInCommandTx,
+  buildVoteEmergencyStopTx,
+  type CreateCircleTransactionData,
+} from '@/lib/zklogin-tx-builders';
+import { getCircleTransactionPackageId } from './circle-service';
+import { getCurrentNetwork, getCurrentPackageId } from './network-config';
 
 export interface EmberOperationLifecycle {
   status: string;
@@ -57,10 +70,15 @@ interface ZkLoginResponse {
   [key: string]: unknown;
 }
 
-interface CircleData {
+export interface CircleData extends CreateCircleTransactionData {
   name: string;
   contribution_amount: string | number;
+  contribution_amount_local?: string | number;
+  contribution_amount_usd?: string | number;
+  currency_type?: string;
   security_deposit: string | number;
+  security_deposit_local?: string | number;
+  security_deposit_usd?: string | number;
   cycle_length: number;
   cycle_day: number;
   circle_type: number;
@@ -69,8 +87,34 @@ interface CircleData {
   penalty_rules: boolean[];
   goal_type?: { some?: number };
   target_amount?: { some?: string | number };
+  target_amount_local?: { some?: string | number } | string | number;
+  target_amount_usd?: string | number;
   target_date?: { some?: string | number };
   verification_required: boolean;
+  auto_release_enabled?: boolean;
+  auto_release_delay_ms?: string | number;
+  next_in_command?: string | null;
+}
+
+type NetworkOverride = 'testnet' | 'mainnet';
+
+export interface RecoveryActionRequest {
+  circleId: string;
+  network?: NetworkOverride;
+}
+
+export interface RecoveryExecutionRequest extends RecoveryActionRequest {
+  walletId: string;
+  stablecoinType: string;
+}
+
+export interface BatchHeartbeatAdminLivenessRequest {
+  circleIds: string[];
+  network?: NetworkOverride;
+}
+
+export interface UpdateNextInCommandRequest extends RecoveryActionRequest {
+  nextInCommand?: string | null;
 }
 
 export type StablecoinTarget = 'USDC' | 'USDT' | 'SUI_USDE';
@@ -308,6 +352,190 @@ export class ZkLoginClient {
       // Otherwise wrap in a new error
       throw new ZkLoginError(String(error), false);
     }
+  }
+
+  private assertTransactionAccount(account: AccountData): void {
+    if (!account.zkProofs?.proofPoints ||
+        !account.zkProofs.issBase64Details ||
+        !account.zkProofs.headerBase64) {
+      throw new ZkLoginError(
+        'Missing required authentication data. Please login again.',
+        true,
+      );
+    }
+  }
+
+  private async sendSerializedTransaction(
+    account: AccountData,
+    tx: Transaction,
+    network?: NetworkOverride,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    try {
+      this.assertTransactionAccount(account);
+
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'sendSerializedTransaction',
+          account,
+          txb: tx.serialize(),
+          network,
+        }),
+      });
+
+      const responseData: ZkLoginResponse = await response.json();
+
+      if (response.status === 401) {
+        throw new ZkLoginError(
+          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`,
+          true,
+        );
+      }
+
+      if (!response.ok) {
+        throw new ZkLoginError(
+          responseData.error || 'Transaction failed',
+          !!responseData.requireRelogin,
+        );
+      }
+
+      if (!responseData.digest) {
+        throw new ZkLoginError('No transaction digest received from server', false);
+      }
+
+      return {
+        digest: responseData.digest,
+        requireRelogin: responseData.requireRelogin,
+      };
+    } catch (error) {
+      if (error instanceof ZkLoginError) {
+        throw error;
+      }
+
+      throw new ZkLoginError(String(error), false);
+    }
+  }
+
+  public async createCircle(
+    account: AccountData,
+    circleData: CircleData,
+    network?: NetworkOverride,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    const tx = buildCreateCircleTx({
+      packageId: getCurrentPackageId(),
+      circleData,
+    });
+
+    return this.sendSerializedTransaction(account, tx, network);
+  }
+
+  public async proposeEmergencyStop(
+    account: AccountData,
+    request: RecoveryActionRequest,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    const packageId = await getCircleTransactionPackageId(request.circleId, account.userAddr);
+    const tx = buildProposeEmergencyStopTx({
+      packageId,
+      circleId: request.circleId,
+    });
+
+    return this.sendSerializedTransaction(account, tx, request.network);
+  }
+
+  public async voteEmergencyStop(
+    account: AccountData,
+    request: RecoveryActionRequest & { yesVote: boolean },
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    const packageId = await getCircleTransactionPackageId(request.circleId, account.userAddr);
+    const tx = buildVoteEmergencyStopTx({
+      packageId,
+      circleId: request.circleId,
+      yesVote: request.yesVote,
+    });
+
+    return this.sendSerializedTransaction(account, tx, request.network);
+  }
+
+  public async executeRecovery(
+    account: AccountData,
+    request: RecoveryExecutionRequest,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    const packageId = await getCircleTransactionPackageId(request.circleId, account.userAddr);
+    const tx = buildExecuteRecoveryTx({
+      packageId,
+      circleId: request.circleId,
+      walletId: request.walletId,
+      stablecoinType: request.stablecoinType,
+    });
+
+    return this.sendSerializedTransaction(account, tx, request.network);
+  }
+
+  public async triggerAutoRelease(
+    account: AccountData,
+    request: RecoveryExecutionRequest,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    const packageId = await getCircleTransactionPackageId(request.circleId, account.userAddr);
+    const tx = buildTriggerAutoReleaseTx({
+      packageId,
+      circleId: request.circleId,
+      walletId: request.walletId,
+      stablecoinType: request.stablecoinType,
+    });
+
+    return this.sendSerializedTransaction(account, tx, request.network);
+  }
+
+  public async heartbeatAdminLiveness(
+    account: AccountData,
+    request: RecoveryActionRequest,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    const packageId = await getCircleTransactionPackageId(request.circleId, account.userAddr);
+    const tx = buildHeartbeatAdminLivenessTx({
+      packageId,
+      circleId: request.circleId,
+    });
+
+    return this.sendSerializedTransaction(account, tx, request.network);
+  }
+
+  public async batchHeartbeatAdminLiveness(
+    account: AccountData,
+    request: BatchHeartbeatAdminLivenessRequest,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    const uniqueCircleIds = [...new Set(
+      request.circleIds
+        .filter((circleId): circleId is string => typeof circleId === 'string')
+        .map((circleId) => circleId.trim())
+        .filter((circleId) => circleId.length > 0),
+    )];
+
+    if (uniqueCircleIds.length === 0) {
+      throw new ZkLoginError('At least one circle ID is required.', false);
+    }
+
+    const circles = await Promise.all(uniqueCircleIds.map(async (circleId) => ({
+      circleId,
+      packageId: await getCircleTransactionPackageId(circleId, account.userAddr),
+    })));
+    const tx = buildBatchHeartbeatAdminLivenessTx({ circles });
+
+    return this.sendSerializedTransaction(account, tx, request.network);
+  }
+
+  public async updateNextInCommand(
+    account: AccountData,
+    request: UpdateNextInCommandRequest,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    const packageId = await getCircleTransactionPackageId(request.circleId, account.userAddr);
+    const tx = buildUpdateNextInCommandTx({
+      packageId,
+      circleId: request.circleId,
+      nextInCommand: request.nextInCommand ?? null,
+    });
+
+    return this.sendSerializedTransaction(account, tx, request.network);
   }
 
   public async deleteCircle(account: AccountData, circleId: string): Promise<{ digest: string; requireRelogin?: boolean }> {

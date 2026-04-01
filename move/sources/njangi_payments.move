@@ -1,25 +1,17 @@
 module njangi::njangi_payments {
-    use sui::object::{Self, ID, UID};
-    use sui::tx_context::{Self, TxContext};
     use sui::coin::{Self, Coin};
-    use sui::balance::{Self, Balance};
     use sui::clock::{Self, Clock};
     use sui::event;
     use sui::sui::SUI;
-    use sui::transfer;
-    use sui::dynamic_object_field;
-    use std::option::{Self, Option};
     use std::string::{Self, String};
-    use std::vector;
     use std::type_name;
     use std::ascii;
     
     use njangi::njangi_core as core;
     use njangi::njangi_circles::{Self as circles, Circle};
-    use njangi::njangi_members::{Self as members, Member};
+    use njangi::njangi_members as members;
     use njangi::njangi_custody::{Self as custody, CustodyWallet};
     use njangi::njangi_milestones::{Self as milestones, MilestoneData};
-    use njangi::njangi_circle_config as config;
     
     // ----------------------------------------------------------
     // Error codes
@@ -31,14 +23,7 @@ module njangi::njangi_payments {
     const EInvalidBidAmount: u64 = 26;
     const EAuctionNotActive: u64 = 27;
     const EInvalidMilestone: u64 = 28;
-    const EInvalidRotationPosition: u64 = 29;
-    const EPositionAlreadyTaken: u64 = 30;
-    const EMilestoneTypeInvalid: u64 = 31;
     const EMilestoneTargetInvalid: u64 = 32;
-    const EMilestoneVerificationFailed: u64 = 33;
-    const EMilestoneDeadlinePassed: u64 = 34;
-    const EMilestoneAlreadyVerified: u64 = 35;
-    const EMilestonePrerequisiteNotMet: u64 = 36;
     const EUnsupportedToken: u64 = 37;
     const EAmountOverflow: u64 = 38;
     const MAX_U64: u64 = 0xFFFF_FFFF_FFFF_FFFF;
@@ -134,6 +119,7 @@ module njangi::njangi_payments {
     // ----------------------------------------------------------
     // PayoutWindow struct definition
     // ----------------------------------------------------------
+    #[allow(unused_field)]
     public struct PayoutWindow has store, drop {
         start_time: u64,
         end_time: u64,
@@ -152,6 +138,72 @@ module njangi::njangi_payments {
 
     fun coin_type_label<CoinType>(): String {
         string::utf8(ascii::into_bytes(type_name::into_string(type_name::get<CoinType>())))
+    }
+
+    fun allocate_recovery_debit_amounts(
+        outstandings: vector<u64>,
+        total_amount: u64
+    ): vector<u64> {
+        let len = vector::length(&outstandings);
+        let mut debits = vector::empty<u64>();
+        let mut i = 0;
+
+        while (i < len) {
+            vector::push_back(&mut debits, 0);
+            i = i + 1;
+        };
+
+        let mut remaining = total_amount;
+        while (remaining > 0) {
+            let mut eligible_member_count = 0;
+            let mut j = 0;
+
+            while (j < len) {
+                let outstanding = *vector::borrow(&outstandings, j);
+                let debited_so_far = *vector::borrow(&debits, j);
+                if (outstanding > debited_so_far) {
+                    eligible_member_count = eligible_member_count + 1;
+                };
+                j = j + 1;
+            };
+
+            if (eligible_member_count == 0) {
+                break
+            };
+
+            let base_allocation = remaining / eligible_member_count;
+            let mut remainder = remaining % eligible_member_count;
+            let mut allocated_this_round = 0;
+            let mut k = 0;
+
+            while (k < len) {
+                let outstanding = *vector::borrow(&outstandings, k);
+                let debited_so_far = *vector::borrow(&debits, k);
+                let available = outstanding - debited_so_far;
+
+                if (available > 0) {
+                    let mut desired = base_allocation;
+                    if (remainder > 0) {
+                        desired = desired + 1;
+                        remainder = remainder - 1;
+                    };
+
+                    let debit_amount = if (desired > available) { available } else { desired };
+                    if (debit_amount > 0) {
+                        *vector::borrow_mut(&mut debits, k) = debited_so_far + debit_amount;
+                        remaining = remaining - debit_amount;
+                        allocated_this_round = allocated_this_round + debit_amount;
+                    };
+                };
+                k = k + 1;
+            };
+
+            if (allocated_this_round == 0) {
+                break
+            };
+        };
+
+        debits
     }
     
     // ----------------------------------------------------------
@@ -191,6 +243,7 @@ module njangi::njangi_payments {
         // Update stats AFTER the funds are deposited
         let member_mut = circles::get_member_mut(circle, sender);
         members::record_contribution(member_mut, contribution_amount_raw, clock::timestamp_ms(clock));
+        members::add_recovery_sui_contributions(member_mut, payment_amount);
 
         // Track cycle progress in USD cents, independent from payment rail.
         circles::add_to_contributions_this_cycle(circle, contribution_amount_usd_cents);
@@ -206,6 +259,100 @@ module njangi::njangi_payments {
         // But we DONT attempt to trigger the payout automatically after a contribution
         // This avoids the race condition between contribution and withdrawal
         // Admin must explicitly trigger payouts with admin_trigger_payout
+    }
+
+    fun debit_active_member_recovery_sui_contributions(
+        circle: &mut Circle,
+        total_amount: u64
+    ) {
+        if (total_amount == 0) {
+            return
+        };
+
+        let rotation_order = circles::get_rotation_order(circle);
+        let len = vector::length(&rotation_order);
+        let mut member_addresses = vector::empty<address>();
+        let mut outstandings = vector::empty<u64>();
+        let mut i = 0;
+
+        while (i < len) {
+            let member_addr = *vector::borrow(&rotation_order, i);
+            if (
+                member_addr != @0x0
+                    && circles::is_member(circle, member_addr)
+                    && !vector::contains(&member_addresses, &member_addr)
+            ) {
+                let member = circles::get_member(circle, member_addr);
+                let is_active_member = members::get_status(member) == members::member_status_active();
+                let outstanding = members::get_recovery_sui_contributions(member);
+                if (is_active_member && outstanding > 0) {
+                    vector::push_back(&mut member_addresses, member_addr);
+                    vector::push_back(&mut outstandings, outstanding);
+                };
+            };
+            i = i + 1;
+        };
+
+        let debits = allocate_recovery_debit_amounts(outstandings, total_amount);
+        let member_count = vector::length(&member_addresses);
+        let mut j = 0;
+
+        while (j < member_count) {
+            let debit_amount = *vector::borrow(&debits, j);
+            if (debit_amount > 0) {
+                let member_addr = *vector::borrow(&member_addresses, j);
+                let member_mut = circles::get_member_mut(circle, member_addr);
+                members::subtract_recovery_sui_contributions(member_mut, debit_amount);
+            };
+            j = j + 1;
+        };
+    }
+
+    fun debit_active_member_recovery_stablecoin_contributions(
+        circle: &mut Circle,
+        total_amount: u64
+    ) {
+        if (total_amount == 0) {
+            return
+        };
+
+        let rotation_order = circles::get_rotation_order(circle);
+        let len = vector::length(&rotation_order);
+        let mut member_addresses = vector::empty<address>();
+        let mut outstandings = vector::empty<u64>();
+        let mut i = 0;
+
+        while (i < len) {
+            let member_addr = *vector::borrow(&rotation_order, i);
+            if (
+                member_addr != @0x0
+                    && circles::is_member(circle, member_addr)
+                    && !vector::contains(&member_addresses, &member_addr)
+            ) {
+                let member = circles::get_member(circle, member_addr);
+                let is_active_member = members::get_status(member) == members::member_status_active();
+                let outstanding = members::get_recovery_stablecoin_contributions(member);
+                if (is_active_member && outstanding > 0) {
+                    vector::push_back(&mut member_addresses, member_addr);
+                    vector::push_back(&mut outstandings, outstanding);
+                };
+            };
+            i = i + 1;
+        };
+
+        let debits = allocate_recovery_debit_amounts(outstandings, total_amount);
+        let member_count = vector::length(&member_addresses);
+        let mut j = 0;
+
+        while (j < member_count) {
+            let debit_amount = *vector::borrow(&debits, j);
+            if (debit_amount > 0) {
+                let member_addr = *vector::borrow(&member_addresses, j);
+                let member_mut = circles::get_member_mut(circle, member_addr);
+                members::subtract_recovery_stablecoin_contributions(member_mut, debit_amount);
+            };
+            j = j + 1;
+        };
     }
     
     // ----------------------------------------------------------
@@ -284,6 +431,7 @@ module njangi::njangi_payments {
             );
             transfer::public_transfer(stablecoin, recipient);
 
+            debit_active_member_recovery_stablecoin_contributions(circle, stablecoin_payout_amount);
             circles::reset_contributions_this_cycle(circle);
             circles::advance_rotation_position_and_cycle(circle, recipient, clock);
 
@@ -339,6 +487,7 @@ module njangi::njangi_payments {
         let payout_coin = custody::withdraw(wallet, payout_amount, ctx);
         transfer::public_transfer(payout_coin, recipient);
 
+        debit_active_member_recovery_sui_contributions(circle, payout_amount);
         circles::reset_contributions_this_cycle(circle);
         circles::advance_rotation_position_and_cycle(circle, recipient, clock);
 
@@ -392,7 +541,7 @@ module njangi::njangi_payments {
         assert!(total_contributions >= payout_amount, EInsufficientTreasuryBalance);
         
         // Now perform the mutable operations
-        let payout_coin = coin::from_balance(
+        let payout_coin: Coin<SUI> = coin::from_balance(
             circles::split_from_contributions(circle, payout_amount),
             ctx
         );
@@ -551,7 +700,7 @@ module njangi::njangi_payments {
         // If there's a previous highest bidder, refund them
         if (option::is_some(&highest_bidder)) {
             let prev_bidder = *option::borrow(&highest_bidder);
-            let refund_coin = coin::from_balance(
+            let refund_coin: Coin<SUI> = coin::from_balance(
                 circles::split_from_contributions(circle, current_highest_bid),
                 ctx
             );
@@ -588,7 +737,7 @@ module njangi::njangi_payments {
         
         if (option::is_some(&winner_opt)) {
             let winner = *option::borrow(&winner_opt);
-            circles::set_rotation_position(circle, winner, position, ctx);
+            circles::set_rotation_position_internal(circle, winner, position);
             
             event::emit(AuctionCompleted {
                 circle_id: circles::get_id(circle),
@@ -762,13 +911,14 @@ module njangi::njangi_payments {
         let (_, deposits_balance, _) = circles::get_treasury_balances(circle);
         assert!(deposits_balance >= returnable_amount, EInsufficientTreasuryBalance);
         
-        let deposit_coin = coin::from_balance(
+        let deposit_coin: Coin<SUI> = coin::from_balance(
             circles::split_from_deposits(circle, returnable_amount),
             ctx
         );
         
         let member_mut = circles::get_member_mut(circle, member_addr);
         members::subtract_from_deposit_balance(member_mut, returnable_amount);
+        members::subtract_recovery_sui_deposit(member_mut, returnable_amount);
         
         transfer::public_transfer(deposit_coin, member_addr);
     }
@@ -781,7 +931,7 @@ module njangi::njangi_payments {
     // 3. Calculates appropriate payout amount 
     // 4. Executes the payout and updates cycle/rotation state
     // ----------------------------------------------------------
-    public entry fun admin_trigger_payout<CoinType>(
+    public fun admin_trigger_payout<CoinType>(
         circle: &mut Circle,
         wallet: &mut CustodyWallet,
         clock: &Clock,
@@ -805,7 +955,7 @@ module njangi::njangi_payments {
     // ----------------------------------------------------------
     // Admin function to force a payout to a specific member
     // ----------------------------------------------------------
-    public entry fun admin_force_payout(
+    public fun admin_force_payout(
         circle: &mut Circle,
         wallet: &mut CustodyWallet,
         recipient: address,
@@ -855,6 +1005,8 @@ module njangi::njangi_payments {
         
         // Transfer the payout to the recipient
         transfer::public_transfer(payout_coin, recipient);
+
+        debit_active_member_recovery_sui_contributions(circle, payout_amount);
         
         // Reset the contributions counter for this cycle
         circles::reset_contributions_this_cycle(circle);
@@ -901,7 +1053,7 @@ module njangi::njangi_payments {
     // Admin function to trigger payout using USDC stablecoin
     // This function handles direct stablecoin payments when there's insufficient SUI
     // ----------------------------------------------------------
-    public entry fun admin_trigger_usdc_payout<CoinType>(
+    public fun admin_trigger_usdc_payout<CoinType>(
         circle: &mut Circle,
         wallet: &mut CustodyWallet,
         clock: &Clock,
@@ -952,13 +1104,12 @@ module njangi::njangi_payments {
         let security_deposit_amount = safe_mul(security_deposit_micro, member_count);
         
         // The available balance for payout is the total balance minus the security deposits
-        let mut available_balance = total_stablecoin_balance;
-        if (total_stablecoin_balance > security_deposit_amount) {
-            available_balance = total_stablecoin_balance - security_deposit_amount;
+        let available_balance = if (total_stablecoin_balance > security_deposit_amount) {
+            total_stablecoin_balance - security_deposit_amount
         } else {
             // If there's not enough to cover security deposits, this could be an issue,
             // but we'll continue with whatever balance is available for testing purposes
-            available_balance = 0;
+            0
         };
         
         // Verify there's something to withdraw
@@ -986,6 +1137,8 @@ module njangi::njangi_payments {
         
         // Transfer directly to recipient
         transfer::public_transfer(stablecoin, recipient);
+
+        debit_active_member_recovery_stablecoin_contributions(circle, actual_payout_amount);
         
         // Reset contributions counter
         circles::reset_contributions_this_cycle(circle);
@@ -1011,7 +1164,7 @@ module njangi::njangi_payments {
     // Admin function to pay out SUI security deposit to a member when the circle
     // is inactive or paused after a cycle. This is a specialized version for SUI deposits.
     // ----------------------------------------------------------
-    public entry fun admin_payout_security_deposit_sui(
+    public fun admin_payout_security_deposit_sui(
         circle: &mut Circle,
         wallet: &mut CustodyWallet,
         member_addr: address,
@@ -1046,6 +1199,7 @@ module njangi::njangi_payments {
         let member_mut = circles::get_member_mut(circle, member_addr);
         members::set_deposit_paid(member_mut, false); // Set not paid (returned)
         members::set_deposit_balance(member_mut, 0); // Zero out the balance
+        members::clear_recovery_sui_deposit(member_mut);
         
         // Check if there's enough balance in the wallet
         let wallet_balance = custody::get_total_wallet_balance(wallet);
@@ -1096,7 +1250,7 @@ module njangi::njangi_payments {
     // Admin function to pay out stablecoin security deposit to a member when the circle
     // is inactive or paused after a cycle. This is the generic version for stablecoin deposits.
     // ----------------------------------------------------------
-    public entry fun admin_payout_security_deposit_stablecoin<CoinType>(
+    public fun admin_payout_security_deposit_stablecoin<CoinType>(
         circle: &mut Circle,
         wallet: &mut CustodyWallet,
         member_addr: address,
@@ -1132,6 +1286,7 @@ module njangi::njangi_payments {
         let member_mut = circles::get_member_mut(circle, member_addr);
         members::set_deposit_paid(member_mut, false); // Set not paid (returned)
         members::set_deposit_balance(member_mut, 0); // Zero out the balance
+        members::clear_recovery_stablecoin_deposit(member_mut);
         
         // Check if there's enough balance of this coin type in the wallet
         let wallet_balance = custody::get_stablecoin_balance<CoinType>(wallet);
@@ -1159,4 +1314,27 @@ module njangi::njangi_payments {
             timestamp: clock::timestamp_ms(clock)
         });
     }
-} 
+
+    #[test]
+    fun test_allocate_recovery_debit_amounts_even_split() {
+        let debits = allocate_recovery_debit_amounts(vector[100, 100, 100], 300);
+        assert!(*vector::borrow(&debits, 0) == 100, 9001);
+        assert!(*vector::borrow(&debits, 1) == 100, 9002);
+        assert!(*vector::borrow(&debits, 2) == 100, 9003);
+    }
+
+    #[test]
+    fun test_allocate_recovery_debit_amounts_partial_split_with_remainder() {
+        let debits = allocate_recovery_debit_amounts(vector[100, 100, 100], 100);
+        assert!(*vector::borrow(&debits, 0) == 34, 9004);
+        assert!(*vector::borrow(&debits, 1) == 33, 9005);
+        assert!(*vector::borrow(&debits, 2) == 33, 9006);
+    }
+
+    #[test]
+    fun test_allocate_recovery_debit_amounts_caps_and_redistributes() {
+        let debits = allocate_recovery_debit_amounts(vector[100, 10], 100);
+        assert!(*vector::borrow(&debits, 0) == 90, 9007);
+        assert!(*vector::borrow(&debits, 1) == 10, 9008);
+    }
+}

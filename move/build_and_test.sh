@@ -360,14 +360,24 @@ if [[ "$publish_response" == "y" || "$publish_response" == "Y" ]]; then
     ENV_FILE="../.env.local"
     if [ -f "$ENV_FILE" ]; then
         echo -e "${BLUE}Updating .env.local with the new package ID...${NC}"
-        # Use sed to replace the NEXT_PUBLIC_PACKAGE_ID line
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-            # macOS requires an empty string for -i
-            sed -i '' "s|^NEXT_PUBLIC_PACKAGE_ID=.*|NEXT_PUBLIC_PACKAGE_ID=${PACKAGE_ID}|" "$ENV_FILE"
-        else
-            # Linux version
-            sed -i "s|^NEXT_PUBLIC_PACKAGE_ID=.*|NEXT_PUBLIC_PACKAGE_ID=${PACKAGE_ID}|" "$ENV_FILE"
+
+        ACTIVE_ENV=$(get_sui_env)
+        ENV_KEYS=("NEXT_PUBLIC_PACKAGE_ID")
+        if [[ "$ACTIVE_ENV" == "testnet" ]]; then
+            ENV_KEYS+=("NEXT_PUBLIC_TESTNET_PACKAGE_ID" "NEXT_PUBLIC_TESTNET_WHATSAPP_PACKAGE_ID")
+        elif [[ "$ACTIVE_ENV" == "mainnet" ]]; then
+            ENV_KEYS+=("NEXT_PUBLIC_MAINNET_PACKAGE_ID" "NEXT_PUBLIC_MAINNET_WHATSAPP_PACKAGE_ID")
         fi
+
+        for env_key in "${ENV_KEYS[@]}"; do
+            if grep -q "^${env_key}=" "$ENV_FILE"; then
+                if [[ "$OSTYPE" == "darwin"* ]]; then
+                    sed -i '' "s|^${env_key}=.*|${env_key}=${PACKAGE_ID}|" "$ENV_FILE"
+                else
+                    sed -i "s|^${env_key}=.*|${env_key}=${PACKAGE_ID}|" "$ENV_FILE"
+                fi
+            fi
+        done
         echo -e "${GREEN}✅ Updated .env.local with package ID: ${PACKAGE_ID}${NC}"
     else
         echo -e "${YELLOW}Note: .env.local file not found. If you're using environment variables, manually update NEXT_PUBLIC_PACKAGE_ID to ${PACKAGE_ID}${NC}"

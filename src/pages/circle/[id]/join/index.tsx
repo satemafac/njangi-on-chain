@@ -5,6 +5,7 @@ import { ArrowLeft, AlertCircle, LogIn } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { SuiClient } from '@mysten/sui/client';
 import { getCircleConfigFieldsFromDynamicFields } from '@/lib/circle-config';
+import { resolveCircleLifecycleState } from '@/lib/circle-chain';
 import { priceService } from '@/services/price-service';
 import { getCirclePackageId } from '../../../../services/circle-service';
 import { getCurrentRpcUrl } from '../../../../services/network-config';
@@ -26,6 +27,8 @@ interface Circle {
   maxMembers: number;
   currentMembers: number;
   nextPayoutTime: number;
+  isActive: boolean;
+  paused: boolean;
 }
 
 // Define CircleFields type
@@ -45,6 +48,8 @@ interface CircleFields {
   max_members?: string;
   current_members: string; // Assume this is still reliable
   next_payout_time: string;
+  is_active?: boolean | string;
+  paused_after_cycle?: boolean | string;
   usd_amounts?: object | string;
   [key: string]: string | number | boolean | object | unknown;
 }
@@ -164,8 +169,10 @@ export default function JoinCircle() {
         userAddress ?? undefined,
       );
       const fields = objectData.data.content.fields as CircleFields;
+      const lifecycle = resolveCircleLifecycleState(fields);
       console.log('Join - Using package ID:', determinedPackageId);
       console.log('Join - Raw Circle Object Fields:', fields);
+      console.log('Join - Circle lifecycle:', lifecycle);
         
       // Get dynamic fields
       const dynamicFieldsResult = await client.getDynamicFields({
@@ -431,6 +438,8 @@ export default function JoinCircle() {
         maxMembers: configValues.maxMembers,
         currentMembers: memberCount, // Use accurately fetched count
         nextPayoutTime: Number(fields.next_payout_time || 0),
+        isActive: lifecycle.isActive,
+        paused: lifecycle.isPausedAfterCycle,
       });
         
     } catch (error) {
@@ -478,6 +487,11 @@ export default function JoinCircle() {
       return;
     }
 
+    if (circle?.isActive && !circle.paused) {
+      toast.error('This circle is currently active. New members can only join when the circle is paused between cycles or inactive.');
+      return;
+    }
+
     console.log(`[JoinPage] Submitting join request for circle ${id} and user ${userAddress}`);
     
     try {
@@ -496,17 +510,18 @@ export default function JoinCircle() {
           userName: account?.name || 'Anonymous',
         }),
       });
+
+      const data = await response.json().catch(() => null);
       
       if (!response.ok) {
         console.error('[JoinPage] Failed to create join request:', response.status, response.statusText);
-        toast.error('Failed to submit join request. Please try again.', {id: 'submit-request'});
+        toast.error(data?.message || 'Failed to submit join request. Please try again.', {id: 'submit-request'});
         return;
       }
-      
-      const data = await response.json();
+
       console.log('[JoinPage] Join request creation response:', data);
       
-      if (data.success) {
+      if (data?.success) {
         // Update UI state
         setHasPendingRequest(true);
         toast.success('Join request submitted successfully', {id: 'submit-request'});
@@ -514,7 +529,7 @@ export default function JoinCircle() {
         // Recheck pending request status to confirm
         setTimeout(checkPendingRequest, 1000);
       } else {
-        toast.error(data.message || 'Failed to submit join request', {id: 'submit-request'});
+        toast.error(data?.message || 'Failed to submit join request', {id: 'submit-request'});
       }
     } catch (error) {
       console.error('[JoinPage] Error submitting join request:', error);
@@ -629,6 +644,12 @@ export default function JoinCircle() {
     })}`;
   };
 
+  const formatAddress = (address: string) => {
+    if (!address) return 'Unknown';
+    if (address.length <= 14) return address;
+    return `${address.slice(0, 6)}...${address.slice(-4)}`;
+  };
+
   // Helper component to display both USD and SUI amounts
   const CurrencyDisplay = ({ 
     usd, 
@@ -662,9 +683,13 @@ export default function JoinCircle() {
       : displaySuiValue.toLocaleString('en-US', { maximumFractionDigits: 2 });
     
     return (
-      <div className={`flex flex-col ${className}`}>
-        <span className="font-medium">{formatCurrency(usdValue, currencyType)}</span>
-        <span className="text-sm text-gray-500">{formattedSui} SUI</span>
+      <div className={`flex flex-col gap-1 ${className}`}>
+        <span className="text-xl font-semibold tracking-[-0.02em] text-[#171923]">
+          {formatCurrency(usdValue, currencyType)}
+        </span>
+        <span className="text-sm font-medium text-[#667085]">
+          {formattedSui} SUI
+        </span>
       </div>
     );
   };
@@ -693,6 +718,7 @@ export default function JoinCircle() {
   }, [isAuthenticated, id, router.isReady]);
 
   // Generate page title & description based on circle data
+  const joinRequestsOpen = circle ? (!circle.isActive || circle.paused) : false;
   const pageTitle = circle 
     ? `Join ${circle.name} Circle - Njangi On-Chain`
     : 'Join Circle - Njangi On-Chain';
@@ -708,20 +734,76 @@ export default function JoinCircle() {
     }
   }, [circle, pageTitle]);
 
+  const backDestination = isAuthenticated ? '/dashboard' : '/';
+  const backLabel = isAuthenticated ? 'Back to dashboard' : 'Back to home';
+  const pageShellClass =
+    'relative isolate min-h-screen overflow-hidden bg-[#f5f1e8] text-[#171923]';
+  const shellCardClass =
+    'overflow-hidden rounded-[30px] border border-[#e6ded0] bg-white/95 shadow-[0_28px_90px_-50px_rgba(15,23,42,0.28)] backdrop-blur';
+  const sectionCardClass =
+    'rounded-[24px] border border-[#e8dfd2] bg-[#fcfbf8] p-5 shadow-[0_24px_60px_-42px_rgba(15,23,42,0.2)] sm:p-6';
+  const nestedCardClass =
+    'rounded-[20px] border border-[#ebe3d6] bg-white p-4 shadow-[0_16px_40px_-36px_rgba(15,23,42,0.18)] sm:p-5';
+  const eyebrowClass =
+    'text-[0.72rem] font-semibold uppercase tracking-[0.32em] text-[#6b7280]';
+  const badgeClass =
+    'inline-flex items-center rounded-full border border-[#ddd4c5] bg-white px-4 py-2 text-[0.7rem] font-semibold uppercase tracking-[0.24em] text-[#64748b]';
+  const secondaryActionClass =
+    'inline-flex items-center justify-center gap-2 rounded-full border border-[#d8cfbf] bg-white px-5 py-3 text-sm font-semibold text-[#1f2430] transition-all duration-200 hover:border-[#cbbfae] hover:bg-[#fcfbf8] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#70819b]/30';
+  const primaryActionClass =
+    'inline-flex w-full items-center justify-center rounded-full bg-[#171923] px-5 py-3.5 text-sm font-semibold text-white transition-colors duration-200 hover:bg-[#10131b] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#70819b]/35';
+
+  const renderBackButton = () => (
+    <div className="mb-6 sm:mb-8">
+      <button
+        onClick={() => router.push(backDestination)}
+        className={secondaryActionClass}
+      >
+        <ArrowLeft className="h-4 w-4" />
+        {backLabel}
+      </button>
+    </div>
+  );
+
   // Update the component's return statement to safely check auth state
   if (!router.isReady) {
     // Show loading while router is initializing
     return (
-      <div className="min-h-screen bg-gray-50">
-        <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-          <div className="px-4 py-6 sm:px-0">
-            <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100 p-6">
-              <div className="py-8 flex justify-center">
-                <svg className="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-              </div>
+      <div className={pageShellClass}>
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-[360px] bg-[radial-gradient(circle_at_top,rgba(112,129,155,0.18),transparent_68%)]" />
+        <main className="relative mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+          {renderBackButton()}
+          <div className={shellCardClass}>
+            <div className="border-b border-[#ece4d7] px-6 py-8 sm:px-8">
+              <span className={eyebrowClass}>Join circle</span>
+              <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-[#171923] sm:text-[2.8rem]">
+                Preparing the join flow
+              </h1>
+              <p className="mt-4 max-w-2xl text-base leading-8 text-[#5f6b7f]">
+                Loading the circle terms, member count, and approval state.
+              </p>
+            </div>
+            <div className="flex justify-center px-6 py-14 sm:px-8 sm:py-20">
+              <svg
+                className="h-8 w-8 animate-spin text-[#70819b]"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                />
+              </svg>
             </div>
           </div>
         </main>
@@ -731,18 +813,27 @@ export default function JoinCircle() {
 
   if (!id) {
     return (
-      <div className="min-h-screen bg-gray-50">
-        <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-          <div className="px-4 py-6 sm:px-0">
-            <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100 p-6">
-              <div className="text-center py-8">
-                <p className="text-gray-500">Invalid circle ID</p>
+      <div className={pageShellClass}>
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-[360px] bg-[radial-gradient(circle_at_top,rgba(112,129,155,0.18),transparent_68%)]" />
+        <main className="relative mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+          {renderBackButton()}
+          <div className={shellCardClass}>
+            <div className="px-6 py-14 text-center sm:px-8 sm:py-20">
+              <span className={eyebrowClass}>Join circle</span>
+              <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-[#171923] sm:text-[2.8rem]">
+                Invalid circle link
+              </h1>
+              <p className="mx-auto mt-4 max-w-xl text-base leading-8 text-[#5f6b7f]">
+                This join page is missing a valid circle identifier. Return to the
+                dashboard and open the invitation again.
+              </p>
+              <div className="mt-8 flex justify-center">
                 <button
                   onClick={() => router.push('/dashboard')}
-                  className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow-sm text-sm font-medium"
+                  className={secondaryActionClass}
                 >
-                  <ArrowLeft className="w-4 h-4" />
-                  Go to Dashboard
+                  <ArrowLeft className="h-4 w-4" />
+                  Go to dashboard
                 </button>
               </div>
             </div>
@@ -779,114 +870,399 @@ export default function JoinCircle() {
         <meta property="og:image:alt" content={`Join ${circle?.name || 'a Njangi'} Circle`} />
       </Head>
       
-      <div className="min-h-screen bg-gray-50">
-        <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-          <div className="px-4 py-6 sm:px-0">
-            <div className="mb-6">
-              <button
-                onClick={() => router.push(isAuthenticated ? '/dashboard' : '/')}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm text-sm text-gray-700 font-medium"
-              >
-                <ArrowLeft className="w-4 h-4" />
-                {isAuthenticated ? 'Back to Dashboard' : 'Back to Home'}
-              </button>
-            </div>
+      <div className={pageShellClass}>
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-[360px] bg-[radial-gradient(circle_at_top,rgba(112,129,155,0.18),transparent_68%)]" />
+        <main className="relative mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+          {renderBackButton()}
 
-            <div className="bg-white shadow-md rounded-xl overflow-hidden border border-gray-100">
-              <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
-                <h2 className="text-2xl font-bold text-gray-900">
-                  Join Circle
-                </h2>
-
-                {/* Show loading state */}
-                {loading ? (
-                  <div className="py-8 flex justify-center">
-                    <svg className="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                  </div>
-                ) : circle ? (
-                  <div className="py-4 space-y-8">
-                    <div className="px-2">
-                      <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Circle Details</h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                          <p className="text-sm text-gray-500 mb-1">Circle Name</p>
-                          <p className="text-lg font-medium">{circle.name}</p>
-                        </div>
-                        
-                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                          <p className="text-sm text-gray-500 mb-1">Contribution Amount</p>
-                          <CurrencyDisplay usd={circle.contributionAmountUsd} sui={circle.contributionAmount} currencyType={circle.currencyType} />
-                        </div>
-                        
-                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                          <p className="text-sm text-gray-500 mb-1">Security Deposit</p>
-                          <CurrencyDisplay usd={circle.securityDepositUsd} sui={circle.securityDeposit} currencyType={circle.currencyType} />
-                        </div>
-                        
-                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                          <p className="text-sm text-gray-500 mb-1">Contribution Schedule</p>
-                          <p className="text-lg font-medium">{formatCycleInfo(circle.cycleLength, circle.cycleDay)}</p>
-                        </div>
-                        
-                        <div className="bg-gray-50 p-4 rounded-lg shadow-sm">
-                          <p className="text-sm text-gray-500 mb-1">Members</p>
-                          <p className="text-lg font-medium">{circle.currentMembers} / {circle.maxMembers}</p>
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div className="pt-6 border-t border-gray-200 px-2">
-                      <h3 className="text-lg font-medium text-gray-900 mb-4 border-l-4 border-blue-500 pl-3">Join Request</h3>
-                      <div className="bg-yellow-50 p-4 rounded-md mb-6">
-                        <p className="text-sm text-yellow-800">
-                          By joining this circle, you agree to contribute {formatCurrency(circle.contributionAmountUsd, circle.currencyType)} contribution {formatCycleInfo(circle.cycleLength, circle.cycleDay).toLowerCase()}. You will also need to pay a security deposit of {formatCurrency(circle.securityDepositUsd, circle.currencyType)}.
+          <div className={shellCardClass}>
+            {loading ? (
+              <>
+                <div className="border-b border-[#ece4d7] px-6 py-8 sm:px-8">
+                  <span className={eyebrowClass}>Join circle</span>
+                  <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-[#171923] sm:text-[2.8rem]">
+                    Preparing the circle details
+                  </h1>
+                  <p className="mt-4 max-w-2xl text-base leading-8 text-[#5f6b7f]">
+                    We&apos;re checking the contribution terms and whether you already
+                    have an active request.
+                  </p>
+                </div>
+                <div className="flex justify-center px-6 py-14 sm:px-8 sm:py-20">
+                  <svg
+                    className="h-8 w-8 animate-spin text-[#70819b]"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    />
+                  </svg>
+                </div>
+              </>
+            ) : circle ? (
+              <>
+                <div className="grid gap-8 border-b border-[#ece4d7] px-6 py-8 sm:px-8 lg:grid-cols-[minmax(0,1.2fr)_340px]">
+                  <div className="space-y-6">
+                    <div className="space-y-4">
+                      <span className={eyebrowClass}>Join circle</span>
+                      <div className="space-y-3">
+                        <h1 className="text-3xl font-semibold tracking-[-0.05em] text-[#171923] sm:text-[3rem]">
+                          {circle.name}
+                        </h1>
+                        <p className="max-w-2xl text-base leading-8 text-[#5f6b7f]">
+                          Review the contribution terms, send a join request, and wait
+                          for approval from the circle admin before you participate.
                         </p>
                       </div>
-                      
-                      {!isAuthenticated ? (
-                        <div className="bg-blue-50 p-4 rounded-md mb-6">
-                          <div className="flex flex-col items-center text-center">
-                            <LogIn className="w-6 h-6 text-blue-600 mb-2" />
-                            <h4 className="text-lg font-medium text-blue-800 mb-2">Login Required</h4>
-                            <p className="text-sm text-blue-700 mb-4">
-                              You need to log in to join this circle.
-                            </p>
-                            <LoginButton />
-                          </div>
-                        </div>
-                      ) : hasPendingRequest ? (
-                        <div className="bg-blue-50 p-4 rounded-md mb-6 flex items-start">
-                          <AlertCircle className="w-5 h-5 text-blue-500 mr-2 flex-shrink-0 mt-0.5" />
-                          <div>
-                            <h4 className="text-sm font-medium text-blue-800">Request Sent</h4>
-                            <p className="text-sm text-blue-700 mt-1">
-                              Your request to join this circle has been sent to the admin. 
-                              You&apos;ll be notified when your request is approved.
-                            </p>
-                          </div>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={handleSubmit}
-                          disabled={isSubmitting || isMember || hasPendingRequest}
-                          className={`w-full flex justify-center py-3 px-4 rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 transition-all ${(isSubmitting || isMember || hasPendingRequest) ? 'opacity-70 cursor-not-allowed' : ''}`}
-                        >
-                          {isSubmitting ? 'Submitting Request...' : isMember ? 'Already a Member' : 'Request to Join Circle'}
-                        </button>
-                      )}
+                    </div>
+
+                    <div className="flex flex-wrap gap-3">
+                      <span className={badgeClass}>
+                        {circle.currentMembers} of {circle.maxMembers} members
+                      </span>
+                      <span className={badgeClass}>
+                        {formatCycleInfo(circle.cycleLength, circle.cycleDay)}
+                      </span>
+                      <span className={badgeClass}>
+                        {circle.currencyType || 'USD'} settlement
+                      </span>
+                      <span className={badgeClass}>
+                        {joinRequestsOpen ? 'Requests open' : 'Requests paused'}
+                      </span>
                     </div>
                   </div>
-                ) : (
-                  <div className="py-8 text-center">
-                    <p className="text-gray-500">Circle information could not be loaded</p>
-                    <p className="text-sm text-gray-400 mt-2">Please try refreshing the page</p>
+
+                  <div className={sectionCardClass}>
+                    <span className={eyebrowClass}>At a glance</span>
+                    <dl className="mt-6 space-y-4">
+                      <div className="flex items-start justify-between gap-4 border-b border-[#ece4d7] pb-4">
+                        <dt className="text-sm font-medium text-[#667085]">
+                          Contribution
+                        </dt>
+                        <dd>
+                          <CurrencyDisplay
+                            usd={circle.contributionAmountUsd}
+                            sui={circle.contributionAmount}
+                            currencyType={circle.currencyType}
+                            className="items-end text-right"
+                          />
+                        </dd>
+                      </div>
+                      <div className="flex items-start justify-between gap-4 border-b border-[#ece4d7] pb-4">
+                        <dt className="text-sm font-medium text-[#667085]">
+                          Security deposit
+                        </dt>
+                        <dd>
+                          <CurrencyDisplay
+                            usd={circle.securityDepositUsd}
+                            sui={circle.securityDeposit}
+                            currencyType={circle.currencyType}
+                            className="items-end text-right"
+                          />
+                        </dd>
+                      </div>
+                      <div className="flex items-start justify-between gap-4 border-b border-[#ece4d7] pb-4">
+                        <dt className="text-sm font-medium text-[#667085]">
+                          Contribution cadence
+                        </dt>
+                        <dd className="text-right text-sm font-semibold text-[#171923]">
+                          {formatCycleInfo(circle.cycleLength, circle.cycleDay)}
+                        </dd>
+                      </div>
+                      <div className="flex items-start justify-between gap-4">
+                        <dt className="text-sm font-medium text-[#667085]">
+                          Circle admin
+                        </dt>
+                        <dd className="text-sm font-semibold text-[#171923]">
+                          {formatAddress(circle.admin)}
+                        </dd>
+                      </div>
+                    </dl>
                   </div>
-                )}
+                </div>
+
+                <div className="grid gap-6 px-6 py-8 sm:px-8 lg:grid-cols-[minmax(0,1.1fr)_360px]">
+                  <div className="space-y-6">
+                    <section className={sectionCardClass}>
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <span className={eyebrowClass}>Circle details</span>
+                          <h2 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
+                            Contribution structure
+                          </h2>
+                        </div>
+                        <div className="self-start rounded-full border border-[#ddd4c5] bg-white px-4 py-2 text-sm font-semibold text-[#455468]">
+                          {circle.currentMembers}/{circle.maxMembers} active spots filled
+                        </div>
+                      </div>
+
+                      <div className="mt-6 grid gap-4 sm:grid-cols-2">
+                        <div className={nestedCardClass}>
+                          <p className={eyebrowClass}>Contribution amount</p>
+                          <CurrencyDisplay
+                            usd={circle.contributionAmountUsd}
+                            sui={circle.contributionAmount}
+                            currencyType={circle.currencyType}
+                            className="mt-4"
+                          />
+                        </div>
+                        <div className={nestedCardClass}>
+                          <p className={eyebrowClass}>Security deposit</p>
+                          <CurrencyDisplay
+                            usd={circle.securityDepositUsd}
+                            sui={circle.securityDeposit}
+                            currencyType={circle.currencyType}
+                            className="mt-4"
+                          />
+                        </div>
+                        <div className={nestedCardClass}>
+                          <p className={eyebrowClass}>Contribution schedule</p>
+                          <p className="mt-4 text-xl font-semibold tracking-[-0.03em] text-[#171923]">
+                            {formatCycleInfo(circle.cycleLength, circle.cycleDay)}
+                          </p>
+                        </div>
+                        <div className={nestedCardClass}>
+                          <p className={eyebrowClass}>Membership</p>
+                          <p className="mt-4 text-xl font-semibold tracking-[-0.03em] text-[#171923]">
+                            {circle.currentMembers} members active
+                          </p>
+                          <p className="mt-2 text-sm leading-6 text-[#667085]">
+                            Maximum capacity is {circle.maxMembers} members for this
+                            circle.
+                          </p>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className={sectionCardClass}>
+                      <span className={eyebrowClass}>Process</span>
+                      <h2 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
+                        What happens after you request access
+                      </h2>
+
+                      <div className="mt-6 grid gap-4 sm:grid-cols-3">
+                        <div className={nestedCardClass}>
+                          <p className="text-sm font-semibold text-[#455468]">01</p>
+                          <p className="mt-4 text-lg font-semibold tracking-[-0.03em] text-[#171923]">
+                            Review the terms
+                          </p>
+                          <p className="mt-3 text-sm leading-6 text-[#667085]">
+                            Confirm the contribution amount, cadence, and the security
+                            deposit before you continue.
+                          </p>
+                        </div>
+                        <div className={nestedCardClass}>
+                          <p className="text-sm font-semibold text-[#455468]">02</p>
+                          <p className="mt-4 text-lg font-semibold tracking-[-0.03em] text-[#171923]">
+                            Send your request
+                          </p>
+                          <p className="mt-3 text-sm leading-6 text-[#667085]">
+                            Your request is sent to the admin for review. No contribution
+                            is taken at this stage.
+                          </p>
+                        </div>
+                        <div className={nestedCardClass}>
+                          <p className="text-sm font-semibold text-[#455468]">03</p>
+                          <p className="mt-4 text-lg font-semibold tracking-[-0.03em] text-[#171923]">
+                            Join after approval
+                          </p>
+                          <p className="mt-3 text-sm leading-6 text-[#667085]">
+                            Once approved, you can enter the circle flow and manage your
+                            contributions from the app.
+                          </p>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+
+                  <aside className="space-y-6">
+                    <section className={sectionCardClass}>
+                      <span className={eyebrowClass}>Request access</span>
+                      <h2 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
+                        Review the terms
+                      </h2>
+                      <p className="mt-4 text-base leading-8 text-[#5f6b7f]">
+                        By requesting access, you&apos;re agreeing to contribute{' '}
+                        {formatCurrency(
+                          circle.contributionAmountUsd,
+                          circle.currencyType,
+                        )}{' '}
+                        on a{' '}
+                        {formatCycleInfo(
+                          circle.cycleLength,
+                          circle.cycleDay,
+                        ).toLowerCase()}{' '}
+                        basis and to hold a security deposit of{' '}
+                        {formatCurrency(
+                          circle.securityDepositUsd,
+                          circle.currencyType,
+                        )}{' '}
+                        under the circle rules.
+                      </p>
+
+                      <div className="mt-6 space-y-3">
+                        <div className={nestedCardClass}>
+                          <p className={eyebrowClass}>Contribution</p>
+                          <CurrencyDisplay
+                            usd={circle.contributionAmountUsd}
+                            sui={circle.contributionAmount}
+                            currencyType={circle.currencyType}
+                            className="mt-4"
+                          />
+                        </div>
+                        <div className={nestedCardClass}>
+                          <p className={eyebrowClass}>Deposit</p>
+                          <CurrencyDisplay
+                            usd={circle.securityDepositUsd}
+                            sui={circle.securityDeposit}
+                            currencyType={circle.currencyType}
+                            className="mt-4"
+                          />
+                        </div>
+                      </div>
+                    </section>
+
+                    {!joinRequestsOpen ? (
+                      <section className={sectionCardClass}>
+                        <div className="flex items-start gap-4">
+                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[#ddd4c5] bg-white">
+                            <AlertCircle className="h-5 w-5 text-[#5f6b7f]" />
+                          </div>
+                          <div>
+                            <span className={eyebrowClass}>Request status</span>
+                            <h3 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
+                              Joining is temporarily closed
+                            </h3>
+                            <p className="mt-4 text-sm leading-7 text-[#667085]">
+                              New members can only join when the current cycle is paused
+                              between rounds or when the circle is inactive.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-6 rounded-[20px] border border-[#e8dfd2] bg-white px-4 py-4 text-sm leading-7 text-[#455468]">
+                          Join requests reopen automatically once the active cycle is
+                          paused or the circle becomes inactive.
+                        </div>
+                      </section>
+                    ) : !isAuthenticated ? (
+                      <section className={sectionCardClass}>
+                        <div className="flex items-start gap-4">
+                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[#ddd4c5] bg-white">
+                            <LogIn className="h-5 w-5 text-[#5f6b7f]" />
+                          </div>
+                          <div>
+                            <span className={eyebrowClass}>Authentication</span>
+                            <h3 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
+                              Sign in to request access
+                            </h3>
+                            <p className="mt-4 text-sm leading-7 text-[#667085]">
+                              Use your preferred provider to continue. The app will
+                              return you to this circle after login.
+                            </p>
+                          </div>
+                        </div>
+                        <LoginButton
+                          variant="landing"
+                          className="mt-6 sm:!grid-cols-1"
+                        />
+                      </section>
+                    ) : hasPendingRequest ? (
+                      <section className={sectionCardClass}>
+                        <div className="flex items-start gap-4">
+                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[#ddd4c5] bg-white">
+                            <AlertCircle className="h-5 w-5 text-[#5f6b7f]" />
+                          </div>
+                          <div>
+                            <span className={eyebrowClass}>Request status</span>
+                            <h3 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
+                              Request sent
+                            </h3>
+                            <p className="mt-4 text-sm leading-7 text-[#667085]">
+                              Your request is already with the circle admin. You&apos;ll
+                              be able to join once it has been approved.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-6 rounded-[20px] border border-[#e8dfd2] bg-white px-4 py-4 text-sm leading-7 text-[#455468]">
+                          No further action is needed right now. You can safely leave
+                          this page and return later to check the decision.
+                        </div>
+                      </section>
+                    ) : (
+                      <section className={sectionCardClass}>
+                        <span className={eyebrowClass}>Request status</span>
+                        <h3 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
+                          Send your request
+                        </h3>
+                        <p className="mt-4 text-sm leading-7 text-[#667085]">
+                          The admin will review your request before you can access the
+                          circle and begin contributing.
+                        </p>
+                        <div className="mt-6 rounded-[20px] border border-[#e8dfd2] bg-white px-4 py-4 text-sm leading-7 text-[#455468]">
+                          Requesting access does not trigger a payment. Contributions
+                          only begin after your membership is approved.
+                        </div>
+                        <button
+                          onClick={handleSubmit}
+                          disabled={
+                            isSubmitting ||
+                            isMember ||
+                            hasPendingRequest ||
+                            !joinRequestsOpen
+                          }
+                          className={`${primaryActionClass} mt-6 ${
+                            isSubmitting ||
+                            isMember ||
+                            hasPendingRequest ||
+                            !joinRequestsOpen
+                              ? 'cursor-not-allowed opacity-60'
+                              : ''
+                          }`}
+                        >
+                          {isSubmitting
+                            ? 'Submitting request...'
+                            : isMember
+                              ? 'Already a member'
+                              : 'Request to join circle'}
+                        </button>
+                      </section>
+                    )}
+                  </aside>
+                </div>
+              </>
+            ) : (
+              <div className="px-6 py-14 text-center sm:px-8 sm:py-20">
+                <span className={eyebrowClass}>Join circle</span>
+                <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-[#171923] sm:text-[2.8rem]">
+                  Circle information could not be loaded
+                </h1>
+                <p className="mx-auto mt-4 max-w-xl text-base leading-8 text-[#5f6b7f]">
+                  Refresh the page or reopen the invitation link. The circle details
+                  may be temporarily unavailable.
+                </p>
+                <div className="mt-8 flex justify-center">
+                  <button
+                    onClick={() => router.push(backDestination)}
+                    className={secondaryActionClass}
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    {backLabel}
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </main>
       </div>

@@ -7,6 +7,20 @@ import * as Select from '@radix-ui/react-select';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
+import { ZkLoginClient, ZkLoginError } from '../services/zkLoginClient';
+import {
+  autoReleaseDelayMsToDays,
+  daysToAutoReleaseDelayMs,
+  formatAutoReleaseDurationDays,
+  getDefaultAutoReleaseDelayMs,
+  getMinimumAutoReleaseDelayMs,
+  isValidAutoReleaseDelayMs,
+  type AutoReleaseCycleLength,
+} from '../lib/auto-release';
+import {
+  getRecoveryDelegateValidationError,
+  normalizeRecoveryDelegateAddress,
+} from '../lib/recovery-delegate';
 import { getCurrentPackageId, getCurrentRpcUrl, getCurrentNetwork } from '../services/network-config';
 
 // Add batch optimization imports
@@ -94,7 +108,7 @@ interface CircleCreatedEvent {
 
 type CycleType = 'rotational' | 'smart-goal';
 type RotationStyle = 'fixed' | 'auction-based';
-type CycleLength = 'weekly' | 'bi-weekly' | 'monthly' | 'quarterly';
+type CycleLength = AutoReleaseCycleLength;
 type WeekDay = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
 
 interface CircleFormData {
@@ -111,6 +125,9 @@ interface CircleFormData {
   securityDeposit: number; // SUI amount
   securityDepositUSD: number; // NEW: USD amount (deprecated, will be replaced by selectedCurrency amount)
   securityDepositLocal: number; // NEW: Amount in selected currency
+  autoReleaseEnabled: boolean;
+  autoReleaseDelayMs: number;
+  nextInCommand: string;
   penaltyRules: {
     latePayment: boolean;
     missedMeeting: boolean;
@@ -159,7 +176,10 @@ const WEEKDAY_MAP = {
 } as const;
 
 // Validation function for form data
-const validateFormData = (formData: CircleFormData): string[] => {
+const validateFormData = (
+  formData: CircleFormData,
+  adminAddress?: string | null,
+): string[] => {
   const errors: string[] = [];
   
   if (!formData.name) {
@@ -189,6 +209,25 @@ const validateFormData = (formData: CircleFormData): string[] => {
     if (typeof formData.cycleDay !== 'number' || formData.cycleDay < 1 || formData.cycleDay > 28) {
       errors.push('Please select a valid day of the month (1-28)');
     }
+  }
+
+  if (
+    formData.autoReleaseEnabled
+    && !isValidAutoReleaseDelayMs(formData.cycleLength, formData.autoReleaseDelayMs)
+  ) {
+    const minimumDays = autoReleaseDelayMsToDays(getMinimumAutoReleaseDelayMs(formData.cycleLength));
+    errors.push(
+      `Auto-release delay must be greater than ${formatAutoReleaseDurationDays(minimumDays)} for a ${formData.cycleLength} circle`,
+    );
+  }
+
+  const delegateValidationError = getRecoveryDelegateValidationError({
+    value: formData.nextInCommand,
+    adminAddress,
+    required: formData.autoReleaseEnabled,
+  });
+  if (delegateValidationError) {
+    errors.push(delegateValidationError);
   }
   
   if (formData.cycleType === 'smart-goal' && formData.smartGoal) {
@@ -283,6 +322,9 @@ const prepareCircleCreationData = (formData: CircleFormData) => {
     target_amount_usd,
     target_date,
     verification_required: formData.smartGoal?.verificationRequired || false,
+    auto_release_enabled: formData.autoReleaseEnabled,
+    auto_release_delay_ms: formData.autoReleaseDelayMs,
+    next_in_command: normalizeRecoveryDelegateAddress(formData.nextInCommand),
   };
 };
 
@@ -312,6 +354,9 @@ export default function CreateCircle() {
     securityDeposit: 0,
     securityDepositUSD: 0,
     securityDepositLocal: 0,
+    autoReleaseEnabled: false,
+    autoReleaseDelayMs: 0,
+    nextInCommand: '',
     penaltyRules: {
       latePayment: false,
       missedMeeting: false,
@@ -406,13 +451,13 @@ export default function CreateCircle() {
           <Tooltip.Trigger asChild>
             <span className={`cursor-help ${className}`}>
               {symbol} {local.toFixed(2)} {isPriceAvailable ? 
-                <span className="text-gray-500">({sui.toFixed(2)} SUI)</span> : 
+                <span className="text-[#667085]">({sui.toFixed(2)} SUI)</span> : 
                 <span className="text-yellow-500">(SUI price unavailable)</span>}
             </span>
           </Tooltip.Trigger>
           <Tooltip.Portal>
             <Tooltip.Content
-              className="bg-gray-900 text-white px-3 py-2 rounded text-sm"
+              className="rounded-xl border border-[#d9d0c4] bg-[#1d2533] px-3 py-2 text-sm text-white shadow-[0_18px_48px_-24px_rgba(15,23,42,0.55)]"
               sideOffset={5}
             >
               <div className="space-y-1">
@@ -420,17 +465,17 @@ export default function CreateCircle() {
                   <>
                     <p>Live Conversion Rate:</p>
                     <p>1 SUI = {suiPrice ? formatCurrency(suiPrice, 'USD') : 'Loading...'}</p>
-                    <p className="text-xs text-gray-400">Updates every minute</p>
-                    <p className="text-xs text-blue-300">Currency: {formData.selectedCurrency}</p>
+                    <p className="text-xs text-white/70">Updates every minute</p>
+                    <p className="text-xs text-[#b9c8dd]">Currency: {formData.selectedCurrency}</p>
                   </>
                 ) : (
                   <>
                     <p>SUI price currently unavailable</p>
-                    <p className="text-xs text-gray-400">SUI conversion will be applied at transaction time</p>
+                    <p className="text-xs text-white/70">SUI conversion will be applied at transaction time</p>
                   </>
                 )}
               </div>
-              <Tooltip.Arrow className="fill-gray-900" />
+              <Tooltip.Arrow className="fill-[#1d2533]" />
             </Tooltip.Content>
           </Tooltip.Portal>
         </Tooltip.Root>
@@ -510,6 +555,57 @@ export default function CreateCircle() {
     }));
   };
 
+  const minimumAutoReleaseDelayMs = getMinimumAutoReleaseDelayMs(formData.cycleLength);
+  const minimumAutoReleaseDelayDays = autoReleaseDelayMsToDays(minimumAutoReleaseDelayMs);
+  const minimumAllowedAutoReleaseDelayDays = minimumAutoReleaseDelayDays + 1;
+  const selectedAutoReleaseDelayDays = autoReleaseDelayMsToDays(formData.autoReleaseDelayMs);
+  const normalizedNextInCommand = normalizeRecoveryDelegateAddress(formData.nextInCommand);
+  const nextInCommandValidationError = getRecoveryDelegateValidationError({
+    value: formData.nextInCommand,
+    adminAddress: account?.userAddr ?? userAddress ?? null,
+    required: formData.autoReleaseEnabled,
+  });
+  const nextInCommandInlineError = formData.nextInCommand.trim()
+    ? nextInCommandValidationError
+    : null;
+  const autoReleasePresetOptions = [
+    {
+      label: 'Minimum + 1 day',
+      delayMs: getDefaultAutoReleaseDelayMs(formData.cycleLength),
+    },
+    {
+      label: '2 cycles',
+      delayMs: minimumAutoReleaseDelayMs * 2,
+    },
+    {
+      label: '3 cycles',
+      delayMs: minimumAutoReleaseDelayMs * 3,
+    },
+  ];
+
+  const handleAutoReleaseToggle = (checked: boolean) => {
+    setFormData((prev) => ({
+      ...prev,
+      autoReleaseEnabled: checked,
+      autoReleaseDelayMs: checked
+        ? isValidAutoReleaseDelayMs(prev.cycleLength, prev.autoReleaseDelayMs)
+          ? prev.autoReleaseDelayMs
+          : getDefaultAutoReleaseDelayMs(prev.cycleLength)
+        : 0,
+    }));
+  };
+
+  const handleAutoReleaseDelayDaysChange = (rawValue: string) => {
+    const parsedValue = Number(rawValue);
+    setFormData((prev) => ({
+      ...prev,
+      autoReleaseDelayMs:
+        Number.isFinite(parsedValue) && parsedValue > 0
+          ? daysToAutoReleaseDelayMs(parsedValue)
+          : 0,
+    }));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -518,7 +614,7 @@ export default function CreateCircle() {
     setError(null);
     
     // Validate form data
-    const errors = validateFormData(formData);
+    const errors = validateFormData(formData, account?.userAddr ?? userAddress ?? null);
     if (errors.length > 0) {
       setValidationErrors(errors);
       return;
@@ -527,6 +623,11 @@ export default function CreateCircle() {
     // Check if SUI price is available
     if (!isPriceAvailable) {
       setValidationErrors(["SUI price is currently unavailable. Please try again later."]);
+      return;
+    }
+
+    if (!account) {
+      setError('Authentication is required before creating a circle.');
       return;
     }
     
@@ -567,44 +668,27 @@ export default function CreateCircle() {
         penalty_rules: contractData.penalty_rules,
         verification_required: contractData.verification_required,
         currency_type: contractData.currency_type,
+        auto_release_enabled: contractData.auto_release_enabled,
+        auto_release_delay_ms: contractData.auto_release_delay_ms,
+        next_in_command: contractData.next_in_command,
         target_amount: contractData.target_amount?.some 
           ? { some: contractData.target_amount.some.toString() }
           : { none: null },
-        target_amount_local: contractData.target_amount_local,
+        target_amount_local: contractData.target_amount_local > 0
+          ? { some: contractData.target_amount_local.toString() }
+          : { none: null },
         target_amount_usd: contractData.target_amount_usd,
         target_date: contractData.target_date?.some
           ? { some: contractData.target_date.some.toString() }
           : { none: null }
       };
       
-      // Call the backend to send transaction using zkLogin
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'sendTransaction',
-          account,
-          circleData: serializedData,
-          network: getCurrentNetwork(), // Include current network selection
-        }),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        if (response.status === 401) {
-          // Session expired or authentication failed, redirect to dashboard
-          // Clear dashboard cache to ensure fresh data is loaded
-          if (typeof window !== 'undefined' && userAddress) {
-            const currentNetwork = getCurrentNetwork();
-            const cacheKey = `cache_${userAddress}_${currentNetwork}_circles`;
-            localStorage.removeItem(cacheKey);
-          }
-          router.push('/dashboard');
-          return;
-        }
-        throw new Error(result.error || 'Transaction failed.');
-      }
+      const zkLoginClient = ZkLoginClient.getInstance();
+      const result = await zkLoginClient.createCircle(
+        account,
+        serializedData,
+        getCurrentNetwork(),
+      );
       
       // Store the transaction digest for reference
       if (result.digest) {
@@ -615,6 +699,15 @@ export default function CreateCircle() {
       setCurrentStep(3); // Updated to step 3 for invite members
     } catch (err) {
       console.error('Error creating circle:', err);
+      if (err instanceof ZkLoginError && err.requireRelogin) {
+        if (typeof window !== 'undefined' && userAddress) {
+          const currentNetwork = getCurrentNetwork();
+          const cacheKey = `cache_${userAddress}_${currentNetwork}_circles`;
+          localStorage.removeItem(cacheKey);
+        }
+        router.push('/dashboard');
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Failed to create circle. Please try again.');
     }
   };
@@ -797,16 +890,132 @@ The Njangi On-Chain Team`;
     return null;
   }
 
+  const stepDefinitions = [
+    {
+      label: 'Circle type',
+      title: 'Choose the circle structure',
+      description:
+        'Start with the operating model. Rotational circles are ready now, while smart-goal circles remain on the roadmap.',
+    },
+    {
+      label: 'Currency',
+      title: 'Choose the value anchor',
+      description:
+        'Set the currency your members understand and plan around. SUI remains the settlement rail underneath.',
+    },
+    {
+      label: 'Configuration',
+      title: 'Define how the circle runs',
+      description:
+        'Set the name, contribution amount, cadence, deposit, and optional rules that will guide this group.',
+    },
+    {
+      label: 'Invites',
+      title: 'Invite members into the circle',
+      description:
+        'Share the link, prepare email invites, and hand the circle off to the people who will run it with you.',
+    },
+  ];
+  const currentStepMeta = stepDefinitions[currentStep] ?? stepDefinitions[0];
+  const shellCardClass =
+    'rounded-[32px] border border-[#ddd5c9] bg-white/88 shadow-[0_30px_90px_-62px_rgba(15,23,42,0.42)] backdrop-blur';
+  const sectionCardClass =
+    'rounded-[24px] border border-[#e7dfd4] bg-[#fbfaf7] p-4 shadow-[0_24px_70px_-58px_rgba(15,23,42,0.28)] sm:p-5';
+  const primaryActionClass =
+    'inline-flex items-center justify-center rounded-full bg-slate-950 px-5 py-3 text-sm font-medium text-white transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2';
+  const secondaryActionClass =
+    'inline-flex items-center justify-center rounded-full border border-stone-300 bg-white px-5 py-3 text-sm font-medium text-slate-700 transition hover:border-stone-400 hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-stone-300 focus:ring-offset-2';
+  const stepChipBaseClass =
+    'rounded-[22px] border px-4 py-3 text-left transition-colors';
+  const stepLabelClass =
+    'text-[11px] font-semibold uppercase tracking-[0.22em] text-[#717784]';
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <main className="max-w-3xl mx-auto py-4 sm:py-6 px-4 sm:px-6 lg:px-8">
-        <h1 className="text-xl sm:text-2xl font-semibold text-blue-600 mb-4">Create New Njangi Circle</h1>
-        <div className="bg-white shadow rounded-lg p-4 sm:p-6">
+    <div className="min-h-screen bg-[#f6f3ee] text-[#171923]">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-[440px] bg-[radial-gradient(circle_at_top_left,_rgba(108,122,147,0.16),_transparent_34%),radial-gradient(circle_at_85%_10%,_rgba(218,204,178,0.28),_transparent_24%),linear-gradient(180deg,_rgba(255,255,255,0.58)_0%,_rgba(246,243,238,0)_72%)]" />
+      <main className="relative mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+        <div className="mb-6 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => router.push('/dashboard')}
+            className={secondaryActionClass}
+          >
+            <svg
+              className="mr-2 h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M15 19l-7-7 7-7"
+              />
+            </svg>
+            Back to dashboard
+          </button>
+          <span className="inline-flex items-center rounded-full border border-[#dfe5ef] bg-white px-3 py-2 text-sm font-medium text-[#51627b]">
+            Step {currentStep + 1} of {stepDefinitions.length}
+          </span>
+        </div>
+
+        <div className={`${shellCardClass} overflow-hidden`}>
+          <div className="border-b border-[#e7dfd4] bg-[linear-gradient(135deg,rgba(243,246,251,0.95),rgba(251,250,247,0.9))] px-5 py-6 sm:px-8 sm:py-8">
+            <div className="max-w-3xl">
+              <p className={stepLabelClass}>Create circle</p>
+              <h1 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-[#171923] sm:text-[2.45rem]">
+                {currentStepMeta.title}
+              </h1>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-[#5f6674] sm:text-base">
+                {currentStepMeta.description}
+              </p>
+            </div>
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {stepDefinitions.map((step, index) => {
+                const isActive = index === currentStep;
+                const isCompleted = index < currentStep;
+
+                return (
+                  <div
+                    key={step.label}
+                    className={`${stepChipBaseClass} ${
+                      isActive
+                        ? 'border-[#d5dde8] bg-white text-[#171923]'
+                        : isCompleted
+                          ? 'border-[#cfe2d5] bg-[#eef7f0] text-[#24553a]'
+                          : 'border-[#e3dbcf] bg-[#fbfaf7] text-[#6b7280]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-semibold">{step.label}</p>
+                      <span
+                        className={`inline-flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ${
+                          isActive
+                            ? 'bg-[#1d2533] text-white'
+                            : isCompleted
+                              ? 'bg-[#24553a] text-white'
+                              : 'bg-white text-[#6b7280]'
+                        }`}
+                      >
+                        {index + 1}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="p-5 sm:p-8">
           {currentStep === 0 ? (
             <div className="space-y-6">
-              <div className="text-center">
-                <h2 className="text-2xl font-semibold text-gray-900">Choose Circle Type</h2>
-                <p className="mt-2 text-gray-600">Select the type of Njangi circle you want to create</p>
+              <div className="max-w-2xl">
+                <p className="text-sm leading-6 text-[#5f6674]">
+                  Pick the structure before you move into currency and scheduling.
+                  Rotational circles are the live path today.
+                </p>
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
@@ -816,15 +1025,16 @@ The Njangi On-Chain Team`;
                     setFormData(prev => ({ ...prev, cycleType: 'rotational' }));
                     setCurrentStep(1); // Go to currency selection step
                   }}
-                  className="p-6 border rounded-lg hover:border-blue-500 hover:shadow-md transition-all text-center group"
+                  className="group rounded-[28px] border border-[#d7cec1] bg-[#fbfaf7] p-6 text-center transition-all duration-200 hover:-translate-y-0.5 hover:border-[#c9c0b2] hover:bg-white hover:shadow-[0_24px_70px_-58px_rgba(15,23,42,0.34)]"
                 >
-                  <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <svg className="w-8 h-8 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#d8e2f0] bg-white text-[#5f708a]">
+                    <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                     </svg>
                   </div>
-                  <h3 className="text-xl font-medium text-gray-900 mb-2">Rotational Circle</h3>
-                  <p className="text-gray-600">Members contribute regularly and take turns receiving the full pot in a predetermined order</p>
+                  <p className={stepLabelClass}>Available now</p>
+                  <h3 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-[#171923]">Rotational Circle</h3>
+                  <p className="mt-3 text-sm leading-6 text-[#5f6674]">Members contribute regularly and take turns receiving the full pot in a predetermined order.</p>
                 </button>
 
                 {/* Smart Goal Circle Card */}
@@ -836,25 +1046,25 @@ The Njangi On-Chain Team`;
                       duration: 3000
                     });
                   }}
-                  className="p-6 border rounded-lg border-gray-300 hover:border-gray-400 transition-all text-center group relative"
+                  className="group relative rounded-[28px] border border-[#e3dbcf] bg-[#f7f4ee] p-6 text-center transition-all duration-200 hover:border-[#d3cabd]"
                 >
                   {/* Coming Soon Badge - move to top-right corner of the card instead of floating outside */}
                   <div className="absolute top-2 right-2">
-                    <span className="bg-amber-500 text-white text-xs px-2 py-1 rounded-full font-medium whitespace-nowrap shadow-md">
+                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-800 shadow-sm">
                       Coming Soon
                     </span>
                   </div>
                   
-                  {/* Reduce opacity of the overlay to make text more visible */}
-                  <div className="absolute inset-0 bg-white/30 rounded-lg"></div>
+                  <div className="absolute inset-0 rounded-[28px] bg-white/35" />
                   
-                  <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4 relative">
-                    <svg className="w-8 h-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <div className="relative mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#d7cec1] bg-white text-[#5f708a]">
+                    <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                   </div>
-                  <h3 className="text-xl font-medium text-gray-900 mb-2 relative">Smart Goal Circle</h3>
-                  <p className="text-gray-600 relative">Members contribute towards a shared savings goal with automatic distribution upon completion</p>
+                  <p className={`${stepLabelClass} relative`}>Planned flow</p>
+                  <h3 className="relative mt-3 text-xl font-semibold tracking-[-0.03em] text-[#171923]">Smart Goal Circle</h3>
+                  <p className="relative mt-3 text-sm leading-6 text-[#5f6674]">Members contribute toward a shared savings goal with automatic distribution when the group completes it.</p>
                 </button>
               </div>
 
@@ -870,10 +1080,10 @@ The Njangi On-Chain Team`;
                     }
                     router.push('/dashboard');
                   }}
-                  className="group inline-flex items-center px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base font-medium text-gray-700 bg-white border-2 border-gray-200 rounded-lg sm:rounded-xl shadow-sm hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200"
+                  className={secondaryActionClass}
                 >
                   <svg 
-                    className="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-gray-400 group-hover:text-gray-500 transition-colors duration-200" 
+                    className="mr-2 h-4 w-4 text-slate-400 transition-colors duration-200 group-hover:text-slate-500" 
                     fill="none" 
                     viewBox="0 0 24 24" 
                     stroke="currentColor"
@@ -892,9 +1102,11 @@ The Njangi On-Chain Team`;
           ) : currentStep === 1 ? (
             // NEW: Currency Selection Step
             <div className="space-y-6">
-              <div className="text-center">
-                <h2 className="text-2xl font-semibold text-gray-900">Choose Your Currency</h2>
-                <p className="mt-2 text-gray-600">Select the currency for contributions and deposits</p>
+              <div className="max-w-2xl">
+                <p className="text-sm leading-6 text-[#5f6674]">
+                  Choose the currency members will reason about when they plan
+                  contributions and deposits.
+                </p>
               </div>
 
               {/* Currency Selection */}
@@ -914,19 +1126,19 @@ The Njangi On-Chain Team`;
                       <button
                         key={currency.code}
                         onClick={() => handleInputChange('selectedCurrency', currency.code)}
-                        className={`p-4 border rounded-lg text-left transition-all ${
+                        className={`rounded-[22px] border p-4 text-left transition-all ${
                           formData.selectedCurrency === currency.code
-                            ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
-                            : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                            ? 'border-[#d5dde8] bg-white shadow-[0_24px_60px_-54px_rgba(15,23,42,0.32)]'
+                            : 'border-[#e3dbcf] bg-[#fbfaf7] hover:border-[#d2c8ba] hover:bg-white'
                         }`}
                       >
                         <div className="flex items-center justify-between">
                           <div>
-                            <h4 className="font-medium text-gray-900">{currency.name}</h4>
-                            <p className="text-sm text-gray-500">{currency.symbol} • {currency.code}</p>
+                            <h4 className="font-medium text-[#171923]">{currency.name}</h4>
+                            <p className="text-sm text-[#667085]">{currency.symbol} • {currency.code}</p>
                           </div>
                           {formData.selectedCurrency === currency.code && (
-                            <div className="w-5 h-5 text-blue-600">
+                            <div className="h-5 w-5 text-[#51627b]">
                               <CheckIcon />
                             </div>
                           )}
@@ -951,19 +1163,19 @@ The Njangi On-Chain Team`;
                       <button
                         key={currency.code}
                         onClick={() => handleInputChange('selectedCurrency', currency.code)}
-                        className={`p-4 border rounded-lg text-left transition-all ${
+                        className={`rounded-[22px] border p-4 text-left transition-all ${
                           formData.selectedCurrency === currency.code
-                            ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
-                            : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                            ? 'border-[#d5dde8] bg-white shadow-[0_24px_60px_-54px_rgba(15,23,42,0.32)]'
+                            : 'border-[#e3dbcf] bg-[#fbfaf7] hover:border-[#d2c8ba] hover:bg-white'
                         }`}
                       >
                         <div className="flex items-center justify-between">
                           <div>
-                            <h4 className="font-medium text-gray-900">{currency.name}</h4>
-                            <p className="text-sm text-gray-500">{currency.symbol} • {currency.code}</p>
+                            <h4 className="font-medium text-[#171923]">{currency.name}</h4>
+                            <p className="text-sm text-[#667085]">{currency.symbol} • {currency.code}</p>
                           </div>
                           {formData.selectedCurrency === currency.code && (
-                            <div className="w-5 h-5 text-blue-600">
+                            <div className="h-5 w-5 text-[#51627b]">
                               <CheckIcon />
                             </div>
                           )}
@@ -974,16 +1186,16 @@ The Njangi On-Chain Team`;
                 </div>
 
                 {/* Currency Information */}
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <div className={sectionCardClass}>
                   <div className="flex items-start">
                     <div className="mr-3 mt-1">
-                      <svg className="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                      <svg className="h-5 w-5 text-[#70819a]" fill="none" viewBox="0 0 20 20" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
                     </div>
                     <div className="flex-1">
-                      <h4 className="text-sm font-medium text-blue-800">Stable Value Pegging</h4>
-                      <p className="mt-1 text-sm text-blue-700">
+                      <h4 className="text-sm font-medium text-[#171923]">Stable Value Pegging</h4>
+                      <p className="mt-1 text-sm leading-6 text-[#5f6674]">
                         All contributions and deposits will be pegged to your selected currency. 
                         While transactions are processed in SUI, the equivalent value in {SUPPORTED_CURRENCIES[formData.selectedCurrency]?.name || 'your currency'} remains stable, 
                         protecting members from cryptocurrency price volatility.
@@ -997,10 +1209,10 @@ The Njangi On-Chain Team`;
               <div className="flex flex-col sm:flex-row justify-between pt-6 space-y-3 sm:space-y-0">
                 <button
                   onClick={() => setCurrentStep(0)}
-                  className="group inline-flex items-center justify-center px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base font-medium text-gray-700 bg-white border-2 border-gray-200 rounded-lg sm:rounded-xl shadow-sm hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200"
+                  className={secondaryActionClass}
                 >
                   <svg 
-                    className="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-gray-400 group-hover:text-gray-500 transition-colors duration-200" 
+                    className="mr-2 h-4 w-4 text-slate-400 transition-colors duration-200 group-hover:text-slate-500" 
                     fill="none" 
                     viewBox="0 0 24 24" 
                     stroke="currentColor"
@@ -1016,11 +1228,11 @@ The Njangi On-Chain Team`;
                 </button>
                 <button
                   onClick={() => setCurrentStep(2)} // Go to main form step
-                  className="group inline-flex items-center justify-center px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base font-medium text-white bg-blue-600 border-2 border-transparent rounded-lg sm:rounded-xl shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200"
+                  className={primaryActionClass}
                 >
                   Continue to Circle Setup
                   <svg 
-                    className="w-4 h-4 sm:w-5 sm:h-5 ml-2 text-blue-200 group-hover:text-white transition-colors duration-200" 
+                    className="ml-2 h-4 w-4 text-slate-300 transition-colors duration-200 group-hover:text-white" 
                     fill="none" 
                     viewBox="0 0 24 24" 
                     stroke="currentColor"
@@ -1037,9 +1249,36 @@ The Njangi On-Chain Team`;
             </div>
           ) : currentStep === 2 ? (
             <form onSubmit={handleSubmit} className="space-y-8">
+              <div className={sectionCardClass}>
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="max-w-2xl">
+                    <p className={stepLabelClass}>Circle setup</p>
+                    <h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-[#171923]">
+                      Configure how this circle should run
+                    </h2>
+                    <p className="mt-2 text-sm leading-6 text-[#5f6674]">
+                      Define the core economics and cadence first. The invite
+                      step comes immediately after the circle is created.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <span className="inline-flex items-center rounded-full border border-[#dde5ef] bg-white px-3 py-2 text-sm font-medium text-[#51627b]">
+                      {formData.cycleType === 'rotational' ? 'Rotational' : 'Smart Goal'}
+                    </span>
+                    <span className="inline-flex items-center rounded-full border border-[#dde5ef] bg-white px-3 py-2 text-sm font-medium text-[#51627b]">
+                      {formData.selectedCurrency}
+                    </span>
+                    <span className="inline-flex items-center rounded-full border border-[#dde5ef] bg-white px-3 py-2 text-sm font-medium text-[#51627b]">
+                      {formData.numberOfMembers} members
+                    </span>
+                  </div>
+                </div>
+              </div>
+
               {/* Error Display */}
               {error && (
-                <div className="p-4 bg-red-50 border border-red-200 rounded-md">
+                <div className="rounded-[22px] border border-red-200 bg-red-50/90 p-4">
                   <div className="flex">
                     <div className="flex-shrink-0">
                       <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
@@ -1054,16 +1293,16 @@ The Njangi On-Chain Team`;
                 </div>
               )}
               {validationErrors.length > 0 && (
-                <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-md">
+                <div className="rounded-[22px] border border-amber-200 bg-amber-50/90 p-4">
                   <div className="flex">
                     <div className="flex-shrink-0">
-                      <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                      <svg className="h-5 w-5 text-amber-500" viewBox="0 0 20 20" fill="currentColor">
                         <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
                       </svg>
                     </div>
                     <div className="ml-3">
-                      <h3 className="text-sm font-medium text-yellow-800">Please fix the following issues:</h3>
-                      <ul className="mt-2 text-sm text-yellow-700 list-disc list-inside">
+                      <h3 className="text-sm font-medium text-amber-900">Please fix the following issues:</h3>
+                      <ul className="mt-2 list-disc list-inside text-sm text-amber-800">
                         {validationErrors.map((error, index) => (
                           <li key={index}>{error}</li>
                         ))}
@@ -1282,10 +1521,15 @@ The Njangi On-Chain Team`;
                 <Select.Root
                   value={formData.cycleLength}
                   onValueChange={(value: CycleLength) => {
-                    handleInputChange('cycleLength', value);
-                    // Reset cycleDay to appropriate default based on cycle length
-                    // Treat bi-weekly like weekly for day selection
-                    handleInputChange('cycleDay', (value === 'weekly' || value === 'bi-weekly') ? 'monday' : 1);
+                    setFormData((prev) => ({
+                      ...prev,
+                      cycleLength: value,
+                      cycleDay: (value === 'weekly' || value === 'bi-weekly') ? 'monday' : 1,
+                      autoReleaseDelayMs:
+                        prev.autoReleaseEnabled && !isValidAutoReleaseDelayMs(value, prev.autoReleaseDelayMs)
+                          ? getDefaultAutoReleaseDelayMs(value)
+                          : prev.autoReleaseDelayMs,
+                    }));
                   }}
                 >
                   <Select.Trigger
@@ -1771,10 +2015,180 @@ The Njangi On-Chain Team`;
                 </div>
               </div>
 
+              <div className="space-y-4 rounded-[24px] border border-[#e6dccd] bg-[#fcfaf6] p-4 sm:p-5">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="max-w-2xl">
+                    <div className="flex items-center flex-wrap">
+                      <h3 className="text-sm font-medium text-gray-700">Admin Liveness Fallback</h3>
+                      <InfoTooltip>
+                        <p>Optional recovery path for worst-case admin absence.</p>
+                        <p className="text-gray-300 text-xs mt-1">If enabled, the delegate gets the first 24 hours of trigger authority after this delay elapses.</p>
+                        <p className="text-gray-300 text-xs mt-1">The delay must be longer than the selected cycle length.</p>
+                      </InfoTooltip>
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-gray-600">
+                      Configure an automatic release window that can unwind the circle if the admin is deceased, missing, or permanently unreachable.
+                    </p>
+                  </div>
+                  <Switch.Root
+                    checked={formData.autoReleaseEnabled}
+                    onCheckedChange={handleAutoReleaseToggle}
+                    className="h-7 w-12 rounded-full bg-gray-200 relative data-[state=checked]:bg-[#1d2533] transition-colors duration-200"
+                    aria-label="Enable admin liveness fallback"
+                  >
+                    <Switch.Thumb className="block h-6 w-6 rounded-full bg-white shadow-lg transition-transform duration-200 translate-x-0.5 data-[state=checked]:translate-x-[22px]" />
+                  </Switch.Root>
+                </div>
+
+                <div className={`rounded-[20px] border p-4 ${
+                  formData.autoReleaseEnabled
+                    ? 'border-amber-200 bg-amber-50 text-amber-900'
+                    : 'border-stone-200 bg-white text-slate-600'
+                }`}>
+                  <p className="text-sm font-semibold">
+                    Admin liveness fallback {formData.autoReleaseEnabled ? 'enabled' : 'disabled'}
+                  </p>
+                  <p className="mt-2 text-sm leading-6">
+                    {formData.autoReleaseEnabled
+                      ? 'This setting is irreversible after creation. If recovery is triggered, the cycle stops and custody funds are returned to their recorded owners.'
+                      : 'Leave this off if you do not want an automatic admin-absence recovery path attached to the circle.'}
+                  </p>
+                </div>
+
+                {formData.autoReleaseEnabled && (
+                  <div className="space-y-4">
+                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_300px]">
+                      <div className="space-y-3 rounded-[20px] border border-stone-200 bg-white p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <label htmlFor="auto-release-delay-days" className="text-sm font-medium text-gray-700">
+                            Delay before fallback unlocks
+                          </label>
+                          <span className="rounded-full bg-stone-100 px-3 py-1 text-xs font-medium text-slate-700">
+                            More than {formatAutoReleaseDurationDays(minimumAutoReleaseDelayDays)}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <input
+                            id="auto-release-delay-days"
+                            type="number"
+                            min={minimumAllowedAutoReleaseDelayDays}
+                            step={1}
+                            value={selectedAutoReleaseDelayDays > 0 ? selectedAutoReleaseDelayDays : ''}
+                            onChange={(e) => handleAutoReleaseDelayDaysChange(e.target.value)}
+                            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                            placeholder={`${minimumAllowedAutoReleaseDelayDays}`}
+                          />
+                          <span className="text-sm text-gray-500">days</span>
+                        </div>
+                        <p className="text-sm text-gray-500">
+                          Choose a delay longer than the circle cadence. Weekly circles must exceed 7 days, monthly circles must exceed 30 days, and so on.
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {autoReleasePresetOptions.map((preset) => {
+                            const presetDays = autoReleaseDelayMsToDays(preset.delayMs);
+                            const isSelected = formData.autoReleaseDelayMs === preset.delayMs;
+                            return (
+                              <button
+                                key={preset.label}
+                                type="button"
+                                onClick={() => {
+                                  setFormData((prev) => ({
+                                    ...prev,
+                                    autoReleaseDelayMs: preset.delayMs,
+                                  }));
+                                }}
+                                className={`rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
+                                  isSelected
+                                    ? 'border-[#1d2533] bg-[#1d2533] text-white'
+                                    : 'border-stone-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-stone-50'
+                                }`}
+                              >
+                                {preset.label} ({presetDays}d)
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="rounded-[20px] border border-[#dbe2ec] bg-[#f3f6fb] p-4">
+                        <p className="text-sm font-medium text-[#1d2533]">Recovery window summary</p>
+                        <p className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-[#171923]">
+                          {selectedAutoReleaseDelayDays > 0
+                            ? formatAutoReleaseDurationDays(selectedAutoReleaseDelayDays)
+                            : 'Set a delay'}
+                        </p>
+                        <p className="mt-2 text-sm leading-6 text-[#51627b]">
+                          The delegate-exclusive recovery window can only open after this delay from circle creation. The onchain rule requires it to be longer than the selected {formData.cycleLength} cycle.
+                        </p>
+                        <p className="mt-3 text-xs text-[#70819a]">
+                          Minimum allowed: {formatAutoReleaseDurationDays(minimumAllowedAutoReleaseDelayDays)}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_300px]">
+                      <div className="space-y-3 rounded-[20px] border border-stone-200 bg-white p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <label htmlFor="next-in-command" className="text-sm font-medium text-gray-700">
+                            Next in command
+                          </label>
+                          <span className="rounded-full bg-stone-100 px-3 py-1 text-xs font-medium text-slate-700">
+                            First recovery right
+                          </span>
+                        </div>
+                        <input
+                          id="next-in-command"
+                          type="text"
+                          value={formData.nextInCommand}
+                          onChange={(e) => handleInputChange('nextInCommand', e.target.value)}
+                          className={`block w-full rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 ${
+                            nextInCommandInlineError
+                              ? 'border-red-300 text-red-900 placeholder:text-red-300'
+                              : 'border-gray-300'
+                          }`}
+                          placeholder="0x..."
+                          autoCapitalize="off"
+                          autoCorrect="off"
+                          spellCheck={false}
+                        />
+                        <p className="text-sm text-gray-500">
+                          This wallet gets the first 24 hours of exclusive trigger authority after the admin heartbeat expires. It does not need to be a member yet, but it must be an active, unsuspended member when recovery is triggered.
+                        </p>
+                        {nextInCommandInlineError ? (
+                          <p className="text-sm font-medium text-red-600">
+                            {nextInCommandInlineError}
+                          </p>
+                        ) : !normalizedNextInCommand ? (
+                          <p className="text-xs text-[#70819a]">
+                            Required before creation when admin liveness fallback is enabled.
+                          </p>
+                        ) : normalizedNextInCommand ? (
+                          <p className="text-xs text-[#51627b] break-all">
+                            Normalized delegate address: {normalizedNextInCommand}
+                          </p>
+                        ) : null}
+                      </div>
+
+                      <div className="rounded-[20px] border border-[#dbe2ec] bg-[#f3f6fb] p-4">
+                        <p className="text-sm font-medium text-[#1d2533]">Trigger order</p>
+                        <div className="mt-3 space-y-3 text-sm leading-6 text-[#51627b]">
+                          <p>1. Admin heartbeat expires after {formatAutoReleaseDurationDays(selectedAutoReleaseDelayDays || minimumAllowedAutoReleaseDelayDays)}.</p>
+                          <p>2. The next in command gets 24 hours of exclusive recovery authority.</p>
+                          <p>3. If that delegate is invalid at expiry or does not respond within 24 hours, eligible active members can trigger the same unwind path.</p>
+                        </div>
+                        <p className="mt-3 text-xs text-[#70819a]">
+                          Recovery stops the circle and returns custody funds to their recorded owners.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Final Currency Peg Summary */}
-              <div className="mt-8 mb-6 border border-indigo-200 bg-indigo-50 rounded-lg p-4 text-indigo-700">
+              <div className="mt-8 mb-6 rounded-[24px] border border-[#dbe2ec] bg-[#f3f6fb] p-4 text-[#51627b] sm:p-5">
                 <h3 className="font-semibold text-sm flex items-center">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-indigo-600" viewBox="0 0 20 20" fill="currentColor">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="mr-2 h-5 w-5 text-[#5f708a]" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm1-11a1 1 0 1 1-2 0v2H7a1 1 0 1 0 0 2h2v2a1 1 0 1 0 2 0v-2h2a1 1 0 1 0 0-2h-2V7z" clipRule="evenodd" />
                   </svg>
                   {formData.selectedCurrency}-Pegged Njangi Feature
@@ -1795,13 +2209,13 @@ The Njangi On-Chain Team`;
                 <button
                   type="button"
                   onClick={() => router.back()}
-                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200"
+                  className={secondaryActionClass}
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  className={primaryActionClass}
                 >
                   Next: Invite Members
                 </button>
@@ -1809,25 +2223,36 @@ The Njangi On-Chain Team`;
             </form>
           ) : (
             <div className="space-y-8">
-              <div className="text-center">
-                <h2 className="text-2xl font-semibold text-gray-900">Invite Members</h2>
-                <p className="mt-2 text-sm text-gray-600">
-                  Invite {formData.numberOfMembers - 1} members to join your Njangi circle
-                </p>
+              <div className={sectionCardClass}>
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="max-w-2xl">
+                    <p className={stepLabelClass}>Invites</p>
+                    <h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-[#171923]">
+                      Invite members into the circle
+                    </h2>
+                    <p className="mt-2 text-sm leading-6 text-[#5f6674]">
+                      Add direct invites, generate the share link, and finish the
+                      flow once the circle ID is available.
+                    </p>
+                  </div>
+                  <span className="inline-flex items-center rounded-full border border-[#dde5ef] bg-white px-3 py-2 text-sm font-medium text-[#51627b]">
+                    {formData.numberOfMembers - 1} member slots to fill
+                  </span>
+                </div>
               </div>
 
               {/* Direct Invites Section */}
-              <div className="bg-white rounded-lg p-4 sm:p-6 space-y-6">
+              <div className={sectionCardClass}>
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-3 sm:space-y-0">
-                  <h3 className="text-lg font-medium text-gray-900">Direct Invites</h3>
-                  <div className="flex items-center space-x-2 bg-gray-100 rounded-lg p-1">
+                  <h3 className="text-lg font-medium text-[#171923]">Direct Invites</h3>
+                  <div className="flex items-center space-x-2 rounded-full border border-[#e3dbcf] bg-white p-1">
                     <button
                       type="button"
                       onClick={() => setInviteType('email')}
-                      className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                      className={`rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${
                         inviteType === 'email'
-                          ? 'bg-white text-blue-700 shadow-sm'
-                          : 'text-gray-500 hover:text-gray-700'
+                          ? 'bg-[#1d2533] text-white shadow-sm'
+                          : 'text-[#667085] hover:text-[#171923]'
                       }`}
                     >
                       Email
@@ -1835,10 +2260,10 @@ The Njangi On-Chain Team`;
                     <button
                       type="button"
                       onClick={() => setInviteType('phone')}
-                      className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                      className={`rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${
                         inviteType === 'phone'
-                          ? 'bg-white text-blue-700 shadow-sm'
-                          : 'text-gray-500 hover:text-gray-700'
+                          ? 'bg-[#1d2533] text-white shadow-sm'
+                          : 'text-[#667085] hover:text-[#171923]'
                       }`}
                     >
                       Phone
@@ -1848,13 +2273,13 @@ The Njangi On-Chain Team`;
 
                 {/* Email functionality note */}
                 {inviteType === 'email' && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
+                  <div className="rounded-[20px] border border-[#dbe2ec] bg-[#f3f6fb] p-4">
                     <div className="flex items-start">
-                      <svg className="h-5 w-5 text-blue-400 mr-2 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                      <svg className="mr-2 mt-0.5 h-5 w-5 flex-shrink-0 text-[#70819a]" fill="none" viewBox="0 0 20 20" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
-                      <div className="text-sm text-blue-700 min-w-0">
-                        <p className="font-medium">Email Invites</p>
+                      <div className="min-w-0 text-sm text-[#5f6674]">
+                        <p className="font-medium text-[#171923]">Email Invites</p>
                         <p className="mt-1">Adding an email will automatically fetch your circle ID and generate the invite link. Email invites will then open in your default email client with a pre-written message containing the circle details and join link.</p>
                       </div>
                     </div>
@@ -1971,9 +2396,9 @@ The Njangi On-Chain Team`;
               </div>
 
               {/* Shareable Link Section */}
-              <div className="bg-white rounded-lg p-4 sm:p-6 space-y-4">
-                <h3 className="text-lg font-medium text-gray-900">Shareable Invite Link</h3>
-                <p className="text-sm text-gray-500">
+              <div className={sectionCardClass}>
+                <h3 className="text-lg font-medium text-[#171923]">Shareable Invite Link</h3>
+                <p className="text-sm text-[#667085]">
                   {createdCircleId 
                     ? "Your circle ID has been fetched and invite link is ready to share"
                     : "Add an email above to automatically fetch the circle ID and generate the invite link"
@@ -2104,7 +2529,7 @@ The Njangi On-Chain Team`;
                       <button
                         type="button"
                         disabled
-                        className="w-full sm:w-auto px-4 py-2 border border-gray-200 rounded-md shadow-sm text-sm font-medium text-gray-400 bg-gray-50 cursor-not-allowed"
+                        className="w-full sm:w-auto rounded-full border border-stone-200 bg-stone-50 px-5 py-3 text-sm font-medium text-stone-400 cursor-not-allowed"
                       >
                         Back
                       </button>
@@ -2152,7 +2577,7 @@ The Njangi On-Chain Team`;
                       router.push('/dashboard?refreshCircles=true');
                     }, 3000); // Increased delay to allow blockchain to process transaction
                   }}
-                  className="w-full sm:w-auto px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  className={`w-full sm:w-auto ${primaryActionClass}`}
                 >
                   {inviteMembers.filter(member => member.type === 'email' && member.status === 'pending').length > 0 && createdCircleId
                     ? 'Send Email Invites & Finish'
@@ -2162,6 +2587,7 @@ The Njangi On-Chain Team`;
               </div>
             </div>
           )}
+        </div>
         </div>
       </main>
     </div>
@@ -2224,13 +2650,13 @@ const InfoTooltip = ({ children }: { children: React.ReactNode }) => (
       </Tooltip.Trigger>
       <Tooltip.Portal>
         <Tooltip.Content
-          className="bg-gray-900 text-white px-2 sm:px-3 py-1.5 sm:py-2 rounded text-xs sm:text-sm max-w-xs z-50"
+          className="z-50 max-w-xs rounded-xl border border-[#d9d0c4] bg-[#1d2533] px-2 sm:px-3 py-1.5 sm:py-2 text-xs text-white shadow-[0_18px_48px_-24px_rgba(15,23,42,0.55)] sm:text-sm"
           sideOffset={5}
         >
           <div className="space-y-1">
             {children}
           </div>
-          <Tooltip.Arrow className="fill-gray-900" />
+          <Tooltip.Arrow className="fill-[#1d2533]" />
         </Tooltip.Content>
       </Tooltip.Portal>
     </Tooltip.Root>

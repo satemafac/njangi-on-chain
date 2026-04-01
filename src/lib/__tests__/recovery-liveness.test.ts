@@ -1,0 +1,163 @@
+import {
+  AUTO_RELEASE_DELEGATE_GRACE_PERIOD_MS,
+  getRecoveryAutoReleaseUiState,
+  parseRecoveryStatus,
+} from '@/lib/recovery-liveness';
+
+const ADMIN_ADDRESS = '0x00000000000000000000000000000000000000000000000000000000000000aa';
+const DELEGATE_ADDRESS = '0x00000000000000000000000000000000000000000000000000000000000000bb';
+const MEMBER_ADDRESS = '0x00000000000000000000000000000000000000000000000000000000000000cc';
+
+describe('recovery liveness helpers', () => {
+  it('parses delegate and heartbeat fields from config', () => {
+    const status = parseRecoveryStatus({
+      recovery_state: '0',
+      recovery_proposal: { vec: [] },
+      auto_release_enabled: true,
+      auto_release_delay_ms: '1000',
+      auto_release_start_time: '5000',
+      next_in_command: { vec: [DELEGATE_ADDRESS] },
+      recovery_state_updated_at: '5500',
+    });
+
+    expect(status).toMatchObject({
+      rawState: 0,
+      autoReleaseEnabled: true,
+      autoReleaseDelayMs: 1000,
+      autoReleaseStartTime: 5000,
+      autoReleaseTriggerTime: 6000,
+      lastAdminHeartbeatAt: 5000,
+      nextInCommand: DELEGATE_ADDRESS,
+      lastUpdatedAt: 5500,
+    });
+  });
+
+  it('authorizes the valid delegate first when expiry is reached', () => {
+    const state = getRecoveryAutoReleaseUiState({
+      recoveryStatus: {
+        rawState: 0,
+        autoReleaseEnabled: true,
+        autoReleaseTriggerTime: 1000,
+        nextInCommand: DELEGATE_ADDRESS,
+      },
+      adminAddress: ADMIN_ADDRESS,
+      userAddress: DELEGATE_ADDRESS,
+      viewerIsEligibleActiveMember: true,
+      delegateIsEligibleActiveMember: true,
+      now: 1000,
+    });
+
+    expect(state.viewerRole).toBe('delegate');
+    expect(state.delegateStatus).toBe('valid');
+    expect(state.viewerCanTrigger).toBe(true);
+    expect(state.authorityMode).toBe('delegate_grace');
+    expect(state.memberFallbackReady).toBe(false);
+    expect(state.memberFallbackUnlockTime).toBe(1000 + AUTO_RELEASE_DELEGATE_GRACE_PERIOD_MS);
+  });
+
+  it('blocks active members during the delegate-exclusive grace window', () => {
+    const state = getRecoveryAutoReleaseUiState({
+      recoveryStatus: {
+        rawState: 0,
+        autoReleaseEnabled: true,
+        autoReleaseTriggerTime: 1000,
+        nextInCommand: DELEGATE_ADDRESS,
+      },
+      adminAddress: ADMIN_ADDRESS,
+      userAddress: MEMBER_ADDRESS,
+      viewerIsEligibleActiveMember: true,
+      delegateIsEligibleActiveMember: true,
+      now: 1000,
+    });
+
+    expect(state.viewerRole).toBe('member_waiting_delegate');
+    expect(state.viewerBlockedByDelegate).toBe(true);
+    expect(state.viewerCanTrigger).toBe(false);
+    expect(state.memberFallbackReady).toBe(false);
+  });
+
+  it('unlocks member fallback after the delegate grace window expires', () => {
+    const state = getRecoveryAutoReleaseUiState({
+      recoveryStatus: {
+        rawState: 0,
+        autoReleaseEnabled: true,
+        autoReleaseTriggerTime: 1000,
+        nextInCommand: DELEGATE_ADDRESS,
+      },
+      adminAddress: ADMIN_ADDRESS,
+      userAddress: MEMBER_ADDRESS,
+      viewerIsEligibleActiveMember: true,
+      delegateIsEligibleActiveMember: true,
+      now: 1000 + AUTO_RELEASE_DELEGATE_GRACE_PERIOD_MS,
+    });
+
+    expect(state.viewerRole).toBe('member_fallback');
+    expect(state.viewerBlockedByDelegate).toBe(false);
+    expect(state.viewerCanTrigger).toBe(true);
+    expect(state.memberFallbackReady).toBe(true);
+    expect(state.authorityMode).toBe('member_fallback');
+  });
+
+  it('falls back immediately to any active non-admin member when no valid delegate exists', () => {
+    const state = getRecoveryAutoReleaseUiState({
+      recoveryStatus: {
+        rawState: 0,
+        autoReleaseEnabled: true,
+        autoReleaseTriggerTime: 1000,
+        nextInCommand: DELEGATE_ADDRESS,
+      },
+      adminAddress: ADMIN_ADDRESS,
+      userAddress: MEMBER_ADDRESS,
+      viewerIsEligibleActiveMember: true,
+      delegateIsEligibleActiveMember: false,
+      now: 1000,
+    });
+
+    expect(state.delegateStatus).toBe('invalid');
+    expect(state.viewerRole).toBe('member_fallback');
+    expect(state.viewerCanTrigger).toBe(true);
+    expect(state.memberFallbackReady).toBe(true);
+    expect(state.authorityMode).toBe('member_fallback');
+  });
+
+  it('never allows the admin to trigger auto-release', () => {
+    const state = getRecoveryAutoReleaseUiState({
+      recoveryStatus: {
+        rawState: 0,
+        autoReleaseEnabled: true,
+        autoReleaseTriggerTime: 1000,
+        nextInCommand: null,
+      },
+      adminAddress: ADMIN_ADDRESS,
+      userAddress: ADMIN_ADDRESS,
+      viewerIsEligibleActiveMember: true,
+      delegateIsEligibleActiveMember: false,
+      now: 1000,
+    });
+
+    expect(state.viewerRole).toBe('admin');
+    expect(state.viewerCanTrigger).toBe(false);
+  });
+
+  it('invalidates a delegate that matches the admin and reopens member fallback', () => {
+    const state = getRecoveryAutoReleaseUiState({
+      recoveryStatus: {
+        rawState: 0,
+        autoReleaseEnabled: true,
+        autoReleaseTriggerTime: 1000,
+        nextInCommand: ADMIN_ADDRESS,
+      },
+      adminAddress: ADMIN_ADDRESS,
+      userAddress: MEMBER_ADDRESS,
+      viewerIsEligibleActiveMember: true,
+      delegateIsEligibleActiveMember: true,
+      now: 1000,
+    });
+
+    expect(state.delegateStatus).toBe('invalid');
+    expect(state.validDelegate).toBeNull();
+    expect(state.viewerRole).toBe('member_fallback');
+    expect(state.viewerCanTrigger).toBe(true);
+    expect(state.memberFallbackReady).toBe(true);
+  });
+});

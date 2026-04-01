@@ -1,10 +1,4 @@
 module njangi::njangi_core {
-    use sui::object;
-    use sui::tx_context;
-    use sui::clock;
-    use std::string::String;
-    use std::option::{Self, Option};
-    
     // ----------------------------------------------------------
     // Constants and Error codes
     // ----------------------------------------------------------
@@ -16,18 +10,7 @@ module njangi::njangi_core {
     public fun decimal_scaling(): u64 { DECIMAL_SCALING }
     
     // Error constants (common to multiple modules)
-    const EInvalidMemberCount: u64 = 0;
-    const EInvalidContributionAmount: u64 = 1;
-    const EInvalidSecurityDeposit: u64 = 2;
-    const EInvalidCycleLength: u64 = 3;
-    const EInvalidCycleDay: u64 = 4;
-    const ECircleFull: u64 = 5;
-    const EInsufficientDeposit: u64 = 6;
     const ENotAdmin: u64 = 7;
-    const ENotMember: u64 = 8;
-    const EInsufficientBalance: u64 = 12;
-    const ENO_SECURITY_DEPOSIT: u64 = 21;
-    const EMINIMUM_MEMBERS_REQUIRED: u64 = 22;
     const EInvalidDecimalPrecision: u64 = 23;
     const EDecimalConversionOverflow: u64 = 24;
     const MAX_U64: u64 = 0xFFFF_FFFF_FFFF_FFFF;
@@ -334,26 +317,24 @@ module njangi::njangi_core {
             }
         } else { // Quarterly cycle_length == 2
             // Quarterly works similar to monthly, but we need to calculate the next quarter date
-            let mut next_month = month;
-            let mut next_year = year;
-            
-            // Get current day of month
             let day_of_month = day;
-            
-            // If current day of month is after the target day, move to next month
-            if (day_of_month > cycle_day || (day_of_month == cycle_day && day_ms > 0)) {
-                next_month = month + 3;
-                if (next_month > 12) {
-                    next_month = next_month - 12;
-                    next_year = year + 1;
+
+            let (next_year, next_month) = if (day_of_month > cycle_day || (day_of_month == cycle_day && day_ms > 0)) {
+                let mut candidate_month = month + 3;
+                let mut candidate_year = year;
+                if (candidate_month > 12) {
+                    candidate_month = candidate_month - 12;
+                    candidate_year = year + 1;
                 };
+                (candidate_year, candidate_month)
             } else {
-                // Otherwise, move to next quarter
-                next_month = month + (3 - (month - 1) % 3);
-                if (next_month > 12) {
-                    next_month = next_month - 12;
-                    next_year = year + 1;
+                let mut candidate_month = month + (3 - (month - 1) % 3);
+                let mut candidate_year = year;
+                if (candidate_month > 12) {
+                    candidate_month = candidate_month - 12;
+                    candidate_year = year + 1;
                 };
+                (candidate_year, candidate_month)
             };
             
             // Get timestamp for the target day of next quarter (always in the future)
@@ -367,7 +348,7 @@ module njangi::njangi_core {
     public struct UsdAmounts has store, drop {
         contribution_amount: u64, 
         security_deposit: u64,
-        target_amount: option::Option<u64>
+        target_amount: Option<u64>
     }
     
     // ----------------------------------------------------------
@@ -405,7 +386,7 @@ module njangi::njangi_core {
     public fun create_usd_amounts(
         contribution_amount: u64,
         security_deposit: u64,
-        target_amount: option::Option<u64>
+        target_amount: Option<u64>
     ): UsdAmounts {
         UsdAmounts {
             contribution_amount,
@@ -423,7 +404,7 @@ module njangi::njangi_core {
         usd_amounts.security_deposit
     }
 
-    public fun get_usd_target_amount(usd_amounts: &UsdAmounts): option::Option<u64> {
+    public fun get_usd_target_amount(usd_amounts: &UsdAmounts): Option<u64> {
         usd_amounts.target_amount
     }
 

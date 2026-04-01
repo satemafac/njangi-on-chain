@@ -1,25 +1,43 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../../../contexts/AuthContext';
 import { SuiClient } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
 import {
   ArrowLeft,
+  AlertTriangle,
   ArrowUpRight,
   CalendarDays,
   CheckCircle2,
   CircleDot,
   Copy,
   Link2,
+  RefreshCw,
   Shield,
   Users,
   Wallet,
 } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
+import { RecoveryProposalCard } from '@/components/recovery/RecoveryProposalCard';
+import { RecoveryRefundTable } from '@/components/recovery/RecoveryRefundTable';
+import { RecoveryStateBadge } from '@/components/recovery/RecoveryStateBadge';
 import { getCircleConfigFieldsFromDynamicFields } from '@/lib/circle-config';
+import {
+  getRecoveryAutoReleaseUiState,
+  parseRecoveryStatus,
+  type RecoveryStatusSnapshot,
+} from '@/lib/recovery-liveness';
+import {
+  loadRecoveryExecutionStatus,
+  loadRecoveryStablecoinCoinType,
+  type RecoveryExecutionStatus,
+} from '@/lib/recovery-execution';
+import { getRecoveryProposalUiState } from '@/lib/recovery-ui';
+import { resolveStablecoinMetadata } from '@/lib/stablecoin-metadata';
 import { priceService } from '../../../services/price-service';
 import { getCirclePackageId } from '../../../services/circle-service';
-import { getCurrentRpcUrl } from '../../../services/network-config';
+import { ZkLoginClient, ZkLoginError } from '../../../services/zkLoginClient';
+import { getCurrentNetwork, getCurrentRpcUrl } from '../../../services/network-config';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -37,6 +55,10 @@ interface Circle {
   currentMembers: number;
   nextPayoutTime: number;
   isActive: boolean;
+  custody?: {
+    walletId: string;
+    stablecoinCoinType?: string;
+  };
 }
 
 // Fix linter errors by using more specific types
@@ -55,12 +77,79 @@ interface CircleCreatedEvent {
   cycle_length: string;
 }
 
+const parseU64Like = (value: unknown): bigint => {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return BigInt(Math.max(0, Math.trunc(value)));
+  if (typeof value === 'string' && /^\d+$/.test(value)) return BigInt(value);
+  return 0n;
+};
+
+const asRecord = (value: unknown): Record<string, unknown> | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+};
+
+const unwrapMoveValue = (value: unknown): unknown => {
+  const record = asRecord(value);
+  if (!record) return value;
+  if ('fields' in record) return unwrapMoveValue(record.fields);
+  if ('value' in record) return unwrapMoveValue(record.value);
+  return value;
+};
+
+const moveVectorToArray = (value: unknown): unknown[] => {
+  if (Array.isArray(value)) return value;
+  const unwrapped = unwrapMoveValue(value);
+  if (Array.isArray(unwrapped)) return unwrapped;
+  const record = asRecord(unwrapped);
+  if (!record) return [];
+  return Array.isArray(record.vec) ? record.vec : [];
+};
+
+const moveOptionToValue = (value: unknown): unknown | null => {
+  if (value === null || typeof value === 'undefined') return null;
+  const record = asRecord(value);
+  if (record && 'some' in record) return record.some ?? null;
+  const vec = moveVectorToArray(value);
+  return vec.length > 0 ? vec[0] : null;
+};
+
+const normalizeAddress = (value: string | null | undefined): string | null =>
+  typeof value === 'string' && value.length > 0 ? value.toLowerCase() : null;
+
+const canMemberTriggerAutoReleaseFromFieldObject = (value: unknown): boolean => {
+  const wrapper = asRecord(value);
+  const memberValue = wrapper?.value ? asRecord(wrapper.value) : wrapper;
+  const memberFields = memberValue?.fields ? asRecord(memberValue.fields) : memberValue;
+  if (!memberFields) {
+    return false;
+  }
+
+  const status = Number(parseU64Like(memberFields.status));
+  const suspensionEndTime = moveOptionToValue(memberFields.suspension_end_time);
+  return status === 0 && suspensionEndTime === null;
+};
+
 export default function CircleDetails() {
   const router = useRouter();
   const { id } = router.query;
   const { isAuthenticated, isLoading: authLoading, userAddress, account } = useAuth();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
+  const [membersTableId, setMembersTableId] = useState<string | null>(null);
+  const [circlePackageId, setCirclePackageId] = useState<string | null>(null);
+  const [recoveryStatus, setRecoveryStatus] = useState<RecoveryStatusSnapshot | null>(null);
+  const [loadingRecoveryStatus, setLoadingRecoveryStatus] = useState(false);
+  const [recoveryExecution, setRecoveryExecution] = useState<RecoveryExecutionStatus | null>(null);
+  const [loadingRecoveryExecution, setLoadingRecoveryExecution] = useState(false);
+  const [recoveryStablecoinType, setRecoveryStablecoinType] = useState<string | null>(null);
+  const [viewerCanAutoReleaseFallback, setViewerCanAutoReleaseFallback] = useState(false);
+  const [delegateCanAutoReleaseFallback, setDelegateCanAutoReleaseFallback] = useState(false);
+  const [loadingRecoveryLiveness, setLoadingRecoveryLiveness] = useState(false);
+  const [isSubmittingRecoveryVote, setIsSubmittingRecoveryVote] = useState(false);
+  const [isSubmittingAutoRelease, setIsSubmittingAutoRelease] = useState(false);
   const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
   const [copiedId, setCopiedId] = useState(false);
   // Track membership verification status (used for access control flow)
@@ -229,6 +318,7 @@ export default function CircleDetails() {
       // Determine package ID for this circle
       const determinedPackageId = await getCirclePackageId(id as string, userAddress);
       console.log('Details - Using package ID:', determinedPackageId);
+      setCirclePackageId(determinedPackageId);
       // Get object data
       const objectData = await client.getObject({
         id: id as string,
@@ -240,6 +330,14 @@ export default function CircleDetails() {
         throw new Error('Invalid circle object data received');
       }
       const fields = objectData.data.content.fields as Record<string, SuiFieldValue>;
+      const resolvedMembersTableId = fields.members && typeof fields.members === 'object' && fields.members !== null &&
+        'fields' in fields.members && fields.members.fields && typeof fields.members.fields === 'object' &&
+        fields.members.fields !== null && 'id' in fields.members.fields &&
+        fields.members.fields.id && typeof fields.members.fields.id === 'object' &&
+        fields.members.fields.id !== null && 'id' in fields.members.fields.id
+        ? (fields.members.fields.id as { id: string }).id
+        : null;
+      setMembersTableId(resolvedMembersTableId);
 
       // Get dynamic fields
       const dynamicFieldsResult = await client.getDynamicFields({
@@ -323,6 +421,7 @@ export default function CircleDetails() {
 
         if (configFields) {
           console.log('Details - CircleConfig fields:', configFields);
+          setRecoveryStatus(parseRecoveryStatus(configFields));
 
           if (configFields.contribution_amount) {
             configValues.contributionAmount = Number(configFields.contribution_amount) / 1e9;
@@ -350,9 +449,12 @@ export default function CircleDetails() {
             configValues.maxMembers = Number(configFields.max_members);
             console.log('Details - Extracted max_members from CircleConfig:', configValues.maxMembers);
           }
+        } else {
+          setRecoveryStatus(null);
         }
       } catch (error) {
         console.error('Details - Error fetching CircleConfig fields:', error);
+        setRecoveryStatus(null);
       }
       console.log('Details - Config after Dynamic Fields:', configValues);
 
@@ -417,7 +519,42 @@ export default function CircleDetails() {
         console.error('Details - Error calculating member count:', error);
         actualMemberCount = Number(fields.current_members || 1);
         }
-        
+
+      let custodyWalletId: string | null = null;
+      let custodyStablecoinCoinType: string | undefined;
+      try {
+        const custodyWalletEvents = await client.queryEvents({
+          query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyWalletCreated` },
+          limit: 50,
+        });
+        const custodyEvent = custodyWalletEvents.data.find((event) =>
+          (event.parsedJson as { circle_id?: string })?.circle_id === id,
+        );
+        custodyWalletId = (custodyEvent?.parsedJson as { wallet_id?: string })?.wallet_id || null;
+
+        if (custodyWalletId) {
+          const walletData = await client.getObject({
+            id: custodyWalletId,
+            options: { showContent: true },
+          });
+
+          if (walletData.data?.content && 'fields' in walletData.data.content) {
+            const walletFields = walletData.data.content.fields as Record<string, SuiFieldValue>;
+            const stablecoinConfigFields = walletFields.stablecoin_config
+              && typeof walletFields.stablecoin_config === 'object'
+              && walletFields.stablecoin_config !== null
+              && 'fields' in walletFields.stablecoin_config
+              ? walletFields.stablecoin_config.fields as Record<string, unknown>
+              : null;
+            if (typeof stablecoinConfigFields?.target_coin_type === 'string') {
+              custodyStablecoinCoinType = stablecoinConfigFields.target_coin_type;
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Details - Error fetching custody wallet info:', error);
+      }
+      
       // Set circle state
         setCircle({
           id: id as string,
@@ -434,6 +571,12 @@ export default function CircleDetails() {
           currentMembers: actualMemberCount,
         nextPayoutTime: Number(fields.next_payout_time || 0),
           isActive: isActive,
+        custody: custodyWalletId
+          ? {
+              walletId: custodyWalletId,
+              stablecoinCoinType: custodyStablecoinCoinType,
+            }
+          : undefined,
         });
 
     } catch (error) {
@@ -444,6 +587,142 @@ export default function CircleDetails() {
     }
   };
 
+  const fetchRecoveryStatus = useCallback(async () => {
+    if (!id) return;
+
+    setLoadingRecoveryStatus(true);
+    try {
+      const client = new SuiClient({ url: getCurrentRpcUrl() });
+      const dynamicFieldsResult = await client.getDynamicFields({ parentId: id as string });
+      const configFields = await getCircleConfigFieldsFromDynamicFields(client, dynamicFieldsResult.data);
+      setRecoveryStatus(parseRecoveryStatus(configFields));
+    } catch (error) {
+      console.error('Details - Error refreshing recovery status:', error);
+    } finally {
+      setLoadingRecoveryStatus(false);
+    }
+  }, [id]);
+
+  const fetchRecoveryExecutionState = useCallback(async (packageIdOverride?: string) => {
+    if (!id) {
+      setRecoveryExecution(null);
+      setRecoveryStablecoinType(null);
+      return;
+    }
+
+    setLoadingRecoveryExecution(true);
+    try {
+      const resolvedPackageId =
+        packageIdOverride ||
+        circlePackageId ||
+        (userAddress ? await getCirclePackageId(id as string, userAddress) : null);
+
+      if (!resolvedPackageId) {
+        setRecoveryExecution(null);
+        setRecoveryStablecoinType(null);
+        return;
+      }
+
+      if (!circlePackageId) {
+        setCirclePackageId(resolvedPackageId);
+      }
+
+      const client = new SuiClient({ url: getCurrentRpcUrl() });
+      const [executionStatus, stablecoinCoinType] = await Promise.all([
+        loadRecoveryExecutionStatus({
+          client,
+          packageId: resolvedPackageId,
+          circleId: id as string,
+        }),
+        loadRecoveryStablecoinCoinType({
+          client,
+          packageId: resolvedPackageId,
+          circleId: id as string,
+        }),
+      ]);
+
+      setRecoveryExecution(executionStatus);
+      setRecoveryStablecoinType(stablecoinCoinType);
+    } catch (error) {
+      console.error('Details - Error refreshing recovery execution state:', error);
+    } finally {
+      setLoadingRecoveryExecution(false);
+    }
+  }, [circlePackageId, id, userAddress]);
+
+  const fetchRecoveryLivenessState = useCallback(async (nextInCommandOverride?: string | null) => {
+    if (!membersTableId || !userAddress) {
+      setViewerCanAutoReleaseFallback(false);
+      setDelegateCanAutoReleaseFallback(false);
+      return;
+    }
+
+    setLoadingRecoveryLiveness(true);
+    try {
+      const client = new SuiClient({ url: getCurrentRpcUrl() });
+      const configuredDelegate = nextInCommandOverride ?? recoveryStatus?.nextInCommand ?? null;
+      const readEligibility = async (address: string | null | undefined): Promise<boolean> => {
+        if (!address) {
+          return false;
+        }
+
+        try {
+          const memberField = await client.getDynamicFieldObject({
+            parentId: membersTableId,
+            name: { type: 'address', value: address },
+          });
+          return canMemberTriggerAutoReleaseFromFieldObject(memberField.data?.content);
+        } catch {
+          return false;
+        }
+      };
+
+      const viewerEligibilityPromise = readEligibility(userAddress);
+      const delegateEligibilityPromise = configuredDelegate
+        ? normalizeAddress(configuredDelegate) === normalizeAddress(userAddress)
+          ? viewerEligibilityPromise
+          : readEligibility(configuredDelegate)
+        : Promise.resolve(false);
+
+      const [viewerEligible, delegateEligible] = await Promise.all([
+        viewerEligibilityPromise,
+        delegateEligibilityPromise,
+      ]);
+
+      setViewerCanAutoReleaseFallback(viewerEligible);
+      setDelegateCanAutoReleaseFallback(delegateEligible);
+    } catch (error) {
+      console.error('Details - Error refreshing recovery liveness state:', error);
+      setViewerCanAutoReleaseFallback(false);
+      setDelegateCanAutoReleaseFallback(false);
+    } finally {
+      setLoadingRecoveryLiveness(false);
+    }
+  }, [membersTableId, recoveryStatus?.nextInCommand, userAddress]);
+
+  useEffect(() => {
+    if (!id || !userAddress) return;
+
+    void fetchRecoveryStatus();
+    void fetchRecoveryExecutionState();
+    const intervalId = window.setInterval(() => {
+      void fetchRecoveryStatus();
+      void fetchRecoveryExecutionState();
+    }, 15000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [fetchRecoveryExecutionState, fetchRecoveryStatus, id, userAddress]);
+
+  useEffect(() => {
+    if (!membersTableId || !userAddress) {
+      return;
+    }
+
+    void fetchRecoveryLivenessState();
+  }, [fetchRecoveryLivenessState, membersTableId, recoveryStatus?.nextInCommand, userAddress]);
+
   const formatDate = (timestamp: number, useLocalTime = false) => {
     if (!timestamp) return 'Not set';
     return new Date(timestamp).toLocaleDateString('en-US', {
@@ -452,6 +731,20 @@ export default function CircleDetails() {
       day: 'numeric',
       timeZone: useLocalTime ? undefined : 'UTC' // Use local timezone when requested
     });
+  };
+
+  const formatRelativeDuration = (milliseconds: number) => {
+    if (!Number.isFinite(milliseconds) || milliseconds <= 0) return 'Ready now';
+
+    const totalSeconds = Math.ceil(milliseconds / 1000);
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+    if (days > 0) return `${days}d ${hours}h`;
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    if (minutes > 0) return `${minutes}m`;
+    return `${totalSeconds}s`;
   };
 
   // Format currency value based on currency type
@@ -800,6 +1093,49 @@ export default function CircleDetails() {
   }
 
   const isAdmin = circle?.admin === userAddress;
+  const recoveryProposal = recoveryStatus?.proposal ?? null;
+  const recoveryProposalUi = recoveryProposal
+    ? getRecoveryProposalUiState({
+        proposal: recoveryProposal,
+        userAddress,
+      })
+    : null;
+  const recoveryProposalPassed = recoveryProposalUi?.isPassed ?? false;
+  const recoveryProposalFailed = recoveryProposalUi?.isFailed ?? false;
+  const recoveryDeadlinePassed = recoveryProposalUi?.isDeadlinePassed ?? false;
+  const currentUserVote = recoveryProposalUi?.currentUserVote ?? null;
+  const currentUserEligibleToVote = recoveryProposalUi?.currentUserEligibleToVote ?? false;
+  const canVoteOnRecoveryProposal = recoveryProposalUi?.canVote ?? false;
+  const autoReleaseUi = getRecoveryAutoReleaseUiState({
+    recoveryStatus,
+    adminAddress: circle?.admin,
+    userAddress,
+    viewerIsEligibleActiveMember: viewerCanAutoReleaseFallback,
+    delegateIsEligibleActiveMember: delegateCanAutoReleaseFallback,
+  });
+  const recoveryStablecoinMeta = resolveStablecoinMetadata(
+    recoveryStablecoinType || circle?.custody?.stablecoinCoinType || null,
+  );
+  const canTriggerAutoRelease = autoReleaseUi.viewerCanTrigger;
+  const recoveryExecutionStarted = Boolean(recoveryExecution?.startedAt);
+  const recoveryExecutionCompleted = Boolean(recoveryExecution?.completedAt) || recoveryStatus?.rawState === 3;
+  const recoveryExecutionProgress = recoveryExecution
+    ? Math.min(100, (recoveryExecution.refundedMembers / Math.max(recoveryExecution.totalMembers, 1)) * 100)
+    : recoveryStatus?.rawState === 3
+      ? 100
+      : 0;
+  const formatRecoveryAssetAmount = (rawAmount: bigint, decimals: number, label: string) =>
+    `${(Number(rawAmount) / 10 ** decimals).toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: decimals === 9 ? 4 : 2,
+    })} ${label}`;
+  const shouldShowRecoverySection = Boolean(
+    recoveryProposal
+      || recoveryExecution
+      || recoveryStatus?.autoReleaseEnabled
+      || recoveryStatus?.rawState === 2
+      || recoveryStatus?.rawState === 3,
+  );
   const estimatedNextPayout = circle
     ? calculatePotentialNextPayoutDate(circle.cycleLength, circle.cycleDay)
     : 0;
@@ -811,6 +1147,99 @@ export default function CircleDetails() {
     'text-[11px] font-semibold uppercase tracking-[0.22em] text-[#7a818e]';
   const pillBaseClass =
     'inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium';
+
+  const handleVoteEmergencyStop = async (yesVote: boolean) => {
+    if (!circle || !account) {
+      toast.error('Circle or account information is unavailable.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Cast a ${yesVote ? 'YES' : 'NO'} vote on the emergency stop proposal? This action is recorded onchain and cannot be changed.`,
+    );
+    if (!confirmed) return;
+
+    setIsSubmittingRecoveryVote(true);
+    const toastId = `vote-recovery-${yesVote ? 'yes' : 'no'}`;
+
+    try {
+      toast.loading(`Submitting ${yesVote ? 'approval' : 'rejection'} vote...`, { id: toastId });
+      const zkLoginClient = ZkLoginClient.getInstance();
+      await zkLoginClient.voteEmergencyStop(account, {
+        circleId: circle.id,
+        yesVote,
+        network: getCurrentNetwork(),
+      });
+
+      toast.success(`Your ${yesVote ? 'approval' : 'rejection'} vote was recorded.`, { id: toastId });
+      await Promise.all([
+        fetchCircleDetails(),
+        fetchRecoveryStatus(),
+        fetchRecoveryExecutionState(),
+        fetchRecoveryLivenessState(),
+      ]);
+    } catch (error) {
+      console.error('Details - Failed to vote on recovery proposal:', error);
+      if (error instanceof ZkLoginError && error.requireRelogin) {
+        router.push('/');
+        return;
+      }
+      toast.error(error instanceof Error ? error.message : 'Failed to cast vote', { id: toastId });
+    } finally {
+      setIsSubmittingRecoveryVote(false);
+    }
+  };
+
+  const handleTriggerAutoRelease = async () => {
+    if (!circle || !circle.custody?.walletId || !account) {
+      toast.error('Recovery wallet information is unavailable.');
+      return;
+    }
+
+    const stablecoinType = recoveryStablecoinType || circle.custody.stablecoinCoinType;
+    if (!stablecoinType) {
+      toast.error('Stablecoin type is unavailable for this custody wallet.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Trigger the admin-liveness fallback now? This stops the circle and returns tracked funds to their recorded owners.',
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setIsSubmittingAutoRelease(true);
+    const toastId = 'trigger-auto-release';
+
+    try {
+      toast.loading('Triggering auto-release recovery...', { id: toastId });
+      const zkLoginClient = ZkLoginClient.getInstance();
+      await zkLoginClient.triggerAutoRelease(account, {
+        circleId: circle.id,
+        walletId: circle.custody.walletId,
+        stablecoinType,
+        network: getCurrentNetwork(),
+      });
+
+      toast.success('Auto-release recovery submitted.', { id: toastId });
+      await Promise.all([
+        fetchCircleDetails(),
+        fetchRecoveryStatus(),
+        fetchRecoveryExecutionState(),
+        fetchRecoveryLivenessState(),
+      ]);
+    } catch (error) {
+      console.error('Details - Failed to trigger auto-release:', error);
+      if (error instanceof ZkLoginError && error.requireRelogin) {
+        router.push('/');
+        return;
+      }
+      toast.error(error instanceof Error ? error.message : 'Failed to trigger auto-release', { id: toastId });
+    } finally {
+      setIsSubmittingAutoRelease(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#f6f3ee] text-[#171923]">
@@ -827,20 +1256,23 @@ export default function CircleDetails() {
           </button>
 
           {!loading && circle && (
-            <span
-              className={`${pillBaseClass} ${
-                circle.isActive
-                  ? 'border-[#cfe2d5] bg-[#eef7f0] text-[#24553a]'
-                  : 'border-[#e5dac9] bg-[#fcf7ef] text-[#8a5a21]'
-              }`}
-            >
-              {circle.isActive ? (
-                <CheckCircle2 className="h-4 w-4" />
-              ) : (
-                <CircleDot className="h-4 w-4" />
-              )}
-              {circle.isActive ? 'Active circle' : 'Awaiting activation'}
-            </span>
+            <>
+              <span
+                className={`${pillBaseClass} ${
+                  circle.isActive
+                    ? 'border-[#cfe2d5] bg-[#eef7f0] text-[#24553a]'
+                    : 'border-[#e5dac9] bg-[#fcf7ef] text-[#8a5a21]'
+                }`}
+              >
+                {circle.isActive ? (
+                  <CheckCircle2 className="h-4 w-4" />
+                ) : (
+                  <CircleDot className="h-4 w-4" />
+                )}
+                {circle.isActive ? 'Active circle' : 'Awaiting activation'}
+              </span>
+              <RecoveryStateBadge rawState={recoveryStatus?.rawState} stateLabel={recoveryStatus?.stateLabel} />
+            </>
           )}
         </div>
 
@@ -995,6 +1427,442 @@ export default function CircleDetails() {
                   </div>
                 </div>
               </div>
+
+              {shouldShowRecoverySection && (
+                <div className={`${pageSurfaceClass} p-6 sm:p-8`}>
+                  <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="max-w-2xl">
+                      <span className={detailLabelClass}>Emergency recovery</span>
+                      <h2 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
+                        {recoveryStatus?.rawState === 3
+                          ? 'Recovery completed'
+                          : recoveryStatus?.rawState === 2
+                            ? 'Recovery execution in progress'
+                            : recoveryProposal
+                              ? `Member vote ${recoveryProposalUi?.titleLabel || 'in progress'}`
+                              : recoveryStatus?.autoReleaseEnabled
+                                ? 'Admin liveness fallback'
+                                : 'Recovery status'}
+                      </h2>
+                      <p className="mt-3 text-sm leading-7 text-[#5f6674]">
+                        {recoveryStatus?.rawState === 3
+                          ? 'The emergency recovery path finished onchain and tracked balances were returned to their recorded owners.'
+                          : recoveryStatus?.rawState === 2
+                            ? 'The circle has been stopped for recovery. Refund progress below reflects the unwind events emitted from custody.'
+                            : recoveryProposalPassed
+                              ? 'This emergency stop proposal has majority approval and is waiting for admin execution.'
+                              : recoveryProposalFailed
+                                ? 'This emergency stop proposal closed without majority approval. The vote path is no longer active.'
+                                : recoveryProposal
+                                  ? 'An emergency stop proposal is active for this circle. Eligible members can cast one vote to approve or reject the stop-and-refund action.'
+                                  : 'This circle has a heartbeat-based fallback. If the admin disappears long enough, the designated delegate gets the first 24 hours to trigger the stop-and-refund path before eligible active members inherit fallback rights.'}
+                      </p>
+                    </div>
+
+                    <div className={`${detailCardClass} w-full max-w-sm p-5`}>
+                      <div className="flex items-center justify-between gap-3">
+                        <p className={detailLabelClass}>Recovery state</p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void fetchRecoveryStatus();
+                            void fetchRecoveryExecutionState();
+                            void fetchRecoveryLivenessState();
+                          }}
+                          disabled={loadingRecoveryStatus || loadingRecoveryExecution || loadingRecoveryLiveness}
+                          className="inline-flex items-center gap-2 rounded-full border border-[#d7cec1] bg-white px-3 py-2 text-xs font-semibold text-[#334155] transition-colors hover:bg-[#fbfaf7] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${(loadingRecoveryStatus || loadingRecoveryExecution || loadingRecoveryLiveness) ? 'animate-spin' : ''}`} />
+                          Refresh
+                        </button>
+                      </div>
+
+                      <div className="mt-4">
+                        <RecoveryStateBadge
+                          rawState={recoveryStatus?.rawState}
+                          stateLabel={recoveryStatus?.stateLabel || (loadingRecoveryStatus ? 'Loading' : 'Active')}
+                        />
+                      </div>
+
+                      <p className="mt-3 text-sm leading-6 text-[#5f6674]">
+                        {recoveryProposal
+                          ? `Proposal deadline: ${formatDate(recoveryProposal.deadline, true)}`
+                          : recoveryExecution?.startedAt
+                            ? `Execution started: ${formatDate(recoveryExecution.startedAt, true)}`
+                            : recoveryStatus?.autoReleaseEnabled
+                              ? `Heartbeat expiry: ${recoveryStatus.autoReleaseTriggerTime ? formatDate(recoveryStatus.autoReleaseTriggerTime, true) : 'Not configured'}`
+                              : 'No emergency recovery proposal is active right now.'}
+                      </p>
+                      <p className="mt-1 text-sm leading-6 text-[#5f6674]">
+                        {recoveryProposalUi?.deadlineSummary
+                          ? recoveryProposalUi.deadlineSummary
+                          : recoveryProposal && !recoveryDeadlinePassed
+                            ? `${formatRelativeDuration(recoveryProposal.deadline - Date.now())} remaining`
+                            : recoveryExecutionCompleted
+                              ? 'Recovery execution has finalized onchain.'
+                              : recoveryExecutionStarted
+                                ? 'Refund execution is still in progress.'
+                                : recoveryStatus?.autoReleaseEnabled
+                                  ? autoReleaseUi.ready
+                                    ? 'The heartbeat window has expired and the fallback path is open.'
+                                    : `${formatRelativeDuration(autoReleaseUi.remainingMs)} until the fallback opens.`
+                                  : 'Refresh this card to pull the latest onchain recovery events.'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {recoveryProposal && recoveryProposalUi && (
+                    <RecoveryProposalCard
+                      eyebrow="Member vote"
+                      title={`Emergency stop ${recoveryProposalUi.titleLabel}`}
+                      description={
+                        recoveryProposalPassed
+                          ? 'Member-majority approval is locked in. The admin can now execute the stop-and-refund path.'
+                          : recoveryProposalFailed
+                            ? 'This proposal closed without meeting the majority threshold.'
+                            : 'Eligible members can cast one irreversible onchain vote on whether this circle should halt and unwind funds.'
+                      }
+                      stateLabel={recoveryStatus?.stateLabel || 'Proposal Pending'}
+                      rawState={recoveryStatus?.rawState ?? 1}
+                      proposal={recoveryProposal}
+                      proposalUi={recoveryProposalUi}
+                      now={Date.now()}
+                      formatDate={formatDate}
+                      formatRelativeDuration={formatRelativeDuration}
+                      onRefresh={() => {
+                        void fetchRecoveryStatus();
+                        void fetchRecoveryExecutionState();
+                        void fetchRecoveryLivenessState();
+                      }}
+                      loading={loadingRecoveryStatus || loadingRecoveryExecution || loadingRecoveryLiveness}
+                      className="mt-6 border-[#e9e1d6] bg-[#fbfaf7]"
+                      footerTags={
+                        <>
+                          {currentUserVote && (
+                            <span className="inline-flex items-center rounded-full bg-[#eef7f0] px-3 py-1 text-xs font-medium text-[#24553a]">
+                              You voted {currentUserVote.approved ? 'yes' : 'no'}
+                            </span>
+                          )}
+                          {!currentUserVote && currentUserEligibleToVote && (
+                            <span className="inline-flex items-center rounded-full bg-[#fff5e7] px-3 py-1 text-xs font-medium text-[#8a5a21]">
+                              Your vote is still required
+                            </span>
+                          )}
+                        </>
+                      }
+                      actionArea={
+                        canVoteOnRecoveryProposal ? (
+                          <div className="rounded-[24px] border border-[#e9e1d6] bg-white p-5">
+                            <p className={detailLabelClass}>Cast your vote</p>
+                            <p className="mt-3 text-sm leading-7 text-[#5f6674]">
+                              Votes are submitted onchain individually by each eligible member and cannot be changed after confirmation.
+                            </p>
+                            <div className="mt-5 flex flex-wrap gap-3">
+                              <button
+                                type="button"
+                                onClick={() => handleVoteEmergencyStop(true)}
+                                disabled={isSubmittingRecoveryVote}
+                                className="inline-flex items-center gap-2 rounded-2xl bg-[#d28a2d] px-4 py-3 text-sm font-semibold text-white transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#b97721] disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <CheckCircle2 className="h-4 w-4" />
+                                Vote yes
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleVoteEmergencyStop(false)}
+                                disabled={isSubmittingRecoveryVote}
+                                className="inline-flex items-center gap-2 rounded-2xl border border-[#d7cec1] bg-white px-4 py-3 text-sm font-semibold text-[#334155] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#fbfaf7] disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <CircleDot className="h-4 w-4" />
+                                Vote no
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className={`rounded-[18px] border p-4 text-sm leading-6 ${
+                            recoveryProposalUi.closedVoteTone === 'success'
+                              ? 'border-[#cfe2d5] bg-[#eef7f0] text-[#24553a]'
+                              : recoveryProposalUi.closedVoteTone === 'danger'
+                                ? 'border-[#ead6d0] bg-[#fdf2f1] text-[#8f3f34]'
+                                : 'border-[#e9e1d6] bg-white text-[#5f6674]'
+                          }`}>
+                            {recoveryProposalUi.closedVoteMessage}
+                          </div>
+                        )
+                      }
+                    />
+                  )}
+
+                  {!recoveryProposal && (recoveryStatus?.rawState === 2 || recoveryStatus?.rawState === 3) && (
+                    <div className={`${detailCardClass} mt-6 p-5`}>
+                      <p className={detailLabelClass}>Proposal</p>
+                      <h3 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-[#171923]">
+                        Vote window closed
+                      </h3>
+                      <p className="mt-3 text-sm leading-7 text-[#5f6674]">
+                        The circle is already in a recovery lifecycle state, so proposal voting is no longer the active control path.
+                      </p>
+                    </div>
+                  )}
+
+                  <div className={`${detailCardClass} mt-6 p-5`}>
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className={detailLabelClass}>Admin liveness fallback</p>
+                        <h3 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-[#171923]">
+                          {recoveryStatus?.autoReleaseEnabled ? 'Delegate and member fallback' : 'Fallback not configured'}
+                        </h3>
+                        <p className="mt-2 text-sm leading-6 text-[#5f6674]">
+                          {recoveryStatus?.autoReleaseEnabled
+                            ? 'Heartbeat expiry opens a delegate-exclusive recovery window first. If the delegate is invalid at expiry or does not act within 24 hours, eligible active non-admin members become the fallback.'
+                            : 'This circle was created without the admin-liveness fallback, so the vote path is the only recovery path available here.'}
+                        </p>
+                      </div>
+                      {canTriggerAutoRelease && (
+                        <button
+                          type="button"
+                          onClick={handleTriggerAutoRelease}
+                          disabled={isSubmittingAutoRelease || loadingRecoveryExecution}
+                          className="inline-flex items-center gap-2 rounded-2xl bg-[#d28a2d] px-4 py-3 text-sm font-semibold text-white transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#b97721] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <AlertTriangle className="h-4 w-4" />
+                          {isSubmittingAutoRelease ? 'Triggering...' : 'Trigger Auto-Release'}
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                      <div className={`${detailCardClass} border-[#e9e1d6] bg-white p-4 shadow-none`}>
+                        <p className={detailLabelClass}>Last admin heartbeat</p>
+                        <p className="mt-2 text-sm font-semibold text-[#171923]">
+                          {recoveryStatus?.autoReleaseEnabled
+                            ? formatDate(recoveryStatus.lastAdminHeartbeatAt, true)
+                            : 'Not configured'}
+                        </p>
+                        <p className="mt-1 text-xs text-[#5f6674]">
+                          {recoveryStatus?.autoReleaseEnabled
+                            ? autoReleaseUi.ready
+                              ? 'The liveness window has expired.'
+                              : `${formatRelativeDuration(autoReleaseUi.remainingMs)} until expiry`
+                            : 'No heartbeat window exists for this circle.'}
+                        </p>
+                      </div>
+                      <div className={`${detailCardClass} border-[#e9e1d6] bg-white p-4 shadow-none`}>
+                        <p className={detailLabelClass}>Member fallback unlocks</p>
+                        <p className="mt-2 text-sm font-semibold text-[#171923]">
+                          {autoReleaseUi.memberFallbackUnlockTime
+                            ? formatDate(autoReleaseUi.memberFallbackUnlockTime, true)
+                            : 'Not configured'}
+                        </p>
+                        <p className="mt-1 text-xs text-[#5f6674]">
+                          {recoveryStatus?.autoReleaseEnabled
+                            ? autoReleaseUi.memberFallbackReady
+                              ? 'Eligible active members can use the fallback now.'
+                              : autoReleaseUi.delegateStatus === 'valid'
+                                ? 'Members inherit trigger rights only after the 24-hour delegate window ends.'
+                                : 'If the delegate is invalid at expiry, member fallback opens immediately.'
+                            : 'No fallback trigger timestamp exists.'}
+                        </p>
+                      </div>
+                      <div className={`${detailCardClass} border-[#e9e1d6] bg-white p-4 shadow-none`}>
+                        <p className={detailLabelClass}>Next in command</p>
+                        <p className="mt-2 break-all font-mono text-sm font-semibold text-[#171923]">
+                          {autoReleaseUi.configuredDelegate ? autoReleaseUi.configuredDelegate : 'Not configured'}
+                        </p>
+                        <p className="mt-1 text-xs text-[#5f6674]">
+                          {autoReleaseUi.delegateStatus === 'valid'
+                            ? 'This wallet is currently active and gets the first 24 hours of trigger authority after heartbeat expiry.'
+                            : autoReleaseUi.delegateStatus === 'invalid'
+                              ? 'A delegate is configured, but that wallet is no longer an eligible active member.'
+                              : 'Auto-release now requires a valid delegate wallet to be configured.'}
+                        </p>
+                      </div>
+                      <div className={`${detailCardClass} border-[#e9e1d6] bg-white p-4 shadow-none`}>
+                        <p className={detailLabelClass}>Your role</p>
+                        <p className="mt-2 text-sm font-semibold text-[#171923]">
+                          {autoReleaseUi.viewerRole === 'admin'
+                            ? 'Admin'
+                            : autoReleaseUi.viewerRole === 'delegate'
+                              ? 'Designated delegate'
+                              : autoReleaseUi.viewerRole === 'member_fallback'
+                                ? 'Active-member fallback'
+                                : autoReleaseUi.viewerRole === 'member_waiting_delegate'
+                                  ? 'Active member, delegate ahead'
+                                  : 'Not eligible'}
+                        </p>
+                        <p className="mt-1 text-xs text-[#5f6674]">
+                          {autoReleaseUi.viewerRole === 'admin'
+                            ? 'Admins refresh the heartbeat through signed circle actions, but admins cannot trigger auto-release themselves.'
+                            : autoReleaseUi.viewerRole === 'delegate'
+                              ? autoReleaseUi.ready
+                                ? autoReleaseUi.memberFallbackReady
+                                  ? 'The delegate-exclusive window has ended, but you can still trigger recovery as an eligible active member.'
+                                  : 'You are in the delegate-exclusive recovery window right now.'
+                                : 'You become the first authorized fallback caller once the heartbeat expires.'
+                              : autoReleaseUi.viewerRole === 'member_fallback'
+                                ? autoReleaseUi.ready
+                                  ? autoReleaseUi.delegateStatus === 'valid'
+                                    ? 'The 24-hour delegate window has ended, so you can now trigger recovery as an eligible active member.'
+                                    : 'No valid delegate exists, so you can trigger recovery now as an active non-admin member.'
+                                  : autoReleaseUi.delegateStatus === 'valid'
+                                    ? 'You can trigger recovery if the delegate does not respond within 24 hours after heartbeat expiry.'
+                                    : 'If no valid delegate exists when the heartbeat expires, you will be eligible to trigger recovery.'
+                                : autoReleaseUi.viewerRole === 'member_waiting_delegate'
+                                  ? 'A valid delegate exists, so active members stay blocked until the 24-hour delegate window ends unless that delegate becomes invalid first.'
+                                  : 'Only eligible active members can use this fallback path.'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className={`mt-5 rounded-[18px] border p-4 text-sm leading-6 ${
+                      canTriggerAutoRelease
+                        ? 'border-[#e6c28f] bg-[#fff5e7] text-[#8a5a21]'
+                        : autoReleaseUi.ready
+                          ? 'border-[#e9e1d6] bg-white text-[#5f6674]'
+                          : 'border-[#e9e1d6] bg-white text-[#5f6674]'
+                    }`}>
+                      {recoveryStatus?.rawState === 2 || recoveryStatus?.rawState === 3 ? (
+                        'The circle is already in the recovery lifecycle, so the heartbeat fallback is no longer the active control path.'
+                      ) : !recoveryStatus?.autoReleaseEnabled ? (
+                        'No auto-release fallback is configured for this circle.'
+                      ) : canTriggerAutoRelease ? (
+                        'You satisfy the current onchain authorization rules and can trigger the stop-and-refund recovery path now.'
+                      ) : autoReleaseUi.viewerRole === 'admin' ? (
+                        'Admins cannot use the fallback trigger. If recovery is needed now and the vote has passed, use the admin execution path instead.'
+                      ) : autoReleaseUi.viewerRole === 'member_waiting_delegate' ? (
+                        'The heartbeat may expire, but the designated delegate keeps exclusive authority for the first 24 hours while they remain valid.'
+                      ) : autoReleaseUi.ready ? (
+                        'The fallback window is open, but your wallet is not eligible to trigger it.'
+                      ) : (
+                        'The heartbeat window is still active. This card will switch to a triggerable state automatically when the expiry time is reached for the correct caller.'
+                      )}
+                    </div>
+                  </div>
+
+                  {(recoveryExecutionStarted || recoveryStatus?.rawState === 2 || recoveryStatus?.rawState === 3) && (
+                    <div className={`${detailCardClass} mt-6 p-5`}>
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className={detailLabelClass}>Execution</p>
+                          <h3 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-[#171923]">Refund progress</h3>
+                          <p className="mt-2 text-sm leading-6 text-[#5f6674]">
+                            Recovery execution emits per-member refund events and a completion summary when the unwind finishes.
+                          </p>
+                        </div>
+                        <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${
+                          recoveryExecutionCompleted
+                            ? 'bg-[#eef7f0] text-[#24553a]'
+                            : 'bg-[#fff5e7] text-[#8a5a21]'
+                        }`}>
+                          {loadingRecoveryExecution
+                            ? 'Refreshing execution...'
+                            : recoveryExecutionCompleted
+                              ? 'Completed'
+                              : 'In progress'}
+                        </span>
+                      </div>
+
+                      {recoveryExecution ? (
+                        <>
+                          <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                            <div className={`${detailCardClass} p-5`}>
+                              <p className={detailLabelClass}>Started</p>
+                              <p className="mt-3 text-sm font-semibold text-[#171923]">
+                                {formatDate(recoveryExecution.startedAt, true)}
+                              </p>
+                              <p className="mt-1 text-sm text-[#5f6674]">
+                                by {recoveryExecution.executor.slice(0, 6)}...{recoveryExecution.executor.slice(-4)}
+                              </p>
+                            </div>
+                            <div className={`${detailCardClass} p-5`}>
+                              <p className={detailLabelClass}>Path</p>
+                              <p className="mt-3 text-sm font-semibold text-[#171923]">
+                                {recoveryExecution.usedAutoRelease ? 'Auto-release fallback' : 'Member-vote execution'}
+                              </p>
+                              <p className="mt-1 text-sm text-[#5f6674]">
+                                {recoveryExecutionCompleted ? 'Execution finalized onchain' : 'Awaiting completion signal'}
+                              </p>
+                            </div>
+                            <div className={`${detailCardClass} p-5`}>
+                              <p className={detailLabelClass}>Members refunded</p>
+                              <p className="mt-3 text-2xl font-semibold text-[#171923]">
+                                {recoveryExecution.refundedMembers} / {recoveryExecution.totalMembers}
+                              </p>
+                              <p className="mt-1 text-sm text-[#5f6674]">Members with non-zero refunds processed</p>
+                            </div>
+                            <div className={`${detailCardClass} p-5`}>
+                              <p className={detailLabelClass}>Completed</p>
+                              <p className="mt-3 text-sm font-semibold text-[#171923]">
+                                {recoveryExecution.completedAt ? formatDate(recoveryExecution.completedAt, true) : 'Pending'}
+                              </p>
+                              <p className="mt-1 text-sm text-[#5f6674]">
+                                {recoveryStatus?.stateLabel || 'Recovery state unavailable'}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="mt-6">
+                            <div className="mb-2 flex items-center justify-between gap-3">
+                              <p className="text-sm font-medium text-[#334155]">Execution progress</p>
+                              <p className="text-xs text-[#7a818e]">
+                                {recoveryExecution.refundedMembers} / {Math.max(recoveryExecution.totalMembers, 1)} members
+                              </p>
+                            </div>
+                            <div className="h-3 rounded-full bg-[#e8e0d3]">
+                              <div
+                                className={`h-3 rounded-full transition-all duration-500 ${
+                                  recoveryExecutionCompleted ? 'bg-[#2f7a51]' : 'bg-[#d28a2d]'
+                                }`}
+                                style={{ width: `${recoveryExecutionProgress}%` }}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="mt-6 grid gap-4 sm:grid-cols-2">
+                            <div className={`${detailCardClass} p-5`}>
+                              <p className={detailLabelClass}>Total SUI refund</p>
+                              <p className="mt-3 text-sm font-semibold text-[#171923]">
+                                {formatRecoveryAssetAmount(recoveryExecution.totalSuiRefundRaw, 9, 'SUI')}
+                              </p>
+                            </div>
+                            <div className={`${detailCardClass} p-5`}>
+                              <p className={detailLabelClass}>Total stablecoin refund</p>
+                              <p className="mt-3 text-sm font-semibold text-[#171923]">
+                                {formatRecoveryAssetAmount(
+                                  recoveryExecution.totalStablecoinRefundRaw,
+                                  recoveryStablecoinMeta.decimals,
+                                  recoveryStablecoinMeta.label,
+                                )}
+                              </p>
+                            </div>
+                          </div>
+
+                          <RecoveryRefundTable
+                            refunds={recoveryExecution.memberRefunds}
+                            formatDate={(timestamp) => formatDate(timestamp, true)}
+                            formatSuiAmount={(rawAmount) => formatRecoveryAssetAmount(rawAmount, 9, 'SUI')}
+                            formatStablecoinAmount={(rawAmount) =>
+                              formatRecoveryAssetAmount(
+                                rawAmount,
+                                recoveryStablecoinMeta.decimals,
+                                recoveryStablecoinMeta.label,
+                              )
+                            }
+                            title="Recent refund events"
+                            emptyMessage="No member refund events have been emitted yet."
+                            maxItems={6}
+                            className="mt-6 border-[#e9e1d6] bg-[#fbfaf7]"
+                          />
+                        </>
+                      ) : (
+                        <div className="mt-6 rounded-[18px] border border-[#e9e1d6] bg-white p-4 text-sm leading-6 text-[#5f6674]">
+                          The circle is in a recovery lifecycle state, but the current RPC response has not returned execution events yet.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </section>
 
             <aside className="space-y-6">

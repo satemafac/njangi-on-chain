@@ -1,6 +1,5 @@
 module njangi::njangi_price_validator {
     use sui::clock::Clock;
-    use sui::tx_context::{Self, TxContext};
     
     use pyth::price_info;
     use pyth::price_identifier;

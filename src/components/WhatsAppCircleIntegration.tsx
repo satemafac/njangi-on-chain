@@ -308,7 +308,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   }
 
   return (
-    <div className="rounded-[22px] border border-green-200 bg-gradient-to-r from-green-50 to-emerald-50 p-3 sm:p-4">
+    <div className="space-y-4">
       <div className="mb-3 flex flex-col gap-2 sm:mb-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center space-x-2">
           <MessageCircle className="w-5 h-5 text-green-600" />
@@ -324,25 +324,29 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
       {linkedStatus.isLinked ? (
         // Show linked status
         <div className="space-y-3">
-          <div className="space-y-2 rounded-[18px] border border-white/80 bg-white p-3 shadow-[0_10px_24px_-22px_rgba(15,23,42,0.28)]">
-            <p className="text-sm text-gray-600">
-              <strong>Link Type:</strong> {linkedStatus.linkType === 1 ? '📱 Individual' : '👥 Group'}
-            </p>
-            <p className="text-sm text-gray-600">
-              <strong>Recipient:</strong> {linkedStatus.recipient}
-            </p>
-            {linkedStatus.linkedAt && (
-              <p className="text-xs text-gray-500">
-                Linked on: {new Date(linkedStatus.linkedAt).toLocaleDateString()}
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div className="rounded-[18px] border border-green-200 bg-green-50/70 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-green-700">Link Type</p>
+              <p className="mt-2 text-lg font-semibold text-gray-900">
+                {linkedStatus.linkType === 1 ? '📱 Individual' : '👥 Group'}
               </p>
-            )}
+            </div>
+            <div className="rounded-[18px] border border-stone-200 bg-white p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Recipient</p>
+              <p className="mt-2 break-all text-lg font-semibold text-gray-900">{linkedStatus.recipient}</p>
+              {linkedStatus.linkedAt && (
+                <p className="mt-2 text-xs text-gray-500">
+                  Linked on: {new Date(linkedStatus.linkedAt).toLocaleDateString()}
+                </p>
+              )}
+            </div>
           </div>
 
-          <div className="space-y-2">
+          <div className="rounded-[18px] bg-gradient-to-r from-green-50 to-emerald-50 p-3">
             <p className="text-sm text-gray-700">
               ✨ This circle will receive WhatsApp notifications for:
             </p>
-            <ul className="text-xs text-gray-600 space-y-1 ml-4">
+            <ul className="mt-3 space-y-1 pl-4 text-xs text-gray-600">
               <li>✓ New cycle started</li>
               <li>✓ Member contributions</li>
               <li>✓ Deadline reminders</li>
@@ -382,7 +386,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
           ) : (
             <form
               onSubmit={handleLinkCircle}
-              className="space-y-3 rounded-[18px] border border-white/80 bg-white p-3 shadow-[0_10px_24px_-22px_rgba(15,23,42,0.28)] sm:p-4"
+              className="space-y-3 rounded-[18px] border border-green-200 bg-gradient-to-r from-green-50/70 to-emerald-50/70 p-3 sm:p-4"
             >
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -546,7 +550,7 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
                 )}
               </div>
 
-              <div className="rounded-[16px] border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700 space-y-1">
+              <div className="rounded-[16px] bg-blue-50 p-3 text-xs text-blue-700 space-y-1">
                 <p>💡 <strong>Tip:</strong> Circle admins will receive WhatsApp notifications for circle events.</p>
                 <p className="text-xs text-blue-600">Group ID formats: <code className="bg-blue-100 px-1 rounded">123456789-1234567890@g.us</code> or <code className="bg-blue-100 px-1 rounded">120363043968066561@g.us</code></p>
               </div>

@@ -1,12 +1,39 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { SuiClient } from '@mysten/sui/client';
 import joinRequestDatabase from '../../../services/join-request-database';
 import databaseService from '../../../services/database-service';
+import { resolveCircleLifecycleState } from '../../../lib/circle-chain';
+import { getCurrentRpcUrl } from '../../../services/network-config';
 
 type ResponseData = {
   success: boolean;
   message?: string;
   data?: Record<string, unknown>;
 };
+
+async function getCircleJoinWindow(circleId: string): Promise<{
+  isActive: boolean;
+  isPausedAfterCycle: boolean;
+}> {
+  const client = new SuiClient({ url: getCurrentRpcUrl() });
+  const circleObject = await client.getObject({
+    id: circleId,
+    options: { showContent: true },
+  });
+
+  if (!circleObject.data?.content || !('fields' in circleObject.data.content)) {
+    throw new Error('Could not load circle details');
+  }
+
+  const lifecycle = resolveCircleLifecycleState(
+    circleObject.data.content.fields as Record<string, unknown>,
+  );
+
+  return {
+    isActive: lifecycle.isActive,
+    isPausedAfterCycle: lifecycle.isPausedAfterCycle,
+  };
+}
 
 // Check if we're running on localhost
 const isLocalhost = () => {
@@ -31,6 +58,14 @@ export default async function handler(
       return res.status(400).json({
         success: false,
         message: 'Missing required fields'
+      });
+    }
+
+    const circleJoinWindow = await getCircleJoinWindow(circleId);
+    if (circleJoinWindow.isActive && !circleJoinWindow.isPausedAfterCycle) {
+      return res.status(409).json({
+        success: false,
+        message: 'This circle is currently active. New members can only join when the circle is paused between cycles or inactive.'
       });
     }
 
