@@ -53,7 +53,7 @@ module njangi::njangi_compliance {
     const POLICY_HASH_BYTES: u64 = 32;
     const REF_HASH_BYTES: u64 = 32;
 
-    // AttestorCapMinted.source values.
+    // AttestorCapMinted.source / ComplianceConfigCreated.source values.
     const CAP_SOURCE_PACKAGE_INIT: u8 = 0;
     const CAP_SOURCE_UPGRADE_CAP: u8 = 1;
 
@@ -69,9 +69,14 @@ module njangi::njangi_compliance {
     }
 
     /// Singleton shared configuration for the compliance gate. Created
-    /// exactly once, in this module's `init`, so any `&ComplianceConfig`
-    /// reference is necessarily THE canonical one — downstream gates can
-    /// trust it without comparing object IDs.
+    /// only by the package publisher — in this module's `init` on a fresh
+    /// publish, or via `create_config` (UpgradeCap-gated) when the module
+    /// ships to an existing lineage through a package upgrade, where
+    /// `init` never runs. Every `&ComplianceConfig` reference is therefore
+    /// publisher-rooted; the canonical instance is the one whose id the
+    /// deployment pins (bootstrap records it in the app environment), and
+    /// every creation emits `ComplianceConfigCreated` so any duplicate is
+    /// immediately auditable on chain.
     ///
     ///   * `expected_issuer` — the only issuer address whose attestations
     ///     the protocol gates accept. Rotated by the config admin when
@@ -136,6 +141,17 @@ module njangi::njangi_compliance {
         to: address,
     }
 
+    /// Audit trail: every ComplianceConfig that ever comes into
+    /// existence. Exactly one creation event is expected per lineage; a
+    /// second event is an operational red flag (see `create_config`).
+    public struct ComplianceConfigCreated has copy, drop {
+        config_id: ID,
+        admin: address,
+        expected_issuer: address,
+        /// CAP_SOURCE_PACKAGE_INIT or CAP_SOURCE_UPGRADE_CAP.
+        source: u8,
+    }
+
     public struct ExpectedIssuerUpdated has copy, drop {
         config_id: ID,
         previous_issuer: address,
@@ -160,6 +176,13 @@ module njangi::njangi_compliance {
     /// expected to immediately move the cap into a multisig or hand it to
     /// the designated compliance signer; holding it in a hot wallet
     /// defeats the purpose.
+    ///
+    /// NOTE: on Sui, `init` runs ONLY on a fresh publish — never on a
+    /// package upgrade. Lineages that gain this module through an upgrade
+    /// (both live deployments do: testnet is a v6 upgrade lineage and
+    /// mainnet has a v1 publish, so every future release is an upgrade)
+    /// must bootstrap via the UpgradeCap-gated fallbacks instead:
+    /// `mint_attestor_cap` + `create_config`.
     fun init(ctx: &mut TxContext) {
         let deployer = tx_context::sender(ctx);
 
@@ -171,13 +194,64 @@ module njangi::njangi_compliance {
         });
         transfer::transfer(cap, deployer);
 
+        create_and_share_config(deployer, CAP_SOURCE_PACKAGE_INIT, ctx);
+    }
+
+    /// Shared creation path for the ComplianceConfig: both `init` (fresh
+    /// publish) and `create_config` (upgrade bootstrap) funnel through
+    /// here, so every config that ever exists starts with the publisher
+    /// as admin + expected issuer and is announced by the same event.
+    fun create_and_share_config(creator: address, source: u8, ctx: &mut TxContext) {
         let config = ComplianceConfig {
             id: object::new(ctx),
-            admin: deployer,
-            expected_issuer: deployer,
+            admin: creator,
+            expected_issuer: creator,
             revoked: table::new<ID, u64>(ctx),
         };
+        event::emit(ComplianceConfigCreated {
+            config_id: object::uid_to_inner(&config.id),
+            admin: creator,
+            expected_issuer: creator,
+            source,
+        });
         transfer::share_object(config);
+    }
+
+    /// Post-upgrade bootstrap for the ComplianceConfig (June 2026 audit
+    /// repair). `init` never runs on a package upgrade, so a lineage that
+    /// gains this module via `sui client upgrade` would otherwise have NO
+    /// ComplianceConfig and no way to create one — leaving every gated
+    /// path (`contribute_with_attestation`,
+    /// `finalize_and_redeem_with_attestation`, `revoke`) permanently
+    /// uncallable, and bricking the escrow rail of any circle whose admin
+    /// enables `requires_attestation`. Mirrors the `mint_attestor_cap`
+    /// fallback and the post-publish bootstrap-initializer pattern of
+    /// `njangi_price_validator::init_registry` /
+    /// `whatsapp_integration::init_registry` (wired into
+    /// scripts/bootstrap-package.mjs).
+    ///
+    /// Authority: holding the UpgradeCap — the package publisher, i.e.
+    /// the exact party that runs `init` on a fresh publish and that can
+    /// already seize any existing config via `reset_config_admin`, so
+    /// this function grants no authority the publisher does not already
+    /// hold. Members and third parties can never create a config.
+    ///
+    /// Once-only discipline: a strict on-chain "exactly one config per
+    /// lineage" guard is not expressible here — it would need shared
+    /// state that predates this call, which an upgraded lineage by
+    /// definition lacks (the same reason `init` can't help). The guard is
+    /// therefore layered: (a) creation is publisher-anchored via the
+    /// UpgradeCap, (b) every creation emits `ComplianceConfigCreated`, so
+    /// a duplicate is a loud, auditable anomaly rather than a silent one,
+    /// and (c) the ops bootstrap is idempotent — it skips creation when
+    /// the config id is already recorded, and the app pins exactly that
+    /// id. A duplicate would in any case grant nothing: it could only be
+    /// minted by the party that already controls every config.
+    public entry fun create_config(
+        _upgrade_cap: &UpgradeCap,
+        ctx: &mut TxContext,
+    ) {
+        create_and_share_config(tx_context::sender(ctx), CAP_SOURCE_UPGRADE_CAP, ctx);
     }
 
     /// Post-upgrade fallback: if the original cap was lost, the
@@ -596,5 +670,68 @@ module njangi::njangi_compliance {
         let mut config = ts::take_shared<ComplianceConfig>(&scenario);
         set_expected_issuer(&mut config, T_ROGUE, ts::ctx(&mut scenario));
         abort 0
+    }
+
+    /// Simulates the live-lineage path where this module arrives in a
+    /// package UPGRADE: `init` never runs, so the publisher bootstraps
+    /// the cap and config with the UpgradeCap fallbacks. The resulting
+    /// config must behave exactly like an init-created one: publisher is
+    /// admin + expected issuer, issuance validates, revocation works.
+    #[test]
+    fun test_create_config_via_upgrade_cap_bootstraps_full_gate() {
+        let mut scenario = ts::begin(T_ISSUER);
+        let mut clock = clock::create_for_testing(ts::ctx(&mut scenario));
+        clock::set_for_testing(&mut clock, T_START_MS);
+
+        // No init: bootstrap purely from the UpgradeCap, as on the real
+        // testnet/mainnet lineages.
+        let upgrade_cap = sui::package::test_publish(
+            object::id_from_address(@0x42),
+            ts::ctx(&mut scenario),
+        );
+        mint_attestor_cap(&upgrade_cap, ts::ctx(&mut scenario));
+        create_config(&upgrade_cap, ts::ctx(&mut scenario));
+        transfer::public_transfer(upgrade_cap, T_ISSUER);
+
+        // Config starts publisher-rooted, like init's.
+        ts::next_tx(&mut scenario, T_ISSUER);
+        let config = ts::take_shared<ComplianceConfig>(&scenario);
+        assert!(config_admin(&config) == T_ISSUER, 9350);
+        assert!(expected_issuer(&config) == T_ISSUER, 9351);
+
+        // Issue with the fallback-minted cap; the attestation validates
+        // against the upgrade-created config.
+        let cap = ts::take_from_sender<AttestorCap>(&scenario);
+        issue(&cap, T_SUBJECT, hash32(), hash32(), T_TTL_MS, &clock, ts::ctx(&mut scenario));
+        ts::return_to_sender(&mut scenario, cap);
+        ts::return_shared(config);
+
+        ts::next_tx(&mut scenario, T_SUBJECT);
+        let config = ts::take_shared<ComplianceConfig>(&scenario);
+        let attestation = ts::take_from_sender<ComplianceAttestation>(&scenario);
+        assert!(is_attestation_valid(&config, &attestation, &clock), 9352);
+        let id = attestation_id(&attestation);
+        ts::return_to_sender(&mut scenario, attestation);
+        ts::return_shared(config);
+
+        // Revocation — the audit's launch-blocking fix — must be live on
+        // the upgrade-created config too.
+        ts::next_tx(&mut scenario, T_ISSUER);
+        let cap = ts::take_from_sender<AttestorCap>(&scenario);
+        let mut config = ts::take_shared<ComplianceConfig>(&scenario);
+        revoke(&cap, &mut config, id, &clock, ts::ctx(&mut scenario));
+        assert!(is_revoked_id(&config, id), 9353);
+        ts::return_to_sender(&mut scenario, cap);
+        ts::return_shared(config);
+
+        ts::next_tx(&mut scenario, T_SUBJECT);
+        let config = ts::take_shared<ComplianceConfig>(&scenario);
+        let attestation = ts::take_from_sender<ComplianceAttestation>(&scenario);
+        assert!(!is_attestation_valid(&config, &attestation, &clock), 9354);
+        ts::return_to_sender(&mut scenario, attestation);
+        ts::return_shared(config);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
     }
 }

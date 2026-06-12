@@ -27,6 +27,10 @@ module njangi::njangi_payments {
     const EMilestoneTargetInvalid: u64 = 32;
     const EAmountOverflow: u64 = 38;
     const ENotScheduledRecipient: u64 = 39;
+    // Mirrors njangi_cycle_escrow::E_COMPLIANCE_ATTESTATION_REQUIRED (216)
+    // so the frontend maps a single abort code for "this circle requires a
+    // compliance attestation" across both money rails.
+    const E_COMPLIANCE_ATTESTATION_REQUIRED: u64 = 216;
     const MAX_U64: u64 = 0xFFFF_FFFF_FFFF_FFFF;
     
     // ----------------------------------------------------------
@@ -209,12 +213,19 @@ module njangi::njangi_payments {
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
-        
+
+        // Compliance-gated circles must use the per-cycle escrow rail
+        // (njangi_cycle_escrow::contribute_with_attestation). The legacy
+        // custody rail performs no attestation checks, so allowing it here
+        // would let members bypass the KYC gate with a hand-rolled PTB
+        // (June 2026 audit). Security deposits and all refund/recovery
+        // paths stay ungated — they only return a member's own funds.
+        assert!(!circles::requires_attestation(circle), E_COMPLIANCE_ATTESTATION_REQUIRED);
         // Must be a circle member
         assert!(circles::is_member(circle, sender), 8);
         // Circle must be active to accept contributions
         assert!(circles::is_circle_active(circle), 54);
-        
+
         let contribution_amount_raw = circles::get_contribution_amount_raw(circle);
         let contribution_amount_usd_cents = circles::get_contribution_amount_usd(circle);
         let payment_amount = coin::value(&payment);
@@ -794,6 +805,12 @@ module njangi::njangi_payments {
         clock: &Clock,
         ctx: &mut TxContext
     ) {
+        // Compliance-gated circles must collect through the per-cycle
+        // escrow rail, whose finalize/redeem paths verify attestations.
+        // Without this, a gated circle's pot could be run end-to-end on
+        // the legacy rail with zero KYC checks (June 2026 audit).
+        assert!(!circles::requires_attestation(circle), E_COMPLIANCE_ATTESTATION_REQUIRED);
+
         // Circle must be active for payouts
         assert!(circles::is_circle_active(circle), 54);
 
@@ -817,6 +834,10 @@ module njangi::njangi_payments {
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
+
+        // Compliance-gated circles must collect through the per-cycle
+        // escrow rail (redeem_claim / finalize_and_redeem_with_attestation).
+        assert!(!circles::requires_attestation(circle), E_COMPLIANCE_ATTESTATION_REQUIRED);
 
         // Circle must be active for payouts
         assert!(circles::is_circle_active(circle), 54);
@@ -1143,6 +1164,113 @@ module njangi::njangi_payments {
         let circle = ts::take_shared<Circle>(&scenario);
         assert!(circles::has_contributed_this_cycle(&circle, TEST_BOB), 9134);
         ts::return_shared(circle);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    // --- compliance gate blocks the legacy custody rail ------------------
+    //
+    // June 2026 audit repair: requires_attestation circles must not be
+    // able to run their pot on the legacy rail (which has no attestation
+    // checks). Contribution AND collection are blocked with abort 216,
+    // forcing gated circles onto the per-cycle escrow rail. Security
+    // deposits stay ungated.
+
+    #[test_only]
+    fun enable_attestation_requirement(scenario: &mut ts::Scenario, clock: &Clock) {
+        ts::next_tx(scenario, TEST_ADMIN);
+        let mut circle = ts::take_shared<Circle>(scenario);
+        circles::set_requires_attestation(&mut circle, true, clock, ts::ctx(scenario));
+        ts::return_shared(circle);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_COMPLIANCE_ATTESTATION_REQUIRED, location = Self)]
+    fun test_gated_circle_blocks_legacy_sui_contribute() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_wallet(&mut scenario);
+        enable_attestation_requirement(&mut scenario, &clock);
+
+        contribute_sui_as(&mut scenario, TEST_BOB, &clock);
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(
+        abort_code = njangi::njangi_circles::E_COMPLIANCE_ATTESTATION_REQUIRED,
+        location = njangi::njangi_circles
+    )]
+    fun test_gated_circle_blocks_legacy_stablecoin_contribute() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_wallet(&mut scenario);
+        enable_attestation_requirement(&mut scenario, &clock);
+
+        contribute_usdc_as(&mut scenario, TEST_BOB, &clock);
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_COMPLIANCE_ATTESTATION_REQUIRED, location = Self)]
+    fun test_gated_circle_blocks_legacy_trigger_payout() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_wallet(&mut scenario);
+
+        // Fund the cycle on the (still ungated) legacy rail first, THEN
+        // gate the circle: collection must be blocked too, otherwise
+        // pre-gate contributions could be collected without any KYC.
+        contribute_sui_as(&mut scenario, TEST_BOB, &clock);
+        contribute_sui_as(&mut scenario, TEST_CAROL, &clock);
+        enable_attestation_requirement(&mut scenario, &clock);
+
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        let mut wallet = ts::take_shared<CustodyWallet>(&scenario);
+        trigger_payout<SUI>(&mut circle, &mut wallet, &clock, ts::ctx(&mut scenario));
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_COMPLIANCE_ATTESTATION_REQUIRED, location = Self)]
+    fun test_gated_circle_blocks_legacy_claim_payout() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_wallet(&mut scenario);
+
+        contribute_sui_as(&mut scenario, TEST_BOB, &clock);
+        contribute_sui_as(&mut scenario, TEST_CAROL, &clock);
+        enable_attestation_requirement(&mut scenario, &clock);
+
+        // ADMIN is the scheduled recipient — even the rightful claimant
+        // is pushed onto the escrow rail.
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        let mut wallet = ts::take_shared<CustodyWallet>(&scenario);
+        claim_payout<SUI>(&mut circle, &mut wallet, &clock, ts::ctx(&mut scenario));
+        abort 0
+    }
+
+    #[test]
+    fun test_gated_circle_still_accepts_security_deposits() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_wallet(&mut scenario);
+        enable_attestation_requirement(&mut scenario, &clock);
+
+        // Security deposits only ever return to their owner, so they are
+        // deliberately exempt from the compliance gate (the UI's deposit
+        // flow still runs on the legacy custody path).
+        deposit_security_usdc_as(&mut scenario, TEST_BOB, &clock);
+
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let circle = ts::take_shared<Circle>(&scenario);
+        let wallet = ts::take_shared<CustodyWallet>(&scenario);
+        assert!(
+            custody::get_stablecoin_balance<TESTUSDC>(&wallet) == TEST_USDC_DEPOSIT,
+            9140
+        );
+        let member = circles::get_member(&circle, TEST_BOB);
+        assert!(members::get_deposit_balance(member) > 0, 9141);
+        ts::return_shared(circle);
+        ts::return_shared(wallet);
 
         clock::destroy_for_testing(clock);
         ts::end(scenario);

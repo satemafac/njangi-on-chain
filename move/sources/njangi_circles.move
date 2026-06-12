@@ -55,6 +55,10 @@ module njangi::njangi_circles {
     // that requires attestations, the requirement can never be switched
     // off (bait-and-switch guard — members joined under the KYC promise).
     const ECannotDisableAttestationRequirement: u64 = 75;
+    // Mirrors njangi_cycle_escrow::E_COMPLIANCE_ATTESTATION_REQUIRED (216)
+    // so the frontend maps a single abort code for "this circle requires a
+    // compliance attestation" across both money rails.
+    const E_COMPLIANCE_ATTESTATION_REQUIRED: u64 = 216;
 
     // Time constants (in milliseconds)
     const THIRTY_DAYS_MS: u64 = 2_592_000_000; // 30 days in milliseconds
@@ -729,11 +733,19 @@ module njangi::njangi_circles {
     // permissionless — so the gate was trivially bypassable by anyone
     // hand-rolling the ungated path. This flag is the on-chain source of
     // truth: njangi_cycle_escrow reads it at open time and forces every
-    // escrow of a gated circle onto the attestation-checked paths.
+    // escrow of a gated circle onto the attestation-checked paths, and
+    // the legacy custody rail (contribute_stablecoin here;
+    // njangi_payments::contribute / trigger_payout / claim_payout)
+    // refuses gated circles outright with the same abort code (216),
+    // forcing them onto the escrow rail. Security deposits and all
+    // refund/recovery paths stay ungated — they only return a member's
+    // own funds, so no funds can ever be stranded behind the gate.
     // ----------------------------------------------------------
 
     /// Sets whether this circle requires a valid compliance attestation
-    /// to contribute to / collect from its per-cycle escrows. Admin only.
+    /// to contribute to / collect from its money paths (per-cycle escrows
+    /// become attestation-checked; the legacy custody rail is blocked
+    /// entirely). Admin only.
     /// Enabling is always allowed (it only tightens the rules; escrows
     /// already open keep the gate state they were opened with). Disabling
     /// is only allowed while the admin is the sole member: once anyone
@@ -2037,7 +2049,15 @@ module njangi::njangi_circles {
         let sender = tx_context::sender(ctx);
         let amount = coin::value(&payment);
 
-        // --- Basic Assertions --- 
+        // --- Basic Assertions ---
+        // Compliance-gated circles must use the per-cycle escrow rail
+        // (njangi_cycle_escrow::contribute_with_attestation). This legacy
+        // custody rail performs no attestation checks, so allowing it here
+        // would let members bypass the KYC gate with a hand-rolled PTB
+        // (June 2026 audit). Security deposits
+        // (member_deposit_security_deposit) and all refund/recovery paths
+        // stay ungated — they only return a member's own funds.
+        assert!(!requires_attestation(circle), E_COMPLIANCE_ATTESTATION_REQUIRED);
         // Must be a circle member
         assert!(is_member(circle, sender), ENotMember); // Use local error code
         // Circle must be active to accept contributions

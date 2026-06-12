@@ -365,7 +365,9 @@ module njangi::njangi_cycle_escrow {
     /// (never taken), so members don't have to give it up when paying
     /// into the pot. `compliance::subject` must match the sender to
     /// prevent a cheap "borrow someone else's pass" attack. The shared
-    /// `ComplianceConfig` (a singleton created at package publish) pins
+    /// `ComplianceConfig` (publisher-created: in `init` on a fresh
+    /// publish, or via the UpgradeCap-gated
+    /// `njangi_compliance::create_config` on upgraded lineages) pins
     /// the accepted issuer and carries the revocation registry, so a
     /// rogue cap's attestations and revoked passes both fail here.
     public fun contribute_with_attestation<T>(
