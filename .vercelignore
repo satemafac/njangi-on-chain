@@ -1,0 +1,51 @@
+# Vercel CLI file-based deploys use this file INSTEAD of .gitignore when it
+# exists, so it must mirror the critical .gitignore entries and additionally
+# exclude tracked directories that `next build` does not need.
+
+# --- mirrored from .gitignore (never upload) ---
+.git
+node_modules
+.next
+out
+build
+coverage
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.log
+*.pem
+.DS_Store
+.cycle-finalized-cursor.json
+.vercel
+*.zkey
+*.db
+*.db-shm
+*.db-wal
+tsconfig.tsbuildinfo
+out-static
+walrus-blobs
+data
+automation-service
+cetus
+~
+
+# --- local-only workspaces / artifacts (gitignored, large) ---
+walrus-sites
+backend-fix3
+frontend-fix3
+salt-service
+tasks
+.taskmaster
+.cursor
+.roo
+.claude
+
+# --- tracked, but irrelevant to the Next.js build ---
+move
+whatsapp-bot-backend
+docs
+web
+.github
+zklogin-docker

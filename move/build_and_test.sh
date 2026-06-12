@@ -131,7 +131,10 @@ update_circle_chain_lineage() {
     published_at=${published_at:-$package_id}
     original_id=${original_id:-$package_id}
 
-    perl -0pi -e "s/(\\b${network}: \\{\\n\\s+publishedAt: ')[^']+(',\\n\\s+originalId: ')[^']+(',\\n\\s+\\},)/\$1${published_at}\$2${original_id}\$3/s" "$lineage_file"
+    # Brace-delimited group refs (${1}, not $1): the package ids start with "0x",
+    # so "$1${published_at}" would reach perl as "$10x..." and parse as the
+    # (empty) capture group 10, mangling the file. See commit b624a4a.
+    perl -0pi -e "s/(\\b${network}: \\{\\n\\s+publishedAt: ')[^']+(',\\n\\s+originalId: ')[^']+(',\\n\\s+\\},)/\${1}${published_at}\${2}${original_id}\${3}/s" "$lineage_file"
 
     if grep -A3 "  ${network}: {" "$lineage_file" | grep -q "$published_at"; then
         echo -e "${GREEN}✅ Updated src/lib/circle-chain.ts ${network} lineage: publishedAt=${published_at}, originalId=${original_id}${NC}"

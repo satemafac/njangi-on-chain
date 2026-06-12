@@ -168,3 +168,6 @@ salt-database.json
 src/services/*.log
 src/services/*.db
 .claude/scheduled_tasks.lock
+
+# switch-network.sh artifacts
+*.backup

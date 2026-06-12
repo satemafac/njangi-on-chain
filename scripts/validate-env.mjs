@@ -174,12 +174,49 @@ if (!complianceGateEnabled && !read('INTERNAL_NOTIFY_SECRET')) {
 // /api/cron/cycle-finalized fails closed (500) and no nudges go out.
 if (!read('CRON_SECRET')) {
   warnings.push(
-    'CRON_SECRET is unset. /api/cron/cycle-finalized rejects every invocation without it; run `npm run generate:secrets` and mirror the value on the Vercel project.',
+    'CRON_SECRET is unset. /api/cron/cycle-finalized and /api/cron/whatsapp-circle-events reject every invocation without it; run `npm run generate:secrets` and mirror the value on the Vercel project.',
   );
 }
 
+// June 2026 platform hardening: Sentry is OPTIONAL — every Sentry init
+// (sentry.client/server/edge.config.ts) no-ops when its DSN is empty. We
+// only sanity-check the format when a value is present so a typo'd DSN
+// doesn't silently disable error tracking.
+for (const key of ['SENTRY_DSN', 'NEXT_PUBLIC_SENTRY_DSN']) {
+  const value = read(key);
+  if (value && !/^https:\/\/[^@\s]+@[^/\s]+\/\d+$/.test(value)) {
+    warnings.push(
+      `${key} does not look like a Sentry DSN (expected https://<key>@<host>/<project-id>). Error tracking will silently fail.`,
+    );
+  }
+}
+if (read('SENTRY_DSN') && !read('NEXT_PUBLIC_SENTRY_DSN')) {
+  warnings.push(
+    'SENTRY_DSN is set but NEXT_PUBLIC_SENTRY_DSN is empty — server errors will be tracked, browser errors will not.',
+  );
+}
+
+// June 2026 fold-in: the standalone whatsapp-bot-backend HTTP service was
+// replaced by /api/cron/whatsapp-circle-events (see
+// whatsapp-bot-backend/DEPRECATED.md). Its env vars are dead.
+for (const key of [
+  'BACKEND_AUTH_TOKEN',
+  'WHATSAPP_BACKEND_URL',
+  'CIRCLE_BACKEND_URL',
+  'ANALYTICS_URL',
+  'ENABLE_EVENT_LISTENER',
+  'ENABLE_MESSAGE_SENDER',
+  'ENABLE_ON_CHAIN_LOGGING',
+]) {
+  if (read(key)) {
+    warnings.push(
+      `${key} is set but unused — it belonged to the retired whatsapp-bot-backend service. Remove it from .env.local.`,
+    );
+  }
+}
+
 if (fs.existsSync(path.join(repoRoot, 'whatsapp-bot-backend', '.env.local'))) {
-  warnings.push('whatsapp-bot-backend/.env.local still exists. The backend now auto-loads the repo root .env.local.');
+  warnings.push('whatsapp-bot-backend/.env.local still exists. The bot backend is deprecated (folded into the app); delete the file.');
 }
 
 if (warnings.length > 0) {

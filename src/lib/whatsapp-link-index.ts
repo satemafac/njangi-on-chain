@@ -128,6 +128,37 @@ export async function deindexWhatsAppLinksForCircle(circleId: string): Promise<v
 }
 
 /**
+ * Returns the Walrus blob ids linked to a circle, newest first. The
+ * whatsapp-circle-events cron uses this for O(1) circle → phone
+ * resolution (decrypting only the matched blob) before falling back to
+ * the on-chain registry scan. The phone itself is never stored here —
+ * only its HMAC — so callers must still decrypt the blob.
+ */
+export async function lookupBlobsForCircle(
+  circleId: string,
+): Promise<string[]> {
+  if (!isPostgresAvailable()) {
+    warnFallbackOnce();
+    const blobs: string[] = [];
+    for (const rows of memoryFallback.values()) {
+      for (const row of rows) {
+        if (row.circleId === circleId) blobs.push(row.walrusBlobId);
+      }
+    }
+    return blobs.reverse();
+  }
+
+  await ensureTable();
+  const result = await getPool().query<{ walrus_blob_id: string }>(
+    `SELECT walrus_blob_id FROM whatsapp_phone_index
+      WHERE circle_id = $1
+      ORDER BY id DESC`,
+    [circleId],
+  );
+  return result.rows.map((row) => row.walrus_blob_id);
+}
+
+/**
  * Returns every circle linked to the supplied phone number. The webhook
  * uses this to skip the O(N) Walrus scan and fall straight through to the
  * decrypt step (which still happens, but only for the matched blob).

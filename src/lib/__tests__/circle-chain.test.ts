@@ -58,10 +58,25 @@ describe('circle-chain helpers', () => {
     });
 
     it('returns lookup ids for the active upgrade lineage', () => {
-      // After the upgrades the testnet lineage spans two ids: the original
-      // package id (where struct/event types stay anchored) and the current
-      // published-at. A lineage lookup must return BOTH so reads/event filters
-      // resolve across the upgrade.
+      // A lineage lookup must return every id the lineage spans so
+      // reads/event filters resolve across upgrades. The 2026-06-12 testnet
+      // republish (0x89cddf…) is a fresh v1 lineage — original id and
+      // published-at coincide, so the set collapses to the single id.
+      expect(
+        getPackageLookupIds({
+          network: 'testnet',
+          packageId:
+            '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
+          currentPackageId:
+            '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
+        }),
+      ).toEqual([
+        '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
+      ]);
+
+      // An app still configured with the retired package id is treated as
+      // current-lineage (packageId === currentPackageId) and additionally
+      // gets the live lineage ids, so reads keep resolving across cutover.
       expect(
         getPackageLookupIds({
           network: 'testnet',
@@ -72,7 +87,7 @@ describe('circle-chain helpers', () => {
         }),
       ).toEqual([
         '0xc5aed33e4da2530d0f9b36a64d96d662b109ba2962bb6918bc3fa21be1622465',
-        '0xbd5ae9ea680fb6c4b43c89369b72bc4358ce3801fb0fdfb7776f1caf3795c634',
+        '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
       ]);
     });
 

@@ -25,6 +25,10 @@ export type NotificationKind =
   | 'cycle_finalized'
   | 'ramp_kyc_complete'
   | 'stale_attestation_admin'
+  /** Circle lifecycle events (joins, contributions, payouts, links) from
+   *  the /api/cron/whatsapp-circle-events drain — the fold-in of the
+   *  retired whatsapp-bot-backend listener. */
+  | 'circle_event'
   | 'custom';
 
 export interface SendMemberNotificationInput {
