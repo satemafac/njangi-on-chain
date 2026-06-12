@@ -15,6 +15,7 @@
 //   9. zklogin_sessions               (src/lib/zklogin-session-registry.ts)
 //  10. rate_limits                    (src/lib/rate-limit.ts)
 //  11. webhook_events                 (src/lib/webhook-dedupe.ts)
+//  12. subscriptions                  (src/services/stripe-service.ts)
 //
 // Phase 12 publish-readiness: replaces the old transactional migration
 // that only knew about `join_requests` + `mainnet_signups`. Keeps every
@@ -231,6 +232,35 @@ const STATEMENTS = [
           );
           CREATE INDEX IF NOT EXISTS webhook_events_received_idx
             ON webhook_events (received_at);`,
+  },
+  {
+    // Stripe subscription billing (June 2026). One row per zkLogin identity
+    // (sub, aud) — the same root key as the `salts` table — with the derived
+    // Sui address alongside for feature gates that key off addresses.
+    // Stripe webhook idempotency reuses the shared `webhook_events` table
+    // above (provider = 'stripe' via src/lib/webhook-dedupe.ts); no separate
+    // stripe_webhook_events table.
+    name: 'subscriptions',
+    sql: `CREATE TABLE IF NOT EXISTS subscriptions (
+            id SERIAL PRIMARY KEY,
+            sub TEXT NOT NULL,
+            aud TEXT NOT NULL,
+            user_address TEXT NOT NULL,
+            stripe_customer_id TEXT NOT NULL UNIQUE,
+            stripe_subscription_id TEXT UNIQUE,
+            price_id TEXT,
+            plan TEXT NOT NULL DEFAULT 'free',
+            status TEXT NOT NULL,
+            current_period_end TIMESTAMPTZ,
+            cancel_at_period_end BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (sub, aud)
+          );
+          CREATE INDEX IF NOT EXISTS subscriptions_user_address_idx
+            ON subscriptions (user_address);
+          CREATE INDEX IF NOT EXISTS subscriptions_status_idx
+            ON subscriptions (status);`,
   },
 ];
 

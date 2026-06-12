@@ -43,6 +43,12 @@ import {
   hasZkLoginSession,
   setZkLoginSession,
 } from '@/lib/zklogin-session-registry';
+import {
+  assertCanCreateCircle,
+  assertWithinMemberLimit,
+  entitlementErrorBody,
+  EntitlementError,
+} from '@/lib/entitlement-gate';
 
 // Add at the top with other imports
 interface RPCError extends Error {
@@ -1274,6 +1280,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             autoReleaseEnabled,
             autoReleaseDelayMs: autoReleaseDelayMs.toString()
           });
+
+          // Billing SOFT gate (create-circle path): requested member cap vs
+          // the plan's maxMembers, and the admin's existing circle count vs
+          // maxCircles. create_circle is a public Move entry point and the
+          // Phase 2 client-side signer submits straight to RPC, so a
+          // client-side signer bypasses this entirely — it is product
+          // friction for the upgrade funnel, NOT security. No-op while
+          // NEXT_PUBLIC_BILLING_ENABLED is off; fails open on billing
+          // infrastructure errors. Recovery/claim/withdraw/contribute paths
+          // are deliberately never gated (ToS-promised).
+          try {
+            await assertCanCreateCircle({
+              identity: {
+                sub: session.account.sub,
+                aud: session.account.aud,
+                userAddress: session.account.userAddr,
+              },
+              requestedMaxMembers: Number(circleData.max_members ?? 0),
+              network:
+                requestedNetwork === 'testnet' || requestedNetwork === 'mainnet'
+                  ? requestedNetwork
+                  : getCurrentNetwork(),
+            });
+          } catch (gateError) {
+            if (gateError instanceof EntitlementError) {
+              return res.status(402).json(entitlementErrorBody(gateError));
+            }
+            console.warn(
+              '[zkLogin] createCircle billing gate skipped (fail-open):',
+              gateError,
+            );
+          }
 
           // Attempt to send the transaction with network override support
           try {
@@ -5289,6 +5327,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               error: 'Invalid session: No account data found. Please authenticate first.',
               requireRelogin: true
             });
+          }
+
+          // Billing SOFT gate: the requested member cap must fit the
+          // admin's plan (free 3 / premium 20). admin_set_max_members is a
+          // public Move function reachable from the client-side signer, so
+          // this is upgrade-funnel friction, NOT security — and it never
+          // touches recovery/claim/withdraw paths. No-op while billing is
+          // off; fails open on billing infrastructure errors.
+          try {
+            await assertWithinMemberLimit(newMaxMembers, {
+              sub: session.account.sub,
+              aud: session.account.aud,
+              userAddress: session.account.userAddr,
+            });
+          } catch (gateError) {
+            if (gateError instanceof EntitlementError) {
+              return res.status(402).json(entitlementErrorBody(gateError));
+            }
+            console.warn(
+              '[zkLogin] adminSetMaxMembers billing gate skipped (fail-open):',
+              gateError,
+            );
           }
 
           console.log(`Setting max members for circle ${circleId} to ${newMaxMembers} on network: ${requestedNetwork || getCurrentNetwork()}`);

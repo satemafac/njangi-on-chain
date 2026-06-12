@@ -3,7 +3,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { Instrument_Serif } from 'next/font/google';
 import { useAuth } from '@/contexts/AuthContext';
-import { Bell, User, Menu, X } from 'lucide-react';
+import { Bell, Crown, User, Menu, X } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useRouter } from 'next/router';
 import type { JoinRequest } from '@/services/database-service';
@@ -14,6 +14,12 @@ const wordmarkFont = Instrument_Serif({
   weight: '400',
   display: 'swap',
 });
+
+// Billing kill switch (same one-line read as entitlement-gate's
+// isBillingEnabled — inline so Next substitutes the build-time value in
+// the client bundle). While false, no plan badge is shown at all.
+const BILLING_ENABLED =
+  (process.env.NEXT_PUBLIC_BILLING_ENABLED || 'false').toLowerCase() === 'true';
 
 export const Navbar: React.FC = () => {
   const { logout, account } = useAuth();
@@ -26,6 +32,7 @@ export const Navbar: React.FC = () => {
   const [lastFetchTime, setLastFetchTime] = useState<number>(0);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [logoError, setLogoError] = useState(false);
+  const [billingPlan, setBillingPlan] = useState<'free' | 'premium' | null>(null);
 
   // Debounce mechanism to prevent infinite loops
   const FETCH_DEBOUNCE_MS = 5000; // 5 seconds minimum between fetches
@@ -221,6 +228,36 @@ export const Navbar: React.FC = () => {
     setFetchError(null);
   }, [account]);
 
+  // Plan badge (Free/Premium) — only when billing is enabled. Resolved via
+  // the session-authenticated /api/billing/status endpoint; hidden on any
+  // failure (the badge is informational, server gates stay authoritative).
+  useEffect(() => {
+    if (!BILLING_ENABLED || !account) {
+      setBillingPlan(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch('/api/billing/status', {
+          method: 'GET',
+          credentials: 'same-origin',
+          headers: { Accept: 'application/json' },
+        });
+        if (!response.ok) return;
+        const body = await response.json();
+        if (!cancelled && body?.success) {
+          setBillingPlan(body.data?.plan === 'premium' ? 'premium' : 'free');
+        }
+      } catch {
+        /* keep badge hidden */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [account]);
+
   useEffect(() => {
     // Only fetch if we have an account and haven't hit max retries
     if (account && retryCount.current < MAX_RETRIES) {
@@ -318,6 +355,26 @@ export const Navbar: React.FC = () => {
 
           {account && (
             <div className="hidden items-center gap-3 md:flex">
+              {billingPlan && (
+                <Link
+                  href="/pricing"
+                  title={
+                    billingPlan === 'premium'
+                      ? 'Premium plan — manage your subscription'
+                      : 'Free plan — see Premium features'
+                  }
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-xs font-semibold transition ${
+                    billingPlan === 'premium'
+                      ? 'border-amber-200 bg-amber-50 text-amber-800 hover:border-amber-300 hover:bg-amber-100'
+                      : 'border-stone-200 bg-white text-slate-600 hover:border-stone-300 hover:bg-stone-50'
+                  }`}
+                >
+                  {billingPlan === 'premium' && (
+                    <Crown className="h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                  {billingPlan === 'premium' ? 'Premium' : 'Free plan'}
+                </Link>
+              )}
               <Tooltip.Provider>
                 <Tooltip.Root>
                   <Tooltip.Trigger asChild>
@@ -601,6 +658,35 @@ export const Navbar: React.FC = () => {
                   {pendingRequests.length ? `${pendingRequests.length} new` : 'None'}
                 </span>
               </button>
+
+              {billingPlan && (
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between rounded-[20px] border border-stone-200 bg-white px-4 py-3 text-left shadow-[0_14px_30px_-28px_rgba(15,23,42,0.35)] transition hover:bg-stone-50"
+                  onClick={() => {
+                    router.push('/pricing');
+                    setMobileMenuOpen(false);
+                  }}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border border-stone-200 bg-stone-100">
+                      <Crown
+                        className={`h-4 w-4 ${
+                          billingPlan === 'premium' ? 'text-amber-600' : 'text-slate-600'
+                        }`}
+                      />
+                    </div>
+                    <span className="text-sm font-medium text-slate-950">Your plan</span>
+                  </div>
+                  <span
+                    className={`text-xs font-semibold ${
+                      billingPlan === 'premium' ? 'text-amber-700' : 'text-slate-500'
+                    }`}
+                  >
+                    {billingPlan === 'premium' ? 'Premium' : 'Free'}
+                  </span>
+                </button>
+              )}
 
               <button
                 onClick={logout}

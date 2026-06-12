@@ -169,6 +169,28 @@ if (!complianceGateEnabled && !read('INTERNAL_NOTIFY_SECRET')) {
   );
 }
 
+// Stripe subscription billing (June 2026): everything stays free until
+// NEXT_PUBLIC_BILLING_ENABLED=true, so the STRIPE_* values are optional by
+// default and required only once the kill switch is flipped — checkout,
+// the billing portal, and webhook signature verification all need them.
+const billingEnabled =
+  (read('NEXT_PUBLIC_BILLING_ENABLED') || 'false').toLowerCase() === 'true';
+const stripeKeys = ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'STRIPE_PRICE_ID_PREMIUM'];
+if (billingEnabled) {
+  for (const key of stripeKeys) {
+    if (!read(key)) {
+      errors.push(
+        `NEXT_PUBLIC_BILLING_ENABLED is true but ${key} is empty. Billing endpoints cannot run without it.`,
+      );
+    }
+  }
+} else if (stripeKeys.some((key) => read(key)) && !stripeKeys.every((key) => read(key))) {
+  warnings.push(
+    `Partial Stripe configuration detected (${stripeKeys.filter((key) => read(key)).join(', ')}). ` +
+      'Set all of STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_ID_PREMIUM before flipping NEXT_PUBLIC_BILLING_ENABLED.',
+  );
+}
+
 // June 2026 Vercel migration: the cycle-finalized notifier runs as a Vercel
 // cron authenticated by `Authorization: Bearer ${CRON_SECRET}`. Without it,
 // /api/cron/cycle-finalized fails closed (500) and no nudges go out.

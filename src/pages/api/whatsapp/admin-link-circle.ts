@@ -48,6 +48,11 @@ import {
   type WhatsAppPiiPayload,
 } from '../../../lib/walrus-pii';
 import { indexWhatsAppLink } from '../../../lib/whatsapp-link-index';
+import {
+  assertEntitled,
+  entitlementErrorBody,
+  EntitlementError,
+} from '../../../lib/entitlement-gate';
 
 interface LinkCircleRequest {
   circleId: string; // consumed by withCircleAdminAuth, not the handler
@@ -229,6 +234,29 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
       return res
         .status(400)
         .json({ success: false, error: 'Invalid linkType (must be 1 or 2)' });
+    }
+
+    // Premium gate (ENFORCEABLE): the WhatsApp suite is fully
+    // server-mediated — Walrus PII encryption + the on-chain anchor run
+    // here with server keys, so this gate cannot be bypassed by calling
+    // the contract directly. Runs after admin auth but BEFORE any side
+    // effect. No-op while NEXT_PUBLIC_BILLING_ENABLED is off; on billing
+    // infra errors it fails open (this is a paid convenience, never an
+    // access control on funds).
+    try {
+      await assertEntitled('whatsappSuite', { userAddress: adminAddr });
+    } catch (gateError) {
+      if (gateError instanceof EntitlementError) {
+        logAdminAction('LINK_CIRCLE_UPGRADE_REQUIRED', adminAddr, {
+          circleId,
+          feature: gateError.feature,
+        });
+        return res.status(402).json(entitlementErrorBody(gateError));
+      }
+      console.warn(
+        '[admin-link-circle] Entitlement lookup failed; allowing request (fail-open billing gate):',
+        gateError,
+      );
     }
 
     logAdminAction('LINK_CIRCLE_INITIATED', adminAddr, {
