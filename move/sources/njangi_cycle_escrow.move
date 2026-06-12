@@ -69,6 +69,12 @@ module njangi::njangi_cycle_escrow {
     const E_ATTESTATION_WRONG_ISSUER: u64 = 229;
     const E_ATTESTATION_REVOKED: u64 = 230;
     const E_ATTESTATION_EXPIRED: u64 = 231;
+    // The supplied ComplianceConfig is not the exact config object this
+    // escrow pinned at open time (June 2026 adversarial-review repair:
+    // the gate must not trust whatever config the caller's PTB supplies).
+    const E_COMPLIANCE_CONFIG_MISMATCH: u64 = 232;
+    // A gated escrow cannot be opened without a config pin to enforce.
+    const E_COMPLIANCE_CONFIG_NOT_PINNED: u64 = 233;
 
     const CLAIM_WINDOW_MS: u64 = 30 * 24 * 60 * 60 * 1000; // 30 days
     /// Grace period after the cycle's snapshot due date before anyone may
@@ -106,6 +112,13 @@ module njangi::njangi_cycle_escrow {
         /// owned by the caller. The flag is set at open time so existing
         /// escrows opened before the gate flipped on continue to work.
         requires_attestation: bool,
+        /// Object id of the ONLY ComplianceConfig the gated paths accept
+        /// (June 2026 adversarial-review repair). Captured at open time —
+        /// from the circle's admin-pinned config for circle-required
+        /// gates, or from the opener-presented config for opt-in gates —
+        /// so a caller's PTB cannot substitute a stale or fabricated
+        /// config. `some` iff `requires_attestation`.
+        compliance_config_id: Option<ID>,
         /// Terminal refund flag. Set when either refund path begins
         /// (cancel of an unfinalized escrow, or refund of an expired
         /// claim). Once set: contributions, finalization, and claim
@@ -141,6 +154,10 @@ module njangi::njangi_cycle_escrow {
         required_contributors: u64,
         asset_type: vector<u8>,
         opened_at_ms: u64,
+        /// Whether this escrow's money paths are attestation-gated, and
+        /// against which exact ComplianceConfig object (`some` iff gated).
+        requires_attestation: bool,
+        compliance_config_id: Option<ID>,
     }
 
     public struct ContributionRecorded has copy, drop {
@@ -219,21 +236,28 @@ module njangi::njangi_cycle_escrow {
         ctx: &mut TxContext
     ) {
         let amount = circles::get_contribution_amount_raw(circle);
-        open_cycle_internal<T>(circle, amount, clock, false, ctx);
+        open_cycle_internal<T>(circle, amount, clock, option::none(), ctx);
     }
 
     /// Phase 7: opens a per-cycle escrow that requires every contributor
-    /// and claimant to present a valid `ComplianceAttestation`. Use this
-    /// in jurisdictions where the operator must gate on partner-led KYC.
-    /// Existing non-gated escrows (opened with `open_cycle`) continue to
-    /// work when the gate is toggled on — only newly opened ones enforce.
+    /// and claimant to present a valid `ComplianceAttestation`, validated
+    /// against exactly the `ComplianceConfig` presented here (its object
+    /// id is pinned on the escrow). Use this in jurisdictions where the
+    /// operator must gate on partner-led KYC. Existing non-gated escrows
+    /// (opened with `open_cycle`) continue to work when the gate is
+    /// toggled on — only newly opened ones enforce. For circles whose
+    /// admin enabled `requires_attestation` on-chain, the circle's
+    /// admin-pinned config takes precedence over the one presented here.
     public fun open_cycle_with_gate<T>(
         circle: &Circle,
+        compliance_config: &ComplianceConfig,
         clock: &Clock,
         ctx: &mut TxContext
     ) {
         let amount = circles::get_contribution_amount_raw(circle);
-        open_cycle_internal<T>(circle, amount, clock, true, ctx);
+        open_cycle_internal<T>(
+            circle, amount, clock, option::some(object::id(compliance_config)), ctx
+        );
     }
 
     /// Opens a per-cycle escrow that settles in a USD-pegged stablecoin
@@ -251,25 +275,29 @@ module njangi::njangi_cycle_escrow {
         ctx: &mut TxContext
     ) {
         let amount = stable_contribution_amount(circle, stable_decimals);
-        open_cycle_internal<T>(circle, amount, clock, false, ctx);
+        open_cycle_internal<T>(circle, amount, clock, option::none(), ctx);
     }
 
-    /// Compliance-gated variant of `open_cycle_stable`.
+    /// Compliance-gated variant of `open_cycle_stable` (see
+    /// `open_cycle_with_gate` for the config-pinning semantics).
     public fun open_cycle_stable_with_gate<T>(
         circle: &Circle,
+        compliance_config: &ComplianceConfig,
         stable_decimals: u8,
         clock: &Clock,
         ctx: &mut TxContext
     ) {
         let amount = stable_contribution_amount(circle, stable_decimals);
-        open_cycle_internal<T>(circle, amount, clock, true, ctx);
+        open_cycle_internal<T>(
+            circle, amount, clock, option::some(object::id(compliance_config)), ctx
+        );
     }
 
     fun open_cycle_internal<T>(
         circle: &Circle,
         contribution_amount: u64,
         clock: &Clock,
-        gate_requested: bool,
+        opener_gate_config_id: Option<ID>,
         ctx: &mut TxContext
     ) {
         // Authoritative compliance gate (June 2026 audit fix): the
@@ -278,8 +306,30 @@ module njangi::njangi_cycle_escrow {
         // member could hand-roll the ungated `open_cycle` path and mint
         // an escrow that skips the KYC check the circle promised. Callers
         // can still request a gated escrow for an ungated circle (opt-in
-        // tightening), but never the reverse.
-        let requires_attestation = gate_requested || circles::requires_attestation(circle);
+        // tightening, `opener_gate_config_id` set by the *_with_gate
+        // wrappers), but never the reverse.
+        let circle_requires = circles::requires_attestation(circle);
+        let gate_requested = option::is_some(&opener_gate_config_id);
+        let requires_attestation = gate_requested || circle_requires;
+
+        // Pin the exact ComplianceConfig object the gated paths will
+        // accept (June 2026 adversarial-review repair). For a circle
+        // whose admin enabled the requirement on-chain, the pin is the
+        // admin's — never the permissionless opener's, who could
+        // otherwise pin a config they control. The opener-presented
+        // config only applies to opt-in gates on ungated circles.
+        let compliance_config_id = if (circle_requires) {
+            let pin = circles::pinned_compliance_config_id(circle);
+            // set_requires_attestation keeps flag and pin in lockstep,
+            // so a required circle always carries a pin; never open a
+            // gated escrow that cannot name its config.
+            assert!(option::is_some(&pin), E_COMPLIANCE_CONFIG_NOT_PINNED);
+            pin
+        } else if (gate_requested) {
+            opener_gate_config_id
+        } else {
+            option::none()
+        };
 
         let cycle_no = circles::get_current_cycle(circle);
         let rotation_order = circles::get_rotation_order(circle);
@@ -326,6 +376,7 @@ module njangi::njangi_cycle_escrow {
             finalized: false,
             claimed: false,
             requires_attestation,
+            compliance_config_id,
             refunded: false,
             claim_expires_at_ms: 0,
         };
@@ -341,6 +392,8 @@ module njangi::njangi_cycle_escrow {
             required_contributors,
             asset_type: snapshot_asset,
             opened_at_ms,
+            requires_attestation,
+            compliance_config_id,
         });
 
         transfer::share_object(escrow);
@@ -364,12 +417,12 @@ module njangi::njangi_cycle_escrow {
     /// Phase 7: gated contribute. The attestation is only inspected
     /// (never taken), so members don't have to give it up when paying
     /// into the pot. `compliance::subject` must match the sender to
-    /// prevent a cheap "borrow someone else's pass" attack. The shared
-    /// `ComplianceConfig` (publisher-created: in `init` on a fresh
-    /// publish, or via the UpgradeCap-gated
-    /// `njangi_compliance::create_config` on upgraded lineages) pins
-    /// the accepted issuer and carries the revocation registry, so a
-    /// rogue cap's attestations and revoked passes both fail here.
+    /// prevent a cheap "borrow someone else's pass" attack. The supplied
+    /// `ComplianceConfig` must be the EXACT object this escrow pinned at
+    /// open time (June 2026 adversarial-review repair — the gate must
+    /// not trust whatever config the caller's PTB supplies); it pins the
+    /// accepted issuer and carries the revocation registry, so a rogue
+    /// cap's attestations and revoked passes both fail here.
     public fun contribute_with_attestation<T>(
         escrow: &mut CycleEscrow<T>,
         payment: Coin<T>,
@@ -379,7 +432,9 @@ module njangi::njangi_cycle_escrow {
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
-        assert_attestation_valid(attestation, config, sender, clock);
+        assert_attestation_valid(
+            attestation, config, sender, escrow.compliance_config_id, clock
+        );
         contribute_internal<T>(escrow, payment, ctx);
     }
 
@@ -421,18 +476,34 @@ module njangi::njangi_cycle_escrow {
     }
 
     /// Full attestation check for gated money paths, in order:
+    ///   0. the supplied config IS the config object pinned on the
+    ///      escrow at open time — checked before trusting anything the
+    ///      config says, so a caller-supplied stale or fabricated config
+    ///      can never vouch for an attestation (June 2026
+    ///      adversarial-review repair);
     ///   1. the pass belongs to the sender (no borrowing someone else's);
     ///   2. it was signed by the issuer pinned in the shared config —
     ///      NOT just any AttestorCap holder;
     ///   3. it has not been revoked (registry in the shared config);
     ///   4. it has not expired.
     /// Each failure gets its own abort code for frontend mapping.
+    /// `pinned_config_id` is `some` on every gated escrow; `none` only
+    /// when a caller voluntarily presents a pass to an ungated escrow,
+    /// where the gate carries no authority anyway (the ungated
+    /// `contribute` path is open).
     fun assert_attestation_valid(
         attestation: &ComplianceAttestation,
         config: &ComplianceConfig,
         expected_subject: address,
+        pinned_config_id: Option<ID>,
         clock: &Clock,
     ) {
+        if (option::is_some(&pinned_config_id)) {
+            assert!(
+                object::id(config) == *option::borrow(&pinned_config_id),
+                E_COMPLIANCE_CONFIG_MISMATCH,
+            );
+        };
         assert!(
             compliance::subject(attestation) == expected_subject,
             E_COMPLIANCE_ATTESTATION_INVALID,
@@ -532,9 +603,10 @@ module njangi::njangi_cycle_escrow {
 
     /// Phase 7: gated finalize + redeem. The recipient must present their
     /// own valid ComplianceAttestation (issuer-pinned + revocation-checked
-    /// against the shared config). Combined with the contribute-side
-    /// gate, this means nobody can pay into or collect from a compliance-
-    /// enforced escrow without a current partner-led KYC check on file.
+    /// against the exact config object this escrow pinned at open time).
+    /// Combined with the contribute-side gate, this means nobody can pay
+    /// into or collect from a compliance-enforced escrow without a
+    /// current partner-led KYC check on file.
     public fun finalize_and_redeem_with_attestation<T>(
         escrow: &mut CycleEscrow<T>,
         attestation: &ComplianceAttestation,
@@ -543,7 +615,9 @@ module njangi::njangi_cycle_escrow {
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
-        assert_attestation_valid(attestation, config, sender, clock);
+        assert_attestation_valid(
+            attestation, config, sender, escrow.compliance_config_id, clock
+        );
         finalize_and_redeem_internal<T>(escrow, clock, ctx);
     }
 
@@ -783,6 +857,9 @@ module njangi::njangi_cycle_escrow {
     public fun cancel_grace_ms(): u64 { CANCEL_GRACE_MS }
     public fun claim_window_ms(): u64 { CLAIM_WINDOW_MS }
     public fun requires_attestation<T>(escrow: &CycleEscrow<T>): bool { escrow.requires_attestation }
+    public fun pinned_compliance_config_id<T>(escrow: &CycleEscrow<T>): Option<ID> {
+        escrow.compliance_config_id
+    }
     public fun has_member_contributed<T>(escrow: &CycleEscrow<T>, addr: address): bool {
         table::contains(&escrow.contributed, addr)
     }
@@ -1320,11 +1397,13 @@ module njangi::njangi_cycle_escrow {
         x"0202020202020202020202020202020202020202020202020202020202020202"
     }
 
-    /// tx1 (admin): share a 3-member circle and flip its on-chain
-    /// requires_attestation flag ON; tx2 (admin): open the escrow via the
-    /// UNGATED entrypoint — the circle flag must force the gate anyway.
-    /// tx3 (issuer): real compliance bootstrap (cap + singleton config to
-    /// TEST_ISSUER). Returns the test clock (set to TEST_START_MS).
+    /// tx1 (admin): share a 3-member circle; tx2 (issuer): real
+    /// compliance bootstrap (cap + singleton config to TEST_ISSUER);
+    /// tx3 (admin): pin the canonical config + flip the circle's
+    /// on-chain requires_attestation flag ON, then open the escrow via
+    /// the UNGATED entrypoint — the circle flag must force the gate
+    /// (and carry the admin's pin) anyway. Returns the test clock
+    /// (set to TEST_START_MS).
     #[test_only]
     fun setup_gated_circle_and_escrow(scenario: &mut ts::Scenario): Clock {
         let mut clock = clock::create_for_testing(ts::ctx(scenario));
@@ -1337,16 +1416,20 @@ module njangi::njangi_cycle_escrow {
             ts::ctx(scenario)
         );
 
+        ts::next_tx(scenario, TEST_ISSUER);
+        compliance::init_for_testing(ts::ctx(scenario));
+
         ts::next_tx(scenario, TEST_ADMIN);
         let mut circle = ts::take_shared<Circle>(scenario);
-        circles::set_requires_attestation(&mut circle, true, &clock, ts::ctx(scenario));
+        let config = ts::take_shared<ComplianceConfig>(scenario);
+        circles::set_requires_attestation(
+            &mut circle, &config, true, &clock, ts::ctx(scenario)
+        );
         // Deliberately the UNGATED open: a permissionless caller must not
         // be able to mint an ungated escrow for a gated circle.
         open_cycle<SUI>(&circle, &clock, ts::ctx(scenario));
+        ts::return_shared(config);
         ts::return_shared(circle);
-
-        ts::next_tx(scenario, TEST_ISSUER);
-        compliance::init_for_testing(ts::ctx(scenario));
         clock
     }
 
@@ -1397,10 +1480,16 @@ module njangi::njangi_cycle_escrow {
         let mut scenario = ts::begin(TEST_ADMIN);
         let clock = setup_gated_circle_and_escrow(&mut scenario);
 
-        // The UNGATED open inherited the circle's on-chain gate.
+        // The UNGATED open inherited the circle's on-chain gate AND the
+        // admin-pinned config id.
         ts::next_tx(&mut scenario, TEST_BOB);
         let escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        let config = ts::take_shared<ComplianceConfig>(&scenario);
         assert!(requires_attestation(&escrow), 9260);
+        let pin = pinned_compliance_config_id(&escrow);
+        assert!(option::is_some(&pin), 9262);
+        assert!(*option::borrow(&pin) == object::id(&config), 9263);
+        ts::return_shared(config);
         ts::return_shared(escrow);
 
         issue_attestation_to(&mut scenario, TEST_BOB, TEST_TTL_MS, &clock);
@@ -1527,6 +1616,94 @@ module njangi::njangi_cycle_escrow {
         let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
         finalize_to_recipient(&mut escrow, &clock, ts::ctx(&mut scenario));
         abort 0
+    }
+
+    /// Regression test for the June 2026 adversarial-review exploit:
+    /// a member of a gated circle manufactures a parallel compliance
+    /// universe — their own ComplianceConfig (admin + expected_issuer =
+    /// themselves) and their own AttestorCap — then self-issues a
+    /// "valid" pass and supplies BOTH objects in their own PTB. Every
+    /// pre-existing check passes against the rogue config (subject ==
+    /// sender, issuer == that config's expected_issuer, not revoked,
+    /// not expired); only the escrow's pinned config id stops it.
+    /// (On-chain, creating the rogue config at all now also requires
+    /// this lineage's UpgradeCap — see the njangi_compliance tests; this
+    /// test reaches past that first wall via the test-only init to prove
+    /// the second wall holds independently.)
+    #[test]
+    #[expected_failure(abort_code = E_COMPLIANCE_CONFIG_MISMATCH)]
+    fun test_gated_contribute_rejects_fabricated_config() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_gated_circle_and_escrow(&mut scenario);
+
+        // TEST_ROGUE bootstraps their own config + cap...
+        ts::next_tx(&mut scenario, TEST_ROGUE);
+        compliance::init_for_testing(ts::ctx(&mut scenario));
+
+        // ...and self-issues TEST_BOB (a real circle member) a pass that
+        // is perfectly valid against the rogue config.
+        ts::next_tx(&mut scenario, TEST_ROGUE);
+        let rogue_config_id = option::destroy_some(
+            ts::most_recent_id_shared<ComplianceConfig>()
+        );
+        let rogue_cap = ts::take_from_sender<AttestorCap>(&scenario);
+        compliance::issue(
+            &rogue_cap, TEST_BOB, hash32(), hash32(), TEST_TTL_MS, &clock,
+            ts::ctx(&mut scenario)
+        );
+        ts::return_to_sender(&mut scenario, rogue_cap);
+
+        // BOB presents the rogue pass + rogue config: the pinned config
+        // id must kill it.
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        let rogue_config = ts::take_shared_by_id<ComplianceConfig>(
+            &scenario, rogue_config_id
+        );
+        let attestation = ts::take_from_sender<ComplianceAttestation>(&scenario);
+        let payment = coin::mint_for_testing<SUI>(TEST_CONTRIBUTION, ts::ctx(&mut scenario));
+        contribute_with_attestation(
+            &mut escrow, payment, &attestation, &rogue_config, &clock,
+            ts::ctx(&mut scenario)
+        );
+        abort 0
+    }
+
+    /// Opt-in gate on an UNGATED circle: the opener's presented config
+    /// becomes the escrow's pin.
+    #[test]
+    fun test_open_cycle_with_gate_pins_opener_config() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let mut clock = clock::create_for_testing(ts::ctx(&mut scenario));
+        clock::set_for_testing(&mut clock, TEST_START_MS);
+        circles::share_circle_for_testing(
+            vector[TEST_ADMIN, TEST_BOB, TEST_CAROL],
+            TEST_CONTRIBUTION,
+            TEST_USD_CENTS,
+            &clock,
+            ts::ctx(&mut scenario)
+        );
+
+        ts::next_tx(&mut scenario, TEST_ISSUER);
+        compliance::init_for_testing(ts::ctx(&mut scenario));
+
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let circle = ts::take_shared<Circle>(&scenario);
+        let config = ts::take_shared<ComplianceConfig>(&scenario);
+        open_cycle_with_gate<SUI>(&circle, &config, &clock, ts::ctx(&mut scenario));
+        ts::return_shared(circle);
+
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        assert!(requires_attestation(&escrow), 9270);
+        let pin = pinned_compliance_config_id(&escrow);
+        assert!(option::is_some(&pin), 9271);
+        assert!(*option::borrow(&pin) == object::id(&config), 9272);
+        ts::return_shared(escrow);
+        ts::return_shared(config);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
     }
 
     // --- arithmetic guards -------------------------------------------

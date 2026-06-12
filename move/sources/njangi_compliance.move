@@ -1,7 +1,7 @@
 module njangi::njangi_compliance {
     use sui::clock::{Self, Clock};
     use sui::event;
-    use sui::package::UpgradeCap;
+    use sui::package::{Self, UpgradeCap};
     use sui::table::{Self, Table};
 
     // ----------------------------------------------------------
@@ -49,6 +49,8 @@ module njangi::njangi_compliance {
     const E_INVALID_REF_HASH: u64 = 303;
     const E_ZERO_TTL: u64 = 304;
     const E_NOT_CONFIG_ADMIN: u64 = 305;
+    // The presented UpgradeCap does not govern this package lineage.
+    const E_FOREIGN_UPGRADE_CAP: u64 = 306;
 
     const POLICY_HASH_BYTES: u64 = 32;
     const REF_HASH_BYTES: u64 = 32;
@@ -70,13 +72,18 @@ module njangi::njangi_compliance {
 
     /// Singleton shared configuration for the compliance gate. Created
     /// only by the package publisher — in this module's `init` on a fresh
-    /// publish, or via `create_config` (UpgradeCap-gated) when the module
-    /// ships to an existing lineage through a package upgrade, where
-    /// `init` never runs. Every `&ComplianceConfig` reference is therefore
-    /// publisher-rooted; the canonical instance is the one whose id the
-    /// deployment pins (bootstrap records it in the app environment), and
-    /// every creation emits `ComplianceConfigCreated` so any duplicate is
-    /// immediately auditable on chain.
+    /// publish, or via `create_config` when the module ships to an
+    /// existing lineage through a package upgrade, where `init` never
+    /// runs. `create_config` verifies the presented UpgradeCap actually
+    /// governs THIS lineage (see `assert_canonical_upgrade_cap`), so
+    /// every `ComplianceConfig` that can exist is publisher-rooted.
+    /// The canonical instance is additionally pinned ON-CHAIN by each
+    /// gated circle (`njangi_circles::set_requires_attestation` records
+    /// the config's object id, and njangi_cycle_escrow only accepts that
+    /// exact object on its gated paths), so even a second publisher-
+    /// created config cannot be substituted at the gate. Every creation
+    /// emits `ComplianceConfigCreated` so any duplicate is immediately
+    /// auditable on chain.
     ///
     ///   * `expected_issuer` — the only issuer address whose attestations
     ///     the protocol gates accept. Rotated by the config admin when
@@ -217,6 +224,48 @@ module njangi::njangi_compliance {
         transfer::share_object(config);
     }
 
+    // ----------------------------------------------------------
+    // Publisher-lineage binding for UpgradeCap-gated entrypoints
+    // (June 2026 adversarial-review repair).
+    //
+    // `0x2::package::UpgradeCap` is ONE concrete framework type: a cap
+    // from ANY package satisfies `&UpgradeCap`, so taking the cap alone
+    // proves nothing — an attacker can publish a throwaway package,
+    // receive a perfectly real UpgradeCap for it, and present that here.
+    // Every UpgradeCap-gated entrypoint in this module therefore asserts
+    // the cap actually governs THIS package lineage, accepting exactly:
+    //
+    //   1. `package::upgrade_package(cap) == @njangi` — the cap points
+    //      at this package's runtime id. Caps are born pointing at their
+    //      own package id and `commit_upgrade` only ever re-points them
+    //      at fresh storage ids of their own lineage, so no foreign cap
+    //      can ever carry this package's id. This arm covers a
+    //      never-upgraded lineage (a fresh publish, where the runtime id
+    //      and the cap's package field coincide). After the first
+    //      upgrade the genuine cap points at the latest STORAGE id —
+    //      never the runtime id again — which is why arm 2 exists.
+    //
+    //   2. `object::id(cap) == @njangi_upgrade_cap` — the cap IS the
+    //      known UpgradeCap object of this lineage. An object id is
+    //      assigned once and never changes across upgrades or transfers,
+    //      so this pin stays valid for the life of the lineage. The id
+    //      is pinned per network in move/config/{testnet,mainnet}.toml
+    //      (sourced from move/Published.toml / the original publish tx)
+    //      and is compiled into the bytecode.
+    //
+    // If the lineage's UpgradeCap is ever destroyed (`make_immutable`),
+    // these bootstrap/recovery fallbacks die with it and governance
+    // rests solely on `set_config_admin` / `set_expected_issuer` of the
+    // already-existing config.
+    // ----------------------------------------------------------
+    fun assert_canonical_upgrade_cap(cap: &UpgradeCap) {
+        let fresh_publish_cap =
+            package::upgrade_package(cap) == object::id_from_address(@njangi);
+        let pinned_lineage_cap =
+            object::id(cap) == object::id_from_address(@njangi_upgrade_cap);
+        assert!(fresh_publish_cap || pinned_lineage_cap, E_FOREIGN_UPGRADE_CAP);
+    }
+
     /// Post-upgrade bootstrap for the ComplianceConfig (June 2026 audit
     /// repair). `init` never runs on a package upgrade, so a lineage that
     /// gains this module via `sui client upgrade` would otherwise have NO
@@ -230,38 +279,48 @@ module njangi::njangi_compliance {
     /// `whatsapp_integration::init_registry` (wired into
     /// scripts/bootstrap-package.mjs).
     ///
-    /// Authority: holding the UpgradeCap — the package publisher, i.e.
-    /// the exact party that runs `init` on a fresh publish and that can
-    /// already seize any existing config via `reset_config_admin`, so
-    /// this function grants no authority the publisher does not already
-    /// hold. Members and third parties can never create a config.
+    /// Authority: holding THIS lineage's UpgradeCap, verified by
+    /// `assert_canonical_upgrade_cap` — an arbitrary package's cap is
+    /// rejected with `E_FOREIGN_UPGRADE_CAP`. That makes the caller the
+    /// package publisher: the exact party that runs `init` on a fresh
+    /// publish, so this function grants no authority the publisher does
+    /// not already hold. Members and third parties can never create a
+    /// config.
     ///
     /// Once-only discipline: a strict on-chain "exactly one config per
     /// lineage" guard is not expressible here — it would need shared
     /// state that predates this call, which an upgraded lineage by
     /// definition lacks (the same reason `init` can't help). The guard is
-    /// therefore layered: (a) creation is publisher-anchored via the
+    /// therefore layered: (a) creation is bound to this lineage's
     /// UpgradeCap, (b) every creation emits `ComplianceConfigCreated`, so
     /// a duplicate is a loud, auditable anomaly rather than a silent one,
-    /// and (c) the ops bootstrap is idempotent — it skips creation when
-    /// the config id is already recorded, and the app pins exactly that
-    /// id. A duplicate would in any case grant nothing: it could only be
-    /// minted by the party that already controls every config.
+    /// (c) the ops bootstrap is idempotent — it skips creation when the
+    /// config id is already recorded, and the app pins exactly that id —
+    /// and (d) gated circles pin the canonical config's object id
+    /// on-chain (`njangi_circles::set_requires_attestation`), so a
+    /// duplicate could not be substituted at the escrow gate even if one
+    /// were minted.
     public entry fun create_config(
-        _upgrade_cap: &UpgradeCap,
+        upgrade_cap: &UpgradeCap,
         ctx: &mut TxContext,
     ) {
+        assert_canonical_upgrade_cap(upgrade_cap);
         create_and_share_config(tx_context::sender(ctx), CAP_SOURCE_UPGRADE_CAP, ctx);
     }
 
-    /// Post-upgrade fallback: if the original cap was lost, the
-    /// UpgradeCap holder can mint a fresh AttestorCap. Taking the cap by
-    /// reference proves authority without consuming it. The mint is
-    /// audit-evented like every other cap movement.
+    /// Post-upgrade fallback: if the original cap was lost, the holder
+    /// of THIS lineage's UpgradeCap (verified — a foreign package's cap
+    /// aborts with `E_FOREIGN_UPGRADE_CAP`) can mint a fresh AttestorCap.
+    /// Taking the cap by reference proves authority without consuming
+    /// it. The mint is audit-evented like every other cap movement.
+    /// The lineage check also closes a revocation-griefing hole: without
+    /// it, anyone could mint themselves an AttestorCap with a throwaway
+    /// package's cap and `revoke` legitimate members' attestations.
     public entry fun mint_attestor_cap(
-        _upgrade_cap: &UpgradeCap,
+        upgrade_cap: &UpgradeCap,
         ctx: &mut TxContext,
     ) {
+        assert_canonical_upgrade_cap(upgrade_cap);
         let recipient = tx_context::sender(ctx);
         let cap = AttestorCap { id: object::new(ctx) };
         event::emit(AttestorCapMinted {
@@ -329,14 +388,20 @@ module njangi::njangi_compliance {
         config.admin = new_admin;
     }
 
-    /// Disaster recovery: the UpgradeCap holder (package publisher — the
-    /// highest existing authority) can re-seat the config admin if the
-    /// admin key is lost. Mirrors the `mint_attestor_cap` fallback.
+    /// Disaster recovery: the holder of THIS lineage's UpgradeCap
+    /// (package publisher — the highest existing authority; a foreign
+    /// package's cap aborts with `E_FOREIGN_UPGRADE_CAP`) can re-seat
+    /// the config admin if the admin key is lost. Mirrors the
+    /// `mint_attestor_cap` fallback. The lineage check is what stops an
+    /// attacker from seizing the canonical (shared!) config with a
+    /// throwaway package's cap and re-pinning `expected_issuer` to
+    /// themselves.
     public entry fun reset_config_admin(
-        _upgrade_cap: &UpgradeCap,
+        upgrade_cap: &UpgradeCap,
         config: &mut ComplianceConfig,
         new_admin: address,
     ) {
+        assert_canonical_upgrade_cap(upgrade_cap);
         event::emit(ConfigAdminUpdated {
             config_id: object::uid_to_inner(&config.id),
             previous_admin: config.admin,
@@ -677,6 +742,10 @@ module njangi::njangi_compliance {
     /// the cap and config with the UpgradeCap fallbacks. The resulting
     /// config must behave exactly like an init-created one: publisher is
     /// admin + expected issuer, issuance validates, revocation works.
+    /// The cap is minted against @njangi — THIS package — exercising the
+    /// fresh-publish arm of `assert_canonical_upgrade_cap` (the pinned
+    /// object-id arm is compile-time network config and is covered by
+    /// the foreign-cap rejection tests below).
     #[test]
     fun test_create_config_via_upgrade_cap_bootstraps_full_gate() {
         let mut scenario = ts::begin(T_ISSUER);
@@ -686,7 +755,7 @@ module njangi::njangi_compliance {
         // No init: bootstrap purely from the UpgradeCap, as on the real
         // testnet/mainnet lineages.
         let upgrade_cap = sui::package::test_publish(
-            object::id_from_address(@0x42),
+            object::id_from_address(@njangi),
             ts::ctx(&mut scenario),
         );
         mint_attestor_cap(&upgrade_cap, ts::ctx(&mut scenario));
@@ -732,6 +801,73 @@ module njangi::njangi_compliance {
         ts::return_shared(config);
 
         clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    // --- foreign-UpgradeCap rejection (June 2026 adversarial-review
+    // repair). The exploit: publish ANY throwaway package, receive a
+    // perfectly real `0x2::package::UpgradeCap` for it, and present it
+    // to the cap-gated entrypoints. Every one of them must abort. -----
+
+    #[test_only]
+    fun foreign_upgrade_cap(scenario: &mut ts::Scenario): UpgradeCap {
+        // A real UpgradeCap — for somebody else's package (@0x42).
+        sui::package::test_publish(
+            object::id_from_address(@0x42),
+            ts::ctx(scenario),
+        )
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_FOREIGN_UPGRADE_CAP)]
+    fun test_create_config_rejects_foreign_upgrade_cap() {
+        let mut scenario = ts::begin(T_ROGUE);
+        let foreign_cap = foreign_upgrade_cap(&mut scenario);
+        create_config(&foreign_cap, ts::ctx(&mut scenario));
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_FOREIGN_UPGRADE_CAP)]
+    fun test_mint_attestor_cap_rejects_foreign_upgrade_cap() {
+        let mut scenario = ts::begin(T_ROGUE);
+        let foreign_cap = foreign_upgrade_cap(&mut scenario);
+        mint_attestor_cap(&foreign_cap, ts::ctx(&mut scenario));
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_FOREIGN_UPGRADE_CAP)]
+    fun test_reset_config_admin_rejects_foreign_upgrade_cap() {
+        let mut scenario = ts::begin(T_ISSUER);
+        init_for_testing(ts::ctx(&mut scenario));
+
+        // The attacker tries to seize the CANONICAL shared config with a
+        // throwaway package's cap.
+        ts::next_tx(&mut scenario, T_ROGUE);
+        let foreign_cap = foreign_upgrade_cap(&mut scenario);
+        let mut config = ts::take_shared<ComplianceConfig>(&scenario);
+        reset_config_admin(&foreign_cap, &mut config, T_ROGUE);
+        abort 0
+    }
+
+    #[test]
+    fun test_reset_config_admin_works_with_lineage_cap() {
+        let mut scenario = ts::begin(T_ISSUER);
+        init_for_testing(ts::ctx(&mut scenario));
+
+        ts::next_tx(&mut scenario, T_ISSUER);
+        let upgrade_cap = sui::package::test_publish(
+            object::id_from_address(@njangi),
+            ts::ctx(&mut scenario),
+        );
+        let mut config = ts::take_shared<ComplianceConfig>(&scenario);
+        assert!(config_admin(&config) == T_ISSUER, 9360);
+        reset_config_admin(&upgrade_cap, &mut config, T_MULTISIG);
+        assert!(config_admin(&config) == T_MULTISIG, 9361);
+        ts::return_shared(config);
+        transfer::public_transfer(upgrade_cap, T_ISSUER);
+
         ts::end(scenario);
     }
 }

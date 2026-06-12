@@ -23,6 +23,15 @@ Pyth = { git = "https://github.com/pyth-network/pyth-crosschain.git", subdir = "
 
 [addresses]
 njangi = "0x0"
+# The immutable OBJECT id of this lineage's 0x2::package::UpgradeCap,
+# created by the mainnet publish of
+# 0x7bf5274804a6008ebfbd9bfe766defb7fd5aa5fe6777419c2b6531ec99120b55
+# (tx C4EqEKovAo76spPKMGuBNxnc7iz2yPZF76tgpdmka3XX). Object ids never
+# change across upgrades or transfers, so njangi_compliance uses this to
+# verify a presented UpgradeCap actually governs THIS package lineage —
+# any package's cap satisfies `&UpgradeCap` otherwise. Update only if the
+# lineage is ever re-published from scratch (fresh `sui client publish`).
+njangi_upgrade_cap = "0xd8ca29501b1f1eaee88d37d509e9c80cd5ae45d29acc198137c525aa36e7117c"
 # Official Cetus mainnet package addresses (mainnet-v1.49.0)
 cetus_clmm = "0x75b2e9ecad34944b8d0c874e568c90db0cf9437f0d7392abfd4cb902972f3e40"
 cetus_dca = "0x587614620d0d30aed66d86ffd3ba385a661a86aa573a4d579017068f561c6d8f"

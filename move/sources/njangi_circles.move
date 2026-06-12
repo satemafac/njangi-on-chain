@@ -14,6 +14,8 @@ module njangi::njangi_circles {
     use njangi::njangi_members::{Self as members, Member};
     use njangi::njangi_custody::{Self as custody, CustodyWallet};
     use njangi::njangi_circle_config::{Self as config};
+    use njangi::njangi_compliance::ComplianceConfig;
+    #[test_only] use njangi::njangi_compliance::{Self as compliance};
 
     use pyth::price_info::PriceInfoObject;
     use njangi::njangi_price_validator as price_validator;
@@ -93,6 +95,14 @@ module njangi::njangi_circles {
     // Stored as a dynamic field (absent == false) so the Circle struct
     // layout is unchanged and pre-existing circles default to ungated.
     const FIELD_REQUIRES_ATTESTATION: vector<u8> = b"requires_attestation";
+
+    // Dynamic-field key for the object id of the ComplianceConfig the
+    // admin pinned when enabling the requirement (June 2026
+    // adversarial-review repair). The escrow gate only accepts THIS
+    // exact config object, so a member cannot substitute a stale or
+    // fabricated config in their own PTB. Present iff
+    // FIELD_REQUIRES_ATTESTATION is true.
+    const FIELD_COMPLIANCE_CONFIG_ID: vector<u8> = b"compliance_config_id";
     
     // ----------------------------------------------------------
     // Main Circle struct
@@ -174,9 +184,12 @@ module njangi::njangi_circles {
     /// Emitted whenever the circle-level compliance requirement changes.
     /// `required == true` can be set at any time by the admin; `false`
     /// is only possible while the admin is the sole member.
+    /// `pinned_config_id` is the ComplianceConfig object the circle's
+    /// escrow gates will accept (some iff `required`).
     public struct CircleAttestationRequirementChanged has copy, drop {
         circle_id: ID,
         required: bool,
+        pinned_config_id: Option<ID>,
         changed_by: address,
         changed_at_ms: u64,
     }
@@ -732,7 +745,9 @@ module njangi::njangi_circles {
     // browser localStorage, while open_cycle/contribute are
     // permissionless — so the gate was trivially bypassable by anyone
     // hand-rolling the ungated path. This flag is the on-chain source of
-    // truth: njangi_cycle_escrow reads it at open time and forces every
+    // truth: njangi_cycle_escrow reads it at open time (together with
+    // the pinned ComplianceConfig id, see FIELD_COMPLIANCE_CONFIG_ID)
+    // and forces every
     // escrow of a gated circle onto the attestation-checked paths, and
     // the legacy custody rail (contribute_stablecoin here;
     // njangi_payments::contribute / trigger_payout / claim_payout)
@@ -746,6 +761,20 @@ module njangi::njangi_circles {
     /// to contribute to / collect from its money paths (per-cycle escrows
     /// become attestation-checked; the legacy custody rail is blocked
     /// entirely). Admin only.
+    ///
+    /// When enabling, the admin must present the `ComplianceConfig` the
+    /// gate should trust; its object id is pinned on the circle and the
+    /// escrow gate accepts ONLY that exact config object (June 2026
+    /// adversarial-review repair — without the pin, a member could
+    /// supply any config in their own PTB, e.g. a stale one whose
+    /// `expected_issuer` they control). Creation of ComplianceConfig
+    /// objects is itself bound to the package publisher's UpgradeCap
+    /// (`njangi_compliance::assert_canonical_upgrade_cap`), so the pin
+    /// always names a publisher-rooted config. Re-enabling overwrites
+    /// the pin (admin-controlled re-pin, e.g. after an operator config
+    /// rotation); newly opened escrows pick up the new pin, already-open
+    /// escrows keep the pin they were opened with.
+    ///
     /// Enabling is always allowed (it only tightens the rules; escrows
     /// already open keep the gate state they were opened with). Disabling
     /// is only allowed while the admin is the sole member: once anyone
@@ -753,6 +782,7 @@ module njangi::njangi_circles {
     /// permanent (bait-and-switch guard).
     public fun set_requires_attestation(
         circle: &mut Circle,
+        compliance_config: &ComplianceConfig,
         required: bool,
         clock: &Clock,
         ctx: &mut TxContext
@@ -771,11 +801,34 @@ module njangi::njangi_circles {
         } else {
             dynamic_field::add(&mut circle.id, FIELD_REQUIRES_ATTESTATION, required);
         };
+
+        // Keep the pin in lockstep with the flag: present iff required.
+        let pinned_config_id = if (required) {
+            let config_id = object::id(compliance_config);
+            if (dynamic_field::exists_(&circle.id, FIELD_COMPLIANCE_CONFIG_ID)) {
+                *dynamic_field::borrow_mut<vector<u8>, ID>(
+                    &mut circle.id,
+                    FIELD_COMPLIANCE_CONFIG_ID
+                ) = config_id;
+            } else {
+                dynamic_field::add(&mut circle.id, FIELD_COMPLIANCE_CONFIG_ID, config_id);
+            };
+            option::some(config_id)
+        } else {
+            if (dynamic_field::exists_(&circle.id, FIELD_COMPLIANCE_CONFIG_ID)) {
+                dynamic_field::remove<vector<u8>, ID>(
+                    &mut circle.id,
+                    FIELD_COMPLIANCE_CONFIG_ID
+                );
+            };
+            option::none()
+        };
         touch_admin_heartbeat(circle, clock);
 
         event::emit(CircleAttestationRequirementChanged {
             circle_id: object::uid_to_inner(&circle.id),
             required,
+            pinned_config_id,
             changed_by: sender,
             changed_at_ms: clock::timestamp_ms(clock),
         });
@@ -789,6 +842,19 @@ module njangi::njangi_circles {
             *dynamic_field::borrow<vector<u8>, bool>(&circle.id, FIELD_REQUIRES_ATTESTATION)
         } else {
             false
+        }
+    }
+
+    /// Object id of the ComplianceConfig pinned by the admin when the
+    /// attestation requirement was enabled — the ONLY config object the
+    /// circle's escrow gates accept. `some` iff `requires_attestation`.
+    public fun pinned_compliance_config_id(circle: &Circle): Option<ID> {
+        if (dynamic_field::exists_(&circle.id, FIELD_COMPLIANCE_CONFIG_ID)) {
+            option::some(
+                *dynamic_field::borrow<vector<u8>, ID>(&circle.id, FIELD_COMPLIANCE_CONFIG_ID)
+            )
+        } else {
+            option::none()
         }
     }
 
@@ -3766,6 +3832,7 @@ module njangi::njangi_circles {
         let admin = @0xA;
         let mut scenario = sui::test_scenario::begin(admin);
         let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        compliance::init_for_testing(sui::test_scenario::ctx(&mut scenario));
         share_circle_for_testing(
             vector[admin, @0xB, @0xC], 1_000_000_000, 250, &clock,
             sui::test_scenario::ctx(&mut scenario)
@@ -3773,9 +3840,18 @@ module njangi::njangi_circles {
 
         sui::test_scenario::next_tx(&mut scenario, admin);
         let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        let cconfig = sui::test_scenario::take_shared<ComplianceConfig>(&scenario);
         assert!(!requires_attestation(&circle), 9400);
-        set_requires_attestation(&mut circle, true, &clock, sui::test_scenario::ctx(&mut scenario));
+        assert!(option::is_none(&pinned_compliance_config_id(&circle)), 9402);
+        set_requires_attestation(
+            &mut circle, &cconfig, true, &clock, sui::test_scenario::ctx(&mut scenario)
+        );
         assert!(requires_attestation(&circle), 9401);
+        // Enabling pins the presented config's object id on the circle.
+        let pin = pinned_compliance_config_id(&circle);
+        assert!(option::is_some(&pin), 9403);
+        assert!(*option::borrow(&pin) == object::id(&cconfig), 9404);
+        sui::test_scenario::return_shared(cconfig);
         sui::test_scenario::return_shared(circle);
 
         clock::destroy_for_testing(clock);
@@ -3788,6 +3864,7 @@ module njangi::njangi_circles {
         let admin = @0xA;
         let mut scenario = sui::test_scenario::begin(admin);
         let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        compliance::init_for_testing(sui::test_scenario::ctx(&mut scenario));
         share_circle_for_testing(
             vector[admin, @0xB, @0xC], 1_000_000_000, 250, &clock,
             sui::test_scenario::ctx(&mut scenario)
@@ -3795,9 +3872,14 @@ module njangi::njangi_circles {
 
         sui::test_scenario::next_tx(&mut scenario, admin);
         let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
-        set_requires_attestation(&mut circle, true, &clock, sui::test_scenario::ctx(&mut scenario));
+        let cconfig = sui::test_scenario::take_shared<ComplianceConfig>(&scenario);
+        set_requires_attestation(
+            &mut circle, &cconfig, true, &clock, sui::test_scenario::ctx(&mut scenario)
+        );
         // Members already joined: switching the promise off must abort.
-        set_requires_attestation(&mut circle, false, &clock, sui::test_scenario::ctx(&mut scenario));
+        set_requires_attestation(
+            &mut circle, &cconfig, false, &clock, sui::test_scenario::ctx(&mut scenario)
+        );
         abort 0
     }
 
@@ -3806,6 +3888,7 @@ module njangi::njangi_circles {
         let admin = @0xA;
         let mut scenario = sui::test_scenario::begin(admin);
         let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        compliance::init_for_testing(sui::test_scenario::ctx(&mut scenario));
         share_circle_for_testing(
             vector[admin], 1_000_000_000, 250, &clock,
             sui::test_scenario::ctx(&mut scenario)
@@ -3813,11 +3896,19 @@ module njangi::njangi_circles {
 
         sui::test_scenario::next_tx(&mut scenario, admin);
         let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
-        set_requires_attestation(&mut circle, true, &clock, sui::test_scenario::ctx(&mut scenario));
+        let cconfig = sui::test_scenario::take_shared<ComplianceConfig>(&scenario);
+        set_requires_attestation(
+            &mut circle, &cconfig, true, &clock, sui::test_scenario::ctx(&mut scenario)
+        );
         assert!(requires_attestation(&circle), 9410);
         // Nobody else has joined yet, so the admin may still back out.
-        set_requires_attestation(&mut circle, false, &clock, sui::test_scenario::ctx(&mut scenario));
+        set_requires_attestation(
+            &mut circle, &cconfig, false, &clock, sui::test_scenario::ctx(&mut scenario)
+        );
         assert!(!requires_attestation(&circle), 9411);
+        // Disabling removes the pin too (pin present iff required).
+        assert!(option::is_none(&pinned_compliance_config_id(&circle)), 9412);
+        sui::test_scenario::return_shared(cconfig);
         sui::test_scenario::return_shared(circle);
 
         clock::destroy_for_testing(clock);
@@ -3830,6 +3921,7 @@ module njangi::njangi_circles {
         let admin = @0xA;
         let mut scenario = sui::test_scenario::begin(admin);
         let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        compliance::init_for_testing(sui::test_scenario::ctx(&mut scenario));
         share_circle_for_testing(
             vector[admin, @0xB, @0xC], 1_000_000_000, 250, &clock,
             sui::test_scenario::ctx(&mut scenario)
@@ -3837,7 +3929,10 @@ module njangi::njangi_circles {
 
         sui::test_scenario::next_tx(&mut scenario, @0xB);
         let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
-        set_requires_attestation(&mut circle, true, &clock, sui::test_scenario::ctx(&mut scenario));
+        let cconfig = sui::test_scenario::take_shared<ComplianceConfig>(&scenario);
+        set_requires_attestation(
+            &mut circle, &cconfig, true, &clock, sui::test_scenario::ctx(&mut scenario)
+        );
         abort 0
     }
 

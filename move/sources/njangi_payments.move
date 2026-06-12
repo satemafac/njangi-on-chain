@@ -890,6 +890,7 @@ module njangi::njangi_payments {
     // ===========================================================
 
     #[test_only] use sui::test_scenario as ts;
+    #[test_only] use njangi::njangi_compliance::{Self as compliance, ComplianceConfig};
 
     // A non-SUI coin type for the stablecoin rail. coin::mint_for_testing
     // works for any type parameter, no one-time witness needed.
@@ -1179,9 +1180,17 @@ module njangi::njangi_payments {
 
     #[test_only]
     fun enable_attestation_requirement(scenario: &mut ts::Scenario, clock: &Clock) {
+        // Real compliance bootstrap: the admin must pin a config when
+        // enabling the requirement (the legacy-rail blocks under test
+        // only read the flag, but the setter demands the pin).
+        ts::next_tx(scenario, TEST_ADMIN);
+        compliance::init_for_testing(ts::ctx(scenario));
+
         ts::next_tx(scenario, TEST_ADMIN);
         let mut circle = ts::take_shared<Circle>(scenario);
-        circles::set_requires_attestation(&mut circle, true, clock, ts::ctx(scenario));
+        let config = ts::take_shared<ComplianceConfig>(scenario);
+        circles::set_requires_attestation(&mut circle, &config, true, clock, ts::ctx(scenario));
+        ts::return_shared(config);
         ts::return_shared(circle);
     }
 
