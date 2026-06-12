@@ -2276,23 +2276,15 @@ module njangi::njangi_circles {
         let rotation = &circle.rotation_order;
         let len = vector::length(rotation);
         let mut i = 0;
-        
-        // Added clear log info
-        std::debug::print(&len);
-        std::debug::print(&b"Resetting payout status for all members");
-        
+
         while (i < len) {
             let member_addr = *vector::borrow(rotation, i);
-            
+
             // Skip placeholder addresses
             if (member_addr != @0x0 && table::contains(&circle.members, member_addr)) {
                 let member = table::borrow_mut(&mut circle.members, member_addr);
                 // Make sure to set received_payout to false regardless of current value
                 members::set_received_payout(member, false);
-                
-                // Add debug output
-                std::debug::print(&member_addr);
-                std::debug::print(&b"Set payout status to false");
             };
             i = i + 1;
         };
@@ -2306,22 +2298,15 @@ module njangi::njangi_circles {
         let rotation = &circle.rotation_order;
         let len = vector::length(rotation);
         let mut i = 0;
-        
-        std::debug::print(&len);
-        std::debug::print(&b"Resetting deposit status for all members");
-        
+
         while (i < len) {
             let member_addr = *vector::borrow(rotation, i);
-            
+
             // Skip placeholder addresses
             if (member_addr != @0x0 && table::contains(&circle.members, member_addr)) {
                 let member = table::borrow_mut(&mut circle.members, member_addr);
                 // Reset deposit status to false for all members
                 members::set_deposit_paid(member, false);
-                
-                // Add debug output
-                std::debug::print(&member_addr);
-                std::debug::print(&b"Set deposit status to false");
             };
             i = i + 1;
         };
@@ -2341,7 +2326,6 @@ module njangi::njangi_circles {
     public(package) fun reset_all_members_contribution_status(circle: &mut Circle) {
         // Reset the contributions counter for this cycle
         circle.contributions_this_cycle = 0;
-        std::debug::print(&b"Reset contributions counter to 0");
         
         // Get rotation info
         let rotation = &circle.rotation_order;
@@ -2359,8 +2343,6 @@ module njangi::njangi_circles {
                     let member = table::borrow_mut(&mut circle.members, member_addr);
                     // Reset contribution status
                     members::reset_contribution_status(member);
-                    std::debug::print(&b"Reset contribution status for member:");
-                    std::debug::print(&member_addr);
                 };
             };
             i = i + 1;
@@ -2380,13 +2362,7 @@ module njangi::njangi_circles {
         
         // Calculate next position
         let rotation_len = vector::length(&circle.rotation_order);
-        
-        // Print for debug purposes
-        std::debug::print(&b"Advancing cycle...");
-        std::debug::print(&circle.current_position);
-        std::debug::print(&rotation_len);
-        std::debug::print(&circle.current_cycle);
-        
+
         // We reset all members' contribution status for the new position/cycle
         reset_all_members_contribution_status(circle);
         
@@ -2405,9 +2381,7 @@ module njangi::njangi_circles {
             
             // Update next_payout_time to current time to prevent automatic payouts
             circle.next_payout_time = now;
-            
-            std::debug::print(&b"Cycle completed and paused. Admin needs to resume.");
-            
+
             // Emit event
             event::emit(CyclePaused {
                 circle_id: object::uid_to_inner(&circle.id),
@@ -2455,17 +2429,11 @@ module njangi::njangi_circles {
                 
                 // If this is a weekly or bi-weekly cycle, we need to verify the weekday matches
                 if (cycle_length == 0 || cycle_length == 3) {
-                    // Get the weekday of the current and calculated next payout
-                    let current_weekday = core::get_weekday(now);
+                    // Get the weekday of the calculated next payout
                     let next_weekday = core::get_weekday(circle.next_payout_time);
-                    
+
                     // If the weekday has drifted from the configured cycle_day, recalculate
                     if (next_weekday != cycle_day) {
-                        std::debug::print(&b"Weekday drift detected, recalculating to maintain cycle day");
-                        std::debug::print(&current_weekday);
-                        std::debug::print(&next_weekday);
-                        std::debug::print(&cycle_day);
-                        
                         // Recalculate to get back to the correct weekday
                         // We still want the next position's payout, but on the right day
                         let days_to_add = if (cycle_day >= next_weekday) {
@@ -2484,16 +2452,7 @@ module njangi::njangi_circles {
                     };
                 };
             };
-            
-            std::debug::print(&b"Advanced position within cycle. New payout time set to:");
-            std::debug::print(&circle.next_payout_time);
         };
-        
-        // Print debug info about the new position and cycle
-        std::debug::print(&b"New position:");
-        std::debug::print(&circle.current_position);
-        std::debug::print(&b"New cycle:");
-        std::debug::print(&circle.current_cycle);
     }
     
     // ----------------------------------------------------------
@@ -2540,9 +2499,6 @@ module njangi::njangi_circles {
             admin: circle.admin,
             new_cycle: circle.current_cycle,
         });
-        
-        std::debug::print(&b"Cycle resumed. Starting new cycle:");
-        std::debug::print(&circle.current_cycle);
     }
 
     // ----------------------------------------------------------

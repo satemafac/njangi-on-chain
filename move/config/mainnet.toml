@@ -5,7 +5,11 @@ published-at = "0x0"
 edition = "2024"
 
 [dependencies]
-Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "041c5f2bae2fe52079e44b70514333532d69f4e6" }
+# Sui/MoveStdlib are implicit system dependencies: the CLI injects the framework
+# version matching the installed compiler. Do NOT pin Sui explicitly here — a
+# pinned rev that diverges from the local `sui` binary breaks `sui move test`
+# (the pinned framework's own test files fail to compile under a mismatched
+# compiler). See docs/gtm-readiness-review-2026-06-12.md (toolchain finding).
 Pyth = { git = "https://github.com/pyth-network/pyth-crosschain.git", subdir = "target_chains/sui/contracts", rev = "sui-contract-mainnet" }
 # Note: Wormhole is a dependency of Pyth, so we don't need to include it explicitly to avoid conflicts
 

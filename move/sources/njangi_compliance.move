@@ -185,7 +185,7 @@ module njangi::njangi_compliance {
     public fun is_revoked(attestation: &ComplianceAttestation): bool { attestation.revoked }
 
     #[test_only]
-    public fun __test_init(ctx: &mut TxContext): AttestorCap {
+    public fun new_attestor_cap_for_testing(ctx: &mut TxContext): AttestorCap {
         AttestorCap { id: object::new(ctx) }
     }
 }

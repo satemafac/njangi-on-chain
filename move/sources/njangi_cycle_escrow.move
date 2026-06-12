@@ -598,7 +598,7 @@ module njangi::njangi_cycle_escrow {
     }
 
     #[test_only]
-    public fun __test_filter_active_members(
+    public fun filter_active_members_for_testing(
         rotation: vector<address>
     ): vector<address> {
         filter_active_members(&rotation)
@@ -607,7 +607,7 @@ module njangi::njangi_cycle_escrow {
     #[test]
     fun test_filter_active_members_drops_zero_and_dedupes() {
         let v = vector[@0x1, @0x0, @0x2, @0x1, @0x3];
-        let out = __test_filter_active_members(v);
+        let out = filter_active_members_for_testing(v);
         assert!(vector::length(&out) == 3, 9100);
         assert!(*vector::borrow(&out, 0) == @0x1, 9101);
         assert!(*vector::borrow(&out, 1) == @0x2, 9102);

@@ -35,6 +35,12 @@ manifest_digest = "27370118D5FC8DA7253C24A9115B69327510EB66BA1BF6A17F48BAF66311C
 deps = { Pyth = "Pyth", Sui = "Sui" }
 
 [pinned.testnet.MoveStdlib]
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "718ae563a42fb4ba0d055588f81c704dcef58c25" }
+use_environment = "testnet"
+manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
+deps = {}
+
+[pinned.testnet.MoveStdlib_1]
 source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "041c5f2bae2fe52079e44b70514333532d69f4e6" }
 use_environment = "testnet"
 manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
@@ -44,22 +50,28 @@ deps = {}
 source = { git = "https://github.com/pyth-network/pyth-crosschain.git", subdir = "target_chains/sui/contracts", rev = "62c7a5bc0fc857ba6417ad780190552d4919ceca" }
 use_environment = "testnet"
 manifest_digest = "EE442EEB0E1F71B244DBB1E016B1D0D8F67061BDAFA606B6C86F093D15CA0755"
-deps = { Sui = "Sui", Wormhole = "Wormhole" }
+deps = { Sui = "Sui_1", Wormhole = "Wormhole" }
 
 [pinned.testnet.Sui]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "041c5f2bae2fe52079e44b70514333532d69f4e6" }
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "718ae563a42fb4ba0d055588f81c704dcef58c25" }
 use_environment = "testnet"
 manifest_digest = "7AFB66695545775FBFBB2D3078ADFD084244D5002392E837FDE21D9EA1C6D01C"
 deps = { MoveStdlib = "MoveStdlib" }
+
+[pinned.testnet.Sui_1]
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "041c5f2bae2fe52079e44b70514333532d69f4e6" }
+use_environment = "testnet"
+manifest_digest = "7AFB66695545775FBFBB2D3078ADFD084244D5002392E837FDE21D9EA1C6D01C"
+deps = { MoveStdlib = "MoveStdlib_1" }
 
 [pinned.testnet.Wormhole]
 source = { git = "https://github.com/wormhole-foundation/wormhole.git", subdir = "sui/wormhole", rev = "1b1cb69e809e0e7081cf1bf9b2779c41c14fc7f0" }
 use_environment = "testnet"
 manifest_digest = "6996F1AB8CD448FFBA142C085C488FE8A46B485E61E38A1891EFA52B30D9C12E"
-deps = { Sui = "Sui" }
+deps = { Sui = "Sui_1" }
 
 [pinned.testnet.njangi]
 source = { root = true }
 use_environment = "testnet"
-manifest_digest = "BE19C1557C016B13BFA7620DFAA625580CC16D9999A2DDC186A01D3127D949FF"
-deps = { Pyth = "Pyth", Sui = "Sui" }
+manifest_digest = "2C57C51933AF18B758B64D67646DA5125EB9150D91948086B887AEA8F5B09FB0"
+deps = { Pyth = "Pyth", std = "MoveStdlib", sui = "Sui" }
