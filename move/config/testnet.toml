@@ -29,7 +29,7 @@ njangi = "0x0"
 # to verify a presented UpgradeCap actually governs THIS package lineage —
 # any package's cap satisfies `&UpgradeCap` otherwise. Update only if the
 # lineage is ever re-published from scratch (fresh `sui client publish`).
-njangi_upgrade_cap = "0x3f1189c8c6431b23d15dda36c998ceb7388a346c1f0ec6f92292c1ff06318f7b"
+njangi_upgrade_cap = "0xc590f7b3ad86a637d2a85100703417b1a918dd02d64ebdc2c8413d0d179a7cb4"
 # Official Cetus testnet package addresses (latest versions)
 cetus_clmm = "0xb2a1d27337788bda89d350703b8326952413bd94b35b9b573ac8401b9803d018"  # testnet-v1.26.0
 cetus_dca = "0x19dd42e05fa6c9988a60d30686ee3feb776672b5547e328d6dab16563da65293"  # testnet-v1.25.0
