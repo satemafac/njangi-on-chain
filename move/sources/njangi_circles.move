@@ -3823,6 +3823,23 @@ module njangi::njangi_circles {
         circle.is_active = false;
     }
 
+    /// Configures a test circle as a smart-goal circle (goal_type +
+    /// target_amount on its attached MilestoneConfig) so the
+    /// njangi_milestones creation gate (`has_goal_type`) can be
+    /// exercised; the test factory attaches an empty milestone config.
+    #[test_only]
+    public fun set_goal_type_for_testing(
+        circle: &mut Circle,
+        goal_type: u8,
+        target_amount: u64
+    ) {
+        config::set_goal_for_testing(
+            config::get_milestone_config_mut(&mut circle.id),
+            goal_type,
+            target_amount
+        );
+    }
+
     // ----------------------------------------------------------
     // Circle-level compliance requirement tests
     // ----------------------------------------------------------

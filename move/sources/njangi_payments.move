@@ -11,8 +11,7 @@ module njangi::njangi_payments {
     use njangi::njangi_circles::{Self as circles, Circle};
     use njangi::njangi_members as members;
     use njangi::njangi_custody::{Self as custody, CustodyWallet};
-    use njangi::njangi_milestones::{Self as milestones, MilestoneData};
-    
+
     // ----------------------------------------------------------
     // Error codes
     // ----------------------------------------------------------
@@ -23,8 +22,9 @@ module njangi::njangi_payments {
     const EInsufficientTreasuryBalance: u64 = 25;
     const EInvalidBidAmount: u64 = 26;
     const EAuctionNotActive: u64 = 27;
-    const EInvalidMilestone: u64 = 28;
-    const EMilestoneTargetInvalid: u64 = 32;
+    // Codes 28 (EInvalidMilestone) and 32 (EMilestoneTargetInvalid) were
+    // retired with the legacy milestone wrappers (June 2026 smart-goals
+    // completion — see njangi_milestones, codes 400+); do not reuse them.
     const EAmountOverflow: u64 = 38;
     const ENotScheduledRecipient: u64 = 39;
     // Mirrors njangi_cycle_escrow::E_COMPLIANCE_ATTESTATION_REQUIRED (216)
@@ -97,21 +97,10 @@ module njangi::njangi_payments {
         winning_bid: u64,
     }
     
-    public struct MilestoneCompleted has copy, drop {
-        circle_id: ID,
-        milestone_number: u64,
-        verified_by: address,
-        amount_achieved: u64,
-    }
-    
-    public struct MilestoneVerificationSubmitted has copy, drop {
-        circle_id: ID,
-        milestone_number: u64,
-        submitted_by: address,
-        proof_type: u8,
-        timestamp: u64,
-    }
-    
+    // NOTE: the `MilestoneCompleted` / `MilestoneVerificationSubmitted`
+    // events moved to njangi_milestones with the June 2026 smart-goals
+    // completion; the milestone machinery is self-contained there now.
+
     // ----------------------------------------------------------
     // PayoutWindow struct definition
     // ----------------------------------------------------------
@@ -653,131 +642,21 @@ module njangi::njangi_payments {
     }
     
     // ----------------------------------------------------------
-    // Milestone management 
+    // Milestone management
+    //
+    // NOTE: the legacy wrappers (`add_monetary_milestone`,
+    // `add_time_milestone`, `verify_milestone`,
+    // `submit_milestone_verification`) were removed in the June 2026
+    // smart-goals completion. They delegated into the old half-built
+    // njangi_milestones scaffolding (admin-verified completion with a
+    // placeholder amount, no real progress source). The finished
+    // machinery is self-contained in njangi_milestones: admin-defined
+    // ordered milestones, progress derived permissionlessly from
+    // settled `njangi_cycle_escrow::CycleEscrow` pots, permissionless
+    // condition-asserted completion, and `GoalAchieved` on the final
+    // milestone. Milestones observe funds; they never hold or move them.
     // ----------------------------------------------------------
-    
-    // Add monetary milestone
-    public fun add_monetary_milestone(
-        circle: &mut Circle,
-        milestone_data: &mut MilestoneData,
-        target_amount: u64,
-        deadline: u64,
-        description: vector<u8>,
-        prerequisites: vector<u64>,
-        verification_requirements: vector<u8>,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ) {
-        assert!(tx_context::sender(ctx) == circles::get_admin(circle), 7);
-        // Circle must be active to add milestones
-        assert!(circles::is_circle_active(circle), 54);
-        assert!(circles::has_goal_type(circle), EInvalidMilestone);
-        assert!(target_amount > 0, EMilestoneTargetInvalid);
-        
-        milestones::add_monetary_milestone(
-            milestone_data,
-            target_amount,
-            deadline,
-            description,
-            prerequisites,
-            verification_requirements,
-            clock::timestamp_ms(clock)
-        );
-    }
-    
-    // Add time milestone
-    public fun add_time_milestone(
-        circle: &mut Circle,
-        milestone_data: &mut MilestoneData,
-        duration_days: u64,
-        deadline: u64,
-        description: vector<u8>,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ) {
-        assert!(tx_context::sender(ctx) == circles::get_admin(circle), 7);
-        // Circle must be active to add milestones
-        assert!(circles::is_circle_active(circle), 54);
-        assert!(circles::has_goal_type(circle), EInvalidMilestone);
-        assert!(duration_days > 0, EMilestoneTargetInvalid);
-        
-        milestones::add_time_milestone(
-            milestone_data,
-            duration_days,
-            deadline,
-            description,
-            clock::timestamp_ms(clock)
-        );
-    }
-    
-    // Verify milestone
-    public fun verify_milestone(
-        circle: &mut Circle,
-        milestone_data: &mut MilestoneData,
-        milestone_number: u64,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ) {
-        let sender = tx_context::sender(ctx);
-        // Only admin can verify milestones
-        assert!(sender == circles::get_admin(circle), 7);
-        // Circle must be active to verify milestones
-        assert!(circles::is_circle_active(circle), 54);
-        
-        // Call the verification function in the milestones module
-        milestones::verify_milestone(
-            milestone_data, 
-            circle,
-            milestone_number, 
-            clock::timestamp_ms(clock), 
-            sender
-        );
-        
-        // Emit completion event
-        event::emit(MilestoneCompleted {
-            circle_id: circles::get_id(circle),
-            milestone_number,
-            verified_by: sender,
-            amount_achieved: 0, // Placeholder until we can properly calculate it
-        });
-    }
-    
-    // Submit milestone verification
-    public fun submit_milestone_verification(
-        circle: &mut Circle,
-        milestone_data: &mut MilestoneData,
-        milestone_number: u64,
-        proof: vector<u8>,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ) {
-        // Circle must be active to submit milestone verifications
-        assert!(circles::is_circle_active(circle), 54);
-        
-        let timestamp = clock::timestamp_ms(clock);
-        let sender = tx_context::sender(ctx);
-        
-        milestones::submit_milestone_verification(
-            milestone_data, 
-            milestone_number, 
-            proof, 
-            timestamp, 
-            sender
-        );
-        
-        // Just use index 0 as a simplification since we can't get the length easily
-        // In a real implementation, we would track the proper index
-        let proof_type = milestones::get_milestone_verification_type(milestone_data, milestone_number, 0);
-        
-        event::emit(MilestoneVerificationSubmitted {
-            circle_id: circles::get_id(circle),
-            milestone_number,
-            submitted_by: sender,
-            proof_type,
-            timestamp,
-        });
-    }
-    
+
     // ----------------------------------------------------------
     // Security deposit handling
     //

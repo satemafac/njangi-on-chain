@@ -649,6 +649,20 @@ module njangi::njangi_circle_config {
         config.goal_type
     }
 
+    /// Test-only: flips a MilestoneConfig into the smart-goal shape
+    /// (goal_type + target_amount set) so njangi_milestones' creation
+    /// gate can be exercised against the circle test factory, which
+    /// attaches an empty milestone config.
+    #[test_only]
+    public fun set_goal_for_testing(
+        config: &mut MilestoneConfig,
+        goal_type: u8,
+        target_amount: u64
+    ) {
+        config.goal_type = option::some(goal_type);
+        config.target_amount = option::some(target_amount);
+    }
+
     // Get contribution amount in USD
     public fun get_contribution_amount_usd(obj: &UID): u64 {
         let config = get_circle_config(obj);
