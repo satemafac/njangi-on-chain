@@ -102,8 +102,9 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
             target: `${packageId}::whatsapp_integration::unlink_circle`,
             arguments: [
               txb.object(registryObjectId),
-              txb.pure.address(circleId),
-              txb.pure.address(adminAddr || account.userAddr)
+              // Circle by reference; the contract asserts the sender is
+              // the circle's current on-chain admin.
+              txb.object(circleId)
             ]
           });
         },

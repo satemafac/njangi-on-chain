@@ -1,6 +1,7 @@
 module njangi::whatsapp_integration {
     use sui::table::{Self, Table};
     use sui::event;
+    use njangi::njangi_circles::{Self, Circle};
 
     // ----------------------------------------------------------
     // Compliance redesign — Phase 1
@@ -208,17 +209,20 @@ module njangi::whatsapp_integration {
     /// phone number or group ID.
     public fun link_circle(
         registry: &mut WhatsAppLinksRegistry,
-        circle_id: ID,
+        circle: &Circle,
         link_type: u8,
         walrus_blob_id: vector<u8>,
         link_nonce: vector<u8>,
-        admin_address: address,
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
+        let circle_id = object::id(circle);
 
-        // Verify sender is the admin
-        assert!(sender == admin_address, E_NOT_CIRCLE_ADMIN);
+        // The sender must be the circle's on-chain admin — taking the
+        // Circle by reference (instead of a caller-supplied id + address
+        // pair) makes it impossible to anchor a link for a circle the
+        // sender does not administer.
+        assert!(sender == njangi_circles::get_admin(circle), E_NOT_CIRCLE_ADMIN);
 
         // Validate link type
         assert!(link_type == LINK_TYPE_INDIVIDUAL || link_type == LINK_TYPE_GROUP, E_INVALID_LINK_TYPE);
@@ -264,18 +268,23 @@ module njangi::whatsapp_integration {
     /// Unlink a circle from WhatsApp
     public fun unlink_circle(
         registry: &mut WhatsAppLinksRegistry,
-        circle_id: ID,
-        admin_address: address,
+        circle: &Circle,
         ctx: &mut TxContext
     ) {
+        let sender = tx_context::sender(ctx);
+        let circle_id = object::id(circle);
+
+        // The CURRENT circle admin disables the link (not `linked_by` —
+        // admin rotation must not strand the link, and the old
+        // caller-supplied-address check let anyone who read the public
+        // CircleLinked event disable any circle's notifications).
+        assert!(sender == njangi_circles::get_admin(circle), E_NOT_CIRCLE_ADMIN);
+
         // Find link by circle_id
         assert!(table::contains(&registry.circle_to_link, circle_id), E_LINK_NOT_FOUND);
 
         let link_index = *table::borrow(&registry.circle_to_link, circle_id);
         let link = vector::borrow_mut(&mut registry.links, link_index);
-
-        // Verify admin
-        assert!(link.linked_by == admin_address, E_NOT_CIRCLE_ADMIN);
 
         // Disable the link instead of removing it from the vector.
         let nonce_for_event = link.link_nonce;
@@ -288,7 +297,7 @@ module njangi::whatsapp_integration {
 
         event::emit(CircleUnlinked {
             circle_id,
-            admin_address,
+            admin_address: sender,
             link_nonce: nonce_for_event,
             unlinked_at: tx_context::epoch(ctx),
         });
@@ -613,51 +622,10 @@ module njangi::whatsapp_integration {
         }
     }
 
-    /// Enhanced link_circle with admin verification
-    public fun link_circle_verified(
-        registry: &mut WhatsAppLinksRegistry,
-        circle_id: ID,
-        link_type: u8,
-        walrus_blob_id: vector<u8>,
-        link_nonce: vector<u8>,
-        admin_action: &AdminAction,
-        ctx: &mut TxContext
-    ) {
-        // Verify admin authorization
-        assert!(admin_action.verified, E_UNAUTHORIZED_ADMIN);
-        assert!(admin_action.action_type == ADMIN_ACTION_LINK, E_INVALID_ADMIN_PROOF);
-
-        // Proceed with linking
-        link_circle(
-            registry,
-            circle_id,
-            link_type,
-            walrus_blob_id,
-            link_nonce,
-            admin_action.admin_address,
-            ctx
-        );
-    }
-
-    /// Enhanced unlink_circle with admin verification
-    public fun unlink_circle_verified(
-        registry: &mut WhatsAppLinksRegistry,
-        circle_id: ID,
-        admin_action: &AdminAction,
-        ctx: &mut TxContext
-    ) {
-        // Verify admin authorization
-        assert!(admin_action.verified, E_UNAUTHORIZED_ADMIN);
-        assert!(admin_action.action_type == ADMIN_ACTION_UNLINK, E_INVALID_ADMIN_PROOF);
-
-        // Proceed with unlinking
-        unlink_circle(
-            registry,
-            circle_id,
-            admin_action.admin_address,
-            ctx
-        );
-    }
+    // The former link_circle_verified / unlink_circle_verified wrappers
+    // were removed: they layered AdminAction (sender == caller-supplied
+    // address) over the old unbound signatures — the same hole the
+    // Circle-bound link/unlink above closes — and had no callers.
 
     /// Enhanced log_notification with admin verification
     public fun log_notification_verified(
@@ -685,5 +653,115 @@ module njangi::whatsapp_integration {
     /// Get total number of links
     public fun get_total_links(registry: &WhatsAppLinksRegistry): u64 {
         registry.total_links
+    }
+
+    // ----------------------------------------------------------
+    // Tests — admin binding on link/unlink
+    // ----------------------------------------------------------
+
+    #[test_only]
+    fun setup_circle_and_registry(
+        admin: address,
+        scenario: &mut sui::test_scenario::Scenario,
+    ) {
+        let clock = sui::clock::create_for_testing(sui::test_scenario::ctx(scenario));
+        njangi_circles::share_circle_for_testing(
+            vector[admin, @0xB, @0xC], 1_000_000_000, 250, &clock,
+            sui::test_scenario::ctx(scenario)
+        );
+        init_registry(sui::test_scenario::ctx(scenario));
+        sui::clock::destroy_for_testing(clock);
+    }
+
+    #[test_only]
+    fun test_nonce(): vector<u8> {
+        let mut nonce = vector::empty<u8>();
+        let mut i = 0;
+        while (i < LINK_NONCE_BYTES) {
+            vector::push_back(&mut nonce, (i as u8));
+            i = i + 1;
+        };
+        nonce
+    }
+
+    #[test]
+    fun test_admin_links_and_unlinks_circle() {
+        let admin = @0xA;
+        let mut scenario = sui::test_scenario::begin(admin);
+        setup_circle_and_registry(admin, &mut scenario);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        {
+            let mut registry = sui::test_scenario::take_shared<WhatsAppLinksRegistry>(&scenario);
+            let circle = sui::test_scenario::take_shared<Circle>(&scenario);
+            link_circle(
+                &mut registry, &circle, LINK_TYPE_INDIVIDUAL,
+                b"blob-1", test_nonce(),
+                sui::test_scenario::ctx(&mut scenario)
+            );
+            assert!(get_total_links(&registry) == 1, 0);
+            unlink_circle(&mut registry, &circle, sui::test_scenario::ctx(&mut scenario));
+            assert!(get_total_links(&registry) == 0, 1);
+            sui::test_scenario::return_shared(registry);
+            sui::test_scenario::return_shared(circle);
+        };
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_NOT_CIRCLE_ADMIN)]
+    fun test_non_admin_cannot_link_circle() {
+        let admin = @0xA;
+        let mut scenario = sui::test_scenario::begin(admin);
+        setup_circle_and_registry(admin, &mut scenario);
+
+        // A regular member (not the admin) tries to anchor a link.
+        sui::test_scenario::next_tx(&mut scenario, @0xB);
+        {
+            let mut registry = sui::test_scenario::take_shared<WhatsAppLinksRegistry>(&scenario);
+            let circle = sui::test_scenario::take_shared<Circle>(&scenario);
+            link_circle(
+                &mut registry, &circle, LINK_TYPE_INDIVIDUAL,
+                b"blob-1", test_nonce(),
+                sui::test_scenario::ctx(&mut scenario)
+            );
+            sui::test_scenario::return_shared(registry);
+            sui::test_scenario::return_shared(circle);
+        };
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_NOT_CIRCLE_ADMIN)]
+    fun test_non_admin_cannot_unlink_circle() {
+        let admin = @0xA;
+        let mut scenario = sui::test_scenario::begin(admin);
+        setup_circle_and_registry(admin, &mut scenario);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        {
+            let mut registry = sui::test_scenario::take_shared<WhatsAppLinksRegistry>(&scenario);
+            let circle = sui::test_scenario::take_shared<Circle>(&scenario);
+            link_circle(
+                &mut registry, &circle, LINK_TYPE_INDIVIDUAL,
+                b"blob-1", test_nonce(),
+                sui::test_scenario::ctx(&mut scenario)
+            );
+            sui::test_scenario::return_shared(registry);
+            sui::test_scenario::return_shared(circle);
+        };
+
+        // The old caller-supplied-address check let anyone who read the
+        // public CircleLinked event disable the link; the Circle-bound
+        // check must reject a non-admin sender.
+        sui::test_scenario::next_tx(&mut scenario, @0xB);
+        {
+            let mut registry = sui::test_scenario::take_shared<WhatsAppLinksRegistry>(&scenario);
+            let circle = sui::test_scenario::take_shared<Circle>(&scenario);
+            unlink_circle(&mut registry, &circle, sui::test_scenario::ctx(&mut scenario));
+            sui::test_scenario::return_shared(registry);
+            sui::test_scenario::return_shared(circle);
+        };
+        sui::test_scenario::end(scenario);
     }
 }

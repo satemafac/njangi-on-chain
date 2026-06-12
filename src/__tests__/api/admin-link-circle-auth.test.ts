@@ -359,11 +359,13 @@ describe('admin-link-circle POST authorization ordering', () => {
 
     expect(res.statusCode).toBe(200);
     // On-chain anchor targets the circle the middleware authorized
-    // (arguments: registry, circle_id, link_type, blob_id, nonce, admin).
+    // (arguments: registry, circle ref, link_type, blob_id, nonce — the
+    // contract derives the admin from the sender + Circle reference, so
+    // no caller-supplied admin address rides along anymore).
     expect(moveCalls).toHaveLength(1);
     expect(moveCalls[0].target).toBe('0xpkg::whatsapp_integration::link_circle');
     expect(moveCalls[0].arguments[1]).toBe(CIRCLE_ID);
-    expect(moveCalls[0].arguments[5]).toBe(ADMIN_ADDRESS);
+    expect(moveCalls[0].arguments).toHaveLength(5);
     expect(indexWhatsAppLink).toHaveBeenCalledWith(
       expect.objectContaining({ circleId: CIRCLE_ID }),
     );
@@ -425,11 +427,12 @@ describe('admin-unlink-circle POST authorization binding', () => {
     );
 
     expect(res.statusCode).toBe(200);
-    // arguments: registry, circle_id, admin
+    // arguments: registry, circle ref — the contract asserts the sender
+    // is the circle's current on-chain admin.
     expect(moveCalls).toHaveLength(1);
     expect(moveCalls[0].target).toBe('0xpkg::whatsapp_integration::unlink_circle');
     expect(moveCalls[0].arguments[1]).toBe(CIRCLE_ID);
-    expect(moveCalls[0].arguments[2]).toBe(ADMIN_ADDRESS);
+    expect(moveCalls[0].arguments).toHaveLength(2);
     expect(deindexWhatsAppLinksForCircle).toHaveBeenCalledWith(CIRCLE_ID);
   });
 });

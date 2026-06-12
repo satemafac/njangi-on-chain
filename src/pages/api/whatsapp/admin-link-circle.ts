@@ -291,11 +291,13 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
           target: `${packageId}::whatsapp_integration::link_circle`,
           arguments: [
             txb.object(registryObjectId),
-            txb.pure.address(circleId),
+            // The contract takes the Circle by reference and asserts the
+            // sender is its on-chain admin — no caller-supplied admin
+            // address anymore.
+            txb.object(circleId),
             txb.pure.u8(linkType),
             txb.pure.vector('u8', blobIdBytes),
             txb.pure.vector('u8', nonceBytes),
-            txb.pure.address(adminAddr || account.userAddr),
           ],
         });
       },
