@@ -29,12 +29,13 @@ export interface ComplianceAuthResult {
  * Returns true when the request passes the shared-secret check AND the
  * per-secret rate limit. Sends the appropriate 401/429 response and
  * returns false otherwise — callers should early-return in that case.
+ * Async since the limiter may consult Postgres (serverless deployments).
  */
-export function guardComplianceRequest(
+export async function guardComplianceRequest(
   req: NextApiRequest,
   res: NextApiResponse,
   action: string,
-): boolean {
+): Promise<boolean> {
   const secret = sharedSecret();
   const supplied = req.headers['x-internal-auth'];
   // Constant-time comparison — a plain `!==` short-circuits and leaks
@@ -43,7 +44,7 @@ export function guardComplianceRequest(
     res.status(401).json({ error: 'Invalid internal auth' });
     return false;
   }
-  const outcome = consumeRateLimit({
+  const outcome = await consumeRateLimit({
     key: rateKey(action, secret),
     limit: DEFAULT_LIMIT,
     windowMs: DEFAULT_WINDOW_MS,

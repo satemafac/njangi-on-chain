@@ -20,7 +20,8 @@
 //     in the admin console. The list endpoint can opt-out of returning
 //     them.
 
-import { Pool } from 'pg';
+import type { Pool } from 'pg';
+import { getSharedPgPool, isPostgresConfigured } from './pg-pool';
 import { computeExternalRefHash } from '../services/compliance-attestation-service';
 import type { PolicyDocument } from '../services/compliance-attestation-service';
 import type { NetworkType } from '../services/whatsapp-registry-service';
@@ -49,29 +50,18 @@ export interface EnqueueInput {
 
 const DEFAULT_KYC_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
-let pool: Pool | null = null;
 let setupPromise: Promise<void> | null = null;
 let memoryWarned = false;
 const memoryStore: Map<string, AttestationQueueEntry> = new Map();
 
-function databaseUrl(): string | undefined {
-  return process.env.DATABASE_URL;
-}
-
 function isPostgresAvailable(): boolean {
-  return Boolean(databaseUrl());
+  return isPostgresConfigured();
 }
 
+// Shared lazy pool (SSL resolved from sslmode/PGSSLMODE, verified TLS by
+// default in production) — see src/lib/pg-pool.ts.
 function getPool(): Pool {
-  if (!pool) {
-    const url = databaseUrl();
-    if (!url) throw new Error('DATABASE_URL is not configured.');
-    pool = new Pool({
-      connectionString: url,
-      ssl: url.includes('amazonaws.com') ? { rejectUnauthorized: false } : undefined,
-    });
-  }
-  return pool;
+  return getSharedPgPool();
 }
 
 async function ensureTable(): Promise<void> {

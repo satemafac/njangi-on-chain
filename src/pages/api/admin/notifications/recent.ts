@@ -18,7 +18,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.setHeader('Allow', ['GET']);
     return res.status(405).json({ error: 'Method not allowed' });
   }
-  if (!guardComplianceRequest(req, res, 'admin-notifications')) return;
+  if (!(await guardComplianceRequest(req, res, 'admin-notifications'))) return;
 
   const address = typeof req.query.address === 'string' ? req.query.address : null;
   if (!address || !address.startsWith('0x')) {

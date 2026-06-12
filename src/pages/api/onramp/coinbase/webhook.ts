@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { maskWalletAddress } from '@/services/coinbase-onramp-service';
 import { createOnrampRequestLogger } from '@/lib/onramp-logging';
 import { handleRampKycEvent, type RampKycOutcome } from '@/lib/ramp-kyc-bridge';
+import { registerWebhookEvent, unregisterWebhookEvent } from '@/lib/webhook-dedupe';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 
 interface WebhookSuccessResponse {
@@ -41,9 +42,6 @@ interface CoinbaseWebhookPayload {
     transaction_id?: string;
   };
 }
-
-const EVENT_CACHE_TTL_MS = 60 * 60 * 1000;
-const processedEvents = new Map<string, number>();
 
 function setSecurityHeaders(res: NextApiResponse): void {
   res.setHeader('Cache-Control', 'no-store');
@@ -169,24 +167,6 @@ function verifySignature(
     Buffer.from(expected, 'utf8'),
     Buffer.from(provided, 'utf8'),
   );
-}
-
-function cleanupEventCache(): void {
-  const now = Date.now();
-  for (const [eventId, timestamp] of processedEvents.entries()) {
-    if (now - timestamp >= EVENT_CACHE_TTL_MS) {
-      processedEvents.delete(eventId);
-    }
-  }
-}
-
-function isDuplicateEvent(eventId: string): boolean {
-  cleanupEventCache();
-  return processedEvents.has(eventId);
-}
-
-function markEventProcessed(eventId: string): void {
-  processedEvents.set(eventId, Date.now());
 }
 
 function normalizeEvent(payload: CoinbaseWebhookPayload): {
@@ -322,11 +302,10 @@ export default async function handler(
     });
   }
 
+  // Durable dedupe across serverless instances (webhook_events table when
+  // DATABASE_URL is set; in-memory TTL cache in dev).
   const normalized = normalizeEvent(payload);
-  const duplicate = isDuplicateEvent(normalized.eventId);
-  if (!duplicate) {
-    markEventProcessed(normalized.eventId);
-  }
+  const duplicate = await registerWebhookEvent('coinbase', normalized.eventId);
 
   logger.info('webhook_processed', {
     eventId: normalized.eventId,
@@ -339,29 +318,48 @@ export default async function handler(
       : undefined,
   });
 
-  // Phase 11: when this event represents a final KYC decision, kick the
+  // Phase 11: when this event represents a final KYC decision, run the
   // central ramp-KYC bridge so an attestation gets queued and the member
   // receives a WhatsApp confirmation. Skip duplicates so a webhook retry
   // doesn't re-send the message.
+  //
+  // The bridge is awaited BEFORE the response: on serverless the function
+  // instance is frozen once the response is sent, so a fire-and-forget
+  // promise may never run — and the durable dedupe row written above would
+  // suppress the provider's retry, losing the side effect permanently.
+  // Coinbase tolerates multi-second webhook responses.
   if (!duplicate) {
     const outcome = coinbaseStatusToOutcome(normalized.status);
     const issuerAddress = process.env.NEXT_PUBLIC_NJANGI_ATTESTATION_ISSUER ?? '';
     if (outcome && issuerAddress) {
       const network = (process.env.NEXT_PUBLIC_SUI_NETWORK as NetworkType) ?? 'testnet';
-      void handleRampKycEvent(
-        {
-          provider: 'coinbase',
-          outcome,
-          providerCaseId: normalized.transactionId ?? normalized.eventId,
-          subjectAddress: normalized.walletAddress,
-          network,
-        },
-        issuerAddress,
-      ).catch((err) => {
+      try {
+        await handleRampKycEvent(
+          {
+            provider: 'coinbase',
+            outcome,
+            providerCaseId: normalized.transactionId ?? normalized.eventId,
+            subjectAddress: normalized.walletAddress,
+            network,
+          },
+          issuerAddress,
+        );
+      } catch (err) {
         logger.warn('ramp_kyc_bridge_failed', {
+          eventId: normalized.eventId,
           error: err instanceof Error ? err.message : String(err),
         });
-      });
+        // Release the dedupe claim and signal failure so Coinbase retries
+        // the delivery; the bridge is idempotent on retry.
+        await unregisterWebhookEvent('coinbase', normalized.eventId);
+        return res.status(500).json({
+          provider: 'coinbase',
+          ok: false,
+          error: 'KYC_BRIDGE_FAILED',
+          message:
+            'KYC side effects failed; the event was released for provider retry.',
+        });
+      }
     }
   }
 

@@ -58,6 +58,15 @@ function approvalMessage(
  * returns a final KYC decision. Approved cases queue an attestation and
  * send a WhatsApp confirmation; declined / pending cases are recorded in
  * application logs only (no on-chain state, no member nudge).
+ *
+ * MUST be awaited by the webhook handler before it responds: on serverless
+ * the function instance is frozen as soon as the response is sent, so a
+ * fire-and-forget call may never execute. Throws when the attestation
+ * enqueue fails so the handler can release its webhook-dedupe claim and
+ * return non-2xx — the provider's retry then re-runs this function, which
+ * is idempotent end to end (the queue dedupes pending rows on
+ * (network, subject, case-hash); the notifier dedupes successful sends on
+ * (kind, address, dedupeKey)).
  */
 export async function handleRampKycEvent(
   event: RampKycEvent,
@@ -90,6 +99,7 @@ export async function handleRampKycEvent(
       'Identity verified, sanctions screened, jurisdiction allow-listed by ramp partner.',
   };
 
+  let enqueueError: unknown = null;
   try {
     await enqueueAttestation({
       subject: event.subjectAddress,
@@ -99,6 +109,7 @@ export async function handleRampKycEvent(
       network: event.network,
     });
   } catch (err) {
+    enqueueError = err;
     appLogger.warn('[ramp-kyc-bridge] enqueue failed', {
       provider: event.provider,
       providerCaseId: event.providerCaseId,
@@ -119,4 +130,13 @@ export async function handleRampKycEvent(
     dedupeKey: `${event.provider}:${event.providerCaseId}`,
     dedupeWindowMs: 24 * 60 * 60 * 1000,
   });
+
+  if (enqueueError) {
+    // Surface the dropped attestation to the webhook handler so it can
+    // release its dedupe claim and answer non-2xx; the provider retry
+    // re-runs the enqueue while the WhatsApp send above stays deduped.
+    throw enqueueError instanceof Error
+      ? enqueueError
+      : new Error(String(enqueueError));
+  }
 }

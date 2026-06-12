@@ -11,7 +11,8 @@
 //   * Future custom messages
 // all share the same auth, log, dedupe, and lookup paths.
 
-import { Pool } from 'pg';
+import type { Pool } from 'pg';
+import { getSharedPgPool, isPostgresConfigured } from './pg-pool';
 import { computeLookupHash, fetchAndDecryptPII } from './walrus-pii';
 import { lookupCirclesForPhone } from './whatsapp-link-index';
 import { getActiveWhatsAppRegistries } from '../services/whatsapp-registry-service';
@@ -55,27 +56,16 @@ export interface SendMemberNotificationResult {
 
 const DEFAULT_DEDUPE_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
-let pool: Pool | null = null;
 let setupPromise: Promise<void> | null = null;
 
-function databaseUrl(): string | undefined {
-  return process.env.DATABASE_URL;
-}
-
 function isPostgresAvailable(): boolean {
-  return Boolean(databaseUrl());
+  return isPostgresConfigured();
 }
 
+// Shared lazy pool (SSL resolved from sslmode/PGSSLMODE, verified TLS by
+// default in production) — see src/lib/pg-pool.ts.
 function getPool(): Pool {
-  if (!pool) {
-    const url = databaseUrl();
-    if (!url) throw new Error('DATABASE_URL is not configured.');
-    pool = new Pool({
-      connectionString: url,
-      ssl: url.includes('amazonaws.com') ? { rejectUnauthorized: false } : undefined,
-    });
-  }
-  return pool;
+  return getSharedPgPool();
 }
 
 async function ensureNotificationTable(): Promise<void> {
@@ -107,6 +97,13 @@ function normalizeAddress(addr: string): string {
   return lower.startsWith('0x') ? lower : `0x${lower}`;
 }
 
+/**
+ * Settles the audit row for a send attempt. Under the claim-first flow the
+ * row already exists (inserted by `claimNotificationSlot` with the
+ * in-flight marker); this upsert overwrites the marker with the real
+ * outcome so the slot stops blocking (on failure) or starts deduping (on
+ * success).
+ */
 async function recordNotification(
   kind: NotificationKind,
   target: string,
@@ -131,29 +128,72 @@ async function recordNotification(
   }
 }
 
-async function alreadySentRecently(
+/**
+ * Marker written into `error` while a send is in flight. A row in this
+ * state younger than CLAIM_TTL_MS blocks competing claims for the same
+ * `(kind, target, dedupeKey)`; once the send settles, `recordNotification`
+ * overwrites the marker with the real outcome.
+ */
+const CLAIM_MARKER = 'in_flight';
+
+/**
+ * How long an unfinished claim blocks competitors. Every error path in
+ * `sendMemberNotification` settles its claim eagerly (including a thrown
+ * phone lookup — see the catch around `resolveMemberPhone`), so the only
+ * way a row stays at the marker this long is a hard-killed process
+ * (lambda timeout mid-send). Let the next caller retry then
+ * (at-least-once in that rare crash-after-send window, never the
+ * double-send the old SELECT-then-send race produced on every overlap).
+ */
+const CLAIM_TTL_MS = 2 * 60 * 1000;
+
+/**
+ * Atomically claims the right to send `(kind, target, dedupeKey)` by
+ * upserting the dedupe row BEFORE the send. The single
+ * INSERT … ON CONFLICT DO UPDATE … WHERE statement is the check-and-set:
+ * Postgres serializes conflicting claims on the row lock, the loser
+ * re-evaluates the WHERE against the winner's committed row, and exactly
+ * one caller gets a row back. This replaces the old `alreadySentRecently`
+ * SELECT, which was check-then-act — two overlapping cron runs both passed
+ * the check and double-sent before either recorded its send.
+ *
+ * The claim loses (returns 'duplicate') when the existing row is either a
+ * success inside the dedupe window or a live in-flight claim. Failed or
+ * expired rows are reclaimed, preserving the old retry semantics
+ * (no_link/send_failed outcomes never block a later attempt).
+ */
+async function claimNotificationSlot(
   kind: NotificationKind,
   target: string,
   dedupeKey: string,
   windowMs: number,
-): Promise<boolean> {
-  if (!isPostgresAvailable()) return false;
+): Promise<'claimed' | 'duplicate'> {
+  if (!isPostgresAvailable()) return 'claimed';
   try {
     await ensureNotificationTable();
-    const cutoff = new Date(Date.now() - windowMs).toISOString();
+    const dedupeCutoff = new Date(Date.now() - windowMs).toISOString();
+    const claimCutoff = new Date(Date.now() - CLAIM_TTL_MS).toISOString();
     const result = await getPool().query<{ id: string }>(
-      `SELECT id FROM whatsapp_notifications
-        WHERE kind = $1 AND target_address = $2 AND dedupe_key = $3
-          AND success = TRUE AND sent_at > $4
-        LIMIT 1`,
-      [kind, target, dedupeKey, cutoff],
+      `INSERT INTO whatsapp_notifications (kind, target_address, dedupe_key, success, error, sent_at)
+       VALUES ($1, $2, $3, FALSE, $4, NOW())
+       ON CONFLICT (kind, target_address, dedupe_key) DO UPDATE
+         SET sent_at = NOW(), success = FALSE, error = EXCLUDED.error
+         WHERE NOT (whatsapp_notifications.success = TRUE
+                    AND whatsapp_notifications.sent_at > $5)
+           AND NOT (whatsapp_notifications.success = FALSE
+                    AND whatsapp_notifications.error = $4
+                    AND whatsapp_notifications.sent_at > $6)
+       RETURNING id`,
+      [kind, target, dedupeKey, CLAIM_MARKER, dedupeCutoff, claimCutoff],
     );
-    return (result.rowCount ?? 0) > 0;
+    return (result.rowCount ?? 0) > 0 ? 'claimed' : 'duplicate';
   } catch (err) {
-    appLogger.warn('[whatsapp-notifier] dedupe lookup failed; allowing send', {
+    // Fail-open, matching the historic best-effort contract: a Postgres
+    // blip must not silently drop KYC confirmations or payout nudges.
+    appLogger.warn('[whatsapp-notifier] dedupe claim failed; allowing send', {
       error: err instanceof Error ? err.message : String(err),
     });
-    return false;
+    return 'claimed';
   }
 }
 
@@ -244,10 +284,23 @@ async function sendWhatsAppMessage(phone: string, body: string): Promise<void> {
 
 /**
  * Single entry point every server-side notifier callsite uses. Idempotent
- * by `(kind, memberAddress, dedupeKey)` when Postgres is configured.
+ * by `(kind, memberAddress, dedupeKey)` when Postgres is configured: the
+ * dedupe row is CLAIMED atomically before the send (insert-or-update with
+ * a conditional WHERE, not select-then-send), so concurrent callers —
+ * overlapping cron invocations, webhook retry storms — resolve to exactly
+ * one sender; the rest get `{ sent: false, reason: 'duplicate' }`.
  *
  * Returns success even when no phone is linked — that's a routing decision
  * (the member opted out of WhatsApp), not an error.
+ *
+ * THROW contract: this function throws only on infra failures during the
+ * on-chain phone lookup (e.g. the RPC failover transport exhausted its
+ * candidates). The claim row is settled (`lookup_failed: …`) BEFORE the
+ * rethrow, so the tuple is immediately reclaimable — callers treat the
+ * throw as "infra problem, retry me" (the cycle-finalized cron halts
+ * without advancing its cursor; webhook callers answer non-2xx so the
+ * provider retries) and the retry actually re-sends instead of losing the
+ * claim race against a phantom in-flight row.
  */
 export async function sendMemberNotification(
   input: SendMemberNotificationInput,
@@ -256,13 +309,42 @@ export async function sendMemberNotification(
   const dedupeKey = input.dedupeKey ?? `${input.kind}:${Date.now()}`;
   const windowMs = input.dedupeWindowMs ?? DEFAULT_DEDUPE_WINDOW_MS;
 
-  if (await alreadySentRecently(input.kind, target, dedupeKey, windowMs)) {
+  const claim = await claimNotificationSlot(input.kind, target, dedupeKey, windowMs);
+  if (claim === 'duplicate') {
     return { sent: false, reason: 'duplicate' };
   }
 
+  // From here the claim row is ours, parked at the in-flight marker.
+  // EVERY exit path below — return or throw — must settle it via
+  // `recordNotification`. An unsettled row is poison: the cycle-finalized
+  // cron retries a halted event ~60s later, but CLAIM_TTL_MS is 120s, so
+  // the retry would lose the claim to the stale marker, map 'duplicate' to
+  // 'skipped', advance the cursor, and permanently drop the nudge while
+  // the audit log shows a send frozen at 'in_flight'.
   let phone = input.phoneOverride ?? null;
   if (!phone) {
-    phone = await resolveMemberPhone(target, input.network);
+    try {
+      phone = await resolveMemberPhone(target, input.network);
+    } catch (err) {
+      // Infra failure reading the on-chain link registry (RPC degradation
+      // can throw here while queryEvents still works). Settle the claim
+      // FIRST so the tuple is reclaimable the moment the caller retries,
+      // then rethrow — a lookup failure affects every recipient, so the
+      // caller must halt/retry rather than advance past the event.
+      const message = err instanceof Error ? err.message : String(err);
+      await recordNotification(
+        input.kind,
+        target,
+        dedupeKey,
+        false,
+        `lookup_failed: ${message}`,
+      );
+      appLogger.warn(
+        '[whatsapp-notifier] phone lookup failed; claim settled for retry',
+        { kind: input.kind, target, dedupeKey, error: message },
+      );
+      throw err;
+    }
   }
   if (!phone) {
     await recordNotification(input.kind, target, dedupeKey, false, 'no_link');

@@ -89,7 +89,7 @@ async function handleSignup(
     }
 
     // Throttle per IP + claimed identity before any database work.
-    const rateOutcome = consumeRateLimit({
+    const rateOutcome = await consumeRateLimit({
       key: `mainnet-signup:${getClientIp(req)}:${userAddress?.toLowerCase() || normalizedEmail}`,
       limit: REQUESTS_PER_MINUTE,
       windowMs: MINUTE_WINDOW_MS,

@@ -82,7 +82,7 @@ export default async function handler(
     const { circleId, circleName, userAddress, userName } = parsed.data;
 
     // Throttle before any RPC/database work.
-    const rateOutcome = consumeRateLimit({
+    const rateOutcome = await consumeRateLimit({
       key: `join-request:${getClientIp(req)}:${userAddress.toLowerCase()}`,
       limit: REQUESTS_PER_MINUTE,
       windowMs: MINUTE_WINDOW_MS,

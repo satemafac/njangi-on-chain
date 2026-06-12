@@ -21,18 +21,33 @@ interface LocalJoinRequest {
 export type { JoinRequest } from './join-request-database';
 
 class DatabaseService {
-  private db: Database.Database;
+  // Lazy: the SQLite file is only opened on first use. Opening it in the
+  // constructor ran at module import, which crashes on serverless
+  // deployments (read-only filesystem) even when the route never touches
+  // SQLite because Postgres is configured.
+  private _db: Database.Database | null = null;
 
-  constructor() {
-    // Create database directory if it doesn't exist
-    const dbDir = path.dirname(DB_PATH);
-    if (!fs.existsSync(dbDir)) {
-      fs.mkdirSync(dbDir, { recursive: true });
+  private get db(): Database.Database {
+    if (!this._db) {
+      // June 2026 ops-readiness audit: production must never silently fall
+      // back to a per-instance SQLite file. Fail fast instead.
+      if (process.env.NODE_ENV === 'production' && !process.env.DATABASE_URL) {
+        throw new Error(
+          '[database-service] DATABASE_URL is required in production. ' +
+            'Refusing to fall back to a per-instance SQLite file.',
+        );
+      }
+
+      // Create database directory if it doesn't exist
+      const dbDir = path.dirname(DB_PATH);
+      if (!fs.existsSync(dbDir)) {
+        fs.mkdirSync(dbDir, { recursive: true });
+      }
+
+      this._db = new Database(DB_PATH);
+      this.initializeDatabase();
     }
-
-    // Initialize database
-    this.db = new Database(DB_PATH);
-    this.initializeDatabase();
+    return this._db;
   }
 
   private initializeDatabase() {

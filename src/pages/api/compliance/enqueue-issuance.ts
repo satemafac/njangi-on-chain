@@ -29,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.setHeader('Allow', ['POST']);
     return res.status(405).json({ error: 'Method not allowed' });
   }
-  if (!guardComplianceRequest(req, res, 'enqueue-issuance')) return;
+  if (!(await guardComplianceRequest(req, res, 'enqueue-issuance'))) return;
 
   const body = (req.body || {}) as RequestBody;
   if (!body.subject || !body.providerCaseId || !body.policy || !body.network) {

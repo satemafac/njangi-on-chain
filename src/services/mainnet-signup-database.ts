@@ -1,13 +1,11 @@
-import { Pool } from 'pg';
+import type { Pool } from 'pg';
+import { getSharedPgPool } from '../lib/pg-pool';
 
-// Use the same pool configuration as other database services
-const DATABASE_URL = process.env.DATABASE_URL;
-const useSSL = process.env.DATABASE_URL?.includes('amazonaws.com') || false;
-
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: useSSL ? { rejectUnauthorized: false } : undefined
-});
+// Shared lazy pool (SSL resolved from sslmode/PGSSLMODE, verified TLS by
+// default in production) — see src/lib/pg-pool.ts.
+function pool(): Pool {
+  return getSharedPgPool();
+}
 
 export interface MainnetSignup {
   id: number;
@@ -35,7 +33,7 @@ export class MainnetSignupDatabase {
     try {
       console.log(`[DB] Creating mainnet signup: email=${email}, source=${signupSource}`);
       
-      const result = await pool.query(
+      const result = await pool().query(
         `INSERT INTO mainnet_signups 
          (email, name, user_address, notification_preferences, signup_source) 
          VALUES ($1, $2, $3, $4, $5)
@@ -74,7 +72,7 @@ export class MainnetSignupDatabase {
     try {
       console.log(`[DB] Fetching mainnet signups with limit: ${limit}, offset: ${offset}`);
       
-      const result = await pool.query(
+      const result = await pool().query(
         `SELECT * FROM mainnet_signups 
          ORDER BY created_at DESC
          LIMIT $1 OFFSET $2`,
@@ -99,7 +97,7 @@ export class MainnetSignupDatabase {
   // Get signup count
   async getSignupCount(): Promise<number> {
     try {
-      const result = await pool.query(
+      const result = await pool().query(
         `SELECT COUNT(*) as count FROM mainnet_signups`
       );
 
@@ -113,7 +111,7 @@ export class MainnetSignupDatabase {
   // Check if email already exists
   async emailExists(email: string): Promise<boolean> {
     try {
-      const result = await pool.query(
+      const result = await pool().query(
         `SELECT id FROM mainnet_signups WHERE email = $1`,
         [email]
       );
@@ -128,7 +126,7 @@ export class MainnetSignupDatabase {
   // Get signups by date range
   async getSignupsByDateRange(startDate: Date, endDate: Date): Promise<MainnetSignup[]> {
     try {
-      const result = await pool.query(
+      const result = await pool().query(
         `SELECT * FROM mainnet_signups 
          WHERE created_at >= $1 AND created_at <= $2
          ORDER BY created_at DESC`,
@@ -153,7 +151,7 @@ export class MainnetSignupDatabase {
     preferences: { email: boolean; sms: boolean }
   ): Promise<boolean> {
     try {
-      const result = await pool.query(
+      const result = await pool().query(
         `UPDATE mainnet_signups 
          SET notification_preferences = $2, updated_at = CURRENT_TIMESTAMP
          WHERE email = $1`,

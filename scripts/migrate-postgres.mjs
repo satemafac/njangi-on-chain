@@ -11,12 +11,19 @@
 //   5. whatsapp_phone_index           (src/lib/whatsapp-link-index.ts)
 //   6. compliance_attestation_queue   (src/lib/attestation-queue.ts)
 //   7. whatsapp_notifications         (src/lib/whatsapp-notifier.ts)
-//   8. cycle_finalized_cursor         (scripts/cycle-finalized-notifier.mjs)
+//   8. cycle_finalized_cursor         (src/lib/cycle-finalized-cron.ts)
+//   9. zklogin_sessions               (src/lib/zklogin-session-registry.ts)
+//  10. rate_limits                    (src/lib/rate-limit.ts)
+//  11. webhook_events                 (src/lib/webhook-dedupe.ts)
 //
 // Phase 12 publish-readiness: replaces the old transactional migration
 // that only knew about `join_requests` + `mainnet_signups`. Keeps every
 // table in one place so a fresh deploy doesn't depend on each service
 // to lazy-init its own schema before the first request races them.
+//
+// Tables 9-11 were added for the Vercel serverless migration (June 2026):
+// per-process state (zkLogin sessions, rate-limit windows, webhook dedupe
+// caches) moved into Postgres so any lambda instance sees the same state.
 //
 // Usage:
 //   DATABASE_URL=postgres://... node scripts/migrate-postgres.mjs
@@ -31,11 +38,29 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
+// SSL: sslmode from the URL (Neon carries sslmode=require) or PGSSLMODE
+// wins; production defaults to verified TLS. Mirrors src/lib/pg-pool.ts.
+function resolveSsl(connectionString) {
+  let sslmode = null;
+  try {
+    sslmode = new URL(connectionString).searchParams.get('sslmode');
+  } catch {
+    // Not URL-parseable; fall through to env/heuristics.
+  }
+  sslmode = sslmode ?? process.env.PGSSLMODE ?? null;
+  if (sslmode) {
+    if (sslmode === 'disable') return undefined;
+    if (sslmode === 'no-verify') return { rejectUnauthorized: false };
+    return { rejectUnauthorized: true };
+  }
+  if (process.env.NODE_ENV === 'production') return { rejectUnauthorized: true };
+  if (connectionString.includes('amazonaws.com')) return { rejectUnauthorized: false };
+  return undefined;
+}
+
 const pool = new pg.Pool({
   connectionString: DATABASE_URL,
-  ssl: DATABASE_URL.includes('amazonaws.com')
-    ? { rejectUnauthorized: false }
-    : undefined,
+  ssl: resolveSsl(DATABASE_URL),
 });
 
 // Each entry runs as its own statement so a single failure (e.g. a
@@ -152,12 +177,60 @@ const STATEMENTS = [
             ON whatsapp_notifications (target_address, sent_at DESC);`,
   },
   {
+    // locked_until/locked_by: per-(package, network) run lease + fencing
+    // token for the Vercel cron (src/lib/cycle-finalized-cron.ts) so
+    // overlapping invocations skip instead of double-sending. The ALTERs
+    // upgrade tables created before the lease columns existed.
     name: 'cycle_finalized_cursor',
     sql: `CREATE TABLE IF NOT EXISTS cycle_finalized_cursor (
             key TEXT PRIMARY KEY,
             cursor JSONB,
-            updated_at TIMESTAMPTZ DEFAULT NOW()
+            updated_at TIMESTAMPTZ DEFAULT NOW(),
+            locked_until TIMESTAMPTZ,
+            locked_by TEXT
+          );
+          ALTER TABLE cycle_finalized_cursor
+            ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
+          ALTER TABLE cycle_finalized_cursor
+            ADD COLUMN IF NOT EXISTS locked_by TEXT;`,
+  },
+  {
+    name: 'zklogin_sessions',
+    sql: `CREATE TABLE IF NOT EXISTS zklogin_sessions (
+            id TEXT PRIMARY KEY,
+            session_ciphertext TEXT NOT NULL,
+            sub TEXT,
+            aud TEXT,
+            user_address TEXT,
+            max_epoch BIGINT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            expires_at TIMESTAMPTZ NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS zklogin_sessions_user_idx
+            ON zklogin_sessions (user_address);
+          CREATE INDEX IF NOT EXISTS zklogin_sessions_expires_idx
+            ON zklogin_sessions (expires_at);`,
+  },
+  {
+    name: 'rate_limits',
+    sql: `CREATE TABLE IF NOT EXISTS rate_limits (
+            bucket TEXT NOT NULL,
+            window_start TIMESTAMPTZ NOT NULL,
+            count INTEGER NOT NULL,
+            PRIMARY KEY (bucket, window_start)
           );`,
+  },
+  {
+    name: 'webhook_events',
+    sql: `CREATE TABLE IF NOT EXISTS webhook_events (
+            id BIGSERIAL PRIMARY KEY,
+            provider TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (provider, event_id)
+          );
+          CREATE INDEX IF NOT EXISTS webhook_events_received_idx
+            ON webhook_events (received_at);`,
   },
 ];
 

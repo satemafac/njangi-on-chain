@@ -1,13 +1,11 @@
-import { Pool } from 'pg';
+import type { Pool } from 'pg';
+import { getSharedPgPool } from '../lib/pg-pool';
 
-// Use the same pool configuration as postgres-adapter.ts
-const DATABASE_URL = process.env.DATABASE_URL;
-const useSSL = process.env.DATABASE_URL?.includes('amazonaws.com') || false;
-
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: useSSL ? { rejectUnauthorized: false } : undefined
-});
+// Shared lazy pool (SSL resolved from sslmode/PGSSLMODE, verified TLS by
+// default in production) — see src/lib/pg-pool.ts.
+function pool(): Pool {
+  return getSharedPgPool();
+}
 
 export interface JoinRequest {
   id: number;
@@ -32,7 +30,7 @@ export class JoinRequestDatabase {
     try {
       console.log(`[DB] Creating join request: circle=${circleId}, user=${userAddress}, status=${status}`);
       
-      const result = await pool.query(
+      const result = await pool().query(
         `INSERT INTO join_requests 
          (circle_id, circle_name, user_address, user_name, status) 
          VALUES ($1, $2, $3, $4, $5)
@@ -64,7 +62,7 @@ export class JoinRequestDatabase {
     try {
       console.log(`[DB] Fetching pending requests for circle: ${circleId}`);
       
-      const result = await pool.query(
+      const result = await pool().query(
         `SELECT * FROM join_requests 
          WHERE circle_id = $1 AND status = 'pending'
          ORDER BY created_at DESC`,
@@ -85,7 +83,7 @@ export class JoinRequestDatabase {
     try {
       console.log(`[DB] Checking pending request for circle: ${circleId}, user: ${userAddress}`);
       
-      const result = await pool.query(
+      const result = await pool().query(
         `SELECT id FROM join_requests 
          WHERE circle_id = $1 AND user_address = $2 AND status = 'pending'`,
         [circleId, userAddress]
@@ -108,7 +106,7 @@ export class JoinRequestDatabase {
     status: 'approved' | 'rejected'
   ): Promise<boolean> {
     try {
-      const result = await pool.query(
+      const result = await pool().query(
         `UPDATE join_requests 
          SET status = $3, updated_at = CURRENT_TIMESTAMP
          WHERE circle_id = $1 AND user_address = $2`,
@@ -125,7 +123,7 @@ export class JoinRequestDatabase {
   // Get all requests for a user
   async getRequestsByUserAddress(userAddress: string): Promise<JoinRequest[]> {
     try {
-      const result = await pool.query(
+      const result = await pool().query(
         `SELECT * FROM join_requests 
          WHERE user_address = $1
          ORDER BY updated_at DESC`,
@@ -142,7 +140,7 @@ export class JoinRequestDatabase {
   // Get all requests for a circle
   async getRequestsByCircleId(circleId: string): Promise<JoinRequest[]> {
     try {
-      const result = await pool.query(
+      const result = await pool().query(
         `SELECT * FROM join_requests 
          WHERE circle_id = $1
          ORDER BY updated_at DESC`,
@@ -162,7 +160,7 @@ export class JoinRequestDatabase {
     try {
       console.log(`[DB] Looking up user: ${userAddress} for circle: ${circleId}`);
       
-      const result = await pool.query(
+      const result = await pool().query(
         `SELECT * FROM join_requests 
          WHERE circle_id = $1 AND user_address = $2
          ORDER BY updated_at DESC

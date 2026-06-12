@@ -107,7 +107,7 @@ function parseCircleIds(value: string | undefined): string[] {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!guardComplianceRequest(req, res, 'stale-attestation')) return;
+  if (!(await guardComplianceRequest(req, res, 'stale-attestation'))) return;
 
   const network: NetworkType =
     (req.method === 'POST'

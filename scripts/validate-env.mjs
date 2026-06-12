@@ -119,6 +119,19 @@ for (const key of [
   requireValue(key, read(key));
 }
 
+// Vercel serverless migration (June 2026): per-process state (zkLogin
+// sessions, rate limits, webhook dedupe) lives in Postgres. A deployment
+// without DATABASE_URL silently degrades to per-instance memory/SQLite,
+// which on serverless means random logouts and no dedupe — fail here, and
+// fail again at runtime (see src/lib/pg-pool.ts assertDatabaseUrlInProduction).
+requireValue('DATABASE_URL', read('DATABASE_URL'));
+if (read('DATABASE_URL') && !read('ZKLOGIN_SESSION_ENC_KEY')) {
+  errors.push(
+    'DATABASE_URL is set but ZKLOGIN_SESSION_ENC_KEY is empty. zkLogin sessions are ' +
+      'encrypted at rest before hitting Postgres; run `npm run generate:secrets`.',
+  );
+}
+
 if (read('NEXT_PUBLIC_FACEBOOK_CLIENT_SECRET')) {
   warnings.push('NEXT_PUBLIC_FACEBOOK_CLIENT_SECRET should not exist. Use a server-only variable if a secret is required.');
 }
@@ -153,6 +166,15 @@ if (complianceGateEnabled) {
 if (!complianceGateEnabled && !read('INTERNAL_NOTIFY_SECRET')) {
   warnings.push(
     'INTERNAL_NOTIFY_SECRET is unset. Required by the WhatsApp "your turn" notifier and the compliance attestor console.',
+  );
+}
+
+// June 2026 Vercel migration: the cycle-finalized notifier runs as a Vercel
+// cron authenticated by `Authorization: Bearer ${CRON_SECRET}`. Without it,
+// /api/cron/cycle-finalized fails closed (500) and no nudges go out.
+if (!read('CRON_SECRET')) {
+  warnings.push(
+    'CRON_SECRET is unset. /api/cron/cycle-finalized rejects every invocation without it; run `npm run generate:secrets` and mirror the value on the Vercel project.',
   );
 }
 

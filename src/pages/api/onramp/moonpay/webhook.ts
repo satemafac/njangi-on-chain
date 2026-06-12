@@ -11,6 +11,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { verifyMoonPayWebhookSignature } from '../../../../services/moonpay-service';
 import { recordOnrampEvent } from '../../../../lib/onramp-logging';
 import { handleRampKycEvent, type RampKycOutcome } from '../../../../lib/ramp-kyc-bridge';
+import { registerWebhookEvent, unregisterWebhookEvent } from '../../../../lib/webhook-dedupe';
 import type { NetworkType } from '../../../../services/whatsapp-registry-service';
 
 export const config = {
@@ -83,19 +84,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const subjectAddress = moonpaySubject(payload);
   const providerCaseId = moonpayCaseId(payload);
   if (outcome && issuerAddress && providerCaseId) {
-    const network = (process.env.NEXT_PUBLIC_SUI_NETWORK as NetworkType) ?? 'testnet';
-    void handleRampKycEvent(
-      {
-        provider: 'moonpay',
-        outcome,
-        providerCaseId,
-        subjectAddress,
-        network,
-      },
-      issuerAddress,
-    ).catch((err) => {
-      console.warn('[moonpay/webhook] ramp-kyc bridge failed', err);
-    });
+    // MoonPay retries deliveries on non-2xx/timeouts; dedupe on the
+    // (case, outcome) transition so a redelivery doesn't re-queue the
+    // attestation or re-send the WhatsApp confirmation.
+    const dedupeId = `${providerCaseId}:${outcome}`;
+    const duplicate = await registerWebhookEvent('moonpay', dedupeId);
+    if (!duplicate) {
+      const network = (process.env.NEXT_PUBLIC_SUI_NETWORK as NetworkType) ?? 'testnet';
+      try {
+        // Awaited before responding: on serverless the instance is frozen
+        // once the response is sent, so a fire-and-forget call may never
+        // run while the durable dedupe row above suppresses the retry.
+        await handleRampKycEvent(
+          {
+            provider: 'moonpay',
+            outcome,
+            providerCaseId,
+            subjectAddress,
+            network,
+          },
+          issuerAddress,
+        );
+      } catch (err) {
+        console.warn('[moonpay/webhook] ramp-kyc bridge failed', err);
+        // Release the dedupe claim and return non-2xx so MoonPay redelivers;
+        // the bridge is idempotent on retry.
+        await unregisterWebhookEvent('moonpay', dedupeId);
+        return res.status(500).json({ error: 'KYC_BRIDGE_FAILED' });
+      }
+    }
   }
 
   return res.status(200).json({ received: true });

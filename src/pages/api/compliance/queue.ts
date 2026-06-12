@@ -19,7 +19,7 @@ import { guardComplianceRequest } from '../../../lib/compliance-auth';
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const action =
     req.method === 'GET' ? 'queue-list' : req.method === 'POST' ? 'queue-mutate' : 'queue-unknown';
-  if (!guardComplianceRequest(req, res, action)) return;
+  if (!(await guardComplianceRequest(req, res, action))) return;
 
   if (req.method === 'GET') {
     const entries = await listPendingAttestations();

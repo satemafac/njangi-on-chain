@@ -10,6 +10,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { verifyTransakWebhookJwt } from '../../../../services/transak-service';
 import { recordOnrampEvent } from '../../../../lib/onramp-logging';
 import { handleRampKycEvent, type RampKycOutcome } from '../../../../lib/ramp-kyc-bridge';
+import { registerWebhookEvent, unregisterWebhookEvent } from '../../../../lib/webhook-dedupe';
 import type { NetworkType } from '../../../../services/whatsapp-registry-service';
 
 export const config = {
@@ -60,19 +61,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const subjectAddress = transakSubject(payload);
   const providerCaseId = transakCaseId(payload, body);
   if (outcome && issuerAddress && providerCaseId) {
-    const network = (process.env.NEXT_PUBLIC_SUI_NETWORK as NetworkType) ?? 'testnet';
-    void handleRampKycEvent(
-      {
-        provider: 'transak',
-        outcome,
-        providerCaseId,
-        subjectAddress,
-        network,
-      },
-      issuerAddress,
-    ).catch((err) => {
-      console.warn('[transak/webhook] ramp-kyc bridge failed', err);
-    });
+    // Transak retries deliveries; dedupe on the (case, outcome) transition
+    // so a redelivery doesn't re-queue the attestation or re-send the
+    // WhatsApp confirmation.
+    const dedupeId = `${providerCaseId}:${outcome}`;
+    const duplicate = await registerWebhookEvent('transak', dedupeId);
+    if (!duplicate) {
+      const network = (process.env.NEXT_PUBLIC_SUI_NETWORK as NetworkType) ?? 'testnet';
+      try {
+        // Awaited before responding: on serverless the instance is frozen
+        // once the response is sent, so a fire-and-forget call may never
+        // run while the durable dedupe row above suppresses the retry.
+        await handleRampKycEvent(
+          {
+            provider: 'transak',
+            outcome,
+            providerCaseId,
+            subjectAddress,
+            network,
+          },
+          issuerAddress,
+        );
+      } catch (err) {
+        console.warn('[transak/webhook] ramp-kyc bridge failed', err);
+        // Release the dedupe claim and return non-2xx so Transak redelivers;
+        // the bridge is idempotent on retry.
+        await unregisterWebhookEvent('transak', dedupeId);
+        return res.status(500).json({ error: 'KYC_BRIDGE_FAILED' });
+      }
+    }
   }
 
   return res.status(200).json({ received: true });

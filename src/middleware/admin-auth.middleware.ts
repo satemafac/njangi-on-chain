@@ -6,8 +6,9 @@
  * was never wired to a route; it has been replaced with real verification:
  *
  * 1. Resolve the caller from the HttpOnly `session-id` cookie issued by
- *    `/api/zkLogin` (shared in-memory store — see
- *    `src/lib/zklogin-session-registry.ts`). No session → 401.
+ *    `/api/zkLogin` (durable session registry, Postgres-backed when
+ *    DATABASE_URL is set — see `src/lib/zklogin-session-registry.ts`).
+ *    No session → 401.
  * 2. Fetch the circle object on chain and confirm the session address
  *    equals the circle's `admin` field (same source of truth as
  *    `/api/circles/[id]/verify-admin.ts`). Mismatch → 403.
@@ -131,7 +132,7 @@ export async function verifyCircleAdminRequest(
   //    /api/zkLogin OAuth flow. Client-supplied adminAddress/account fields
   //    are never trusted for authorization.
   const sessionId = req.cookies?.['session-id'];
-  const sessionAccount = getZkLoginSessionAccount(sessionId);
+  const sessionAccount = await getZkLoginSessionAccount(sessionId);
   if (!sessionId || !sessionAccount) {
     return {
       ok: false,

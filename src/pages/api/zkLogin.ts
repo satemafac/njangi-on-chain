@@ -35,7 +35,14 @@ import {
 import { getCircleConfigFields } from '@/lib/circle-config';
 import { getMinimumAutoReleaseDelayMsForMoveCycleLength } from '@/lib/auto-release';
 import { normalizeRecoveryDelegateAddress } from '@/lib/recovery-delegate';
-import { getZkLoginSessionStore } from '@/lib/zklogin-session-registry';
+import {
+  countZkLoginSessions,
+  deleteZkLoginSession,
+  deleteZkLoginSessionsForUser,
+  getZkLoginSession,
+  hasZkLoginSession,
+  setZkLoginSession,
+} from '@/lib/zklogin-session-registry';
 
 // Add at the top with other imports
 interface RPCError extends Error {
@@ -115,41 +122,33 @@ async function resolveCirclePackageIdForTransaction(args: {
   return resolvedPackageId;
 }
 
-// In-memory session store. The previous implementation persisted session
+// Durable session store. The previous implementation persisted session
 // material — including ephemeral private keys — to `./zklogin-sessions.json`
 // in development. That made the server an effective custodian and was
-// removed as part of the Phase 1 compliance redesign. Sessions now live
-// only in memory; restart the server to clear them. Production deployments
-// behind multiple replicas should swap this for Redis / Enoki rather than
-// re-introducing a disk file.
+// removed as part of the Phase 1 compliance redesign. The Vercel/serverless
+// migration (June 2026) moved sessions into Postgres, encrypted at rest —
+// see `src/lib/zklogin-session-registry.ts`. Without DATABASE_URL (dev) the
+// registry falls back to the historic in-memory Map.
 //
-// The underlying Map is shared via `zklogin-session-registry` so other API
-// routes (e.g. the WhatsApp admin endpoints) can resolve the caller's
-// session-verified address without trusting client-supplied identity.
-const sessions = (() => {
-  const sessionData = getZkLoginSessionStore();
-
-  return {
-    get: (key: string) => sessionData.get(key),
-    set: (key: string, value: SetupData & { account?: AccountData }) => {
-      sessionData.set(key, value);
-      return sessionData;
-    },
-    delete: (key: string) => sessionData.delete(key),
-    has: (key: string) => sessionData.has(key),
-    size: () => sessionData.size,
-    clear: () => sessionData.clear(),
-    entries: () => sessionData.entries(),
-  };
-})();
+// The registry is shared so other API routes (e.g. the WhatsApp admin
+// endpoints) can resolve the caller's session-verified address without
+// trusting client-supplied identity.
+const sessions = {
+  get: (key: string) => getZkLoginSession(key),
+  set: (key: string, value: SetupData & { account?: AccountData }) =>
+    setZkLoginSession(key, value),
+  delete: (key: string) => deleteZkLoginSession(key),
+  has: (key: string) => hasZkLoginSession(key),
+  size: () => countZkLoginSessions(),
+};
 
 // Add session validation helper with better error handling
-function validateSession(sessionId: string | undefined, action: string): SetupData & { account?: AccountData } {
+async function validateSession(sessionId: string | undefined, action: string): Promise<SetupData & { account?: AccountData }> {
   if (!sessionId) {
     throw new Error('No session ID provided');
   }
 
-  const session = sessions.get(sessionId);
+  const session = await sessions.get(sessionId);
   if (!session) {
     throw new Error(`Session not found for ${action}`);
   }
@@ -169,7 +168,7 @@ function validateSession(sessionId: string | undefined, action: string): SetupDa
       const maxEpoch = Number(session.maxEpoch);
       
       if (currentEpoch >= maxEpoch) {
-        if (sessionId) sessions.delete(sessionId);
+        if (sessionId) await sessions.delete(sessionId);
         throw new Error('Session has expired. Please login again.');
       }
     }
@@ -209,14 +208,10 @@ function clearSessionCookie(res: NextApiResponse) {
   res.setHeader('Set-Cookie', 'session-id=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT');
 }
 
-// Helper to clean up old sessions for a user
-function cleanupUserSessions(userAddr: string, currentSessionId: string) {
-  for (const [sessionId, session] of sessions.entries()) {
-    // Don't delete the current session
-    if (sessionId !== currentSessionId && session.account?.userAddr === userAddr) {
-      sessions.delete(sessionId);
-    }
-  }
+// Helper to clean up old sessions for a user (single active session per
+// user). Delegates to the registry so the delete spans every instance.
+function cleanupUserSessions(userAddr: string, currentSessionId: string): Promise<void> {
+  return deleteZkLoginSessionsForUser(userAddr, currentSessionId);
 }
 
 // Add after MAX_EPOCH constant
@@ -943,8 +938,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.log('Current session state:', {
       action,
       sessionId,
-      hasSession: sessionId ? sessions.has(sessionId) : false,
-      sessionCount: sessions.size
+      hasSession: sessionId ? await sessions.has(sessionId) : false,
+      sessionCount: await sessions.size()
     });
 
     const instance = enokiZkLoginService;
@@ -974,7 +969,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ephemeralPublicKey: instance.getPublicKeyFromPrivate(initialSetup.ephemeralPrivateKey)
         });
         
-        sessions.set(sessionId, initialSetup);
+        await sessions.set(sessionId, initialSetup);
         return res.status(200).json({ loginUrl });
 
       case 'handleCallback':
@@ -1007,7 +1002,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           // Get and validate setup data
-          const savedSetup = validateSession(sessionId, 'handleCallback');
+          const savedSetup = await validateSession(sessionId, 'handleCallback');
           
           // Preserve the auth session network from beginLogin. Only use the callback
           // request network as a fallback if the session did not already store one.
@@ -1033,7 +1028,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const result = await instance.handleCallback(jwt, savedSetup);
             
             // Clean up any existing sessions for this user
-            cleanupUserSessions(result.address, sessionId);
+            await cleanupUserSessions(result.address, sessionId);
             
             // Create the account data object
             const accountData: AccountData = {
@@ -1050,7 +1045,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             };
             
             // Store the account data in the session
-            sessions.set(sessionId, { ...savedSetup, account: accountData });
+            await sessions.set(sessionId, { ...savedSetup, account: accountData });
             
             // Clean up the processing lock
             PROCESSING_SESSIONS.delete(sessionId);
@@ -1085,7 +1080,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // If session validation failed, clear cookie and session
           if (err instanceof Error && err.message.includes('Session')) {
             clearSessionCookie(res);
-            if (sessionId) sessions.delete(sessionId);
+            if (sessionId) await sessions.delete(sessionId);
           }
           throw err;
         }
@@ -1104,15 +1099,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           console.log('Attempting transaction:', {
             sessionId,
             address: account.userAddr,
-            hasSession: sessions.has(sessionId),
+            hasSession: await sessions.has(sessionId),
             ephemeralPublicKey: instance.getPublicKeyFromPrivate(account.ephemeralPrivateKey)
           });
 
           // Validate session with action context
-          const session = validateSession(sessionId, 'sendTransaction');
+          const session = await validateSession(sessionId, 'sendTransaction');
           
           if (!session.account) {
-            sessions.delete(sessionId);
+            await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
               error: 'Invalid session: No account data found. Please authenticate first.'
@@ -1122,7 +1117,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Verify session matches account data
           if (session.account.userAddr !== account.userAddr || 
               session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
-            sessions.delete(sessionId);
+            await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
               error: 'Session mismatch: Please refresh your authentication'
@@ -1241,7 +1236,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               !session.account.zkProofs?.issBase64Details ||
               !session.account.zkProofs?.headerBase64) {
             console.error('Missing proof components in session account data');
-            sessions.delete(sessionId);
+            await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({
               error: 'Invalid proof data in session. Please login again.',
@@ -1254,7 +1249,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             BigInt(session.account.userSalt);
           } catch (error) {
             console.error('Invalid salt format:', error);
-            sessions.delete(sessionId);
+            await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({
               error: 'Invalid account data: salt is not properly formatted. Please login again.',
@@ -1361,7 +1356,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                  txError.message.includes('re-authenticate'))) {
               
               // Clear the session for authentication errors
-              sessions.delete(sessionId);
+              await sessions.delete(sessionId);
               clearSessionCookie(res);
               
               return res.status(401).json({
@@ -1386,7 +1381,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                (err as RPCError).code === -32002)) {
             // Clear the session and return 401
             if (sessionId) {
-              sessions.delete(sessionId);
+              await sessions.delete(sessionId);
               clearSessionCookie(res);
             }
             return res.status(401).json({ 
@@ -1418,12 +1413,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             sessionId,
             address: account.userAddr,
             circleId: req.body.circleId,
-            hasSession: sessions.has(sessionId),
+            hasSession: await sessions.has(sessionId),
             ephemeralPublicKey: instance.getPublicKeyFromPrivate(account.ephemeralPrivateKey)
           });
 
           // Validate session with action context
-          const session = validateSession(sessionId, 'deleteCircle');
+          const session = await validateSession(sessionId, 'deleteCircle');
           
           // Get important parameters from the request
           const circleId = req.body.circleId;
@@ -1711,7 +1706,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                  txError.message.includes('re-authenticate'))) {
               
               // Clear the session for authentication errors
-              sessions.delete(sessionId);
+              await sessions.delete(sessionId);
               clearSessionCookie(res);
               
               return res.status(401).json({
@@ -1799,7 +1794,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                (err as RPCError).code === -32002)) {
             // Clear the session and return 401
             if (sessionId) {
-              sessions.delete(sessionId);
+              await sessions.delete(sessionId);
               clearSessionCookie(res);
             }
             return res.status(401).json({ 
@@ -1832,7 +1827,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               throw new Error('No session ID provided');
             }
             // Just validate the session without storing the result
-            validateSession(sessionId, 'sendTransaction');
+            await validateSession(sessionId, 'sendTransaction');
           } catch (validationError) {
             console.error('Session validation failed:', validationError);
             clearSessionCookie(res);
@@ -1920,7 +1915,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                    txError.message.includes('re-authenticate'))) {
                 
                 // Clear the session for authentication errors
-                  sessions.delete(sessionId);
+                  await sessions.delete(sessionId);
                 clearSessionCookie(res);
                 
                 return res.status(401).json({
@@ -1987,7 +1982,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               throw new Error('No session ID provided');
             }
             // Just validate the session without storing the result
-            validateSession(sessionId, 'sendTransaction');
+            await validateSession(sessionId, 'sendTransaction');
           } catch (validationError) {
             console.error('Session validation failed:', validationError);
             clearSessionCookie(res);
@@ -2084,7 +2079,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                    txError.message.includes('re-authenticate'))) {
                 
                 // Clear the session for authentication errors
-                sessions.delete(sessionId);
+                await sessions.delete(sessionId);
                 clearSessionCookie(res);
                 
                 return res.status(401).json({
@@ -2150,7 +2145,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (!sessionId) {
               throw new Error('No session ID provided');
             }
-            validateSession(sessionId, 'sendTransaction');
+            await validateSession(sessionId, 'sendTransaction');
           } catch (validationError) {
             console.error('Session validation failed:', validationError);
             clearSessionCookie(res);
@@ -2372,7 +2367,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                    txError.message.includes('re-authenticate'))) {
                 
                 // Clear the session for authentication errors
-                sessions.delete(sessionId);
+                await sessions.delete(sessionId);
                 clearSessionCookie(res);
                 
                 return res.status(401).json({
@@ -2467,9 +2462,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           try {
-            const session = validateSession(sessionId, 'sendTransaction');
+            const session = await validateSession(sessionId, 'sendTransaction');
             if (!session.account) {
-              sessions.delete(sessionId);
+              await sessions.delete(sessionId);
               clearSessionCookie(res);
               return res.status(401).json({ 
                 error: 'Invalid session: No account data found. Please authenticate first.'
@@ -2933,7 +2928,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   routeError.message.includes('Session expired') ||
                   routeError.message.includes('Invalid session')) {
                 if (sessionId) {
-                  sessions.delete(sessionId);
+                  await sessions.delete(sessionId);
                   clearSessionCookie(res);
                 }
                 return res.status(401).json({
@@ -3019,10 +3014,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           // Validate session with action context
-          const session = validateSession(sessionId, 'sendTransaction');
+          const session = await validateSession(sessionId, 'sendTransaction');
           
           if (!session.account) {
-            if (sessionId) sessions.delete(sessionId);
+            if (sessionId) await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
               error: 'Invalid session: No account data found. Please authenticate first.',
@@ -3033,7 +3028,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Verify session matches account data
           if (session.account.userAddr !== account.userAddr || 
               session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
-            if (sessionId) sessions.delete(sessionId);
+            if (sessionId) await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
               error: 'Session mismatch: Please refresh your authentication',
@@ -3102,7 +3097,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 error.message.includes('Session expired') ||
                 error.message.includes('re-authenticate')) {
               // Clear the session for authentication errors
-              if (sessionId) sessions.delete(sessionId);
+              if (sessionId) await sessions.delete(sessionId);
               clearSessionCookie(res);
               
               return res.status(401).json({
@@ -3170,10 +3165,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           let depositAmount = parsedDepositAmount;
 
           // Validate session with action context
-          const session = validateSession(sessionId, 'sendTransaction');
+          const session = await validateSession(sessionId, 'sendTransaction');
           
           if (!session.account) {
-            if (sessionId) sessions.delete(sessionId);
+            if (sessionId) await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
               error: 'Invalid session: No account data found. Please authenticate first.',
@@ -3184,7 +3179,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Verify session matches account data
           if (session.account.userAddr !== account.userAddr || 
               session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
-            if (sessionId) sessions.delete(sessionId);
+            if (sessionId) await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
               error: 'Session mismatch: Please refresh your authentication',
@@ -3353,7 +3348,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                err.message.includes('Session expired'))) {
             
             if (sessionId) {
-              sessions.delete(sessionId);
+              await sessions.delete(sessionId);
               clearSessionCookie(res);
             }
             return res.status(401).json({ 
@@ -3405,10 +3400,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
           
           // Validate session with action context
-          const session = validateSession(sessionId, 'depositStablecoin');
+          const session = await validateSession(sessionId, 'depositStablecoin');
           
           if (!session.account) {
-            if (sessionId) sessions.delete(sessionId);
+            if (sessionId) await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
               error: 'Authentication error: Your session has expired. Please login again.',
@@ -3610,7 +3605,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               (error.message.includes('proof verify failed') ||
                error.message.includes('Session expired'))) {
             
-            if (sessionId) sessions.delete(sessionId);
+            if (sessionId) await sessions.delete(sessionId);
             clearSessionCookie(res);
             
             return res.status(401).json({
@@ -3677,10 +3672,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               : undefined;
 
           // Validate session with action context
-          const session = validateSession(sessionId, 'sendTransaction');
+          const session = await validateSession(sessionId, 'sendTransaction');
           
           if (!session.account) {
-            if (sessionId) sessions.delete(sessionId);
+            if (sessionId) await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
               error: 'Authentication error: Your session has expired. Please login again.',
@@ -3691,7 +3686,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Verify session matches account data
           if (session.account.userAddr !== account.userAddr || 
               session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
-            if (sessionId) sessions.delete(sessionId);
+            if (sessionId) await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
               error: 'Session mismatch: Please refresh your authentication',
@@ -3725,7 +3720,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                error.message.includes('Session expired') ||
                error.message.includes('re-authenticate'))) {
             
-            if (sessionId) sessions.delete(sessionId);
+            if (sessionId) await sessions.delete(sessionId);
             clearSessionCookie(res);
             
             return res.status(401).json({
@@ -3781,7 +3776,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               throw new Error('No session ID provided');
             }
             // Just validate the session without storing the result
-            validateSession(sessionId, 'sendTransaction');
+            await validateSession(sessionId, 'sendTransaction');
           } catch (validationError) {
             console.error('Session validation failed:', validationError);
             clearSessionCookie(res);
@@ -3837,7 +3832,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               
               // Clear the session for authentication errors
               if (sessionId) {
-                sessions.delete(sessionId);
+                await sessions.delete(sessionId);
                 clearSessionCookie(res);
               }
               
@@ -3913,9 +3908,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           // Now that we know sessionId is defined, we can safely use it
-          const session = validateSession(sessionId, 'sendTransaction');
+          const session = await validateSession(sessionId, 'sendTransaction');
           if (!session.account) {
-            sessions.delete(sessionId);
+            await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
               error: 'Invalid session: No account data found. Please authenticate first.'
@@ -4093,7 +4088,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                err.message.includes('Session expired'))) {
             
             if (sessionId) {
-              sessions.delete(sessionId);
+              await sessions.delete(sessionId);
               clearSessionCookie(res);
             }
             return res.status(401).json({ 
@@ -4131,9 +4126,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           // Validate session
-          const session = validateSession(sessionId, 'sendTransaction');
+          const session = await validateSession(sessionId, 'sendTransaction');
           if (!session.account) {
-            sessions.delete(sessionId);
+            await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
               error: 'Invalid session: No account data found. Please authenticate first.'
@@ -4502,7 +4497,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                error.message.includes('re-authenticate'))) {
             
             if (sessionId) {
-              sessions.delete(sessionId);
+              await sessions.delete(sessionId);
               clearSessionCookie(res);
             }
             return res.status(401).json({ 
@@ -4559,10 +4554,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           // Validate session with action context
-          const session = validateSession(sessionId, 'sendTransaction');
+          const session = await validateSession(sessionId, 'sendTransaction');
           
           if (!session.account) {
-            sessions.delete(sessionId);
+            await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
               error: 'Invalid session: No account data found. Please authenticate first.'
@@ -4572,7 +4567,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Verify session matches account data
           if (session.account.userAddr !== account.userAddr || 
             session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
-            sessions.delete(sessionId);
+            await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
               error: 'Session mismatch: Please refresh your authentication'
@@ -4638,7 +4633,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               (error.message.includes('proof verify failed') ||
               error.message.includes('Session expired'))) {
             
-            if (sessionId) sessions.delete(sessionId);
+            if (sessionId) await sessions.delete(sessionId);
             clearSessionCookie(res);
             
             return res.status(401).json({
@@ -4865,9 +4860,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             BigInt(usdcAmount) : BigInt(usdcAmount);
 
           // Validate session
-          const session = validateSession(sessionId, 'sendTransaction');
+          const session = await validateSession(sessionId, 'sendTransaction');
           if (!session.account) {
-            sessions.delete(sessionId);
+            await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
               error: 'Invalid session: No account data found. Please authenticate first.'
@@ -5235,7 +5230,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                error.message.includes('Session expired'))) {
             
             if (sessionId) {
-              sessions.delete(sessionId);
+              await sessions.delete(sessionId);
               clearSessionCookie(res);
             }
             return res.status(401).json({ 
@@ -5286,9 +5281,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (!sessionId) {
             return res.status(401).json({ error: 'No session found. Please authenticate first.' });
           }
-          const session = validateSession(sessionId, 'sendTransaction');
+          const session = await validateSession(sessionId, 'sendTransaction');
           if (!session.account) {
-            sessions.delete(sessionId);
+            await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({
               error: 'Invalid session: No account data found. Please authenticate first.',
@@ -5362,7 +5357,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               error.message.includes('re-authenticate'))) {
 
             if (sessionId) {
-              sessions.delete(sessionId);
+              await sessions.delete(sessionId);
               clearSessionCookie(res);
             }
             return res.status(401).json({
@@ -5422,9 +5417,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (!sessionId) {
             return res.status(401).json({ error: 'No session found. Please authenticate first.' });
           }
-          const session = validateSession(sessionId, 'sendTransaction');
+          const session = await validateSession(sessionId, 'sendTransaction');
           if (!session.account) {
-            sessions.delete(sessionId);
+            await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({
               error: 'Invalid session: No account data found. Please authenticate first.',
@@ -5494,7 +5489,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               error.message.includes('re-authenticate'))) {
 
             if (sessionId) {
-              sessions.delete(sessionId);
+              await sessions.delete(sessionId);
               clearSessionCookie(res);
             }
             return res.status(401).json({
@@ -5553,9 +5548,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res.status(401).json({ error: 'No session found. Please authenticate first.' });
         }
         try {
-          const session = validateSession(sessionId, 'sendTransaction');
+          const session = await validateSession(sessionId, 'sendTransaction');
           if (!session.account) {
-            sessions.delete(sessionId);
+            await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ error: 'Invalid session', requireRelogin: true });
           }
@@ -5606,9 +5601,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res.status(401).json({ error: 'No session found. Please authenticate first.' });
         }
         try {
-          const session = validateSession(sessionId, 'sendTransaction');
+          const session = await validateSession(sessionId, 'sendTransaction');
           if (!session.account) {
-            sessions.delete(sessionId);
+            await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ error: 'Invalid session', requireRelogin: true });
           }
@@ -5661,9 +5656,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res.status(401).json({ error: 'No session found. Please authenticate first.' });
         }
         try {
-          const session = validateSession(sessionId, 'sendTransaction');
+          const session = await validateSession(sessionId, 'sendTransaction');
           if (!session.account) {
-            sessions.delete(sessionId);
+            await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ error: 'Invalid session', requireRelogin: true });
           }
@@ -5723,7 +5718,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               throw new Error('No session ID provided');
             }
             // Just validate the session without storing the result
-            validateSession(sessionId, 'sendTransaction');
+            await validateSession(sessionId, 'sendTransaction');
           } catch (validationError) {
             console.error('Session validation failed:', validationError);
             clearSessionCookie(res);
@@ -5774,7 +5769,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               error.message.includes('re-authenticate'))) {
             
             if (sessionId) {
-              sessions.delete(sessionId);
+              await sessions.delete(sessionId);
               clearSessionCookie(res);
             }
             return res.status(401).json({
@@ -5819,7 +5814,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (!sessionId) {
               throw new Error('No session ID provided');
             }
-            validateSession(sessionId, 'sendTransaction');
+            await validateSession(sessionId, 'sendTransaction');
           } catch (validationError) {
             console.error('Session validation failed:', validationError);
             clearSessionCookie(res);
@@ -5864,7 +5859,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               error.message.includes('Session expired') ||
               error.message.includes('re-authenticate'))) {
             if (sessionId) {
-              sessions.delete(sessionId);
+              await sessions.delete(sessionId);
               clearSessionCookie(res);
             }
             return res.status(401).json({
@@ -5897,7 +5892,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (!sessionId) {
               throw new Error('No session ID provided');
             }
-            validateSession(sessionId, 'sendTransaction');
+            await validateSession(sessionId, 'sendTransaction');
           } catch (validationError) {
             console.error('Session validation failed:', validationError);
             clearSessionCookie(res);
@@ -5943,7 +5938,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               error.message.includes('Session expired') ||
               error.message.includes('re-authenticate'))) {
             if (sessionId) {
-              sessions.delete(sessionId);
+              await sessions.delete(sessionId);
               clearSessionCookie(res);
             }
             return res.status(401).json({
@@ -5978,7 +5973,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (!sessionId) {
               throw new Error('No session ID provided');
             }
-            validateSession(sessionId, 'sendTransaction');
+            await validateSession(sessionId, 'sendTransaction');
           } catch (validationError) {
             console.error('Session validation failed:', validationError);
             clearSessionCookie(res);
@@ -6027,7 +6022,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               error.message.includes('Session expired') ||
               error.message.includes('re-authenticate'))) {
             if (sessionId) {
-              sessions.delete(sessionId);
+              await sessions.delete(sessionId);
               clearSessionCookie(res);
             }
             return res.status(401).json({
@@ -6063,7 +6058,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (!sessionId) {
               throw new Error('No session ID provided');
             }
-            validateSession(sessionId, 'sendTransaction');
+            await validateSession(sessionId, 'sendTransaction');
           } catch (validationError) {
             console.error('Session validation failed:', validationError);
             clearSessionCookie(res);
@@ -6112,7 +6107,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               error.message.includes('Session expired') ||
               error.message.includes('re-authenticate'))) {
             if (sessionId) {
-              sessions.delete(sessionId);
+              await sessions.delete(sessionId);
               clearSessionCookie(res);
             }
             return res.status(401).json({
@@ -6158,10 +6153,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           // Validate session
-          const session = validateSession(sessionId, 'sendTokens');
+          const session = await validateSession(sessionId, 'sendTokens');
           
           if (!session.account) {
-            sessions.delete(sessionId);
+            await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
               error: 'Invalid session: No account data found. Please authenticate first.',
@@ -6172,7 +6167,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Verify session matches account data
           if (session.account.userAddr !== account.userAddr || 
               session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
-            sessions.delete(sessionId);
+            await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
               error: 'Session mismatch: Please refresh your authentication',
@@ -6354,7 +6349,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               (error.message.includes('proof verify failed') ||
               error.message.includes('Session expired'))) {
             
-            if (sessionId) sessions.delete(sessionId);
+            if (sessionId) await sessions.delete(sessionId);
             clearSessionCookie(res);
             
             return res.status(401).json({

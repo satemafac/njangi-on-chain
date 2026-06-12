@@ -13,6 +13,13 @@
 //                                    when unset, but the audit team likes
 //                                    to see them split, so we generate
 //                                    both by default).
+//   * ZKLOGIN_SESSION_ENC_KEY      — AES-256 key encrypting zkLogin session
+//                                    payloads (ephemeral keys + zk proofs)
+//                                    at rest in the Postgres
+//                                    `zklogin_sessions` table.
+//   * CRON_SECRET                  — bearer secret Vercel attaches to cron
+//                                    invocations (/api/cron/*). Must match
+//                                    the env var set on the Vercel project.
 //
 // Usage:
 //   node scripts/generate-secrets.mjs           # patches .env.local
@@ -34,6 +41,8 @@ const SECRET_KEYS = [
   'COMPLIANCE_REF_HMAC_SALT',
   'INTERNAL_NOTIFY_SECRET',
   'COMPLIANCE_ISSUANCE_SECRET',
+  'ZKLOGIN_SESSION_ENC_KEY',
+  'CRON_SECRET',
 ];
 
 function defaultEnvPath() {

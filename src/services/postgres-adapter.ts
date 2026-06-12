@@ -1,21 +1,22 @@
 /**
  * PostgreSQL adapter for the salt service.
- * This adapter is used in production environments (e.g., Heroku).
+ * This adapter is used in production environments (Vercel + Neon; formerly
+ * Heroku). SSL is resolved from sslmode in the URL / PGSSLMODE, defaulting
+ * to verified TLS in production — see src/lib/pg-pool.ts.
  */
 
-import { Pool } from 'pg';
+import type { Pool } from 'pg';
+import {
+  assertDatabaseUrlInProduction,
+  getSharedPgPool,
+  isPostgresConfigured,
+} from '../lib/pg-pool';
 
-// Define environment variable for DATABASE_URL
-const DATABASE_URL = process.env.DATABASE_URL;
-
-// Check if we're using SSL (Heroku PostgreSQL requires SSL)
-const useSSL = process.env.DATABASE_URL?.includes('amazonaws.com') || false;
-
-// Create a PostgreSQL connection pool
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: useSSL ? { rejectUnauthorized: false } : undefined
-});
+// Lazy shared pool: created on first query so importing this module never
+// connects (or crashes) when the SQLite dev adapter is in use.
+function pool(): Pool {
+  return getSharedPgPool();
+}
 
 export interface SaltData {
   id?: number;
@@ -40,7 +41,7 @@ export class PostgresAdapter implements DatabaseAdapter {
   async setup(): Promise<void> {
     try {
       // Create tables if they don't exist
-      await pool.query(`
+      await pool().query(`
         CREATE TABLE IF NOT EXISTS salts (
           id SERIAL PRIMARY KEY,
           sub TEXT NOT NULL,
@@ -85,7 +86,7 @@ export class PostgresAdapter implements DatabaseAdapter {
   }
 
   async getSalt(sub: string, aud: string): Promise<SaltData> {
-    const result = await pool.query(
+    const result = await pool().query(
       'SELECT id, salt_encrypted, iv, tag FROM salts WHERE sub = $1 AND aud = $2',
       [sub, aud]
     );
@@ -104,7 +105,7 @@ export class PostgresAdapter implements DatabaseAdapter {
   }
 
   async insertSalt(sub: string, aud: string, saltEncrypted: Buffer, iv: Buffer, tag: Buffer): Promise<number> {
-    const result = await pool.query(
+    const result = await pool().query(
       'INSERT INTO salts (sub, aud, salt_encrypted, iv, tag) VALUES ($1, $2, $3, $4, $5) RETURNING id',
       [sub, aud, saltEncrypted, iv, tag]
     );
@@ -113,14 +114,14 @@ export class PostgresAdapter implements DatabaseAdapter {
   }
 
   async insertRecoveryCode(saltId: number, codeHash: string): Promise<void> {
-    await pool.query(
+    await pool().query(
       'INSERT INTO recovery_codes (salt_id, code_hash) VALUES ($1, $2)',
       [saltId, codeHash]
     );
   }
 
   async getSaltId(sub: string, aud: string): Promise<number | null> {
-    const result = await pool.query(
+    const result = await pool().query(
       'SELECT id FROM salts WHERE sub = $1 AND aud = $2',
       [sub, aud]
     );
@@ -133,7 +134,7 @@ export class PostgresAdapter implements DatabaseAdapter {
   }
 
   async getRecoveryCode(saltId: number, codeHash: string): Promise<{ id: number } | null> {
-    const result = await pool.query(
+    const result = await pool().query(
       'SELECT id FROM recovery_codes WHERE salt_id = $1 AND code_hash = $2 AND used_at IS NULL',
       [saltId, codeHash]
     );
@@ -146,14 +147,14 @@ export class PostgresAdapter implements DatabaseAdapter {
   }
 
   async markRecoveryCodeUsed(id: number): Promise<void> {
-    await pool.query(
+    await pool().query(
       'UPDATE recovery_codes SET used_at = CURRENT_TIMESTAMP WHERE id = $1',
       [id]
     );
   }
 
   async close(): Promise<void> {
-    await pool.end();
+    await pool().end();
   }
 }
 
@@ -259,23 +260,35 @@ export class SQLiteAdapter implements DatabaseAdapter {
   }
 }
 
-// Factory function to get the appropriate database adapter
+// Factory function to get the appropriate database adapter.
+//
+// June 2026 ops-readiness audit: production must never silently fall back
+// to SQLite (a per-instance file on a read-only serverless filesystem).
+// DATABASE_URL is required at boot in production; SQLite remains the
+// explicit dev-only fallback.
 export async function getDatabaseAdapter(): Promise<DatabaseAdapter> {
-  if (process.env.USE_POSTGRES === 'true') {
+  assertDatabaseUrlInProduction('postgres-adapter');
+
+  if (isPostgresConfigured() || process.env.USE_POSTGRES === 'true') {
+    if (!isPostgresConfigured()) {
+      throw new Error(
+        'USE_POSTGRES=true but DATABASE_URL is not set. Configure the connection string.',
+      );
+    }
     console.log('Using PostgreSQL adapter');
     return new PostgresAdapter();
-  } else {
-    console.log('Using SQLite adapter');
-    try {
-      // Use dynamic import for better-sqlite3
-      // This avoids ESM/CJS interop issues while still following ESM standards
-      const BetterSqlite3 = await import('better-sqlite3');
-      const Database = BetterSqlite3.default;
-      
-      return new SQLiteAdapter('./salt-database.db', Database);
-    } catch (error) {
-      console.error('Failed to load SQLite adapter:', error);
-      throw new Error('SQLite adapter failed to initialize');
-    }
   }
-} 
+
+  console.log('Using SQLite adapter (development only)');
+  try {
+    // Use dynamic import for better-sqlite3
+    // This avoids ESM/CJS interop issues while still following ESM standards
+    const BetterSqlite3 = await import('better-sqlite3');
+    const Database = BetterSqlite3.default;
+
+    return new SQLiteAdapter('./salt-database.db', Database);
+  } catch (error) {
+    console.error('Failed to load SQLite adapter:', error);
+    throw new Error('SQLite adapter failed to initialize');
+  }
+}

@@ -9,10 +9,10 @@
 // salt is rotated independently of the AES master key; rotating the salt
 // requires re-running an indexing job over existing on-chain links.
 
-import { Pool } from 'pg';
+import type { Pool } from 'pg';
 import { computeLookupHash } from './walrus-pii';
+import { getSharedPgPool, isPostgresConfigured } from './pg-pool';
 
-let pool: Pool | null = null;
 let setupPromise: Promise<void> | null = null;
 
 const memoryFallback = new Map<string, WhatsAppPhoneIndexRow[]>();
@@ -24,26 +24,14 @@ export interface WhatsAppPhoneIndexRow {
   linkType: 1 | 2;
 }
 
-function databaseUrl(): string | undefined {
-  return process.env.DATABASE_URL;
-}
-
 function isPostgresAvailable(): boolean {
-  return Boolean(databaseUrl());
+  return isPostgresConfigured();
 }
 
+// Shared lazy pool (SSL resolved from sslmode/PGSSLMODE, verified TLS by
+// default in production) — see src/lib/pg-pool.ts.
 function getPool(): Pool {
-  if (!pool) {
-    const url = databaseUrl();
-    if (!url) {
-      throw new Error('DATABASE_URL is not configured.');
-    }
-    pool = new Pool({
-      connectionString: url,
-      ssl: url.includes('amazonaws.com') ? { rejectUnauthorized: false } : undefined,
-    });
-  }
-  return pool;
+  return getSharedPgPool();
 }
 
 async function ensureTable(): Promise<void> {
