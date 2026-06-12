@@ -14,13 +14,27 @@
  *
  * GET /api/whatsapp/admin-link-circle?circleId=...&network=...
  *  returns { isLinked, linkType, walrusBlobId, linkNonceHex, recipient? }
- *  `recipient` is decrypted server-side and only returned on the GET path
- *  for admin tooling — webhooks should resolve via the bundled helper to
- *  avoid passing the plaintext through extra hops.
+ *  `recipient` is decrypted server-side and only returned when
+ *  `includeRecipient=true` AND the caller's zkLogin session resolves to the
+ *  on-chain circle admin. Without that proof the response carries zero PII
+ *  (the plain link-existence probe stays public for the frontend).
+ *
+ * Auth: POST and the GET `includeRecipient` path require the `session-id`
+ * cookie from /api/zkLogin to map to the circle's on-chain admin — see
+ * `src/middleware/admin-auth.middleware.ts`. Authorization runs before any
+ * side effect (Walrus upload, Postgres index write, chain anchor), and the
+ * handler operates on the middleware-verified `req.admin.circleId` /
+ * `req.admin.network` so a diverging query string can never retarget the
+ * link at a circle the caller does not administer.
  */
 
 import { NextApiResponse, NextApiRequest } from 'next';
-import { logAdminAction } from '../../../middleware/admin-auth.middleware';
+import {
+  logAdminAction,
+  verifyCircleAdminRequest,
+  withCircleAdminAuth,
+  type AuthenticatedRequest,
+} from '../../../middleware/admin-auth.middleware';
 import { enokiZkLoginService } from '../../../services/enokiZkLoginService';
 import { AccountData } from '../../../services/zkLoginService';
 import { getNetworkConfig } from '../../../services/network-config';
@@ -36,13 +50,13 @@ import {
 import { indexWhatsAppLink } from '../../../lib/whatsapp-link-index';
 
 interface LinkCircleRequest {
-  circleId: string;
+  circleId: string; // consumed by withCircleAdminAuth, not the handler
   linkType: 1 | 2; // 1 = individual, 2 = group
   phoneOrGroup: string;
   groupName?: string;
-  adminAddress?: string;
+  adminAddress?: string; // must match the session (middleware-enforced)
   account?: AccountData;
-  network?: NetworkType;
+  network?: NetworkType; // consumed by withCircleAdminAuth, not the handler
 }
 
 function buildPayload(
@@ -73,6 +87,20 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
     }
 
     const network = (networkParam as NetworkType) || 'testnet';
+
+    // PII gate: decrypting the linked recipient requires the caller to prove
+    // they are the circle admin (server-verified session + on-chain check).
+    // The unauthenticated probe below returns link existence only — no PII.
+    const wantsRecipient = includeRecipient === 'true';
+    if (wantsRecipient) {
+      const verification = await verifyCircleAdminRequest(req, { circleId, network });
+      if (!verification.ok) {
+        return res
+          .status(verification.status)
+          .json({ success: false, error: verification.error });
+      }
+    }
+
     const activeRegistries = getActiveWhatsAppRegistries(network);
     if (!activeRegistries || activeRegistries.length === 0) {
       throw new Error(`No active WhatsApp registry configured for ${network} network`);
@@ -129,7 +157,7 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
       const walrusBlobIdString = blobIdToString(walrusBlobId);
 
       let recipient: string | undefined;
-      if (includeRecipient === 'true') {
+      if (wantsRecipient) {
         try {
           const payload = await fetchAndDecryptPII(walrusBlobIdString);
           recipient = payload.phone_e164 ?? payload.group_id ?? undefined;
@@ -172,24 +200,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ success: false, error: 'Method not allowed' });
   }
 
+  // Authorization (session → on-chain admin) runs before the handler so no
+  // Walrus upload / index write can happen for an unverified caller.
+  return withCircleAdminAuth(handlePost)(req, res);
+}
+
+async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
   try {
-    const adminAddr = req.body?.adminAddress || 'unknown';
+    // Verified by withCircleAdminAuth: session address === on-chain admin.
+    // Operate on the circle/network the authorization actually ran against —
+    // never re-read them from the raw body, which could diverge from the
+    // query string the middleware resolved (cross-circle link hijack).
+    const adminAddr = req.admin!.suiAddress;
+    const circleId = req.admin!.circleId;
+    const network = req.admin!.network;
     const account = req.body?.account as AccountData | undefined;
 
-    const {
-      circleId,
-      linkType,
-      phoneOrGroup,
-      groupName,
-      network: networkParam,
-    } = req.body as LinkCircleRequest;
+    const { linkType, phoneOrGroup, groupName } = req.body as LinkCircleRequest;
 
-    const network = networkParam || 'testnet';
-
-    if (!circleId || !linkType || !phoneOrGroup) {
+    if (!linkType || !phoneOrGroup) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required fields: circleId, linkType, phoneOrGroup',
+        error: 'Missing required fields: linkType, phoneOrGroup',
       });
     }
 
@@ -309,7 +341,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       },
     });
   } catch (error) {
-    const suiAddress = req.body?.adminAddress;
+    const suiAddress = req.admin?.suiAddress;
     if (suiAddress) {
       logAdminAction('LINK_CIRCLE_ERROR', suiAddress, {
         error: error instanceof Error ? error.message : String(error),

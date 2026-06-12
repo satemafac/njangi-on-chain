@@ -1,7 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { z } from 'zod';
 import joinRequestDatabase from '../../../services/join-request-database';
 import databaseService from '../../../services/database-service';
 import { resolveCircleLifecycleState } from '../../../lib/circle-chain';
+import { getClientIp } from '../../../lib/client-ip';
+import { consumeRateLimit } from '../../../lib/rate-limit';
 import { getCurrentRpcUrl } from '../../../services/network-config';
 import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
 
@@ -10,6 +13,24 @@ type ResponseData = {
   message?: string;
   data?: Record<string, unknown>;
 };
+
+// Abuse guards: this endpoint is unauthenticated (the on-chain join is the
+// source of truth), so validate shapes/lengths and throttle per IP+address.
+// Cryptographic proof that the caller owns userAddress is follow-up scope.
+const REQUESTS_PER_MINUTE = 5;
+const MINUTE_WINDOW_MS = 60_000;
+
+const suiAddressSchema = z
+  .string()
+  .trim()
+  .regex(/^0x[a-fA-F0-9]{1,64}$/, 'Invalid Sui address format');
+
+const createJoinRequestSchema = z.object({
+  circleId: suiAddressSchema,
+  circleName: z.string().trim().min(1).max(120),
+  userAddress: suiAddressSchema,
+  userName: z.string().trim().max(80).optional(),
+});
 
 async function getCircleJoinWindow(circleId: string): Promise<{
   isActive: boolean;
@@ -51,13 +72,26 @@ export default async function handler(
   }
 
   try {
-    const { circleId, circleName, userAddress, userName } = req.body;
-
-    // Validate required fields
-    if (!circleId || !circleName || !userAddress) {
+    const parsed = createJoinRequestSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required fields'
+        message: 'Missing or invalid fields'
+      });
+    }
+    const { circleId, circleName, userAddress, userName } = parsed.data;
+
+    // Throttle before any RPC/database work.
+    const rateOutcome = consumeRateLimit({
+      key: `join-request:${getClientIp(req)}:${userAddress.toLowerCase()}`,
+      limit: REQUESTS_PER_MINUTE,
+      windowMs: MINUTE_WINDOW_MS,
+    });
+    if (!rateOutcome.allowed) {
+      res.setHeader('Retry-After', String(Math.ceil(rateOutcome.resetMs / 1000)));
+      return res.status(429).json({
+        success: false,
+        message: 'Too many join requests. Please wait a moment and try again.'
       });
     }
 

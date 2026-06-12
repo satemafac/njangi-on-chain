@@ -5,6 +5,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createHash } from 'crypto';
 import { consumeRateLimit } from './rate-limit';
+import { timingSafeEqualStrings } from './timing-safe';
 
 const DEFAULT_LIMIT = Number(process.env.COMPLIANCE_RATE_LIMIT ?? '60');
 const DEFAULT_WINDOW_MS = Number(process.env.COMPLIANCE_RATE_LIMIT_WINDOW_MS ?? '60000');
@@ -36,7 +37,9 @@ export function guardComplianceRequest(
 ): boolean {
   const secret = sharedSecret();
   const supplied = req.headers['x-internal-auth'];
-  if (!secret || !supplied || supplied !== secret) {
+  // Constant-time comparison — a plain `!==` short-circuits and leaks
+  // timing information about the shared secret.
+  if (!secret || !timingSafeEqualStrings(supplied, secret)) {
     res.status(401).json({ error: 'Invalid internal auth' });
     return false;
   }

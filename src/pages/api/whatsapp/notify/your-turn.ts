@@ -23,6 +23,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { appLogger } from '../../../../utils/logger';
 import { sendMemberNotification } from '../../../../lib/whatsapp-notifier';
+import { timingSafeEqualStrings } from '../../../../lib/timing-safe';
 import type { NetworkType } from '../../../../services/whatsapp-registry-service';
 
 type SupportedLocale = 'en' | 'fr' | 'pcm' | 'sw' | 'am' | 'ar' | 'fa';
@@ -92,7 +93,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   const authHeader = req.headers['x-internal-auth'];
   const secret = process.env.INTERNAL_NOTIFY_SECRET;
-  if (!secret || !authHeader || authHeader !== secret) {
+  // Constant-time comparison — a plain `!==` short-circuits and leaks
+  // timing information about the shared secret.
+  if (!secret || !timingSafeEqualStrings(authHeader, secret)) {
     return res.status(401).json({ error: 'Invalid internal auth' });
   }
 

@@ -35,6 +35,7 @@ import {
 import { getCircleConfigFields } from '@/lib/circle-config';
 import { getMinimumAutoReleaseDelayMsForMoveCycleLength } from '@/lib/auto-release';
 import { normalizeRecoveryDelegateAddress } from '@/lib/recovery-delegate';
+import { getZkLoginSessionStore } from '@/lib/zklogin-session-registry';
 
 // Add at the top with other imports
 interface RPCError extends Error {
@@ -121,8 +122,12 @@ async function resolveCirclePackageIdForTransaction(args: {
 // only in memory; restart the server to clear them. Production deployments
 // behind multiple replicas should swap this for Redis / Enoki rather than
 // re-introducing a disk file.
+//
+// The underlying Map is shared via `zklogin-session-registry` so other API
+// routes (e.g. the WhatsApp admin endpoints) can resolve the caller's
+// session-verified address without trusting client-supplied identity.
 const sessions = (() => {
-  const sessionData = new Map<string, SetupData & { account?: AccountData }>();
+  const sessionData = getZkLoginSessionStore();
 
   return {
     get: (key: string) => sessionData.get(key),

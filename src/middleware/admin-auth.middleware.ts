@@ -1,15 +1,30 @@
 /**
  * 🔐 Admin Authentication Middleware
- * 
- * Verifies zkLogin admin authentication for protected routes
- * - Token validation
- * - Permission checking
- * - Request logging/auditing
- * - Graceful error handling
+ *
+ * Server-side authorization for circle-admin API routes. The previous
+ * implementation was a placeholder that accepted any non-empty token and
+ * was never wired to a route; it has been replaced with real verification:
+ *
+ * 1. Resolve the caller from the HttpOnly `session-id` cookie issued by
+ *    `/api/zkLogin` (shared in-memory store — see
+ *    `src/lib/zklogin-session-registry.ts`). No session → 401.
+ * 2. Fetch the circle object on chain and confirm the session address
+ *    equals the circle's `admin` field (same source of truth as
+ *    `/api/circles/[id]/verify-admin.ts`). Mismatch → 403.
+ *
+ * Authorization runs BEFORE any handler side effect (Walrus upload,
+ * Postgres index write, notification) — wrap handlers with
+ * `withCircleAdminAuth` or call `verifyCircleAdminRequest` first thing.
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { createLogger, format, transports } from 'winston';
+import { getZkLoginSessionAccount } from '../lib/zklogin-session-registry';
+import {
+  fetchCircleAdminAddress,
+  suiAddressesEqual,
+} from '../lib/circle-admin-verification';
+import type { NetworkType } from '../services/whatsapp-registry-service';
 
 // Configure logger for admin actions
 const adminLogger = createLogger({
@@ -28,326 +43,211 @@ const adminLogger = createLogger({
 // Types
 // ============================================================
 
-export type AdminAction = 'link_circle' | 'unlink_circle' | 'approve_payout' | 'manage_settings' | 'view_logs';
-
-export interface AdminPermission {
-  action: AdminAction;
-  circleId?: string;
-  expiresAt?: Date;
+export interface VerifiedCircleAdmin {
+  /** Session-verified caller address, confirmed equal to the on-chain admin. */
+  suiAddress: string;
+  sessionId: string;
+  circleId: string;
+  network: NetworkType;
 }
+
+export type CircleAdminVerification =
+  | { ok: true; admin: VerifiedCircleAdmin }
+  | { ok: false; status: number; error: string };
 
 export interface AuthenticatedRequest extends NextApiRequest {
-  admin?: {
-    suiAddress: string;
-    sessionId: string;
-    permissions: AdminPermission[];
-    token: string;
-  };
+  admin?: VerifiedCircleAdmin;
 }
 
-export interface MiddlewareOptions {
-  requiredPermission?: AdminPermission['action'];
-  circleIdParam?: string; // Query/body param for circle ID
-  logging?: boolean;
+export interface CircleAdminVerifyOptions {
+  /** Override the circleId instead of reading it from query/body. */
+  circleId?: string;
+  /** Override the network instead of reading it from query/body. */
+  network?: NetworkType;
+}
+
+/** Injectable for tests; production callers use the on-chain default. */
+export interface CircleAdminVerifyDeps {
+  fetchAdminAddress?: typeof fetchCircleAdminAddress;
 }
 
 // ============================================================
-// Middleware Functions
+// Verification
 // ============================================================
 
-/**
- * Extract token from request (header, cookie, or body)
- */
-function extractToken(req: NextApiRequest): string | null {
-  // 1. Check Authorization header
-  const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith('Bearer ')) {
-    return authHeader.substring(7);
-  }
+function resolveNetwork(raw: unknown): NetworkType {
+  return raw === 'mainnet' || raw === 'testnet' ? raw : 'testnet';
+}
 
-  // 2. Check Cookie
-  const cookies = req.headers.cookie;
-  if (cookies) {
-    const match = cookies.match(/admin_session=([^;]+)/);
-    if (match) {
-      return match[1];
-    }
-  }
-
-  // 3. Check request body
-  if (req.body?.token) {
-    return req.body.token;
-  }
-
-  if (req.body?.sessionId) {
-    return req.body.sessionId;
-  }
-
-  return null;
+function firstString(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.length > 0) return value;
+  if (Array.isArray(value) && typeof value[0] === 'string') return value[0];
+  return undefined;
 }
 
 /**
- * Verify admin authentication
+ * Core primitive shared by the admin link/unlink routes (and the GET
+ * `includeRecipient` PII path): binds the caller to a server-verified
+ * zkLogin session and confirms that address is the on-chain circle admin.
+ * Performs no side effects and writes nothing to the response.
  */
-function verifyAdminToken(token: string): { suiAddress: string; sessionId: string; permissions: AdminPermission[] } | null {
-  if (!token || typeof token !== 'string' || token.length === 0) {
-    return null;
+export async function verifyCircleAdminRequest(
+  req: NextApiRequest,
+  options: CircleAdminVerifyOptions = {},
+  deps: CircleAdminVerifyDeps = {},
+): Promise<CircleAdminVerification> {
+  // Query and body are independent in a pages API request, so a caller could
+  // authorize against one circle/network while the handler operates on
+  // another. Reject any divergence outright, and prefer the body value (the
+  // operation target for state-changing POSTs) over the query. Handlers must
+  // then operate on the verified `req.admin.circleId` / `req.admin.network`,
+  // never re-read the raw body.
+  const queryCircleId = firstString(req.query?.circleId);
+  const bodyCircleId = firstString(req.body?.circleId);
+  if (queryCircleId && bodyCircleId && queryCircleId !== bodyCircleId) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'circleId mismatch between query string and request body.',
+    };
+  }
+  const circleId = options.circleId ?? bodyCircleId ?? queryCircleId;
+  if (!circleId) {
+    return { ok: false, status: 400, error: 'Missing circleId' };
   }
 
-  // Simple token validation - in production, verify JWT signature
-  // This is a placeholder implementation
+  const queryNetwork = firstString(req.query?.network);
+  const bodyNetwork = firstString(req.body?.network);
+  if (queryNetwork && bodyNetwork && queryNetwork !== bodyNetwork) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'network mismatch between query string and request body.',
+    };
+  }
+  const network = resolveNetwork(options.network ?? bodyNetwork ?? queryNetwork);
+
+  // 1. Server-verified identity: the HttpOnly session cookie set during the
+  //    /api/zkLogin OAuth flow. Client-supplied adminAddress/account fields
+  //    are never trusted for authorization.
+  const sessionId = req.cookies?.['session-id'];
+  const sessionAccount = getZkLoginSessionAccount(sessionId);
+  if (!sessionId || !sessionAccount) {
+    return {
+      ok: false,
+      status: 401,
+      error: 'Authentication required: no valid zkLogin session. Please sign in again.',
+    };
+  }
+
+  // If the body carries signing material or an address claim, it must match
+  // the authenticated session — same check /api/zkLogin applies before
+  // signing transactions.
+  const bodyAccountAddr = req.body?.account?.userAddr;
+  if (
+    typeof bodyAccountAddr === 'string' &&
+    bodyAccountAddr.length > 0 &&
+    !suiAddressesEqual(bodyAccountAddr, sessionAccount.userAddr)
+  ) {
+    return {
+      ok: false,
+      status: 401,
+      error: 'Session mismatch: account does not match the authenticated session.',
+    };
+  }
+  const claimedAdminAddr = req.body?.adminAddress;
+  if (
+    typeof claimedAdminAddr === 'string' &&
+    claimedAdminAddr.length > 0 &&
+    !suiAddressesEqual(claimedAdminAddr, sessionAccount.userAddr)
+  ) {
+    return {
+      ok: false,
+      status: 403,
+      error: 'adminAddress does not match the authenticated session.',
+    };
+  }
+
+  // 2. On-chain authority: the circle object's admin field. RPC failures
+  //    fail closed.
+  const fetchAdmin = deps.fetchAdminAddress ?? fetchCircleAdminAddress;
+  let onChainAdmin: string | null;
   try {
+    onChainAdmin = await fetchAdmin(circleId, network);
+  } catch (error) {
+    adminLogger.error('❌ On-chain admin lookup failed', {
+      circleId,
+      network,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return {
-      suiAddress: '', // Extracted from token in production
-      sessionId: token,
-      permissions: [
-        { action: 'link_circle' },
-        { action: 'unlink_circle' }
-      ]
+      ok: false,
+      status: 500,
+      error: 'Failed to verify circle admin on-chain',
     };
-  } catch {
-    return null;
   }
-}
 
-/**
- * Check if admin has specific permission
- */
-function hasPermission(
-  permissions: AdminPermission[],
-  action: AdminPermission['action'],
-  circleId?: string
-): boolean {
-  return permissions.some(perm => {
-    if (perm.action !== action) return false;
-    if (perm.expiresAt && perm.expiresAt < new Date()) return false;
-    if (perm.circleId && perm.circleId !== circleId) return false;
-    return true;
-  });
-}
+  if (!onChainAdmin) {
+    return { ok: false, status: 404, error: 'Circle not found' };
+  }
 
-/**
- * Main authentication middleware for API routes
- */
-export function withAdminAuth(options: MiddlewareOptions = {}) {
-  return (handler: (req: AuthenticatedRequest, res: NextApiResponse) => Promise<void> | void) => {
-    return async (req: AuthenticatedRequest, res: NextApiResponse) => {
-      try {
-        const token = extractToken(req);
-
-        if (!token) {
-          adminLogger.warn('❌ Missing authentication token', {
-            path: req.url,
-            ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress
-          });
-
-          return res.status(401).json({
-            success: false,
-            error: 'Missing authentication token',
-            requiresReauth: true
-          });
-        }
-
-        const adminData = verifyAdminToken(token);
-
-        if (!adminData) {
-          adminLogger.warn('❌ Invalid or expired token', {
-            path: req.url,
-            ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress
-          });
-
-          return res.status(401).json({
-            success: false,
-            error: 'Invalid or expired token',
-            requiresReauth: true
-          });
-        }
-
-        if (options.requiredPermission) {
-          let circleId: string | undefined;
-          if (options.circleIdParam) {
-            circleId = (req.query[options.circleIdParam] || req.body?.[options.circleIdParam]) as string;
-          }
-
-          const hasPermissionForAction = hasPermission(
-            adminData.permissions,
-            options.requiredPermission,
-            circleId
-          );
-
-          if (!hasPermissionForAction) {
-            adminLogger.warn('❌ Admin lacks required permission', {
-              suiAddress: adminData.suiAddress,
-              permission: options.requiredPermission,
-              circleId,
-              path: req.url
-            });
-
-            return res.status(403).json({
-              success: false,
-              error: `Missing required permission: ${options.requiredPermission}`
-            });
-          }
-        }
-
-        req.admin = {
-          suiAddress: adminData.suiAddress,
-          sessionId: adminData.sessionId,
-          permissions: adminData.permissions,
-          token: token as string
-        };
-
-        if (options.logging !== false) {
-          adminLogger.info('✅ Admin authenticated', {
-            suiAddress: adminData.suiAddress,
-            path: req.url,
-            method: req.method,
-            permission: options.requiredPermission,
-            ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress
-          });
-        }
-
-        return handler(req, res);
-      } catch (error) {
-        adminLogger.error('❌ Middleware error', {
-          error: error instanceof Error ? error.message : String(error),
-          path: req.url
-        });
-
-        return res.status(500).json({
-          success: false,
-          error: 'Authentication middleware error'
-        });
-      }
-    };
-  };
-}
-
-/**
- * Audit logging middleware
- */
-export function withAdminAuditLog(action: string) {
-  return (handler: (req: AuthenticatedRequest, res: NextApiResponse) => Promise<void> | void) => {
-    return async (req: AuthenticatedRequest, res: NextApiResponse) => {
-      const startTime = Date.now();
-      
-      try {
-        const result = handler(req, res);
-        
-        const duration = Date.now() - startTime;
-        adminLogger.info('✅ Admin action completed', {
-          action,
-          suiAddress: req.admin?.suiAddress,
-          circleId: req.query.id || req.body?.circleId,
-          status: res.statusCode,
-          duration,
-          ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
-          method: req.method,
-          path: req.url
-        });
-
-        return result;
-      } catch (error) {
-        const duration = Date.now() - startTime;
-        adminLogger.error('❌ Admin action failed', {
-          action,
-          suiAddress: req.admin?.suiAddress,
-          circleId: req.query.id || req.body?.circleId,
-          error: error instanceof Error ? error.message : String(error),
-          duration,
-          ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
-          method: req.method,
-          path: req.url
-        });
-
-        throw error;
-      }
-    };
-  };
-}
-
-/**
- * Rate limiting middleware for admin actions
- */
-export function withAdminRateLimit(maxRequests: number = 100, windowMs: number = 60000) {
-  const requestMap = new Map<string, number[]>();
-
-  return (handler: (req: AuthenticatedRequest, res: NextApiResponse) => Promise<void> | void) => {
-    return async (req: AuthenticatedRequest, res: NextApiResponse) => {
-      if (!req.admin) {
-        return handler(req, res);
-      }
-
-      const key = req.admin.suiAddress;
-      const now = Date.now();
-      const windowStart = now - windowMs;
-
-      let requests = requestMap.get(key) || [];
-      requests = requests.filter(time => time > windowStart);
-
-      if (requests.length >= maxRequests) {
-        adminLogger.warn('⚠️ Admin rate limit exceeded', {
-          suiAddress: req.admin.suiAddress,
-          requests: requests.length,
-          limit: maxRequests,
-          window: windowMs
-        });
-
-        return res.status(429).json({
-          success: false,
-          error: 'Rate limit exceeded',
-          retryAfter: Math.ceil((requests[0] + windowMs - now) / 1000)
-        });
-      }
-
-      requests.push(now);
-      requestMap.set(key, requests);
-
-      return handler(req, res);
-    };
-  };
-}
-
-/**
- * Combine multiple middlewares
- */
-type Middleware = (
-  handler: (req: AuthenticatedRequest, res: NextApiResponse) => Promise<void> | void,
-) => (req: AuthenticatedRequest, res: NextApiResponse) => Promise<void> | void;
-
-export function withAdminMiddleware(
-  handler: (req: AuthenticatedRequest, res: NextApiResponse) => Promise<void> | void,
-  ...middlewares: Middleware[]
-) {
-  return middlewares.reduce<ReturnType<Middleware>>(
-    (h, middleware) => middleware(h),
-    handler,
-  );
-}
-
-export function requireAdminAuth(req: AuthenticatedRequest) {
-  if (!req.admin) {
+  if (!suiAddressesEqual(onChainAdmin, sessionAccount.userAddr)) {
     return {
-      valid: false,
-      error: 'Admin authentication required'
+      ok: false,
+      status: 403,
+      error: 'Only the circle admin can perform this action.',
     };
   }
 
   return {
-    valid: true,
-    suiAddress: req.admin.suiAddress,
-    sessionId: req.admin.sessionId,
-    permissions: req.admin.permissions
+    ok: true,
+    admin: {
+      suiAddress: sessionAccount.userAddr,
+      sessionId,
+      circleId,
+      network,
+    },
   };
 }
 
-export function checkAdminPermission(
-  req: AuthenticatedRequest,
-  action: AdminPermission['action'],
-  circleId?: string
-): boolean {
-  if (!req.admin) return false;
-  return hasPermission(req.admin.permissions, action, circleId);
+/**
+ * Route wrapper: rejects the request before the handler runs unless the
+ * caller's zkLogin session resolves to the on-chain circle admin. On
+ * success the verified identity is attached as `req.admin`.
+ */
+export function withCircleAdminAuth(
+  handler: (req: AuthenticatedRequest, res: NextApiResponse) => Promise<unknown> | unknown,
+  options: CircleAdminVerifyOptions = {},
+  deps: CircleAdminVerifyDeps = {},
+) {
+  return async (req: AuthenticatedRequest, res: NextApiResponse) => {
+    const verification = await verifyCircleAdminRequest(req, options, deps);
+
+    if (!verification.ok) {
+      adminLogger.warn('❌ Circle admin authorization failed', {
+        path: req.url,
+        method: req.method,
+        status: verification.status,
+        reason: verification.error,
+        ip: req.headers['x-forwarded-for'] || req.socket?.remoteAddress,
+      });
+      return res.status(verification.status).json({
+        success: false,
+        error: verification.error,
+        requiresReauth: verification.status === 401,
+      });
+    }
+
+    adminLogger.info('✅ Circle admin authenticated', {
+      suiAddress: verification.admin.suiAddress,
+      circleId: verification.admin.circleId,
+      path: req.url,
+      method: req.method,
+    });
+
+    req.admin = verification.admin;
+    return handler(req, res);
+  };
 }
 
 export function logAdminAction(

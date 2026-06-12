@@ -9,7 +9,7 @@
 
 import express from 'express';
 import cors from 'cors';
-import { decodeJwt, JWTPayload } from 'jose';
+import { createRemoteJWKSet, decodeJwt, jwtVerify, JWTPayload } from 'jose';
 import { createHash, createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 import { promises as fs } from 'fs';
 import { getDatabaseAdapter, DatabaseAdapter } from './postgres-adapter';
@@ -18,6 +18,74 @@ import { getDatabaseAdapter, DatabaseAdapter } from './postgres-adapter';
 const PORT = process.env.PORT || 5002;
 const MAX_SALT = 2n ** 128n - 1n; // Maximum allowed salt value
 const ENCRYPTION_KEY_PATH = './.encryption-key';
+
+// JWKS endpoints for the OAuth providers zkLogin supports (iss → JWKS URL).
+// Google issues tokens under both iss spellings.
+const PROVIDER_JWKS_URLS: Record<string, string> = {
+  'https://accounts.google.com': 'https://www.googleapis.com/oauth2/v3/certs',
+  'accounts.google.com': 'https://www.googleapis.com/oauth2/v3/certs',
+  'https://www.facebook.com': 'https://www.facebook.com/.well-known/oauth/openid/jwks/',
+  'https://appleid.apple.com': 'https://appleid.apple.com/auth/keys',
+};
+
+// Module-level cache of remote JWK sets — createRemoteJWKSet memoizes keys
+// internally, so each issuer costs at most one HTTPS fetch per key rotation.
+const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+
+function getProviderJwks(issuer: string): ReturnType<typeof createRemoteJWKSet> {
+  let jwks = jwksCache.get(issuer);
+  if (!jwks) {
+    jwks = createRemoteJWKSet(new URL(PROVIDER_JWKS_URLS[issuer]));
+    jwksCache.set(issuer, jwks);
+  }
+  return jwks;
+}
+
+// Audiences (OAuth client IDs) salts may be issued for. SALT_ALLOWED_AUDIENCES
+// is a comma-separated override for standalone deployments; otherwise fall
+// back to the app's configured client IDs.
+function getAllowedAudiences(): string[] {
+  const fromEnv = (process.env.SALT_ALLOWED_AUDIENCES || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const clientIds = [
+    process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+    process.env.NEXT_PUBLIC_FACEBOOK_CLIENT_ID,
+    process.env.NEXT_PUBLIC_APPLE_CLIENT_ID,
+  ].filter((value): value is string => Boolean(value));
+  return [...new Set([...fromEnv, ...clientIds])];
+}
+
+/**
+ * Verify the OAuth JWT signature against the provider JWKS and validate
+ * iss + aud before any salt is issued or recovered. A salt handed out for
+ * an unverified (sub, aud) lets an attacker deanonymize or pre-seed a
+ * victim's zkLogin address, so decode-without-verify is never acceptable.
+ */
+async function verifyOAuthJwt(token: string): Promise<JWTPayload> {
+  // Unverified decode is used ONLY to route to the right provider JWKS;
+  // jwtVerify re-checks `iss` against the same pinned value after the
+  // signature is validated.
+  const unverified = decodeJwt(token);
+  const issuer = unverified.iss;
+  if (!issuer || !PROVIDER_JWKS_URLS[issuer]) {
+    throw new Error(`Unsupported or missing JWT issuer: ${issuer ?? '<none>'}`);
+  }
+
+  const audiences = getAllowedAudiences();
+  if (audiences.length === 0) {
+    throw new Error(
+      'No allowed OAuth audiences configured — set SALT_ALLOWED_AUDIENCES or the NEXT_PUBLIC_*_CLIENT_ID variables',
+    );
+  }
+
+  const { payload } = await jwtVerify(token, getProviderJwks(issuer), {
+    issuer,
+    audience: audiences,
+  });
+  return payload;
+}
 
 // Define response type for salt requests
 interface SaltResponse {
@@ -206,13 +274,20 @@ app.post('/get-salt', async (req: express.Request, res: express.Response) => {
       return res.status(400).json({ error: 'JWT token is required' });
     }
 
-    // Decode and validate the JWT
-    const decoded = decodeJwt(token);
-    
+    // Verify the JWT signature + iss/aud before issuing anything.
+    let decoded: JWTPayload;
+    try {
+      decoded = await verifyOAuthJwt(token);
+    } catch (error) {
+      return res.status(401).json({
+        error: `JWT verification failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      });
+    }
+
     try {
       validateJwtClaims(decoded);
     } catch (error) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: `JWT validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       });
     }
@@ -272,8 +347,16 @@ app.post('/recover-salt', async (req: express.Request, res: express.Response) =>
       return res.status(400).json({ error: 'JWT token and recovery code are required' });
     }
 
-    // Decode JWT to get sub and aud
-    const decoded = decodeJwt(token);
+    // Verify the JWT signature + iss/aud — recovery must not be possible
+    // with a forged token plus a guessed/stolen recovery code.
+    let decoded: JWTPayload;
+    try {
+      decoded = await verifyOAuthJwt(token);
+    } catch (error) {
+      return res.status(401).json({
+        error: `JWT verification failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      });
+    }
     const audience = Array.isArray(decoded.aud) ? decoded.aud[0] : decoded.aud || '';
     
     if (!decoded.sub || !audience) {
@@ -322,8 +405,15 @@ app.post('/generate-recovery-code', async (req: express.Request, res: express.Re
       return res.status(400).json({ error: 'JWT token is required' });
     }
 
-    // Decode JWT to get sub and aud
-    const decoded = decodeJwt(token);
+    // Verify the JWT signature + iss/aud before minting a recovery code.
+    let decoded: JWTPayload;
+    try {
+      decoded = await verifyOAuthJwt(token);
+    } catch (error) {
+      return res.status(401).json({
+        error: `JWT verification failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      });
+    }
     const audience = Array.isArray(decoded.aud) ? decoded.aud[0] : decoded.aud || '';
     
     if (!decoded.sub || !audience) {
@@ -386,4 +476,4 @@ if (require.main === module) {
 }
 
 // Export for testing
-export { app, setup, encrypt, decrypt, validateJwtClaims, generateSecureRandomSalt, generateRecoveryCode, hashRecoveryCode }; 
+export { app, setup, encrypt, decrypt, validateJwtClaims, verifyOAuthJwt, getAllowedAudiences, generateSecureRandomSalt, generateRecoveryCode, hashRecoveryCode };

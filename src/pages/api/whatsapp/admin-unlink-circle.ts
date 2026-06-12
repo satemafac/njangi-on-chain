@@ -1,9 +1,16 @@
 /**
  * 🔗 Admin Unlink Circle Endpoint
- * 
+ *
  * Endpoint for admin to unlink circles from WhatsApp
  * Uses zkLogin credentials to sign the blockchain transaction
- * 
+ *
+ * Auth: requires the `session-id` cookie from /api/zkLogin to resolve to
+ * the circle's on-chain admin (withCircleAdminAuth) — authorization runs
+ * before the chain call and the Postgres deindex side effect, and the
+ * handler operates on the middleware-verified `req.admin.circleId` /
+ * `req.admin.network` so a diverging query string can never retarget the
+ * unlink at a different circle.
+ *
  * Example usage:
  * POST /api/whatsapp/admin-unlink-circle
  * {
@@ -14,7 +21,11 @@
  */
 
 import { NextApiResponse, NextApiRequest } from 'next';
-import { logAdminAction } from '../../../middleware/admin-auth.middleware';
+import {
+  logAdminAction,
+  withCircleAdminAuth,
+  type AuthenticatedRequest,
+} from '../../../middleware/admin-auth.middleware';
 import { enokiZkLoginService } from '../../../services/enokiZkLoginService';
 import { AccountData } from '../../../services/zkLoginService';
 import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry-service';
@@ -22,10 +33,10 @@ import type { NetworkType } from '../../../services/whatsapp-registry-service';
 import { deindexWhatsAppLinksForCircle } from '../../../lib/whatsapp-link-index';
 
 interface UnlinkCircleRequest {
-  circleId: string;
-  adminAddress?: string;
+  circleId: string; // consumed by withCircleAdminAuth, not the handler
+  adminAddress?: string; // must match the session (middleware-enforced)
   account?: AccountData;
-  network?: NetworkType;
+  network?: NetworkType; // consumed by withCircleAdminAuth, not the handler
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -37,24 +48,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  try {
-    const adminAddr = req.body?.adminAddress || 'unknown';
-    const account = req.body?.account as AccountData | undefined;
-    const { circleId, network: networkParam } = req.body as UnlinkCircleRequest;
-    
-    // Default to testnet if not provided
-    const network = networkParam || 'testnet';
+  // Authorization (session → on-chain admin) runs before the handler so no
+  // chain call or index deletion can happen for an unverified caller.
+  return withCircleAdminAuth(handlePost)(req, res);
+}
 
-    if (!circleId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing circleId'
-      });
-    }
+async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
+  try {
+    // Verified by withCircleAdminAuth: session address === on-chain admin.
+    // Operate on the circle/network the authorization actually ran against —
+    // never re-read them from the raw body, which could diverge from the
+    // query string the middleware resolved.
+    const adminAddr = req.admin!.suiAddress;
+    const circleId = req.admin!.circleId;
+    const network = req.admin!.network;
+    const { account } = (req.body ?? {}) as UnlinkCircleRequest;
 
     console.log('🔗 POST /admin-unlink-circle:', {
       circleId,
-      networkParam,
       network,
       adminAddr: adminAddr.slice(0, 10) + '...'
       });
@@ -142,7 +153,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
   } catch (error) {
-    const suiAddress = req.body?.adminAddress;
+    const suiAddress = req.admin?.suiAddress;
     if (suiAddress) {
       logAdminAction('UNLINK_CIRCLE_ERROR', suiAddress, {
         error: error instanceof Error ? error.message : String(error),

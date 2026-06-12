@@ -13,6 +13,7 @@ import { getCircleStatus, formatCircleStatusForWhatsAppWithNames } from '../../.
 import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
 import { fetchAndDecryptPII } from '../../../lib/walrus-pii';
 import { lookupCirclesForPhone } from '../../../lib/whatsapp-link-index';
+import { timingSafeEqualStrings } from '../../../lib/timing-safe';
 
 interface WebhookResponse {
   success?: boolean;
@@ -190,20 +191,22 @@ async function handler(
     const { 'hub.mode': mode, 'hub.challenge': challenge, 'hub.verify_token': token } =
       req.query as Record<string, string>;
 
+    const tokenMatches = timingSafeEqualStrings(token, process.env.WHATSAPP_VERIFY_TOKEN);
+
     appLogger.debug('Webhook verification request', {
       mode,
       hasChallenge: !!challenge,
-      tokenMatches: token === process.env.WHATSAPP_VERIFY_TOKEN,
+      tokenMatches,
     });
 
-    if (mode === 'subscribe' && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+    if (mode === 'subscribe' && tokenMatches) {
       appLogger.info('Webhook verified successfully');
       return res.status(200).send(challenge);
     }
 
     appLogger.warn('Invalid webhook verification attempt', {
       mode,
-      tokenMatches: token === process.env.WHATSAPP_VERIFY_TOKEN,
+      tokenMatches,
     });
 
     return res.status(403).send('Forbidden');
@@ -222,8 +225,25 @@ async function handler(
         bodySize: rawBody.length,
       });
 
-      // Verify webhook signature if both signature and app secret are present
-      if (signature && appSecret) {
+      // Enforce Meta's HMAC signature. Fail closed: a missing app secret in
+      // production is a deployment error (500), and a missing or invalid
+      // signature is always rejected with 403 — no debug bypass.
+      if (!appSecret) {
+        if (process.env.NODE_ENV === 'production') {
+          appLogger.error(
+            'WHATSAPP_APP_SECRET is not configured — rejecting webhook (fail closed). ' +
+            'Set WHATSAPP_APP_SECRET to the Meta app secret to enable signature verification.',
+          );
+          return res.status(500).json({
+            success: false,
+            error: 'Webhook signature verification is not configured',
+          });
+        }
+        // Non-production only: tolerate a missing secret so local dev without
+        // Meta credentials can exercise the handler.
+        appLogger.warn('WHATSAPP_APP_SECRET not set — skipping signature verification (non-production only)');
+      } else {
+        let isValid = false;
         try {
           const hash = crypto
             .createHmac('sha256', appSecret)
@@ -231,40 +251,28 @@ async function handler(
             .digest('hex');
 
           const expectedSignature = `sha256=${hash}`;
-
-          // Log both signatures for debugging
-          appLogger.debug('Webhook signature comparison', {
-            received: signature,
-            expected: expectedSignature,
-            bodyLength: rawBody.length,
-          });
-
-          const isValid = crypto.timingSafeEqual(
-            Buffer.from(signature),
-            Buffer.from(expectedSignature)
-          );
-
-          if (!isValid) {
-            appLogger.warn('Invalid webhook signature - allowing anyway for debugging', {
-              received: signature.substring(0, 20),
-              expected: expectedSignature.substring(0, 20),
-            });
-            // ⚠️ TEMPORARY: Allow invalid signatures to debug the issue
-            // In production, this should return 403
-          }
-
-          appLogger.debug('Webhook signature processed');
+          // Hash-then-compare keeps this constant-time even when the header
+          // length differs from the expected digest.
+          isValid = timingSafeEqualStrings(signature, expectedSignature);
         } catch (signatureError) {
-          appLogger.warn('Webhook signature verification error - allowing anyway for debugging', {
+          appLogger.warn('Webhook signature verification error', {
             error: signatureError instanceof Error ? signatureError.message : String(signatureError),
           });
-          // ⚠️ TEMPORARY: Allow on error to debug the issue
-          // In production, this should return 403
+          isValid = false;
         }
-      } else if (!signature) {
-        appLogger.debug('No webhook signature header present', {
-          availableHeaders: Object.keys(req.headers).join(', '),
-        });
+
+        if (!isValid) {
+          appLogger.warn('Rejected webhook with missing or invalid signature', {
+            hasSignature: !!signature,
+            received: signature ? signature.substring(0, 20) : '<none>',
+          });
+          return res.status(403).json({
+            success: false,
+            error: 'Invalid webhook signature',
+          });
+        }
+
+        appLogger.debug('Webhook signature verified');
       }
 
       // Parse the webhook body

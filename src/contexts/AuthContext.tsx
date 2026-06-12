@@ -7,6 +7,7 @@ import { refreshAdminHeartbeatsAfterAuth } from '@/lib/admin-heartbeat-refresh';
 import {
   accountToSignerSession,
   clearSignerSession,
+  loadSignerSession,
   saveSignerSession,
 } from '@/lib/zklogin-client-signer';
 
@@ -64,6 +65,26 @@ interface AuthContextType {
     success: boolean;
     digest?: string;
   }>;
+}
+
+// localStorage is readable by any script on the origin, so the persisted
+// account must never include signing material (ephemeral key, zk proofs,
+// salt) — a single XSS would otherwise allow signing as the user until
+// maxEpoch. Only display/identity fields are persisted; key material lives
+// in React state and the sessionStorage signer session (tab-scoped), and a
+// full reload without either requires re-authentication before signing.
+type PersistedAccount = Omit<AccountData, 'ephemeralPrivateKey' | 'zkProofs' | 'userSalt'>;
+
+function toPersistedAccount(account: AccountData): PersistedAccount {
+  return {
+    provider: account.provider,
+    userAddr: account.userAddr,
+    sub: account.sub,
+    aud: account.aud,
+    maxEpoch: account.maxEpoch,
+    picture: account.picture,
+    name: account.name,
+  };
 }
 
 // Create the context with default values
@@ -129,19 +150,40 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       const savedUserAddress = localStorage.getItem('userAddress');
 
       if (savedAccount && savedIsAuthenticated && savedUserAddress) {
-        const parsedAccount = JSON.parse(savedAccount) as AccountData;
-        setAccount(parsedAccount);
+        // Persisted accounts carry no signing material; rehydrate the
+        // sensitive fields from the tab-scoped signer session when one
+        // exists for the same address. Without it the account is
+        // display-only and signing flows require a fresh login.
+        const parsedAccount = JSON.parse(savedAccount) as PersistedAccount &
+          Partial<Pick<AccountData, 'ephemeralPrivateKey' | 'zkProofs' | 'userSalt'>>;
+        let restoredAccount = parsedAccount as AccountData;
+
+        const signerSession = loadSignerSession();
+        if (signerSession && signerSession.userAddress === parsedAccount.userAddr) {
+          restoredAccount = {
+            ...parsedAccount,
+            ephemeralPrivateKey: signerSession.ephemeralPrivateKey,
+            zkProofs: signerSession.zkProofs,
+            userSalt: signerSession.userSalt,
+          } as AccountData;
+        } else if (parsedAccount.ephemeralPrivateKey && parsedAccount.zkProofs) {
+          // Legacy entry written before key material was stripped from
+          // localStorage — use it once; the persistence effect below
+          // rewrites the sanitized shape immediately.
+          try {
+            saveSignerSession(
+              accountToSignerSession(restoredAccount, getCurrentNetwork()),
+            );
+          } catch (signerErr) {
+            console.warn('Failed to rehydrate client signer session', signerErr);
+          }
+        }
+
+        setAccount(restoredAccount);
         setIsAuthenticated(true);
         setUserAddress(savedUserAddress);
-        try {
-          saveSignerSession(
-            accountToSignerSession(parsedAccount, getCurrentNetwork()),
-          );
-        } catch (signerErr) {
-          console.warn('Failed to rehydrate client signer session', signerErr);
-        }
         void refreshAdminHeartbeatsAfterAuth({
-          account: parsedAccount,
+          account: restoredAccount,
           heartbeatClient: zkLogin,
           source: 'session_restore',
         });
@@ -164,7 +206,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
 
     if (account) {
-      localStorage.setItem('account', JSON.stringify(account));
+      // Never persist signing material — see PersistedAccount above.
+      localStorage.setItem('account', JSON.stringify(toPersistedAccount(account)));
     } else {
       localStorage.removeItem('account');
     }
@@ -238,8 +281,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setUserAddress(accountData.userAddr);
     setIsAuthenticated(true);
 
-    // Persist immediately so a navigation/remount cannot lose the fresh session.
-    localStorage.setItem('account', JSON.stringify(accountData));
+    // Persist immediately so a navigation/remount cannot lose the fresh
+    // session. Signing material stays out of localStorage — the signer
+    // session below (sessionStorage) plus React state carry it instead.
+    localStorage.setItem('account', JSON.stringify(toPersistedAccount(accountData)));
     localStorage.setItem('userAddress', accountData.userAddr);
     localStorage.setItem('isAuthenticated', 'true');
 
