@@ -51,6 +51,10 @@ module njangi::njangi_circles {
     // Legacy custody path: a member may contribute at most once per payout
     // round (mirrors the per-cycle escrow's `contributed` table guarantee).
     const E_ALREADY_CONTRIBUTED_THIS_CYCLE: u64 = 74;
+    // Compliance gate: once members beyond the admin have joined a circle
+    // that requires attestations, the requirement can never be switched
+    // off (bait-and-switch guard — members joined under the KYC promise).
+    const ECannotDisableAttestationRequirement: u64 = 75;
 
     // Time constants (in milliseconds)
     const THIRTY_DAYS_MS: u64 = 2_592_000_000; // 30 days in milliseconds
@@ -80,6 +84,11 @@ module njangi::njangi_circles {
     // every site that resets `contributions_this_cycle` so the record and
     // the counter always move in lockstep.
     const FIELD_CYCLE_CONTRIBUTORS: vector<u8> = b"cycle_contributors";
+
+    // Dynamic-field key for the circle-level compliance requirement.
+    // Stored as a dynamic field (absent == false) so the Circle struct
+    // layout is unchanged and pre-existing circles default to ungated.
+    const FIELD_REQUIRES_ATTESTATION: vector<u8> = b"requires_attestation";
     
     // ----------------------------------------------------------
     // Main Circle struct
@@ -156,6 +165,16 @@ module njangi::njangi_circles {
         circle_id: ID,
         enabled: bool,
         toggled_by: address,
+    }
+
+    /// Emitted whenever the circle-level compliance requirement changes.
+    /// `required == true` can be set at any time by the admin; `false`
+    /// is only possible while the admin is the sole member.
+    public struct CircleAttestationRequirementChanged has copy, drop {
+        circle_id: ID,
+        required: bool,
+        changed_by: address,
+        changed_at_ms: u64,
     }
 
     public struct EmergencyStopProposed has copy, drop {
@@ -701,7 +720,66 @@ module njangi::njangi_circles {
             toggled_by: sender,
         });
     }
-    
+
+    // ----------------------------------------------------------
+    // Circle-level compliance requirement (June 2026 audit fix).
+    //
+    // Previously "this circle requires KYC" lived only in the admin's
+    // browser localStorage, while open_cycle/contribute are
+    // permissionless — so the gate was trivially bypassable by anyone
+    // hand-rolling the ungated path. This flag is the on-chain source of
+    // truth: njangi_cycle_escrow reads it at open time and forces every
+    // escrow of a gated circle onto the attestation-checked paths.
+    // ----------------------------------------------------------
+
+    /// Sets whether this circle requires a valid compliance attestation
+    /// to contribute to / collect from its per-cycle escrows. Admin only.
+    /// Enabling is always allowed (it only tightens the rules; escrows
+    /// already open keep the gate state they were opened with). Disabling
+    /// is only allowed while the admin is the sole member: once anyone
+    /// else has joined under the KYC promise, the requirement is
+    /// permanent (bait-and-switch guard).
+    public fun set_requires_attestation(
+        circle: &mut Circle,
+        required: bool,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert!(sender == circle.admin, ENotAdmin);
+        if (!required) {
+            assert!(circle.current_members <= 1, ECannotDisableAttestationRequirement);
+        };
+
+        if (dynamic_field::exists_(&circle.id, FIELD_REQUIRES_ATTESTATION)) {
+            *dynamic_field::borrow_mut<vector<u8>, bool>(
+                &mut circle.id,
+                FIELD_REQUIRES_ATTESTATION
+            ) = required;
+        } else {
+            dynamic_field::add(&mut circle.id, FIELD_REQUIRES_ATTESTATION, required);
+        };
+        touch_admin_heartbeat(circle, clock);
+
+        event::emit(CircleAttestationRequirementChanged {
+            circle_id: object::uid_to_inner(&circle.id),
+            required,
+            changed_by: sender,
+            changed_at_ms: clock::timestamp_ms(clock),
+        });
+    }
+
+    /// Whether this circle requires a compliance attestation on its
+    /// escrow money paths. Absent field == false, so circles created
+    /// before this flag existed stay ungated.
+    public fun requires_attestation(circle: &Circle): bool {
+        if (dynamic_field::exists_(&circle.id, FIELD_REQUIRES_ATTESTATION)) {
+            *dynamic_field::borrow<vector<u8>, bool>(&circle.id, FIELD_REQUIRES_ATTESTATION)
+        } else {
+            false
+        }
+    }
+
     // ----------------------------------------------------------
     // Treasury (payout scheduling, tracking balances)
     // ----------------------------------------------------------
@@ -3581,7 +3659,7 @@ module njangi::njangi_circles {
     ): ID {
         let current_time = clock::timestamp_ms(clock);
         let member_count = vector::length(&member_addrs);
-        assert!(member_count >= 2, 9300);
+        assert!(member_count >= 1, 9300);
         let admin = *vector::borrow(&member_addrs, 0);
 
         let mut circle = Circle {
@@ -3657,6 +3735,90 @@ module njangi::njangi_circles {
     public fun mark_recovery_stopped_for_testing(circle: &mut Circle, clock: &Clock) {
         config::mark_recovery_stopped(&mut circle.id, clock);
         circle.is_active = false;
+    }
+
+    // ----------------------------------------------------------
+    // Circle-level compliance requirement tests
+    // ----------------------------------------------------------
+
+    #[test]
+    fun test_requires_attestation_defaults_false_and_admin_can_enable() {
+        let admin = @0xA;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, @0xB, @0xC], 1_000_000_000, 250, &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        assert!(!requires_attestation(&circle), 9400);
+        set_requires_attestation(&mut circle, true, &clock, sui::test_scenario::ctx(&mut scenario));
+        assert!(requires_attestation(&circle), 9401);
+        sui::test_scenario::return_shared(circle);
+
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = ECannotDisableAttestationRequirement)]
+    fun test_requires_attestation_cannot_be_disabled_after_members_join() {
+        let admin = @0xA;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, @0xB, @0xC], 1_000_000_000, 250, &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        set_requires_attestation(&mut circle, true, &clock, sui::test_scenario::ctx(&mut scenario));
+        // Members already joined: switching the promise off must abort.
+        set_requires_attestation(&mut circle, false, &clock, sui::test_scenario::ctx(&mut scenario));
+        abort 0
+    }
+
+    #[test]
+    fun test_requires_attestation_can_be_disabled_while_admin_is_sole_member() {
+        let admin = @0xA;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin], 1_000_000_000, 250, &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        set_requires_attestation(&mut circle, true, &clock, sui::test_scenario::ctx(&mut scenario));
+        assert!(requires_attestation(&circle), 9410);
+        // Nobody else has joined yet, so the admin may still back out.
+        set_requires_attestation(&mut circle, false, &clock, sui::test_scenario::ctx(&mut scenario));
+        assert!(!requires_attestation(&circle), 9411);
+        sui::test_scenario::return_shared(circle);
+
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = ENotAdmin)]
+    fun test_requires_attestation_non_admin_cannot_set() {
+        let admin = @0xA;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, @0xB, @0xC], 1_000_000_000, 250, &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+
+        sui::test_scenario::next_tx(&mut scenario, @0xB);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        set_requires_attestation(&mut circle, true, &clock, sui::test_scenario::ctx(&mut scenario));
+        abort 0
     }
 
     #[test]

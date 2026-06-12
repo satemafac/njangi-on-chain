@@ -9,7 +9,7 @@ module njangi::njangi_cycle_escrow {
 
     use njangi::njangi_circles::{Self as circles, Circle};
     use njangi::njangi_circle_config as config;
-    use njangi::njangi_compliance::{Self as compliance, ComplianceAttestation};
+    use njangi::njangi_compliance::{Self as compliance, ComplianceAttestation, ComplianceConfig};
 
     // ----------------------------------------------------------
     // Phase 2 per-cycle escrow primitive.
@@ -64,6 +64,11 @@ module njangi::njangi_cycle_escrow {
     const E_ESCROW_REFUNDED: u64 = 226;
     const E_CIRCLE_NOT_IN_RECOVERY: u64 = 227;
     const E_AMOUNT_OVERFLOW: u64 = 228;
+    // Granular attestation-gate failures (June 2026 audit fix) so the
+    // frontend can tell members exactly why a pass was rejected.
+    const E_ATTESTATION_WRONG_ISSUER: u64 = 229;
+    const E_ATTESTATION_REVOKED: u64 = 230;
+    const E_ATTESTATION_EXPIRED: u64 = 231;
 
     const CLAIM_WINDOW_MS: u64 = 30 * 24 * 60 * 60 * 1000; // 30 days
     /// Grace period after the cycle's snapshot due date before anyone may
@@ -264,9 +269,18 @@ module njangi::njangi_cycle_escrow {
         circle: &Circle,
         contribution_amount: u64,
         clock: &Clock,
-        requires_attestation: bool,
+        gate_requested: bool,
         ctx: &mut TxContext
     ) {
+        // Authoritative compliance gate (June 2026 audit fix): the
+        // circle-level on-chain flag is OR'd into whatever the caller
+        // asked for. Opening a cycle is permissionless, so without this a
+        // member could hand-roll the ungated `open_cycle` path and mint
+        // an escrow that skips the KYC check the circle promised. Callers
+        // can still request a gated escrow for an ungated circle (opt-in
+        // tightening), but never the reverse.
+        let requires_attestation = gate_requested || circles::requires_attestation(circle);
+
         let cycle_no = circles::get_current_cycle(circle);
         let rotation_order = circles::get_rotation_order(circle);
         let recipient_opt = circles::get_next_payout_recipient(circle);
@@ -350,16 +364,20 @@ module njangi::njangi_cycle_escrow {
     /// Phase 7: gated contribute. The attestation is only inspected
     /// (never taken), so members don't have to give it up when paying
     /// into the pot. `compliance::subject` must match the sender to
-    /// prevent a cheap "borrow someone else's pass" attack.
+    /// prevent a cheap "borrow someone else's pass" attack. The shared
+    /// `ComplianceConfig` (a singleton created at package publish) pins
+    /// the accepted issuer and carries the revocation registry, so a
+    /// rogue cap's attestations and revoked passes both fail here.
     public fun contribute_with_attestation<T>(
         escrow: &mut CycleEscrow<T>,
         payment: Coin<T>,
         attestation: &ComplianceAttestation,
+        config: &ComplianceConfig,
         clock: &Clock,
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
-        assert_attestation_valid(attestation, sender, clock);
+        assert_attestation_valid(attestation, config, sender, clock);
         contribute_internal<T>(escrow, payment, ctx);
     }
 
@@ -400,8 +418,16 @@ module njangi::njangi_cycle_escrow {
         });
     }
 
+    /// Full attestation check for gated money paths, in order:
+    ///   1. the pass belongs to the sender (no borrowing someone else's);
+    ///   2. it was signed by the issuer pinned in the shared config —
+    ///      NOT just any AttestorCap holder;
+    ///   3. it has not been revoked (registry in the shared config);
+    ///   4. it has not expired.
+    /// Each failure gets its own abort code for frontend mapping.
     fun assert_attestation_valid(
         attestation: &ComplianceAttestation,
+        config: &ComplianceConfig,
         expected_subject: address,
         clock: &Clock,
     ) {
@@ -410,8 +436,16 @@ module njangi::njangi_cycle_escrow {
             E_COMPLIANCE_ATTESTATION_INVALID,
         );
         assert!(
-            compliance::is_attestation_valid(attestation, clock),
-            E_COMPLIANCE_ATTESTATION_INVALID,
+            compliance::issuer(attestation) == compliance::expected_issuer(config),
+            E_ATTESTATION_WRONG_ISSUER,
+        );
+        assert!(
+            !compliance::is_revoked_id(config, compliance::attestation_id(attestation)),
+            E_ATTESTATION_REVOKED,
+        );
+        assert!(
+            clock::timestamp_ms(clock) <= compliance::expires_at_ms(attestation),
+            E_ATTESTATION_EXPIRED,
         );
     }
 
@@ -495,17 +529,19 @@ module njangi::njangi_cycle_escrow {
     }
 
     /// Phase 7: gated finalize + redeem. The recipient must present their
-    /// own valid ComplianceAttestation. Combined with the contribute-side
+    /// own valid ComplianceAttestation (issuer-pinned + revocation-checked
+    /// against the shared config). Combined with the contribute-side
     /// gate, this means nobody can pay into or collect from a compliance-
     /// enforced escrow without a current partner-led KYC check on file.
     public fun finalize_and_redeem_with_attestation<T>(
         escrow: &mut CycleEscrow<T>,
         attestation: &ComplianceAttestation,
+        config: &ComplianceConfig,
         clock: &Clock,
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
-        assert_attestation_valid(attestation, sender, clock);
+        assert_attestation_valid(attestation, config, sender, clock);
         finalize_and_redeem_internal<T>(escrow, clock, ctx);
     }
 
@@ -888,14 +924,19 @@ module njangi::njangi_cycle_escrow {
 
     #[test_only] use sui::test_scenario as ts;
     #[test_only] use sui::sui::SUI;
+    #[test_only] use njangi::njangi_compliance::AttestorCap;
 
     #[test_only] const TEST_ADMIN: address = @0xA11CE;
     #[test_only] const TEST_BOB: address = @0xB0B;
     #[test_only] const TEST_CAROL: address = @0xCA801;
+    #[test_only] const TEST_ISSUER: address = @0x155;
+    #[test_only] const TEST_MULTISIG: address = @0x156;
+    #[test_only] const TEST_ROGUE: address = @0x157;
     #[test_only] const TEST_CONTRIBUTION: u64 = 1_000_000_000; // 1 SUI
     #[test_only] const TEST_USD_CENTS: u64 = 250;
     #[test_only] const TEST_START_MS: u64 = 1_000_000;
     #[test_only] const TEST_SEVEN_DAYS_MS: u64 = 604_800_000;
+    #[test_only] const TEST_TTL_MS: u64 = 86_400_000; // 24h
 
     /// tx1 (admin): share a 3-member active circle; tx2 (admin): open
     /// the ungated SUI escrow for the current cycle. Recipient is the
@@ -1267,6 +1308,222 @@ module njangi::njangi_cycle_escrow {
         let mut circle = ts::take_shared<Circle>(&scenario);
         let escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
         advance_circle_after_claim(&mut circle, &escrow, &clock, ts::ctx(&mut scenario));
+        abort 0
+    }
+
+    // --- compliance gate ----------------------------------------------
+
+    #[test_only]
+    fun hash32(): vector<u8> {
+        x"0202020202020202020202020202020202020202020202020202020202020202"
+    }
+
+    /// tx1 (admin): share a 3-member circle and flip its on-chain
+    /// requires_attestation flag ON; tx2 (admin): open the escrow via the
+    /// UNGATED entrypoint — the circle flag must force the gate anyway.
+    /// tx3 (issuer): real compliance bootstrap (cap + singleton config to
+    /// TEST_ISSUER). Returns the test clock (set to TEST_START_MS).
+    #[test_only]
+    fun setup_gated_circle_and_escrow(scenario: &mut ts::Scenario): Clock {
+        let mut clock = clock::create_for_testing(ts::ctx(scenario));
+        clock::set_for_testing(&mut clock, TEST_START_MS);
+        circles::share_circle_for_testing(
+            vector[TEST_ADMIN, TEST_BOB, TEST_CAROL],
+            TEST_CONTRIBUTION,
+            TEST_USD_CENTS,
+            &clock,
+            ts::ctx(scenario)
+        );
+
+        ts::next_tx(scenario, TEST_ADMIN);
+        let mut circle = ts::take_shared<Circle>(scenario);
+        circles::set_requires_attestation(&mut circle, true, &clock, ts::ctx(scenario));
+        // Deliberately the UNGATED open: a permissionless caller must not
+        // be able to mint an ungated escrow for a gated circle.
+        open_cycle<SUI>(&circle, &clock, ts::ctx(scenario));
+        ts::return_shared(circle);
+
+        ts::next_tx(scenario, TEST_ISSUER);
+        compliance::init_for_testing(ts::ctx(scenario));
+        clock
+    }
+
+    #[test_only]
+    fun issue_attestation_to(
+        scenario: &mut ts::Scenario,
+        subject: address,
+        ttl_ms: u64,
+        clock: &Clock
+    ) {
+        ts::next_tx(scenario, TEST_ISSUER);
+        let cap = ts::take_from_sender<AttestorCap>(scenario);
+        compliance::issue(&cap, subject, hash32(), hash32(), ttl_ms, clock, ts::ctx(scenario));
+        ts::return_to_sender(scenario, cap);
+    }
+
+    #[test_only]
+    fun contribute_with_attestation_as(
+        scenario: &mut ts::Scenario,
+        who: address,
+        clock: &Clock
+    ) {
+        ts::next_tx(scenario, who);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(scenario);
+        let config = ts::take_shared<ComplianceConfig>(scenario);
+        let attestation = ts::take_from_sender<ComplianceAttestation>(scenario);
+        let payment = coin::mint_for_testing<SUI>(TEST_CONTRIBUTION, ts::ctx(scenario));
+        contribute_with_attestation(
+            &mut escrow, payment, &attestation, &config, clock, ts::ctx(scenario)
+        );
+        ts::return_to_sender(scenario, attestation);
+        ts::return_shared(config);
+        ts::return_shared(escrow);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_COMPLIANCE_ATTESTATION_REQUIRED)]
+    fun test_gated_circle_rejects_unattested_contributor() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let _clock = setup_gated_circle_and_escrow(&mut scenario);
+        // BOB hand-rolls the ungated contribute on a gated circle's escrow.
+        contribute_as(&mut scenario, TEST_BOB);
+        abort 0
+    }
+
+    #[test]
+    fun test_gated_circle_full_lifecycle_with_attestations() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_gated_circle_and_escrow(&mut scenario);
+
+        // The UNGATED open inherited the circle's on-chain gate.
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        assert!(requires_attestation(&escrow), 9260);
+        ts::return_shared(escrow);
+
+        issue_attestation_to(&mut scenario, TEST_BOB, TEST_TTL_MS, &clock);
+        issue_attestation_to(&mut scenario, TEST_CAROL, TEST_TTL_MS, &clock);
+        issue_attestation_to(&mut scenario, TEST_ADMIN, TEST_TTL_MS, &clock);
+
+        // Attested members pass the gate.
+        contribute_with_attestation_as(&mut scenario, TEST_BOB, &clock);
+        contribute_with_attestation_as(&mut scenario, TEST_CAROL, &clock);
+
+        // The recipient collects with their own attestation.
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        let config = ts::take_shared<ComplianceConfig>(&scenario);
+        let attestation = ts::take_from_sender<ComplianceAttestation>(&scenario);
+        finalize_and_redeem_with_attestation(
+            &mut escrow, &attestation, &config, &clock, ts::ctx(&mut scenario)
+        );
+        assert!(is_claimed(&escrow), 9261);
+        ts::return_to_sender(&mut scenario, attestation);
+        ts::return_shared(config);
+        ts::return_shared(escrow);
+
+        assert_received_refund(&mut scenario, TEST_ADMIN, 2 * TEST_CONTRIBUTION);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_ATTESTATION_EXPIRED)]
+    fun test_gated_contribute_rejects_expired_attestation() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let mut clock = setup_gated_circle_and_escrow(&mut scenario);
+        issue_attestation_to(&mut scenario, TEST_BOB, 1_000, &clock);
+
+        // One millisecond past expiry: the pass is dead.
+        clock::set_for_testing(&mut clock, TEST_START_MS + 1_001);
+        contribute_with_attestation_as(&mut scenario, TEST_BOB, &clock);
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_ATTESTATION_WRONG_ISSUER)]
+    fun test_gated_contribute_rejects_wrong_issuer() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_gated_circle_and_escrow(&mut scenario);
+
+        // A rogue cap issues BOB a pass from a non-pinned address; the
+        // gate must reject it even though the attestation itself is real.
+        ts::next_tx(&mut scenario, TEST_ROGUE);
+        let rogue_cap = compliance::new_attestor_cap_for_testing(ts::ctx(&mut scenario));
+        compliance::issue(
+            &rogue_cap, TEST_BOB, hash32(), hash32(), TEST_TTL_MS, &clock,
+            ts::ctx(&mut scenario)
+        );
+        compliance::destroy_attestor_cap_for_testing(rogue_cap);
+
+        contribute_with_attestation_as(&mut scenario, TEST_BOB, &clock);
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_ATTESTATION_REVOKED)]
+    fun test_gated_contribute_rejects_attestation_revoked_after_cap_transfer() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_gated_circle_and_escrow(&mut scenario);
+        issue_attestation_to(&mut scenario, TEST_BOB, TEST_TTL_MS, &clock);
+
+        // The issuance cap moves to the operations multisig...
+        ts::next_tx(&mut scenario, TEST_ISSUER);
+        let cap = ts::take_from_sender<AttestorCap>(&scenario);
+        compliance::transfer_attestor_cap(cap, TEST_MULTISIG, ts::ctx(&mut scenario));
+
+        // ...whose holder revokes BOB's pass by id, even though it was
+        // issued by the OLD address and lives in BOB's account.
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let attestation = ts::take_from_sender<ComplianceAttestation>(&scenario);
+        let id = compliance::attestation_id(&attestation);
+        ts::return_to_sender(&mut scenario, attestation);
+
+        ts::next_tx(&mut scenario, TEST_MULTISIG);
+        let cap = ts::take_from_sender<AttestorCap>(&scenario);
+        let mut config = ts::take_shared<ComplianceConfig>(&scenario);
+        compliance::revoke(&cap, &mut config, id, &clock, ts::ctx(&mut scenario));
+        ts::return_shared(config);
+        ts::return_to_sender(&mut scenario, cap);
+
+        contribute_with_attestation_as(&mut scenario, TEST_BOB, &clock);
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_COMPLIANCE_ATTESTATION_INVALID)]
+    fun test_gated_contribute_rejects_borrowed_attestation() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_gated_circle_and_escrow(&mut scenario);
+        issue_attestation_to(&mut scenario, TEST_CAROL, TEST_TTL_MS, &clock);
+
+        // BOB presents CAROL's pass: subject != sender must abort.
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        let config = ts::take_shared<ComplianceConfig>(&scenario);
+        let attestation = ts::take_from_address<ComplianceAttestation>(&scenario, TEST_CAROL);
+        let payment = coin::mint_for_testing<SUI>(TEST_CONTRIBUTION, ts::ctx(&mut scenario));
+        contribute_with_attestation(
+            &mut escrow, payment, &attestation, &config, &clock, ts::ctx(&mut scenario)
+        );
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_COMPLIANCE_ATTESTATION_REQUIRED)]
+    fun test_gated_escrow_rejects_ungated_finalize() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_gated_circle_and_escrow(&mut scenario);
+        issue_attestation_to(&mut scenario, TEST_BOB, TEST_TTL_MS, &clock);
+        issue_attestation_to(&mut scenario, TEST_CAROL, TEST_TTL_MS, &clock);
+        contribute_with_attestation_as(&mut scenario, TEST_BOB, &clock);
+        contribute_with_attestation_as(&mut scenario, TEST_CAROL, &clock);
+
+        // Fully funded, but the ungated finalize path must stay closed.
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        finalize_to_recipient(&mut escrow, &clock, ts::ctx(&mut scenario));
         abort 0
     }
 
