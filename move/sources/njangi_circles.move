@@ -48,6 +48,9 @@ module njangi::njangi_circles {
     const EInvalidRecoveryDelegate: u64 = 71;
     const ERecoveryDelegateUpdateLocked: u64 = 72;
     const ERecoveryAutoReleaseUnauthorized: u64 = 73;
+    // Legacy custody path: a member may contribute at most once per payout
+    // round (mirrors the per-cycle escrow's `contributed` table guarantee).
+    const E_ALREADY_CONTRIBUTED_THIS_CYCLE: u64 = 74;
 
     // Time constants (in milliseconds)
     const THIRTY_DAYS_MS: u64 = 2_592_000_000; // 30 days in milliseconds
@@ -70,6 +73,13 @@ module njangi::njangi_circles {
     // Dynamic-field keys for cached oracle fallback price.
     const FIELD_LAST_VALID_SUI_PRICE_USD_CENTS: vector<u8> = b"last_valid_sui_price_usd_cents";
     const FIELD_LAST_VALID_SUI_PRICE_TS_SEC: vector<u8> = b"last_valid_sui_price_ts_sec";
+
+    // Dynamic-field key recording which members contributed in the current
+    // payout round (legacy custody path de-duplication). Stored as a
+    // dynamic field so the Circle struct layout is unchanged; cleared at
+    // every site that resets `contributions_this_cycle` so the record and
+    // the counter always move in lockstep.
+    const FIELD_CYCLE_CONTRIBUTORS: vector<u8> = b"cycle_contributors";
     
     // ----------------------------------------------------------
     // Main Circle struct
@@ -1125,13 +1135,14 @@ module njangi::njangi_circles {
         balance::join(&mut circle.contributions, amount);
     }
     
-    // ----------------------------------------------------------
-    // Split from deposits Balance
-    // ----------------------------------------------------------
-    public(package) fun split_from_deposits(circle: &mut Circle, amount: u64): Balance<SUI> {
-        balance::split(&mut circle.deposits, amount)
-    }
-    
+    // NOTE: `split_from_deposits` was removed in the June 2026 GTM audit
+    // cleanup. Its only caller was the admin-pushed
+    // `njangi_payments::process_security_deposit_return`, which violated
+    // the no-admin-discretionary-fund-movement invariant and read from
+    // `circle.deposits` — a balance the live deposit flow never funds
+    // (security deposits are held in the CustodyWallet and returned via
+    // the member-initiated recovery flow).
+
     // ----------------------------------------------------------
     // Split from contributions Balance
     // ----------------------------------------------------------
@@ -1958,10 +1969,14 @@ module njangi::njangi_circles {
         // Get member and assert status is active and not suspended
         let member = get_member(circle, sender);
         // Use local error codes
-        assert!(members::get_status(member) == core::member_status_active(), EMemberNotActive); 
-        assert!(option::is_none(&members::get_suspension_end_time(member)), EMemberSuspended); 
+        assert!(members::get_status(member) == core::member_status_active(), EMemberNotActive);
+        assert!(option::is_none(&members::get_suspension_end_time(member)), EMemberSuspended);
 
-        // --- Amount Validation --- 
+        // One contribution per member per payout round (shared across the
+        // SUI and stablecoin rails). Aborts E_ALREADY_CONTRIBUTED_THIS_CYCLE.
+        record_cycle_contributor(circle, sender);
+
+        // --- Amount Validation ---
         // Get required contribution amount in USD from config
         let required_contribution_usd_cents = config::get_contribution_amount_usd(&circle.id);
         // Convert required USD cents (2dp) to USDC micro-units (6dp).
@@ -2098,6 +2113,7 @@ module njangi::njangi_circles {
 
         // Reset in-flight cycle accounting to avoid mismatched thresholds.
         circle.contributions_this_cycle = 0;
+        clear_cycle_contributors(circle);
         circle.next_payout_time = core::calculate_next_payout_time(
             cycle_length,
             cycle_day,
@@ -2262,10 +2278,55 @@ module njangi::njangi_circles {
     public(package) fun add_to_contributions_this_cycle(circle: &mut Circle, amount: u64) {
         circle.contributions_this_cycle = circle.contributions_this_cycle + amount;
     }
-    
+
     // Reset the contributions counter for this cycle (after a payout)
     public(package) fun reset_contributions_this_cycle(circle: &mut Circle) {
         circle.contributions_this_cycle = 0;
+        clear_cycle_contributors(circle);
+    }
+
+    // ----------------------------------------------------------
+    // Per-round contributor de-duplication (legacy custody path).
+    // The per-cycle escrow already enforces one-contribution-per-member
+    // via its `contributed` table; these helpers give the legacy
+    // `contribute` / `contribute_stablecoin` rails the same guarantee so
+    // a single member can no longer satisfy `has_all_members_contributed`
+    // by paying multiple times. The record is shared across both payment
+    // rails (SUI and stablecoin): one contribution per member per round,
+    // regardless of currency.
+    // ----------------------------------------------------------
+
+    // True when `member` already has a recorded contribution for the
+    // current payout round.
+    public fun has_contributed_this_cycle(circle: &Circle, member: address): bool {
+        let key = string::utf8(FIELD_CYCLE_CONTRIBUTORS);
+        if (!dynamic_field::exists_(&circle.id, key)) {
+            return false
+        };
+        let contributors = dynamic_field::borrow<String, vector<address>>(&circle.id, key);
+        vector::contains(contributors, &member)
+    }
+
+    // Record `member` as having contributed for the current payout round.
+    // Aborts with E_ALREADY_CONTRIBUTED_THIS_CYCLE on a duplicate.
+    public(package) fun record_cycle_contributor(circle: &mut Circle, member: address) {
+        let key = string::utf8(FIELD_CYCLE_CONTRIBUTORS);
+        if (!dynamic_field::exists_(&circle.id, key)) {
+            dynamic_field::add<String, vector<address>>(&mut circle.id, key, vector[]);
+        };
+        let contributors = dynamic_field::borrow_mut<String, vector<address>>(&mut circle.id, key);
+        assert!(!vector::contains(contributors, &member), E_ALREADY_CONTRIBUTED_THIS_CYCLE);
+        vector::push_back(contributors, member);
+    }
+
+    // Clear the contributor record. Must be called everywhere
+    // `contributions_this_cycle` is reset so the two stay in lockstep.
+    fun clear_cycle_contributors(circle: &mut Circle) {
+        let key = string::utf8(FIELD_CYCLE_CONTRIBUTORS);
+        if (dynamic_field::exists_(&circle.id, key)) {
+            let contributors = dynamic_field::borrow_mut<String, vector<address>>(&mut circle.id, key);
+            *contributors = vector[];
+        };
     }
     
     // ----------------------------------------------------------
@@ -2326,7 +2387,8 @@ module njangi::njangi_circles {
     public(package) fun reset_all_members_contribution_status(circle: &mut Circle) {
         // Reset the contributions counter for this cycle
         circle.contributions_this_cycle = 0;
-        
+        clear_cycle_contributors(circle);
+
         // Get rotation info
         let rotation = &circle.rotation_order;
         let rotation_len = vector::length(rotation);
@@ -2660,6 +2722,7 @@ module njangi::njangi_circles {
         circle.is_active = false;
         circle.paused_after_cycle = false;
         circle.contributions_this_cycle = 0;
+        clear_cycle_contributors(circle);
         circle.next_payout_time = current_time;
         circle.active_auction = option::none();
 
@@ -2999,24 +3062,26 @@ module njangi::njangi_circles {
         option::some(recipient)
     }
     
-    // Check if all active members have contributed for the current cycle
-    public fun has_all_members_contributed(circle: &Circle): bool {
-        // Count active members in rotation
+    // Count the active members in the rotation and whether the scheduled
+    // recipient (member at current_position) is one of them. Shared by the
+    // funding gate and the payout-amount calculation so the two can never
+    // disagree about how many contributions a cycle collects.
+    fun count_active_members_and_recipient(circle: &Circle): (u64, bool) {
         let mut active_members = 0;
         let rotation = &circle.rotation_order;
         let len = vector::length(rotation);
         let mut i = 0;
-        
+
         // Get current recipient (member at current_position)
         let current_recipient = if (circle.current_position < len) {
             *vector::borrow(rotation, circle.current_position)
         } else {
             @0x0 // Invalid recipient address
         };
-        
+
         // Track if recipient is counted in active members
         let mut recipient_is_active = false;
-        
+
         while (i < len) {
             let member_addr = *vector::borrow(rotation, i);
             if (member_addr != @0x0 && table::contains(&circle.members, member_addr)) {
@@ -3031,21 +3096,47 @@ module njangi::njangi_circles {
             };
             i = i + 1;
         };
-        
+
+        (active_members, recipient_is_active)
+    }
+
+    // Number of members expected to contribute for the current payout round:
+    // active members in the rotation, excluding the scheduled recipient when
+    // that recipient is active (the recipient never pays into their own
+    // payout — same economics as the per-cycle escrow's required_contributors
+    // = member_count - 1). This is the only multiplier the legacy payout may
+    // use: paying contribution x member_count would silently draw the
+    // shortfall from commingled security deposits.
+    public fun current_cycle_contributing_members(circle: &Circle): u64 {
+        let (active_members, recipient_is_active) = count_active_members_and_recipient(circle);
+        if (active_members == 0) {
+            return 0
+        };
+        if (recipient_is_active) {
+            active_members - 1
+        } else {
+            active_members
+        }
+    }
+
+    // Check if all active members have contributed for the current cycle
+    public fun has_all_members_contributed(circle: &Circle): bool {
+        let (active_members, recipient_is_active) = count_active_members_and_recipient(circle);
+
         // If there are no active members, the check passes (sanity check)
         if (active_members == 0) {
             return true
         };
-        
+
         // Calculate expected total contributions in USD cents.
         let contribution_amount_usd = config::get_contribution_amount_usd(&circle.id);
-        
+
         let expected_contributions = expected_cycle_contributions_usd(
             contribution_amount_usd,
             active_members,
             recipient_is_active
         );
-        
+
         // Compare with actual contributions this cycle
         circle.contributions_this_cycle >= expected_contributions
     }

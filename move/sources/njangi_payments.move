@@ -17,8 +17,9 @@ module njangi::njangi_payments {
     // Error codes
     // ----------------------------------------------------------
     const EInvalidPayoutAmount: u64 = 22;
-    const EPayoutAlreadyProcessed: u64 = 23;
-    const EInvalidPayoutSchedule: u64 = 24;
+    // Codes 23 (EPayoutAlreadyProcessed) and 24 (EInvalidPayoutSchedule)
+    // were retired with the admin-discretionary process_scheduled_payout;
+    // do not reuse them.
     const EInsufficientTreasuryBalance: u64 = 25;
     const EInvalidBidAmount: u64 = 26;
     const EAuctionNotActive: u64 = 27;
@@ -227,6 +228,13 @@ module njangi::njangi_payments {
         assert!(members::get_status(member) == 0, 14); // MEMBER_STATUS_ACTIVE
         assert!(option::is_none(&members::get_suspension_end_time(member)), 13); // EMemberSuspended
 
+        // One contribution per member per payout round (shared across the
+        // SUI and stablecoin rails). Aborts with
+        // njangi_circles::E_ALREADY_CONTRIBUTED_THIS_CYCLE on a duplicate,
+        // so a single member can no longer satisfy
+        // has_all_members_contributed by paying multiple times.
+        circles::record_cycle_contributor(circle, sender);
+
         // IMPORTANT: First deposit the payment into the wallet BEFORE updating counters.
         // The package-internal contribution path verifies wallet activity but no longer
         // grants admin discretion over the deposited funds.
@@ -384,16 +392,31 @@ module njangi::njangi_payments {
         let contribution_amount_readable = circles::get_contribution_amount(circle);
         let contribution_amount_usd = circles::get_contribution_amount_usd(circle);
 
+        // The payout must equal exactly what the cycle collects. The funding
+        // gate (has_all_members_contributed) only requires contribution x
+        // contributing_members, where the scheduled recipient is excluded —
+        // the same economics as the per-cycle escrow (required_contributors
+        // = member_count - 1). Paying contribution x member_count (the old
+        // behavior) over-paid by one contribution per cycle, silently
+        // draining commingled security deposits.
+        let contributing_members = circles::current_cycle_contributing_members(circle);
+
         // ------- SAFEGUARDS & ASSERTIONS -------
         assert!(contribution_amount_raw > 0, 59); // Raw contribution amount must be positive
         assert!(member_count > 0, 62); // Must have at least one member
+        assert!(contributing_members > 0, EInvalidPayoutAmount);
+
+        // The stablecoin-first branch prices the payout in USDC micro-units
+        // (6dp); that unit math is meaningless when CoinType is SUI, so SUI
+        // payouts must always take the SUI branch below.
+        let is_sui_coin_type = type_name::get<CoinType>() == type_name::get<SUI>();
 
         // USDC-first: required payout amount in stablecoin micro-units (6dp).
         let stablecoin_per_member = custody::usd_cents_to_usdc_amount(contribution_amount_usd);
-        let stablecoin_payout_amount = safe_mul(stablecoin_per_member, member_count);
+        let stablecoin_payout_amount = safe_mul(stablecoin_per_member, contributing_members);
         let stablecoin_balance = custody::get_stablecoin_balance<CoinType>(wallet);
 
-        if (stablecoin_payout_amount > 0 && stablecoin_balance >= stablecoin_payout_amount) {
+        if (!is_sui_coin_type && stablecoin_payout_amount > 0 && stablecoin_balance >= stablecoin_payout_amount) {
             event::emit(PayoutCurrencySelected {
                 circle_id,
                 recipient,
@@ -406,7 +429,7 @@ module njangi::njangi_payments {
             event::emit(PayoutDebugInfo {
                 wallet_balance: stablecoin_balance,
                 contribution_amount: stablecoin_per_member,
-                member_count,
+                member_count: contributing_members,
                 payout_amount: stablecoin_payout_amount,
                 payout_reason: string::utf8(b"Using USDC-first payout path"),
             });
@@ -427,7 +450,7 @@ module njangi::njangi_payments {
             circles::reset_contributions_this_cycle(circle);
             circles::advance_rotation_position_and_cycle(circle, recipient, clock);
 
-            let human_readable_payout = contribution_amount_readable * member_count;
+            let human_readable_payout = contribution_amount_readable * contributing_members;
             event::emit(PayoutProcessed {
                 circle_id,
                 recipient,
@@ -438,10 +461,14 @@ module njangi::njangi_payments {
             return
         };
 
-        // Fallback to SUI when USDC is insufficient.
-        let payout_amount = safe_mul(contribution_amount_raw, member_count);
+        // Fallback to SUI when USDC is insufficient (or CoinType is SUI).
+        let payout_amount = safe_mul(contribution_amount_raw, contributing_members);
         assert!(payout_amount > 0, EInvalidPayoutAmount);
-        let sui_balance = custody::get_raw_balance(wallet);
+        // Count every SUI store the wallet can actually release from:
+        // release_sui_to_member draws from the main balance AND the dynamic
+        // Balance<SUI> field that deposit_contribution_coin fills, so the
+        // sufficiency check must look at the same total.
+        let sui_balance = custody::get_total_wallet_balance(wallet);
 
         if (sui_balance < payout_amount) {
             event::emit(PayoutCurrencySelected {
@@ -467,7 +494,7 @@ module njangi::njangi_payments {
         event::emit(PayoutDebugInfo {
             wallet_balance: sui_balance,
             contribution_amount: contribution_amount_raw,
-            member_count,
+            member_count: contributing_members,
             payout_amount,
             payout_reason: string::utf8(b"USDC shortfall, using SUI fallback")
         });
@@ -483,7 +510,7 @@ module njangi::njangi_payments {
         circles::reset_contributions_this_cycle(circle);
         circles::advance_rotation_position_and_cycle(circle, recipient, clock);
 
-        let human_readable_payout = contribution_amount_readable * member_count;
+        let human_readable_payout = contribution_amount_readable * contributing_members;
         event::emit(PayoutProcessed {
             circle_id,
             recipient,
@@ -494,65 +521,14 @@ module njangi::njangi_payments {
     }
     
     // ----------------------------------------------------------
-    // Process scheduled payout
+    // NOTE: `process_scheduled_payout` was removed in the June 2026 GTM
+    // audit cleanup. It was admin-gated and paid an ARBITRARY admin-chosen
+    // recipient — a direct violation of the no-admin-discretionary-fund-
+    // movement invariant. The only payout paths are the permissionless
+    // `trigger_payout` and the recipient-pull `claim_payout`, both of which
+    // derive the recipient deterministically from the rotation order.
     // ----------------------------------------------------------
-    public fun process_scheduled_payout(
-        circle: &mut Circle,
-        recipient: address,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ) {
-        assert!(tx_context::sender(ctx) == circles::get_admin(circle), 7);
-        assert!(circles::is_member(circle, recipient), 8);
-        
-        // Circle must be active for payouts
-        assert!(circles::is_circle_active(circle), 54);
-        
-        let current_time = clock::timestamp_ms(clock);
-        assert!(current_time >= circles::get_next_payout_time(circle), EInvalidPayoutSchedule);
-        
-        // First check properties that don't require mutable borrowing
-        let member = circles::get_member(circle, recipient);
-        assert!(!members::has_received_payout(member), EPayoutAlreadyProcessed);
-        
-        // Calculate payout amount before any mutable borrowing
-        let contribution_amount = circles::get_contribution_amount(circle);
-        let (total_contributions, _, _) = circles::get_treasury_balances(circle);
-        
-        let payout_amount = if (circles::has_goal_type(circle)) {
-            // Proportional to how much the user contributed, relative to total in the circle
-            let member_contributed = members::get_total_contributed(member);
-            let member_count = circles::get_member_count(circle);
-            
-            (member_contributed * total_contributions) / (contribution_amount * member_count)
-        } else {
-            // Rotational
-            contribution_amount * circles::get_member_count(circle)
-        };
-        
-        assert!(total_contributions >= payout_amount, EInsufficientTreasuryBalance);
-        
-        // Now perform the mutable operations
-        let payout_coin: Coin<SUI> = coin::from_balance(
-            circles::split_from_contributions(circle, payout_amount),
-            ctx
-        );
-        
-        // Mark the member as paid after we've done everything else
-        let member_mut = circles::get_member_mut(circle, recipient);
-        members::set_received_payout(member_mut, true);
-        
-        transfer::public_transfer(payout_coin, recipient);
-        
-        event::emit(PayoutProcessed {
-            circle_id: circles::get_id(circle),
-            recipient,
-            amount: payout_amount,
-            cycle: circles::get_current_cycle(circle),
-            payout_type: circles::get_goal_type(circle),
-        });
-    }
-    
+
     // ----------------------------------------------------------
     // Auction management
     // ----------------------------------------------------------
@@ -793,51 +769,18 @@ module njangi::njangi_payments {
     
     // ----------------------------------------------------------
     // Security deposit handling
+    //
+    // NOTE: `process_security_deposit_return` was removed in the June 2026
+    // GTM audit cleanup. It was admin-pushed (the admin chose when and for
+    // whom to release funds — violating the no-admin-discretionary-fund-
+    // movement invariant) and it drew from `circle.deposits`, a Balance the
+    // live deposit flow never funds: security deposits are stored in the
+    // CustodyWallet via `member_deposit_security_deposit` and are returned
+    // through the member-initiated recovery flow
+    // (`njangi_circles::execute_recovery` / `trigger_auto_release`), which
+    // refunds each member's recorded deposit deterministically.
     // ----------------------------------------------------------
-    public fun process_security_deposit_return(
-        circle: &mut Circle,
-        member_addr: address,
-        ctx: &mut TxContext
-    ) {
-        assert!(tx_context::sender(ctx) == circles::get_admin(circle), 7);
-        
-        // Circle must not be active to return security deposits
-        assert!(!circles::is_circle_active(circle), 54);
-        
-        let member = circles::get_member(circle, member_addr);
-        
-        // Ensure no obligations
-        assert!(
-            members::get_total_contributed(member) >= 
-            circles::get_contribution_amount(circle) * members::get_total_meetings_required(member),
-            18
-        );
-        
-        // Possibly partial if the user has warnings or low reputation
-        let returnable_amount =
-            if (members::get_warning_count(member) == 0 && members::get_reputation_score(member) >= 80) {
-                members::get_deposit_balance(member)
-            } else {
-                (members::get_deposit_balance(member) * (members::get_reputation_score(member) as u64)) / 100
-            };
-        
-        assert!(returnable_amount > 0 && returnable_amount <= members::get_deposit_balance(member), EInvalidPayoutAmount);
-        
-        let (_, deposits_balance, _) = circles::get_treasury_balances(circle);
-        assert!(deposits_balance >= returnable_amount, EInsufficientTreasuryBalance);
-        
-        let deposit_coin: Coin<SUI> = coin::from_balance(
-            circles::split_from_deposits(circle, returnable_amount),
-            ctx
-        );
-        
-        let member_mut = circles::get_member_mut(circle, member_addr);
-        members::subtract_from_deposit_balance(member_mut, returnable_amount);
-        members::subtract_recovery_sui_deposit(member_mut, returnable_amount);
-        
-        transfer::public_transfer(deposit_coin, member_addr);
-    }
-    
+
     // ----------------------------------------------------------
     // Permissionless payout trigger. Anyone may call this once the cycle has
     // been fully funded; the recipient address is derived deterministically
@@ -912,5 +855,296 @@ module njangi::njangi_payments {
         let debits = allocate_recovery_debit_amounts(vector[100, 10], 100);
         assert!(*vector::borrow(&debits, 0) == 90, 9007);
         assert!(*vector::borrow(&debits, 1) == 10, 9008);
+    }
+
+    // ===========================================================
+    // Lifecycle tests (test_scenario): legacy custody money path.
+    // These run the REAL entrypoints (contribute, contribute_stablecoin,
+    // member_deposit_security_deposit, trigger_payout) against a shared
+    // test circle + custody wallet, covering the June 2026 audit fixes:
+    //   - payout amount = contribution x contributing_members
+    //     (member_count - 1), never drawing from security deposits;
+    //   - per-member per-round contribution de-duplication;
+    //   - security deposit flow unaffected by either fix.
+    // ===========================================================
+
+    #[test_only] use sui::test_scenario as ts;
+
+    // A non-SUI coin type for the stablecoin rail. coin::mint_for_testing
+    // works for any type parameter, no one-time witness needed.
+    #[test_only] public struct TESTUSDC has drop {}
+
+    #[test_only] const TEST_ADMIN: address = @0xA11CE;
+    #[test_only] const TEST_BOB: address = @0xB0B;
+    #[test_only] const TEST_CAROL: address = @0xCA801;
+    #[test_only] const TEST_CONTRIBUTION_RAW: u64 = 1_000_000_000; // 1 SUI (9dp)
+    #[test_only] const TEST_USD_CENTS: u64 = 250;                  // $2.50
+    // $2.50 in USDC micro-units (6dp) = usd_cents_to_usdc_amount(250).
+    #[test_only] const TEST_USDC_CONTRIBUTION: u64 = 2_500_000;
+    // Security deposit = contribution / 2 in the test circle factory:
+    // 125 USD cents = 1_250_000 micro-USDC, or 0.5 SUI on the SUI rail.
+    #[test_only] const TEST_USDC_DEPOSIT: u64 = 1_250_000;
+    #[test_only] const TEST_SUI_DEPOSIT: u64 = 500_000_000;
+    #[test_only] const TEST_START_MS: u64 = 1_000_000;
+
+    /// tx1 (admin): share a 3-member ACTIVE circle (recipient = admin at
+    /// rotation position 0, so BOB + CAROL are the 2 expected contributors)
+    /// plus its custody wallet. Returns the test clock.
+    #[test_only]
+    fun setup_circle_and_wallet(scenario: &mut ts::Scenario): Clock {
+        let mut clock = clock::create_for_testing(ts::ctx(scenario));
+        clock::set_for_testing(&mut clock, TEST_START_MS);
+        let circle_id = circles::share_circle_for_testing(
+            vector[TEST_ADMIN, TEST_BOB, TEST_CAROL],
+            TEST_CONTRIBUTION_RAW,
+            TEST_USD_CENTS,
+            &clock,
+            ts::ctx(scenario)
+        );
+        custody::create_custody_wallet(circle_id, TEST_START_MS, ts::ctx(scenario));
+        clock
+    }
+
+    #[test_only]
+    fun contribute_sui_as(scenario: &mut ts::Scenario, who: address, clock: &Clock) {
+        ts::next_tx(scenario, who);
+        let mut circle = ts::take_shared<Circle>(scenario);
+        let mut wallet = ts::take_shared<CustodyWallet>(scenario);
+        let payment = coin::mint_for_testing<SUI>(TEST_CONTRIBUTION_RAW, ts::ctx(scenario));
+        contribute(&mut circle, &mut wallet, payment, clock, ts::ctx(scenario));
+        ts::return_shared(circle);
+        ts::return_shared(wallet);
+    }
+
+    #[test_only]
+    fun contribute_usdc_as(scenario: &mut ts::Scenario, who: address, clock: &Clock) {
+        ts::next_tx(scenario, who);
+        let mut circle = ts::take_shared<Circle>(scenario);
+        let mut wallet = ts::take_shared<CustodyWallet>(scenario);
+        let payment = coin::mint_for_testing<TESTUSDC>(TEST_USDC_CONTRIBUTION, ts::ctx(scenario));
+        circles::contribute_stablecoin<TESTUSDC>(&mut circle, &mut wallet, payment, clock, ts::ctx(scenario));
+        ts::return_shared(circle);
+        ts::return_shared(wallet);
+    }
+
+    #[test_only]
+    fun deposit_security_usdc_as(scenario: &mut ts::Scenario, who: address, clock: &Clock) {
+        ts::next_tx(scenario, who);
+        let mut circle = ts::take_shared<Circle>(scenario);
+        let mut wallet = ts::take_shared<CustodyWallet>(scenario);
+        let deposit = coin::mint_for_testing<TESTUSDC>(TEST_USDC_DEPOSIT, ts::ctx(scenario));
+        circles::member_deposit_security_deposit<TESTUSDC>(&mut circle, &mut wallet, deposit, clock, ts::ctx(scenario));
+        ts::return_shared(circle);
+        ts::return_shared(wallet);
+    }
+
+    #[test_only]
+    fun assert_received_coin<CoinType>(scenario: &mut ts::Scenario, who: address, amount: u64) {
+        ts::next_tx(scenario, who);
+        let received = ts::take_from_sender<Coin<CoinType>>(scenario);
+        assert!(coin::value(&received) == amount, 9101);
+        coin::burn_for_testing(received);
+    }
+
+    // --- payout amount: contribution x (member_count - 1) --------------
+
+    #[test]
+    fun test_stablecoin_payout_pays_contributions_only_and_spares_deposits() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_wallet(&mut scenario);
+
+        // All three members post security deposits (commingled in the
+        // same wallet balance the payout draws from).
+        deposit_security_usdc_as(&mut scenario, TEST_ADMIN, &clock);
+        deposit_security_usdc_as(&mut scenario, TEST_BOB, &clock);
+        deposit_security_usdc_as(&mut scenario, TEST_CAROL, &clock);
+
+        // Recipient (ADMIN) does not pay in; the 2 others contribute.
+        contribute_usdc_as(&mut scenario, TEST_BOB, &clock);
+        contribute_usdc_as(&mut scenario, TEST_CAROL, &clock);
+
+        // Anyone may trigger once the cycle is fully funded.
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        let mut wallet = ts::take_shared<CustodyWallet>(&scenario);
+        assert!(circles::has_all_members_contributed(&circle), 9102);
+        trigger_payout<TESTUSDC>(&mut circle, &mut wallet, &clock, ts::ctx(&mut scenario));
+
+        // Exactly the 3 security deposits must remain: the payout took
+        // contribution x 2 (what was collected), not contribution x 3.
+        assert!(
+            custody::get_stablecoin_balance<TESTUSDC>(&wallet) == 3 * TEST_USDC_DEPOSIT,
+            9103
+        );
+        // Rotation advanced to position 1.
+        assert!(circles::get_current_position(&circle) == 1, 9104);
+        ts::return_shared(circle);
+        ts::return_shared(wallet);
+
+        // Recipient got exactly 2 contributions' worth.
+        assert_received_coin<TESTUSDC>(&mut scenario, TEST_ADMIN, 2 * TEST_USDC_CONTRIBUTION);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_sui_payout_pays_contributions_only() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_wallet(&mut scenario);
+
+        contribute_sui_as(&mut scenario, TEST_BOB, &clock);
+        contribute_sui_as(&mut scenario, TEST_CAROL, &clock);
+
+        ts::next_tx(&mut scenario, TEST_CAROL);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        let mut wallet = ts::take_shared<CustodyWallet>(&scenario);
+        assert!(circles::has_all_members_contributed(&circle), 9110);
+        // CoinType = SUI must route through the SUI branch (the USDC unit
+        // math is meaningless for SUI) and pay contribution x 2.
+        trigger_payout<SUI>(&mut circle, &mut wallet, &clock, ts::ctx(&mut scenario));
+        assert!(custody::get_total_wallet_balance(&wallet) == 0, 9111);
+        assert!(circles::get_current_position(&circle) == 1, 9112);
+        ts::return_shared(circle);
+        ts::return_shared(wallet);
+
+        assert_received_coin<SUI>(&mut scenario, TEST_ADMIN, 2 * TEST_CONTRIBUTION_RAW);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 56, location = Self)]
+    fun test_trigger_payout_requires_full_funding() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_wallet(&mut scenario);
+
+        // Only one of the two expected contributors pays.
+        contribute_sui_as(&mut scenario, TEST_BOB, &clock);
+
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        let mut wallet = ts::take_shared<CustodyWallet>(&scenario);
+        trigger_payout<SUI>(&mut circle, &mut wallet, &clock, ts::ctx(&mut scenario));
+        abort 0
+    }
+
+    // --- per-round contribution de-duplication --------------------------
+
+    #[test]
+    #[expected_failure(
+        abort_code = njangi::njangi_circles::E_ALREADY_CONTRIBUTED_THIS_CYCLE,
+        location = njangi::njangi_circles
+    )]
+    fun test_duplicate_sui_contribution_aborts() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_wallet(&mut scenario);
+
+        contribute_sui_as(&mut scenario, TEST_BOB, &clock);
+        // BOB cannot satisfy the funding gate by paying twice.
+        contribute_sui_as(&mut scenario, TEST_BOB, &clock);
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(
+        abort_code = njangi::njangi_circles::E_ALREADY_CONTRIBUTED_THIS_CYCLE,
+        location = njangi::njangi_circles
+    )]
+    fun test_duplicate_stablecoin_contribution_aborts() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_wallet(&mut scenario);
+
+        contribute_usdc_as(&mut scenario, TEST_BOB, &clock);
+        contribute_usdc_as(&mut scenario, TEST_BOB, &clock);
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(
+        abort_code = njangi::njangi_circles::E_ALREADY_CONTRIBUTED_THIS_CYCLE,
+        location = njangi::njangi_circles
+    )]
+    fun test_cross_rail_duplicate_contribution_aborts() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_wallet(&mut scenario);
+
+        // One contribution per member per round, regardless of currency:
+        // paying SUI then stablecoin in the same round must abort.
+        contribute_sui_as(&mut scenario, TEST_BOB, &clock);
+        contribute_usdc_as(&mut scenario, TEST_BOB, &clock);
+        abort 0
+    }
+
+    #[test]
+    fun test_contributor_record_clears_after_payout() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_wallet(&mut scenario);
+
+        // Round 1: recipient ADMIN; BOB + CAROL contribute, payout fires.
+        contribute_sui_as(&mut scenario, TEST_BOB, &clock);
+        contribute_sui_as(&mut scenario, TEST_CAROL, &clock);
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        let mut wallet = ts::take_shared<CustodyWallet>(&scenario);
+        trigger_payout<SUI>(&mut circle, &mut wallet, &clock, ts::ctx(&mut scenario));
+        assert!(!circles::has_contributed_this_cycle(&circle, TEST_BOB), 9120);
+        assert!(!circles::has_contributed_this_cycle(&circle, TEST_CAROL), 9121);
+        ts::return_shared(circle);
+        ts::return_shared(wallet);
+        assert_received_coin<SUI>(&mut scenario, TEST_ADMIN, 2 * TEST_CONTRIBUTION_RAW);
+
+        // Round 2: recipient BOB; ADMIN + CAROL contribute again — the
+        // de-dup record must have been cleared by the payout reset.
+        contribute_sui_as(&mut scenario, TEST_ADMIN, &clock);
+        contribute_sui_as(&mut scenario, TEST_CAROL, &clock);
+        ts::next_tx(&mut scenario, TEST_CAROL);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        let mut wallet = ts::take_shared<CustodyWallet>(&scenario);
+        trigger_payout<SUI>(&mut circle, &mut wallet, &clock, ts::ctx(&mut scenario));
+        assert!(circles::get_current_position(&circle) == 2, 9122);
+        ts::return_shared(circle);
+        ts::return_shared(wallet);
+        assert_received_coin<SUI>(&mut scenario, TEST_BOB, 2 * TEST_CONTRIBUTION_RAW);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    // --- security deposit lifecycle stays intact -------------------------
+
+    #[test]
+    fun test_security_deposit_lifecycle_unaffected_by_dedup() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_wallet(&mut scenario);
+
+        // BOB posts a SUI security deposit through the live legacy path.
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        let mut wallet = ts::take_shared<CustodyWallet>(&scenario);
+        let deposit = coin::mint_for_testing<SUI>(TEST_SUI_DEPOSIT, ts::ctx(&mut scenario));
+        circles::member_deposit_security_deposit<SUI>(
+            &mut circle, &mut wallet, deposit, &clock, ts::ctx(&mut scenario)
+        );
+        let member = circles::get_member(&circle, TEST_BOB);
+        assert!(members::get_deposit_balance(member) == TEST_SUI_DEPOSIT, 9130);
+        assert!(members::get_recovery_sui_deposit(member) == TEST_SUI_DEPOSIT, 9131);
+        assert!(custody::get_total_wallet_balance(&wallet) == TEST_SUI_DEPOSIT, 9132);
+        // A security deposit is NOT a cycle contribution: the de-dup
+        // record must not be tripped by it.
+        assert!(!circles::has_contributed_this_cycle(&circle, TEST_BOB), 9133);
+        ts::return_shared(circle);
+        ts::return_shared(wallet);
+
+        // BOB can still contribute normally afterwards.
+        contribute_sui_as(&mut scenario, TEST_BOB, &clock);
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let circle = ts::take_shared<Circle>(&scenario);
+        assert!(circles::has_contributed_this_cycle(&circle, TEST_BOB), 9134);
+        ts::return_shared(circle);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
     }
 }
