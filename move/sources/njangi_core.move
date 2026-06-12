@@ -62,19 +62,17 @@ module njangi::njangi_core {
     // Helper functions to handle SUI decimal scaling
     // ----------------------------------------------------------
     public fun to_decimals(amount: u64): u64 {
-        // We'll use a safer approach to handle very large amounts
-        // DECIMAL_SCALING is 10^9 (1_000_000_000)
-        // Max u64 is 18,446,744,073,709,551,615
-        // So the safe limit for multiplication is 18,446,744,073 (without scaling)
-        
-        // Check if amount is too large to multiply safely
-        if (amount > 18_446_744_073) {
-            // If we have a huge amount, we'll return the max safe scaled value
-            // This prevents runtime errors while still allowing very large values
-            18_446_744_073_000_000_000 // Max safe value with 9 decimals
-        } else {
-            amount * DECIMAL_SCALING
-        }
+        // DECIMAL_SCALING is 10^9 (1_000_000_000).
+        // Max u64 is 18,446,744,073,709,551,615, so any amount above
+        // 18,446,744,073 whole units would overflow when scaled.
+        //
+        // Audit fix: this used to silently CLAMP oversized amounts to the
+        // max scaled value, corrupting the caller's number without any
+        // signal. Financial code must abort loudly instead — callers
+        // (auction minimum bids, milestone targets) should never see a
+        // different value than the one they asked for.
+        assert!(amount <= MAX_U64 / DECIMAL_SCALING, EDecimalConversionOverflow);
+        amount * DECIMAL_SCALING
     }
 
     public fun from_decimals(amount: u64): u64 {
@@ -453,4 +451,22 @@ module njangi::njangi_core {
     // Standard stablecoin decimals
     public fun usdc_decimals(): u8 { 6 }
     public fun sui_decimals(): u8 { 9 }
-} 
+
+    #[test]
+    fun test_to_decimals_scales_and_round_trips() {
+        assert!(to_decimals(0) == 0, 9200);
+        assert!(to_decimals(1) == 1_000_000_000, 9201);
+        assert!(to_decimals(42) == 42_000_000_000, 9202);
+        // Largest amount that scales without overflow.
+        let max_safe = MAX_U64 / DECIMAL_SCALING; // 18_446_744_073
+        assert!(to_decimals(max_safe) == max_safe * DECIMAL_SCALING, 9203);
+        assert!(from_decimals(to_decimals(max_safe)) == max_safe, 9204);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = EDecimalConversionOverflow)]
+    fun test_to_decimals_aborts_instead_of_clamping_on_overflow() {
+        // Used to silently clamp; must now abort loudly.
+        to_decimals(18_446_744_074);
+    }
+}

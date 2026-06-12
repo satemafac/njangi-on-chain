@@ -3471,6 +3471,103 @@ module njangi::njangi_circles {
         rotation_len > 0 && circle.current_position < rotation_len
     }
 
+    // ----------------------------------------------------------
+    // Test-only helpers for sibling-module lifecycle tests
+    // (njangi_cycle_escrow needs a real, active, shared Circle).
+    // ----------------------------------------------------------
+
+    /// Builds and shares a minimal ACTIVE circle: every address in
+    /// `member_addrs` is an active member, in rotation order, with the
+    /// first address as admin/position 0. Weekly cycle on weekday 0.
+    /// Returns the shared circle's ID.
+    #[test_only]
+    public fun share_circle_for_testing(
+        member_addrs: vector<address>,
+        contribution_amount: u64,
+        contribution_amount_usd: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): ID {
+        let current_time = clock::timestamp_ms(clock);
+        let member_count = vector::length(&member_addrs);
+        assert!(member_count >= 2, 9300);
+        let admin = *vector::borrow(&member_addrs, 0);
+
+        let mut circle = Circle {
+            id: object::new(ctx),
+            name: string::utf8(b"test-circle"),
+            admin,
+            current_members: 0,
+            members: table::new(ctx),
+            contributions: balance::zero<SUI>(),
+            deposits: balance::zero<SUI>(),
+            penalties: balance::zero<SUI>(),
+            current_cycle: 1,
+            next_payout_time: current_time + SEVEN_DAYS_MS,
+            created_at: current_time,
+            rotation_order: vector::empty(),
+            rotation_history: vector::empty(),
+            current_position: 0,
+            active_auction: option::none(),
+            is_active: true,
+            contributions_this_cycle: 0,
+            paused_after_cycle: false,
+        };
+
+        let circle_config = config::create_circle_config(
+            contribution_amount,
+            contribution_amount / 2,        // security_deposit
+            string::utf8(b"USD"),
+            contribution_amount,            // contribution_amount_local
+            contribution_amount / 2,        // security_deposit_local
+            contribution_amount_usd,
+            contribution_amount_usd / 2,
+            0,                              // cycle_length: weekly
+            0,                              // cycle_day: weekday 0
+            0,                              // circle_type
+            0,                              // rotation_style
+            member_count,                   // max_members
+            false,                          // auto_swap_enabled
+            false,                          // auto_release_enabled
+            0,                              // auto_release_delay_ms
+            option::none(),                 // next_in_command
+            clock
+        );
+        config::attach_circle_config(&mut circle.id, circle_config);
+        config::attach_milestone_config(&mut circle.id, config::create_milestone_config(
+            option::none(), option::none(), option::none(), option::none(), false
+        ));
+        config::attach_penalty_rules(&mut circle.id, config::create_penalty_rules(
+            vector[false, false]
+        ));
+
+        let mut i = 0;
+        while (i < member_count) {
+            let addr = *vector::borrow(&member_addrs, i);
+            let member = members::create_member(
+                current_time,
+                option::some(i),
+                0,
+                core::member_status_active()
+            );
+            add_member(&mut circle, addr, member);
+            vector::push_back(&mut circle.rotation_order, addr);
+            i = i + 1;
+        };
+
+        let circle_id = object::uid_to_inner(&circle.id);
+        transfer::share_object(circle);
+        circle_id
+    }
+
+    /// Flips a test circle into the executed-recovery state (STOPPED),
+    /// mirroring what execute_recovery_internal does to circle state.
+    #[test_only]
+    public fun mark_recovery_stopped_for_testing(circle: &mut Circle, clock: &Clock) {
+        config::mark_recovery_stopped(&mut circle.id, clock);
+        circle.is_active = false;
+    }
+
     #[test]
     fun test_sui_usd_conversion_round_trip() {
         let one_sui_mist = 1_000_000_000;
