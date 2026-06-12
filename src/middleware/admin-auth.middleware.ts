@@ -105,7 +105,7 @@ function verifyAdminToken(token: string): { suiAddress: string; sessionId: strin
         { action: 'unlink_circle' }
       ]
     };
-  } catch (error) {
+  } catch {
     return null;
   }
 }
@@ -311,11 +311,18 @@ export function withAdminRateLimit(maxRequests: number = 100, windowMs: number =
 /**
  * Combine multiple middlewares
  */
+type Middleware = (
+  handler: (req: AuthenticatedRequest, res: NextApiResponse) => Promise<void> | void,
+) => (req: AuthenticatedRequest, res: NextApiResponse) => Promise<void> | void;
+
 export function withAdminMiddleware(
   handler: (req: AuthenticatedRequest, res: NextApiResponse) => Promise<void> | void,
-  ...middlewares: Array<(h: any) => any>
+  ...middlewares: Middleware[]
 ) {
-  return middlewares.reduce((h, middleware) => middleware(h), handler);
+  return middlewares.reduce<ReturnType<Middleware>>(
+    (h, middleware) => middleware(h),
+    handler,
+  );
 }
 
 export function requireAdminAuth(req: AuthenticatedRequest) {
@@ -346,7 +353,7 @@ export function checkAdminPermission(
 export function logAdminAction(
   action: string,
   suiAddress: string,
-  details: Record<string, any> = {}
+  details: Record<string, unknown> = {}
 ): void {
   adminLogger.info(`✅ ${action}`, {
     suiAddress,

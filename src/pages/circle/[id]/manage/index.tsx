@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
-import { SuiClient, SuiEvent, SuiHTTPTransport } from '@mysten/sui/client';
+import { SuiClient, SuiEvent } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
 import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle, Edit3, Users, Crown, RefreshCw } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
@@ -26,7 +26,7 @@ import { getRecoveryProposalUiState } from '@/lib/recovery-ui';
 import { resolveStablecoinMetadata } from '@/lib/stablecoin-metadata';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
-import { getCirclePackageId } from '../../../../services/circle-service';
+import { getCirclePackageId, getSuiClientFromPool } from '../../../../services/circle-service';
 import {
   getCurrentRpcUrl,
   getCurrentNetwork,
@@ -43,6 +43,11 @@ import {
   type EmberOperationLifecycle,
 } from '../../../../services/zkLoginClient';
 import WhatsAppCircleIntegration from '../../../../components/WhatsAppCircleIntegration';
+import CycleEscrowPanel from '@/components/CycleEscrowPanel';
+import { resolveCircleSettlementCoin } from '@/lib/circle-settlement';
+import { readObject, queryEventsCached, invalidateObject, invalidateSuiRead } from '@/lib/sui-read';
+import { logSuiReadError } from '@/services/sui-rpc-failover';
+import type { NetworkType } from '@/services/whatsapp-registry-service';
 
 // Define a proper Circle type to fix linter errors
 interface Circle {
@@ -83,6 +88,7 @@ interface Circle {
 // Assuming we'll need a Member type as well
 interface Member {
   address: string;
+  memberObjectId?: string;
   joinDate?: number;
   status: 'active' | 'suspended' | 'exited';
   position?: number; // Add position field
@@ -333,11 +339,12 @@ const checkMemberDepositStatus = async (
   memberActivatedEvents: SuiEvent[],
   custodyEvents: SuiEvent[],
   securityReturnedEvents: SuiEvent[]
-): Promise<{ hasPaid: boolean; position?: number; depositBalanceRaw: bigint; lastContributionRaw: bigint }> => {
+): Promise<{ hasPaid: boolean; position?: number; depositBalanceRaw: bigint; lastContributionRaw: bigint; memberObjectId: string | null }> => {
   let hasPaid = false;
   let position: number | undefined = undefined;
   let depositBalanceRaw = 0n;
   let lastContributionRaw = 0n;
+  let memberObjectId: string | null = null;
   let resolvedFromStruct = false;
   
   try {
@@ -347,6 +354,11 @@ const checkMemberDepositStatus = async (
         parentId: membersTableId,
         name: { type: 'address', value: address }
       });
+
+      const candidateObjectId = (memberField.data as { objectId?: string } | undefined)?.objectId;
+      if (typeof candidateObjectId === 'string' && candidateObjectId.length > 0) {
+        memberObjectId = candidateObjectId;
+      }
       
       if (memberField.data?.content && 'fields' in memberField.data.content) {
         const memberFields = memberField.data.content.fields as {
@@ -403,7 +415,7 @@ const checkMemberDepositStatus = async (
   // Check SecurityDepositReturned Event to override hasPaid (using pre-fetched data)
   try {
     if (resolvedFromStruct) {
-      return { hasPaid, position, depositBalanceRaw, lastContributionRaw };
+      return { hasPaid, position, depositBalanceRaw, lastContributionRaw, memberObjectId };
     }
 
     const hasReturnedEvent = securityReturnedEvents.some(event => {
@@ -420,7 +432,7 @@ const checkMemberDepositStatus = async (
     debugLog(`Error checking SecurityDepositReturned events`, { address: shortenAddress(address), error: eventError });
   }
   
-  return { hasPaid, position, depositBalanceRaw, lastContributionRaw };
+  return { hasPaid, position, depositBalanceRaw, lastContributionRaw, memberObjectId };
 };
 
 // Constants for time calculations
@@ -643,18 +655,6 @@ const getJsonRpcUrl = (): string => {
   return getCurrentRpcUrl();
 };
 
-const toWebsocketUrl = (rpcUrl: string): string => {
-  if (rpcUrl.startsWith('https://')) {
-    return `wss://${rpcUrl.slice('https://'.length)}`;
-  }
-
-  if (rpcUrl.startsWith('http://')) {
-    return `ws://${rpcUrl.slice('http://'.length)}`;
-  }
-
-  return rpcUrl;
-};
-
 export default function ManageCircle() {
   const router = useRouter();
   const { id } = router.query;
@@ -713,6 +713,19 @@ export default function ManageCircle() {
     totalActiveInRotation: 0,
   });
   const [loadingContributions, setLoadingContributions] = useState(false);
+
+  // Phase 10: per-circle "require KYC" toggle. Persisted in localStorage
+  // so admins don't have to flip it on every page load. When on, opening
+  // a new round uses the compliance-gated escrow.
+  const [gateRoundsForCircle, setGateRoundsForCircle] = useState(false);
+  // Phase 12 UX chain: when the admin successfully activates the circle,
+  // we set this flag so the CycleEscrowPanel automatically opens the
+  // first contribution round once it sees `isActive=true`. Cleared by
+  // the panel's `onAutoOpenFired` callback after firing once.
+  const [autoOpenFirstRound, setAutoOpenFirstRound] = useState(false);
+  // The Member type on this page is address-only; the panel falls back
+  // to shortened addresses when no display name is mapped.
+  const memberNameMap = useMemo<Record<string, string>>(() => ({}), []);
 
   // Add state variables for max members editing
   const [isEditingMaxMembers, setIsEditingMaxMembers] = useState(false);
@@ -832,7 +845,19 @@ export default function ManageCircle() {
     if (id && userAddress) {
       fetchCircleDetails();
     }
+    // `fetchCircleDetails` closes over id/userAddress already.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, userAddress]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof id !== 'string') return;
+    try {
+      const stored = window.localStorage.getItem(`njangi.gateRounds.${id}`);
+      setGateRoundsForCircle(stored === 'true');
+    } catch {
+      /* ignore */
+    }
+  }, [id]);
 
   useEffect(() => {
     const fetchPrice = async () => {
@@ -852,6 +877,8 @@ export default function ManageCircle() {
     if (id && userAddress) {
       fetchPendingRequests();
     }
+    // `fetchPendingRequests` closes over id/userAddress already.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, userAddress]);
 
   // Initialize newMaxMembersValue when circle data is loaded
@@ -870,9 +897,16 @@ export default function ManageCircle() {
     debugLog('Fetching circle details', { circleId: id });
     setIsFetching(true);
     setLoading(true);
-    
+
+    // This is the single refresh entry point (also called after every admin
+    // write), so drop cached reads for this circle first — a refetch must
+    // reflect the latest chain state. Same-mount dedup still works: the first
+    // read below repopulates the cache for the rest of the burst.
+    invalidateObject(id as string);
+    invalidateSuiRead('events:');
+
     try {
-      const client = new SuiClient({ url: getJsonRpcUrl() });
+      const client = getSuiClientFromPool(getJsonRpcUrl());
       
       // Determine package ID for this circle
       const determinedPackageId = await getCirclePackageId(id as string, userAddress);
@@ -881,10 +915,7 @@ export default function ManageCircle() {
       
       // Parallel fetch: Get circle object and dynamic fields simultaneously
       const [objectData, dynamicFieldsResult] = await Promise.all([
-        client.getObject({
-          id: id as string,
-          options: { showContent: true, showType: true }
-        }),
+        readObject(id as string, { showContent: true, showType: true }),
         client.getDynamicFields({ parentId: id as string })
       ]);
       
@@ -913,7 +944,7 @@ export default function ManageCircle() {
       try {
         // Parallel fetch: Get circle events and activation status
         const [circleEvents] = await Promise.all([
-          client.queryEvents({
+          queryEventsCached({
             query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleCreated` },
             limit: 50
           })
@@ -1025,7 +1056,7 @@ export default function ManageCircle() {
           setRecoveryStatus(null);
         }
       } catch (error) {
-        console.error('Manage - Error fetching CircleConfig fields:', error);
+        logSuiReadError('Manage - Error fetching CircleConfig fields:', error);
         setRecoveryStatus(null);
       }
       debugLog('Config after dynamic fields', { foundInDynamicField, configValues });
@@ -1054,7 +1085,7 @@ export default function ManageCircle() {
         isActive = fields.is_active.toLowerCase() === 'true';
       } else {
         try {
-          const activationEvents = await client.queryEvents({
+          const activationEvents = await queryEventsCached({
             query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleActivated` },
             limit: 50
           });
@@ -1063,7 +1094,7 @@ export default function ManageCircle() {
           );
           debugLog('Circle activation status', isActive);
         } catch (error) {
-          console.error('Error checking circle activation:', error);
+          logSuiReadError('Error checking circle activation:', error);
         }
       }
 
@@ -1092,6 +1123,7 @@ export default function ManageCircle() {
       // Get member addresses directly from blockchain members table (primary method)
       let memberAddresses = new Set<string>();
       let blockchainMemberList: string[] = [];
+      const memberObjectIds = new Map<string, string>();
       
       if (membersTableId) {
         try {
@@ -1099,11 +1131,17 @@ export default function ManageCircle() {
           const allMemberFields = await client.getDynamicFields({ 
             parentId: membersTableId 
           });
-          
+
           blockchainMemberList = allMemberFields.data
-            .filter(field => field.name?.type === 'address')
-            .map(field => field.name.value as string)
-            .filter(addr => addr && addr !== '0x0');
+            .filter((field) => field.name?.type === 'address' && typeof field.name.value === 'string')
+            .map((field) => {
+              const memberAddress = field.name.value as string;
+              if (field.objectId && memberAddress && memberAddress !== '0x0') {
+                memberObjectIds.set(memberAddress, field.objectId);
+              }
+              return memberAddress;
+            })
+            .filter((addr) => addr && addr !== '0x0');
           
           memberAddresses = new Set(blockchainMemberList);
           debugLog('Members from blockchain table', { 
@@ -1111,7 +1149,7 @@ export default function ManageCircle() {
             addresses: blockchainMemberList.map(addr => `${addr.slice(0, 6)}...${addr.slice(-4)}`)
           });
         } catch (error) {
-          console.error('Error fetching members from blockchain table:', error);
+          logSuiReadError('Error fetching members from blockchain table:', error);
         }
       }
       
@@ -1129,19 +1167,19 @@ export default function ManageCircle() {
         
         try {
           [memberEvents, custodyEvents, memberActivatedEvents, securityReturnedEvents] = await Promise.all([
-            client.queryEvents({
+            queryEventsCached({
               query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
               limit: 1000
             }),
-            client.queryEvents({
+            queryEventsCached({
               query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyDeposited` },
               limit: 100
             }),
-            client.queryEvents({
+            queryEventsCached({
               query: { MoveEventType: `${determinedPackageId}::njangi_members::MemberActivated` },
               limit: 100
             }),
-            client.queryEvents({
+            queryEventsCached({
               query: { MoveEventType: `${determinedPackageId}::njangi_payments::SecurityDepositReturned` },
               limit: 100
             })
@@ -1161,32 +1199,32 @@ export default function ManageCircle() {
             addresses: Array.from(memberAddresses).map(addr => `${addr.slice(0, 6)}...${addr.slice(-4)}`)
           });
         } catch (error) {
-          console.error('Error with event-based member discovery:', error);
+          logSuiReadError('Error with event-based member discovery:', error);
           eventBasedMemberCount = 1; // Default fallback
         }
       } else {
         // Still fetch events for deposit status checking, but with smaller limits since we don't need them for member discovery
         try {
           [memberEvents, custodyEvents, memberActivatedEvents, securityReturnedEvents] = await Promise.all([
-            client.queryEvents({
+            queryEventsCached({
               query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
               limit: 100 // Reduced limit since only used for join dates
             }),
-            client.queryEvents({
+            queryEventsCached({
               query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyDeposited` },
               limit: 100
             }),
-            client.queryEvents({
+            queryEventsCached({
               query: { MoveEventType: `${determinedPackageId}::njangi_members::MemberActivated` },
               limit: 100
             }),
-            client.queryEvents({
+            queryEventsCached({
               query: { MoveEventType: `${determinedPackageId}::njangi_payments::SecurityDepositReturned` },
               limit: 100
             })
           ]);
         } catch (error) {
-          console.error('Error fetching events for member details:', error);
+          logSuiReadError('Error fetching events for member details:', error);
           // Initialize empty arrays if event fetching fails
           memberEvents = { data: [] };
           custodyEvents = { data: [] };
@@ -1218,7 +1256,7 @@ export default function ManageCircle() {
         
         try {
           // Use utility function to check deposit status
-          const { hasPaid, position, depositBalanceRaw, lastContributionRaw } = await checkMemberDepositStatus(
+          const { hasPaid, position, depositBalanceRaw, lastContributionRaw, memberObjectId } = await checkMemberDepositStatus(
             client,
             id as string,
             membersTableId,
@@ -1247,6 +1285,7 @@ export default function ManageCircle() {
 
           membersList.push({
             address, 
+            memberObjectId: memberObjectIds.get(address) ?? memberObjectId ?? undefined,
             depositPaid: hasPaid,
             depositBalanceRaw,
             lastContributionRaw,
@@ -1255,8 +1294,17 @@ export default function ManageCircle() {
             position: finalPosition
           });
         } catch (error) {
-          console.error(`Manage - Error fetching deposit status for ${address}:`, error);
-          membersList.push({ address, depositPaid: false, depositBalanceRaw: 0n, lastContributionRaw: 0n, status: 'active', joinDate: creationTimestamp ?? Date.now(), position: undefined });
+          logSuiReadError(`Manage - Error fetching deposit status for ${address}:`, error);
+          membersList.push({
+            address,
+            memberObjectId: memberObjectIds.get(address),
+            depositPaid: false,
+            depositBalanceRaw: 0n,
+            lastContributionRaw: 0n,
+            status: 'active',
+            joinDate: creationTimestamp ?? Date.now(),
+            position: undefined,
+          });
         }
       });
       await Promise.all(depositStatusPromises);
@@ -1323,7 +1371,7 @@ export default function ManageCircle() {
 
       // Fetch custody wallet info in parallel with other operations
         try {
-          const custodyWalletEvents = await client.queryEvents({
+          const custodyWalletEvents = await queryEventsCached({
               query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyWalletCreated` },
             limit: 50
           });
@@ -1518,12 +1566,15 @@ export default function ManageCircle() {
             }
           }
         } catch (error) {
-          console.error('Error fetching custody wallet info:', error);
+          logSuiReadError('Error fetching custody wallet info:', error);
         }
 
     } catch (error) {
-      console.error('Error fetching circle details:', error);
-      toast.error('Could not load circle information');
+      // Transient cooldowns log quietly and skip the toast (self-heals on
+      // refresh); only genuine failures surface to the user.
+      if (!logSuiReadError('Manage - Error fetching circle details:', error)) {
+        toast.error('Could not load circle information');
+      }
     } finally {
       setLoading(false);
       setIsFetching(false);
@@ -2116,13 +2167,24 @@ export default function ManageCircle() {
         }
         
         toast.success(`Approved ${shortenAddress(request.user_address)} to join the circle`);
+
+        // The member was added on-chain (members table mutated + receipt
+        // minted), so the optimistic local-state update above isn't enough:
+        // drop cached circle reads so the contribution panel / dashboard
+        // reflect the new member instead of a 5s-stale snapshot.
+        invalidateObject(request.circle_id);
       } else {
         toast.success(`Rejected join request from ${shortenAddress(request.user_address)}`);
       }
-      
+
       // Refresh the pending requests
       fetchPendingRequests();
-      
+      // Re-read authoritative circle state after an approval (matches the
+      // invalidate-then-refetch pattern used by the other admin writes).
+      if (approve) {
+        fetchCircleDetails();
+      }
+
     } catch (error: unknown) {
       console.error('Error handling join request:', error);
       toast.error('Failed to process join request');
@@ -2536,7 +2598,6 @@ export default function ManageCircle() {
       switch (cycleLength) {
         case 0: // Weekly
           {
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const MS_PER_WEEK = 604800000; // Define inside case
             let daysUntil = 0;
             if (targetDay > currentWeekday) { 
@@ -2561,7 +2622,6 @@ export default function ManageCircle() {
           
         case 3: // Bi-Weekly (Revised Logic)
           {
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const MS_PER_BI_WEEK = 1209600000; // Define inside case
             let daysUntilNextTarget = 0;
             if (targetDay > currentWeekday) { // Target is later this week
@@ -2935,7 +2995,7 @@ export default function ManageCircle() {
     
     setFetchingSuiBalance(true);
     try {
-      const client = new SuiClient({ url: getCurrentRpcUrl() });
+      const client = getSuiClientFromPool(getCurrentRpcUrl());
       
       let mainSuiBalance = 0;
       let dynamicFieldSuiBalance = 0;
@@ -3007,7 +3067,7 @@ export default function ManageCircle() {
       });
 
     } catch (error) {
-      console.error('Error fetching custody wallet SUI balance:', error);
+      logSuiReadError('Error fetching custody wallet SUI balance:', error);
     } finally {
       setFetchingSuiBalance(false);
     }
@@ -3019,7 +3079,7 @@ export default function ManageCircle() {
     
     setFetchingUsdcBalance(true);
     try {
-      const client = new SuiClient({ url: getCurrentRpcUrl() });
+      const client = getSuiClientFromPool(getCurrentRpcUrl());
       const [walletData, walletDynamicFields] = await Promise.all([
         client.getObject({
           id: circle.custody.walletId,
@@ -3082,7 +3142,7 @@ export default function ManageCircle() {
         coinType: stablecoinMeta.coinType
       });
     } catch (error) {
-      console.error('Error fetching custody wallet USDC balance:', error);
+      logSuiReadError('Error fetching custody wallet USDC balance:', error);
     } finally {
       setFetchingUsdcBalance(false);
     }
@@ -3093,6 +3153,8 @@ export default function ManageCircle() {
       fetchCustodyWalletSuiBalance();
       fetchCustodyWalletUsdcBalance();
     }
+    // Balance fetchers are stable component closures.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [circle?.custody?.walletId]);
 
   // useEffect to convert custody USDC balances to local currency for display
@@ -3617,12 +3679,21 @@ export default function ManageCircle() {
             return;
           }
           
+          // Invalidate BEFORE setCircle: the state update synchronously fires
+          // the contribution-status effect, which reads the cached circle —
+          // must miss the pre-activation snapshot. (fetchCircleDetails below
+          // also invalidates, but it's async and would lose the race.)
+          invalidateObject(id as string);
+
           // Update local state
           setCircle(prevCircle => prevCircle ? { ...prevCircle, isActive: true } : null);
-          
+          // Chain into "Open the first round" automatically — the panel
+          // fires onStartRound once it detects circleIsActive=true.
+          setAutoOpenFirstRound(true);
+
           // Show success message with the transaction digest
-          toast.success(`Circle activated successfully! Transaction: ${result.digest.slice(0,8)}...`, { id: toastId + '-success' });
-          
+          toast.success(`Circle activated! Opening the first round now…`, { id: toastId + '-success' });
+
           // Refresh circle details
           fetchCircleDetails();
         } catch (error) {
@@ -3823,6 +3894,8 @@ export default function ManageCircle() {
     if (members.length > 0) {
       logRotationOrderStatus();
     }
+    // Debug-only logger; no additional deps needed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [members]);
 
   // Add this shuffle function after the saveRotationOrder function
@@ -3950,6 +4023,8 @@ export default function ManageCircle() {
         }
       }
     }
+    // Debug helpers close over the same dependencies already listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [members, allDepositsPaid, circle]);
 
   // Get the current circle size category
@@ -4055,7 +4130,7 @@ export default function ManageCircle() {
 
     console.log('[ContributionStatus] Fetching for circle:', circle.id);
     setLoadingContributions(true);
-    const client = new SuiClient({ url: getJsonRpcUrl() });
+    const client = getSuiClientFromPool(getJsonRpcUrl());
     let currentCycleFromServer = 0;
     let determinedActiveMembersInRotation: string[] = [];
     let currentPositionInRotation: number | null = null;
@@ -4063,7 +4138,7 @@ export default function ManageCircle() {
     const uniqueContributors = new Set<string>();
 
     try {
-      const circleObjectData = await client.getObject({ id: circle.id, options: { showContent: true } });
+      const circleObjectData = await readObject(circle.id, { showContent: true });
       if (circleObjectData.data?.content && 'fields' in circleObjectData.data.content) {
         const cFields = circleObjectData.data.content.fields as Record<string, SuiFieldValue>;
         const membersField = cFields.members && typeof cFields.members === 'object' && cFields.members !== null
@@ -4229,12 +4304,12 @@ export default function ManageCircle() {
 
     setLoadingRecoveryStatus(true);
     try {
-      const client = new SuiClient({ url: getJsonRpcUrl() });
+      const client = getSuiClientFromPool(getJsonRpcUrl());
       const dynamicFieldsResult = await client.getDynamicFields({ parentId: id as string });
       const configFields = await getCircleConfigFieldsFromDynamicFields(client, dynamicFieldsResult.data);
       setRecoveryStatus(parseRecoveryStatus(configFields));
     } catch (error) {
-      console.error('Failed to refresh recovery status:', error);
+      logSuiReadError('Failed to refresh recovery status:', error);
     } finally {
       setLoadingRecoveryStatus(false);
     }
@@ -4262,7 +4337,7 @@ export default function ManageCircle() {
         setCirclePackageId(resolvedPackageId);
       }
 
-      const client = new SuiClient({ url: getJsonRpcUrl() });
+      const client = getSuiClientFromPool(getJsonRpcUrl());
       setRecoveryExecution(
         await loadRecoveryExecutionStatus({
           client,
@@ -4271,7 +4346,7 @@ export default function ManageCircle() {
         }),
       );
     } catch (error) {
-      console.error('Failed to refresh recovery execution state:', error);
+      logSuiReadError('Failed to refresh recovery execution state:', error);
     } finally {
       setLoadingRecoveryExecution(false);
     }
@@ -4284,10 +4359,14 @@ export default function ManageCircle() {
 
     void fetchRecoveryStatus();
     void fetchRecoveryExecutionState();
+    // Recovery is a slow-moving safety status (liveness/grace windows are hours),
+    // not a live feed — poll gently and skip while the tab is backgrounded. The
+    // old 15s cadence was a top contributor to RPC rate-limit cooldowns.
     const intervalId = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       void fetchRecoveryStatus();
       void fetchRecoveryExecutionState();
-    }, 15000);
+    }, 60000);
 
     return () => {
       window.clearInterval(intervalId);
@@ -4302,12 +4381,7 @@ export default function ManageCircle() {
     let isActive = true;
     let unsubscribe: (() => void) | null = null;
     const rpcUrl = getJsonRpcUrl();
-    const subscriptionClient = new SuiClient({
-      transport: new SuiHTTPTransport({
-        url: rpcUrl,
-        websocket: { url: toWebsocketUrl(rpcUrl) },
-      }),
-    });
+    const subscriptionClient = getSuiClientFromPool(rpcUrl);
 
     subscriptionClient.subscribeEvent({
       filter: {
@@ -4674,6 +4748,13 @@ export default function ManageCircle() {
     () => members.filter((member) => member.depositPaid),
     [members],
   );
+  const eligibleRecoveryDelegateMembers = useMemo(
+    () => members.filter((member) =>
+      member.status === 'active'
+      && normalizeAddress(member.address) !== normalizeAddress(circle?.admin),
+    ),
+    [circle?.admin, members],
+  );
 
   const now = Date.now();
   const recoveryProposal = recoveryStatus?.proposal ?? null;
@@ -4727,6 +4808,15 @@ export default function ManageCircle() {
     required: true,
   });
   const normalizedRecoveryDelegateDraft = normalizeRecoveryDelegateAddress(recoveryDelegateDraft);
+  const recoveryDelegateDraftIsEligibleMember = Boolean(
+    normalizedRecoveryDelegateDraft
+    && eligibleRecoveryDelegateMembers.some(
+      (member) => normalizeAddress(member.address) === normalizedRecoveryDelegateDraft,
+    ),
+  );
+  const showIneligibleRecoveryDelegateOption = Boolean(
+    normalizedRecoveryDelegateDraft && !recoveryDelegateDraftIsEligibleMember,
+  );
   const hasRecoveryDelegateDraftChanges =
     (normalizedRecoveryDelegateDraft ?? null) !== (autoReleaseUi.configuredDelegate ?? null);
   const recoveryDelegateFormDisabledReason =
@@ -4771,11 +4861,7 @@ export default function ManageCircle() {
 
     if (recoveryStatus.autoReleaseEnabled) {
       const normalizedConfiguredDelegate = normalizeRecoveryDelegateAddress(recoveryStatus.nextInCommand ?? null);
-      const eligibleRecoveryMembers = members.filter((member) =>
-        member.status === 'active'
-          && normalizeAddress(member.address) !== normalizeAddress(circle.admin),
-      );
-      const delegateIsEligibleMember = eligibleRecoveryMembers.some((member) =>
+      const delegateIsEligibleMember = eligibleRecoveryDelegateMembers.some((member) =>
         normalizeAddress(member.address) === normalizedConfiguredDelegate,
       );
 
@@ -4787,11 +4873,11 @@ export default function ManageCircle() {
         return (
           <div>
             <p>The next in command must be an active non-admin member before activation.</p>
-            {eligibleRecoveryMembers.length > 0 ? (
+            {eligibleRecoveryDelegateMembers.length > 0 ? (
               <>
                 <p className="mt-2 font-medium">Eligible members:</p>
                 <ul className="mt-1 list-disc pl-5 text-xs">
-                  {eligibleRecoveryMembers.map((member) => (
+                  {eligibleRecoveryDelegateMembers.map((member) => (
                     <li key={member.address}>{shortenAddress(member.address)}</li>
                   ))}
                 </ul>
@@ -6578,24 +6664,38 @@ export default function ManageCircle() {
                                 >
                                   Delegate wallet
                                 </label>
-                                <input
+                                <select
                                   id="manage-recovery-delegate"
-                                  type="text"
-                                  inputMode="text"
-                                  autoComplete="off"
                                   value={recoveryDelegateDraft}
                                   onChange={(event) => setRecoveryDelegateDraft(event.target.value)}
                                   disabled={!canManageRecoveryDelegate || isUpdatingRecoveryDelegate}
-                                  placeholder="0x..."
                                   className="mt-2 w-full rounded-[18px] border border-stone-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-stone-400 focus:ring-2 focus:ring-stone-200 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-400"
-                                />
+                                >
+                                  <option value="">
+                                    {eligibleRecoveryDelegateMembers.length > 0
+                                      ? 'Select an active member wallet'
+                                      : 'No eligible member wallets yet'}
+                                  </option>
+                                  {showIneligibleRecoveryDelegateOption && normalizedRecoveryDelegateDraft && (
+                                    <option value={normalizedRecoveryDelegateDraft}>
+                                      {`Currently configured (not eligible): ${normalizedRecoveryDelegateDraft}`}
+                                    </option>
+                                  )}
+                                  {eligibleRecoveryDelegateMembers.map((member) => (
+                                    <option key={member.address} value={member.address}>
+                                      {member.address}
+                                    </option>
+                                  ))}
+                                </select>
                                 <p className={`mt-2 text-xs ${
                                   recoveryDelegateValidationError ? 'text-red-600' : 'text-slate-500'
                                 }`}>
                                   {recoveryDelegateValidationError
                                     ? recoveryDelegateValidationError
                                     : normalizedRecoveryDelegateDraft
-                                      ? `Normalized wallet: ${normalizedRecoveryDelegateDraft}`
+                                      ? recoveryDelegateDraftIsEligibleMember
+                                        ? `Selected member wallet: ${normalizedRecoveryDelegateDraft}`
+                                        : `Currently configured wallet: ${normalizedRecoveryDelegateDraft}`
                                       : circle?.isActive
                                         ? 'Required: active auto-release circles must keep a valid next-in-command wallet configured.'
                                         : 'Required before activation: choose an active non-admin member as next in command.'}
@@ -7064,10 +7164,27 @@ export default function ManageCircle() {
                                 return (
                                   <tr key={member.address} className="transition-colors hover:bg-stone-50/70">
                                     <td className="whitespace-nowrap py-3 pl-4 pr-3 text-xs font-medium text-slate-900 sm:pl-6 sm:text-sm">
-                                      <span className="flex flex-col sm:flex-row sm:items-center">
-                                        <span className="font-mono text-xs truncate max-w-[100px] sm:max-w-none">{shortenAddress(member.address)}</span>
-                                        {member.address === circle?.admin && (
-                                          <span className="ml-0 mt-1 inline-block rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-700 sm:ml-2 sm:mt-0">Admin</span>
+                                      <span className="flex flex-col">
+                                        <span className="flex flex-col sm:flex-row sm:items-center">
+                                          <span className="font-mono text-xs truncate max-w-[100px] sm:max-w-none">{shortenAddress(member.address)}</span>
+                                          {member.address === circle?.admin && (
+                                            <span className="ml-0 mt-1 inline-block rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-700 sm:ml-2 sm:mt-0">Admin</span>
+                                          )}
+                                        </span>
+                                        {member.memberObjectId && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              if (!member.memberObjectId) {
+                                                return;
+                                              }
+                                              void copyPlainText(member.memberObjectId, 'Member contract address copied to clipboard!');
+                                            }}
+                                            className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 transition hover:text-slate-900"
+                                          >
+                                            <Copy className="h-3.5 w-3.5" />
+                                            <span className="font-mono">{`Contract ${shortenId(member.memberObjectId)}`}</span>
+                                          </button>
                                         )}
                                       </span>
                                     </td>
@@ -7381,6 +7498,74 @@ export default function ManageCircle() {
                   </div>
                 )}
                 
+                {/* Round Controls — admin-only "Open this round" + KYC gate */}
+                {!loading && circle && typeof id === 'string' && userAddress && circle.admin === userAddress ? (
+                  <div className={sectionCardClass}>
+                    <div className="mb-5">
+                      <p className={sectionEyebrowClass}>Operations</p>
+                      <h3 className={`${sectionTitleClass} mt-2`}>Round controls</h3>
+                      <p className="mt-2 text-sm leading-6 text-slate-500">
+                        Open the next contribution round once the circle is active. Members
+                        pay and collect on their own contribute page; this card is the
+                        admin&rsquo;s lifecycle handle.
+                      </p>
+                    </div>
+                    {!circle.isActive ? (
+                      <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                        <p className="font-semibold">Circle is not active yet.</p>
+                        <div className="mt-1 text-amber-800/90">
+                          {getActivationRequirementMessage()}
+                        </div>
+                        <p className="mt-2 text-xs text-amber-800/70">
+                          Use <span className="font-semibold">Activate Circle</span> in
+                          the Circle Management section below once the conditions above
+                          are met.
+                        </p>
+                      </div>
+                    ) : null}
+                    <label className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                      <span>
+                        <span className="font-semibold">Require KYC for new rounds</span>
+                        <span className="ml-1 text-amber-800/80">
+                          When on, the next round will use the compliance-gated
+                          escrow so members must hold a valid attestation to pay
+                          or collect.
+                        </span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={gateRoundsForCircle}
+                        onChange={(e) => {
+                          const next = e.target.checked;
+                          setGateRoundsForCircle(next);
+                          try {
+                            localStorage.setItem(
+                              `njangi.gateRounds.${id}`,
+                              next ? 'true' : 'false',
+                            );
+                          } catch {
+                            /* ignore quota errors */
+                          }
+                        }}
+                        className="h-5 w-5"
+                      />
+                    </label>
+                    <CycleEscrowPanel
+                      circleId={id}
+                      network={getCurrentNetwork() as NetworkType}
+                      circleName={circle.name}
+                      isAdmin
+                      memberNames={memberNameMap}
+                      requireAttestationOnOpen={gateRoundsForCircle}
+                      showAdminOpenButton
+                      circleIsActive={circle.isActive && allDepositsPaid}
+                      autoOpenWhenReady={autoOpenFirstRound}
+                      onAutoOpenFired={() => setAutoOpenFirstRound(false)}
+                      {...resolveCircleSettlementCoin(circle.autoSwapEnabled)}
+                    />
+                  </div>
+                ) : null}
+
                 {/* Circle Management Actions */}
                 <div className={sectionCardClass} ref={(element) => setManageSectionRef('actions', element)}>
                   <div className="mb-5">
@@ -7424,307 +7609,9 @@ export default function ManageCircle() {
                       </Tooltip.Root>
                     </Tooltip.Provider>
                     
-                    {/* Add Verify Deposits button */}
-                    <button
-                      onClick={() => {
-                        toast.loading('Verifying deposit status for all members...', {id: 'verify-deposits'});
-                        // Force check deposits
-                        setTimeout(() => {
-                          const updatedMembers = members.map(member => ({
-                            ...member,
-                            depositPaid: true
-                          }));
-                          setMembers(updatedMembers);
-                          setAllDepositsPaid(true);
-                          toast.success('Updated deposit status for all members', {id: 'verify-deposits'});
-                          
-                          // Refresh circle details
-                          fetchCircleDetails();
-                        }, 500);
-                      }}
-                      className={`${secondaryActionClass} w-full`}
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 h-3.5 sm:h-4 sm:w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      Verify Deposits
-                    </button>
-
-                    {/* Add Trigger Payout button */}
-                    <Tooltip.Provider>
-                      <Tooltip.Root>
-                        <Tooltip.Trigger asChild>
-                          <div>
-                            <button
-                              onClick={() => {
-                                if (!circle || !circle.custody?.walletId) {
-                                  toast.error('Custody wallet information not available');
-                                  return;
-                                }
-                                
-                                setConfirmationModal({
-                                  isOpen: true,
-                                  title: 'Trigger Automatic Payout',
-                                  message: (
-                                    <div>
-                                      <p>Are you sure you want to trigger an automatic payout for the current member in the rotation?</p>
-                                      <p className="mt-2 text-sm text-gray-600">This will process a payout according to the rotation order.</p>
-                                      {/* Add warning if not all contributions are made */}
-                                      {!allContributionsMadeThisCycle && contributionStatus.currentCycle > 0 && (
-                                        <p className="mt-2 text-sm text-amber-600">
-                                          <AlertTriangle className="inline-block mr-1 h-4 w-4" />
-                                          Warning: Not all members have contributed for cycle {contributionStatus.currentCycle}.
-                                          ({contributionStatus.contributedMembers.size}/{contributionStatus.totalActiveInRotation} contributions made).
-                                          The transaction might fail on-chain if this condition isn&apos;t met by the smart contract.
-                                        </p>
-                                      )}
-                                    </div>
-                                  ),
-                                  onConfirm: async () => {
-                                    const toastId = 'trigger-payout';
-                                    try {
-                                      toast.loading('Processing payout...', { id: toastId });
-                                      
-                                      if (!account) {
-                                        toast.error('User account not available. Please log in again.', { id: toastId });
-                                        return;
-                                      }
-                                      
-                                      const zkLoginClient = new ZkLoginClient();
-                                      
-                                      try {
-                                        // First try regular SUI payout - pass network for correct package ID
-                                        const result = await zkLoginClient.adminTriggerPayout(
-                                          account,
-                                          circle.id,
-                                          circle.custody?.walletId || '',
-                                          getCurrentNetwork()
-                                        );
-                                        
-                                        toast.success('Payout processed successfully!', { id: toastId });
-                                        console.log('Payout transaction:', result);
-                                        fetchCircleDetails();
-                                        fetchContributionStatus(); // Refresh contribution status
-                                      } catch (error: unknown) {
-                                        console.error('Error triggering payout:', error);
-                                        const parsedError = parseMoveError(error instanceof Error ? error.message : String(error));
-                                        
-                                        // Check for code 100 which indicates we should use USDC instead
-                                        if (parsedError.code === 100) {
-                                          toast.loading('Switching to USDC payout...', { id: toastId });
-                                          
-                                          // Try USDC payout instead
-                                          try {
-                                            const usdcResult = await fetch('/api/zkLogin', {
-                                              method: 'POST',
-                                              headers: { 'Content-Type': 'application/json' },
-                                              body: JSON.stringify({
-                                                action: 'adminTriggerUsdcPayout',
-                                                account,
-                                                circleId: circle.id,
-                                                walletId: circle.custody?.walletId || '',
-                                                network: getCurrentNetwork()
-                                              }),
-                                            });
-                                            
-                                            if (usdcResult.ok) {
-                                              toast.success('USDC payout processed successfully!', { id: toastId });
-                                              fetchCircleDetails();
-                                              fetchContributionStatus();
-                                            } else {
-                                              const errorData = await usdcResult.json();
-                                              toast.error(errorData.error || 'Failed to process USDC payout', { id: toastId });
-                                            }
-                                          } catch (usdcError) {
-                                            console.error('Error processing USDC payout:', usdcError);
-                                            toast.error('Failed to process USDC payout', { id: toastId });
-                                          }
-                                        } else {
-                                          // Show original error for other error codes
-                                          toast.error(
-                                            parsedError.message || (error instanceof Error ? error.message : 'Failed to process payout'), 
-                                            { id: toastId }
-                                          );
-                                          
-                                          if (error instanceof ZkLoginError && error.requireRelogin) {
-                                            router.push('/');
-                                          }
-                                        }
-                                      }
-                                    } catch (error: unknown) { 
-                                      console.error('Error triggering payout:', error);
-                                      const parsedError = parseMoveError(error instanceof Error ? error.message : String(error));
-                                      toast.error(
-                                        parsedError.message || (error instanceof Error ? error.message : 'Failed to process payout'), 
-                                        { id: toastId }
-                                      );
-                                      
-                                      if (error instanceof ZkLoginError && error.requireRelogin) {
-                                        router.push('/');
-                                      }
-                                    }
-                                  },
-                                  confirmText: 'Trigger Payout',
-                                  cancelText: 'Cancel',
-                                  confirmButtonVariant: 'primary',
-                                });
-                              }}
-                              className={`w-full ${
-                                !circle || !circle.isActive || !circle.custody?.walletId || !allContributionsMadeThisCycle || loadingContributions
-                                  ? 'inline-flex cursor-not-allowed items-center justify-center rounded-full bg-stone-300 px-4 py-2.5 text-sm font-medium text-white/90'
-                                  : primaryActionClass
-                              }`}
-                              disabled={!circle || !circle.isActive || !circle.custody?.walletId || !allContributionsMadeThisCycle || loadingContributions}
-                            >
-                              {loadingContributions ? (
-                                <svg className="animate-spin h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1.5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                </svg>
-                              ) : (
-                                <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 sm:w-4 sm:w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                </svg>
-                              )}
-                              Trigger Payout
-                            </button>
-                          </div>
-                        </Tooltip.Trigger>
-                        {/* MODIFIED TOOLTIP LOGIC */}
-                        {(loadingContributions || (circle && (!circle.isActive || !circle.custody?.walletId || !allContributionsMadeThisCycle))) && (
-                          <Tooltip.Portal>
-                            <Tooltip.Content
-                              className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs z-50"
-                              sideOffset={5}
-                            >
-                              {loadingContributions ? (
-                                <p>Checking contribution status...</p>
-                              ) : !circle?.isActive ? (
-                                <p>The circle must be active to trigger payouts.</p>
-                              ) : !circle?.custody?.walletId ? (
-                                <p>Custody wallet information is not available.</p>
-                              ) : !allContributionsMadeThisCycle && contributionStatus.currentCycle > 0 ? (
-                                <p>
-                                  Cannot trigger payout: Not all expected members (excluding the recipient) have contributed for cycle {contributionStatus.currentCycle}.<br />
-                                  Progess: ({(() => {
-                                    // Recalculate for display
-                                    let recipientMember: string | null = null;
-                                    if (contributionStatus.currentPosition !== null && contributionStatus.currentPosition !== undefined && contributionStatus.activeMembersInRotation) {
-                                      recipientMember = contributionStatus.activeMembersInRotation[contributionStatus.currentPosition] || null;
-                                    }
-                                    const requiredContributions = recipientMember ? Math.max(0, contributionStatus.totalActiveInRotation - 1) : contributionStatus.totalActiveInRotation;
-                                    let validContributions = 0;
-                                    contributionStatus.contributedMembers.forEach(member => {
-                                      if (member !== recipientMember) validContributions++;
-                                    });
-                                    return `${validContributions}/${requiredContributions} contributions made`;
-                                  })()}).
-                                </p>
-                              ) : !allContributionsMadeThisCycle && circle?.isActive ? (
-                                // This case handles when cycle might be 0 or status is still loading for an active circle
-                                <p>Contribution status for the current cycle is still loading or not yet determined. Please wait or refresh.</p>
-                              ) : (
-                                <p>Ready to trigger payout.</p> // Fallback
-                              )}
-                              <Tooltip.Arrow className="fill-gray-800" />
-                            </Tooltip.Content>
-                          </Tooltip.Portal>
-                        )}
-                      </Tooltip.Root>
-                    </Tooltip.Provider>
-                    
-                    <Tooltip.Provider>
-                      <Tooltip.Root>
-                        <Tooltip.Trigger asChild>
-                          <div>
-                            <button
-                              onClick={() => toast.success('This feature is coming soon')}
-                              className={`w-full ${
-                                !circle || !circle.isActive || circle.paused
-                                  ? 'inline-flex cursor-not-allowed items-center justify-center rounded-full bg-stone-300 px-4 py-2.5 text-sm font-medium text-white/90'
-                                  : warningActionClass
-                              }`}
-                              disabled={!circle || !circle.isActive || circle.paused}
-                            >
-                              {circle?.paused ? (
-                                <>
-                                  <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                  </svg>
-                                  Resume Contributions
-                                </>
-                              ) : (
-                                <>
-                                  <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5" />
-                                  Pause Contributions
-                                </>
-                              )}
-                            </button>
-                          </div>
-                        </Tooltip.Trigger>
-                        {circle && !circle.isActive && (
-                          <Tooltip.Portal>
-                            <Tooltip.Content
-                              className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
-                              sideOffset={5}
-                            >
-                              <p>Cannot pause contributions: The circle is not active yet.</p>
-                              <p className="mt-1 text-gray-300">Activate the circle first before pausing contributions.</p>
-                              <Tooltip.Arrow className="fill-gray-800" />
-                            </Tooltip.Content>
-                          </Tooltip.Portal>
-                        )}
-                        {circle && circle.isActive && circle.paused && (
-                          <Tooltip.Portal>
-                            <Tooltip.Content
-                              className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
-                              sideOffset={5}
-                            >
-                              <p>The circle is already paused after cycle completion.</p>
-                              <p className="mt-1 text-gray-300">Please use the &quot;Resume Cycle&quot; button at the top of the page to resume the circle to the next cycle.</p>
-                              <Tooltip.Arrow className="fill-gray-800" />
-                            </Tooltip.Content>
-                          </Tooltip.Portal>
-                        )}
-                      </Tooltip.Root>
-                    </Tooltip.Provider>
-                    
-                    <Tooltip.Provider>
-                      <Tooltip.Root>
-                        <Tooltip.Trigger asChild>
-                          <div>
-                            <button
-                              onClick={() => toast.success('This feature is coming soon')}
-                              className={`w-full ${
-                                circle && circle.currentMembers > 1 
-                                  ? 'inline-flex cursor-not-allowed items-center justify-center rounded-full bg-stone-300 px-4 py-2.5 text-sm font-medium text-white/90'
-                                  : dangerActionClass
-                              }`}
-                              disabled={circle && circle.currentMembers > 1}
-                            >
-                              <X className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5" />
-                              Delete Circle
-                            </button>
-                          </div>
-                        </Tooltip.Trigger>
-                        {circle && circle.currentMembers > 1 && (
-                          <Tooltip.Portal>
-                            <Tooltip.Content
-                              className="bg-gray-800 text-white px-3 py-2 rounded text-xs max-w-xs"
-                              sideOffset={5}
-                            >
-                              <p>Cannot delete: The circle has {circle.currentMembers - 1} member(s) besides the admin.</p>
-                              <p className="mt-1 text-gray-300">Remove all members first before deleting.</p>
-                              <Tooltip.Arrow className="fill-gray-800" />
-                            </Tooltip.Content>
-                          </Tooltip.Portal>
-                        )}
-                      </Tooltip.Root>
-                    </Tooltip.Provider>
                   </div>
                 </div>
-                
+
                 {/* Circle Token Routing Configuration */}
                 <div className={sectionCardClass} ref={(element) => setManageSectionRef('tools', element)}>
                   {circle && <CircleRoutingSettings 
@@ -8340,6 +8227,28 @@ export default function ManageCircle() {
                         onClick={() => copyPlainText(selectedMobileMember.address, 'Member address copied to clipboard!')}
                         className={subtleIconButtonClass}
                         aria-label="Copy member address"
+                      >
+                        <Copy className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 rounded-[20px] border border-stone-200 bg-stone-50/80 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className={sectionEyebrowClass}>Member Contract Address</p>
+                        <p className="mt-2 break-all font-mono text-sm text-slate-950">
+                          {selectedMobileMember.memberObjectId ?? 'Unavailable'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => selectedMobileMember.memberObjectId
+                          ? copyPlainText(selectedMobileMember.memberObjectId, 'Member contract address copied to clipboard!')
+                          : undefined}
+                        disabled={!selectedMobileMember.memberObjectId}
+                        className={subtleIconButtonClass}
+                        aria-label="Copy member contract address"
                       >
                         <Copy className="h-4 w-4" />
                       </button>

@@ -13,15 +13,20 @@ type PriceApiResponse = {
 type PriceSource = {
   name: string;
   url: string;
-  parsePrice: (payload: any) => number | null;
+  parsePrice: (payload: unknown) => number | null;
 };
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
+}
 
 const PRICE_SOURCES: PriceSource[] = [
   {
     name: 'CoinGecko',
     url: 'https://api.coingecko.com/api/v3/simple/price?ids=sui&vs_currencies=usd',
     parsePrice: (payload) => {
-      const price = payload?.sui?.usd;
+      const sui = asRecord(asRecord(payload)?.sui);
+      const price = sui?.usd;
       return typeof price === 'number' ? price : null;
     },
   },
@@ -29,7 +34,9 @@ const PRICE_SOURCES: PriceSource[] = [
     name: 'Jupiter',
     url: 'https://price.jup.ag/v4/price?ids=SUI',
     parsePrice: (payload) => {
-      const price = payload?.data?.SUI?.price;
+      const data = asRecord(asRecord(payload)?.data);
+      const sui = asRecord(data?.SUI);
+      const price = sui?.price;
       return typeof price === 'number' ? price : null;
     },
   },
@@ -37,7 +44,7 @@ const PRICE_SOURCES: PriceSource[] = [
     name: 'Binance',
     url: 'https://api.binance.com/api/v3/ticker/price?symbol=SUIUSDT',
     parsePrice: (payload) => {
-      const price = payload?.price;
+      const price = asRecord(payload)?.price;
       if (typeof price === 'string') {
         const parsed = Number.parseFloat(price);
         return Number.isFinite(parsed) ? parsed : null;

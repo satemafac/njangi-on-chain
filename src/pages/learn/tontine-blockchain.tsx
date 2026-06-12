@@ -436,8 +436,8 @@ public fun make_monthly_contribution(
           <section className="bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg text-white p-8 mt-12 text-center">
             <h2 className="text-2xl font-bold mb-4">Ready to Join the African Finance Revolution?</h2>
             <p className="text-purple-100 mb-6">
-              Start your digital tontine journey today and connect with African communities worldwide 
-              while preserving cultural traditions and earning yields on your contributions.
+              Start your digital tontine journey today and connect with African communities worldwide
+              while preserving cultural traditions through transparent, non-custodial coordination.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link 

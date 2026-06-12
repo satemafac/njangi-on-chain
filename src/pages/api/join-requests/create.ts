@@ -1,9 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { SuiClient } from '@mysten/sui/client';
 import joinRequestDatabase from '../../../services/join-request-database';
 import databaseService from '../../../services/database-service';
 import { resolveCircleLifecycleState } from '../../../lib/circle-chain';
 import { getCurrentRpcUrl } from '../../../services/network-config';
+import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
 
 type ResponseData = {
   success: boolean;
@@ -15,7 +15,7 @@ async function getCircleJoinWindow(circleId: string): Promise<{
   isActive: boolean;
   isPausedAfterCycle: boolean;
 }> {
-  const client = new SuiClient({ url: getCurrentRpcUrl() });
+  const client = getPooledSuiClient({ rpcUrl: getCurrentRpcUrl() });
   const circleObject = await client.getObject({
     id: circleId,
     options: { showContent: true },

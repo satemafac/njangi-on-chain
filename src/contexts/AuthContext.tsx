@@ -4,6 +4,11 @@ import { ZkLoginClient } from '@/services/zkLoginClient';
 import { useIdleTimer } from '@/hooks/useIdleTimer';
 import { getCurrentNetwork } from '@/services/network-config';
 import { refreshAdminHeartbeatsAfterAuth } from '@/lib/admin-heartbeat-refresh';
+import {
+  accountToSignerSession,
+  clearSignerSession,
+  saveSignerSession,
+} from '@/lib/zklogin-client-signer';
 
 // Define CircleData interface based on required parameters
 interface CircleData {
@@ -128,6 +133,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setAccount(parsedAccount);
         setIsAuthenticated(true);
         setUserAddress(savedUserAddress);
+        try {
+          saveSignerSession(
+            accountToSignerSession(parsedAccount, getCurrentNetwork()),
+          );
+        } catch (signerErr) {
+          console.warn('Failed to rehydrate client signer session', signerErr);
+        }
         void refreshAdminHeartbeatsAfterAuth({
           account: parsedAccount,
           heartbeatClient: zkLogin,
@@ -202,7 +214,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.removeItem('account');
     localStorage.removeItem('isAuthenticated');
     localStorage.removeItem('userAddress');
-    
+
+    // Clear the Phase 2 client-side signer session along with the localStorage
+    // account, so the ephemeral private key never lingers past logout.
+    clearSignerSession();
+
     // Clear sessionStorage to reset UI state between sessions
     sessionStorage.removeItem('testnetBannerDismissed');
     
@@ -226,6 +242,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.setItem('account', JSON.stringify(accountData));
     localStorage.setItem('userAddress', accountData.userAddr);
     localStorage.setItem('isAuthenticated', 'true');
+
+    // Populate the Phase 2 client-side signer session so downstream flows
+    // (useZkLoginSigner) can sign transactions without re-POSTing the
+    // ephemeral private key through the server.
+    try {
+      saveSignerSession(
+        accountToSignerSession(accountData, getCurrentNetwork()),
+      );
+    } catch (signerErr) {
+      console.warn('Failed to persist client signer session', signerErr);
+    }
+
     setHasHydratedAuth(true);
 
     // Reset idle timer after successful login

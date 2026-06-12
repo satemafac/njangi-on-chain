@@ -3,11 +3,16 @@ import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 import { ArrowLeft, AlertCircle, LogIn } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import { SuiClient } from '@mysten/sui/client';
 import { getCircleConfigFieldsFromDynamicFields } from '@/lib/circle-config';
 import { resolveCircleLifecycleState } from '@/lib/circle-chain';
+import {
+  getSuiRpcErrorMessage,
+  isTransientSuiRpcError,
+} from '@/services/sui-rpc-failover';
+import { readObject, queryEventsCached } from '@/lib/sui-read';
+import { logSuiReadError } from '@/services/sui-rpc-failover';
 import { priceService } from '@/services/price-service';
-import { getCirclePackageId } from '../../../../services/circle-service';
+import { getCirclePackageId, getSuiClientFromPool } from '../../../../services/circle-service';
 import { getCurrentRpcUrl } from '../../../../services/network-config';
 import Head from 'next/head';
 import { LoginButton } from '@/components/LoginButton';
@@ -112,6 +117,8 @@ export default function JoinCircle() {
     if (router.isReady && id) {
       fetchCircleDetails();
     }
+    // `fetchCircleDetails` is a stable component closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, userAddress, router.isReady]);
 
   useEffect(() => {
@@ -119,23 +126,25 @@ export default function JoinCircle() {
     if (router.isReady && id && userAddress) {
       checkPendingRequest();
     }
+    // `checkPendingRequest` closes over id/userAddress already.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, userAddress, router.isReady]);
 
   useEffect(() => {
     if (router.isReady && id) {
       fetchCircleDetails();
-      
+
       // Only store viewed circles for authenticated users
       if (isAuthenticated) {
         // Store this circle ID in localStorage for notifications
         try {
           const existingCircleIds = localStorage.getItem('viewedCircles');
           let circleIds: string[] = [];
-          
+
           if (existingCircleIds) {
             circleIds = JSON.parse(existingCircleIds);
           }
-          
+
           if (!circleIds.includes(id as string)) {
             circleIds.push(id as string);
             localStorage.setItem('viewedCircles', JSON.stringify(circleIds));
@@ -145,6 +154,7 @@ export default function JoinCircle() {
         }
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, userAddress, isAuthenticated, router.isReady]);
 
   const fetchCircleDetails = async () => {
@@ -153,13 +163,10 @@ export default function JoinCircle() {
     
     setLoading(true);
     try {
-      const client = new SuiClient({ url: getCurrentRpcUrl() });
+      const client = getSuiClientFromPool(getCurrentRpcUrl());
       
       // Get circle object
-      const objectData = await client.getObject({
-        id: id as string,
-        options: { showContent: true, showType: true }
-      });
+      const objectData = await readObject(id as string, { showContent: true, showType: true });
       
       if (!objectData.data?.content || !('fields' in objectData.data.content)) {
         throw new Error('Invalid circle object data received');
@@ -187,7 +194,7 @@ export default function JoinCircle() {
 
       try {
         // 1. Fetch CircleCreated event
-        const circleEvents = await client.queryEvents({
+        const circleEvents = await queryEventsCached({
           query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleCreated` },
           limit: 50 // Limit scope if needed
         });
@@ -233,7 +240,7 @@ export default function JoinCircle() {
           }
         }
       } catch (error) {
-        console.error('Join - Error fetching event/transaction data:', error);
+        logSuiReadError('Join - Error fetching event/transaction data:', error);
         // Continue even if this fails
       }
       
@@ -294,7 +301,7 @@ export default function JoinCircle() {
           }
         }
       } catch (error) {
-        console.error('Join - Error fetching CircleConfig fields:', error);
+        logSuiReadError('Join - Error fetching CircleConfig fields:', error);
       }
       console.log('Join - Config after Dynamic Fields:', configValues);
 
@@ -342,7 +349,7 @@ export default function JoinCircle() {
         memberAddresses.add(fields.admin); // Add admin
         
         // Fetch all members from join events
-        const joinedEvents = await client.queryEvents({
+        const joinedEvents = await queryEventsCached({
           query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
           limit: 1000 // Fetch enough events
         });
@@ -355,7 +362,7 @@ export default function JoinCircle() {
         });
         
         // 🔴 CRITICAL FIX: Also fetch MemberRemoved events to filter out removed members
-        const removedEvents = await client.queryEvents({
+        const removedEvents = await queryEventsCached({
           query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberRemoved` },
           limit: 1000
         });
@@ -411,7 +418,7 @@ export default function JoinCircle() {
           console.log('Join - User not authenticated, skipping membership checks');
         }
       } catch (error) {
-        console.error(`Join - Error processing membership for circle ${id}:`, error);
+        logSuiReadError(`Join - Error processing membership for circle ${id}:`, error);
         memberCount = Number(fields.current_members || 1); // Fallback
       }
         
@@ -443,6 +450,16 @@ export default function JoinCircle() {
       });
         
     } catch (error) {
+      if (isTransientSuiRpcError(error)) {
+        // RPC is momentarily unavailable (rate-limit / failover cooldown). The
+        // page already rendered; this is expected and will recover on retry.
+        console.warn(
+          'Join - Circle details fetch deferred (transient RPC):',
+          getSuiRpcErrorMessage(error),
+        );
+        toast.error('Network busy — retrying shortly');
+        return;
+      }
       console.error('Join - Error fetching circle details:', error);
       toast.error('Could not load circle information');
       // Set a minimal circle object to prevent UI failures

@@ -2,6 +2,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import crypto from 'crypto';
 import { maskWalletAddress } from '@/services/coinbase-onramp-service';
 import { createOnrampRequestLogger } from '@/lib/onramp-logging';
+import { handleRampKycEvent, type RampKycOutcome } from '@/lib/ramp-kyc-bridge';
+import type { NetworkType } from '@/services/whatsapp-registry-service';
 
 interface WebhookSuccessResponse {
   provider: 'coinbase';
@@ -222,7 +224,21 @@ function normalizeEvent(payload: CoinbaseWebhookPayload): {
   };
 }
 
-export default function handler(
+function coinbaseStatusToOutcome(status: string): RampKycOutcome | null {
+  const lower = status.toLowerCase();
+  if (lower.includes('success') || lower === 'completed' || lower === 'approved') {
+    return 'approved';
+  }
+  if (lower === 'declined' || lower === 'failed' || lower === 'rejected') {
+    return 'declined';
+  }
+  if (lower === 'pending' || lower === 'processing') {
+    return 'pending';
+  }
+  return null;
+}
+
+export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<WebhookSuccessResponse | WebhookErrorResponse>,
 ) {
@@ -322,6 +338,32 @@ export default function handler(
       ? maskWalletAddress(normalized.walletAddress)
       : undefined,
   });
+
+  // Phase 11: when this event represents a final KYC decision, kick the
+  // central ramp-KYC bridge so an attestation gets queued and the member
+  // receives a WhatsApp confirmation. Skip duplicates so a webhook retry
+  // doesn't re-send the message.
+  if (!duplicate) {
+    const outcome = coinbaseStatusToOutcome(normalized.status);
+    const issuerAddress = process.env.NEXT_PUBLIC_NJANGI_ATTESTATION_ISSUER ?? '';
+    if (outcome && issuerAddress) {
+      const network = (process.env.NEXT_PUBLIC_SUI_NETWORK as NetworkType) ?? 'testnet';
+      void handleRampKycEvent(
+        {
+          provider: 'coinbase',
+          outcome,
+          providerCaseId: normalized.transactionId ?? normalized.eventId,
+          subjectAddress: normalized.walletAddress,
+          network,
+        },
+        issuerAddress,
+      ).catch((err) => {
+        logger.warn('ramp_kyc_bridge_failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+  }
 
   return res.status(duplicate ? 200 : 201).json({
     provider: 'coinbase',

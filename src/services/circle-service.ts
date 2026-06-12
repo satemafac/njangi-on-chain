@@ -11,8 +11,9 @@ import type { CircleFormData, CycleLength, WeekDay } from '../types/circle';
 import {
   getCurrentNetwork,
   getCurrentPackageId,
-  getCurrentRpcUrl,
 } from './network-config';
+import { getPooledSuiClient } from './sui-rpc-failover';
+import { readObject, queryEventsCached, IMMUTABLE_READ_TTL_MS } from '@/lib/sui-read';
 
 export function getPackageId(): string {
   return getCurrentPackageId();
@@ -32,12 +33,53 @@ function resolvePackageIdForCurrentNetwork(packageId: string): string {
 export function getPackageLookupIdsForCurrentNetwork(
   packageId?: string | null,
 ): string[] {
-  return getPackageLookupIds({
-    network: getCurrentNetwork(),
+  const currentNetwork = getCurrentNetwork();
+  const currentPackageId = getPackageId();
+  const baseLookupIds = getPackageLookupIds({
+    network: currentNetwork,
     packageId,
-    currentPackageId: getPackageId(),
+    currentPackageId,
   });
+  const normalizedCurrentPackageId = normalizePackageId(currentPackageId);
+  const shouldIncludeKnownIds =
+    packageId == null ||
+    baseLookupIds.length > 1 ||
+    (normalizedCurrentPackageId != null && baseLookupIds.includes(normalizedCurrentPackageId));
+
+  if (!shouldIncludeKnownIds) {
+    return baseLookupIds;
+  }
+
+  const lookupIds = new Set(baseLookupIds);
+  for (const knownId of KNOWN_PACKAGE_IDS[currentNetwork] || []) {
+    const normalizedKnownId = normalizePackageId(knownId);
+    if (normalizedKnownId) {
+      lookupIds.add(normalizedKnownId);
+    }
+  }
+
+  return Array.from(lookupIds);
 }
+
+/**
+ * Known package IDs to always check for circles.
+ * This ensures member-only circles from previous deployments remain discoverable.
+ */
+const KNOWN_PACKAGE_IDS: Record<'testnet' | 'mainnet', string[]> = {
+  testnet: [
+    '0x9f916ce4a0a4970e1d466a79ec2a916ec930feac10218e2b94c282a3906d7926',
+    '0x8d44cd03809c95bd8b46c3f26cc9f7a62085d0f8b1bb22082b6ff768be0cb78f',
+    '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc',
+    '0xafdc1beeda48394d47ecfacf2f03592af72dd59f54887099551ca8c369c460cd',
+  ],
+  mainnet: [
+    '0xcec9cfc2bd69cd02e302433333142db502ab1566fab71d8489630b164927177b',
+    '0x7bf5274804a6008ebfbd9bfe766defb7fd5aa5fe6777419c2b6531ec99120b55',
+  ],
+};
+
+const MAX_USER_PACKAGE_DISCOVERY_PAGES = 10;
+const MAX_EVENT_QUERY_PAGES_PER_PACKAGE = 50;
 
 // Constants from Move contract
 const CIRCLE_TYPE_ROTATIONAL = 0;
@@ -224,14 +266,12 @@ export class CircleService {
  */
 export async function getCirclePackageId(circleId: string, userAddress?: string): Promise<string> {
   try {
-    const client = new SuiClient({ url: getCurrentRpcUrl() });
-    
-    // First, try to get the circle object directly to extract package ID from its type
+    // First, try to get the circle object directly to extract package ID from
+    // its type. An object's type is immutable, so this is cached aggressively —
+    // and since this path usually succeeds, repeat calls skip the event scans
+    // below entirely. (getCirclePackageId runs on every page mount.)
     try {
-      const circleObject = await client.getObject({
-        id: circleId,
-        options: { showType: true }
-      });
+      const circleObject = await readObject(circleId, { showType: true }, { ttlMs: IMMUTABLE_READ_TTL_MS });
 
       if (circleObject.data?.type) {
         const packageId = extractPackageIdFromMoveType(circleObject.data.type);
@@ -252,15 +292,15 @@ export async function getCirclePackageId(circleId: string, userAddress?: string)
       // Search through each package ID for the circle
       for (const packageId of userPackageIds) {
         try {
-          const events = await client.queryEvents({
+          const events = await queryEventsCached({
             query: { MoveEventType: `${packageId}::njangi_circles::CircleCreated` },
             limit: 100
           });
-          
-          const foundEvent = events.data.find(event => 
+
+          const foundEvent = events.data.find(event =>
             (event.parsedJson as { circle_id?: string })?.circle_id === circleId
           );
-          
+
           if (foundEvent) {
             const normalizedPackageId = normalizePackageId(packageId) ?? packageId;
             console.log(`Found circle ${circleId} created with package ${normalizedPackageId}`);
@@ -275,15 +315,15 @@ export async function getCirclePackageId(circleId: string, userAddress?: string)
     
     // Fallback: try with the current default package ID
     try {
-      const events = await client.queryEvents({
+      const events = await queryEventsCached({
         query: { MoveEventType: `${getPackageId()}::njangi_circles::CircleCreated` },
         limit: 100
       });
-      
-      const foundEvent = events.data.find(event => 
+
+      const foundEvent = events.data.find(event =>
         (event.parsedJson as { circle_id?: string })?.circle_id === circleId
       );
-      
+
       if (foundEvent) {
         console.log(`Found circle ${circleId} created with default package ${getPackageId()}`);
         return getPackageId();
@@ -312,11 +352,7 @@ export async function getCircleTransactionPackageId(
 
 export async function getObjectPackageId(objectId: string): Promise<string> {
   try {
-    const client = new SuiClient({ url: getCurrentRpcUrl() });
-    const object = await client.getObject({
-      id: objectId,
-      options: { showType: true },
-    });
+    const object = await readObject(objectId, { showType: true }, { ttlMs: IMMUTABLE_READ_TTL_MS });
 
     const packageId = extractPackageIdFromMoveType(object.data?.type);
     if (packageId) {
@@ -335,28 +371,6 @@ export async function getObjectTransactionPackageId(objectId: string): Promise<s
 }
 
 /**
- * Known package IDs to always check for circles
- * This ensures users who are members-only (added by admin, never transacted) can still see their circles
- * Add old package IDs here after upgrades to maintain cross-version compatibility
- */
-const KNOWN_PACKAGE_IDS: Record<'testnet' | 'mainnet', string[]> = {
-  testnet: [
-    '0x9f916ce4a0a4970e1d466a79ec2a916ec930feac10218e2b94c282a3906d7926', // Old testnet package (user requested)
-    '0x8d44cd03809c95bd8b46c3f26cc9f7a62085d0f8b1bb22082b6ff768be0cb78f',
-    '0xd0f586ee515a0289be671399c3a4550f96cd556592e10686b820cdba6a56ecdc', // Previous testnet package
-    '0xafdc1beeda48394d47ecfacf2f03592af72dd59f54887099551ca8c369c460cd', // Original ID for current upgraded testnet package
-    // Note: Current package ID is automatically added from getPackageId()
-    // Add more old package IDs here after future upgrades
-  ],
-  mainnet: [
-    // Add mainnet package IDs here as needed after mainnet deployment
-    '0xcec9cfc2bd69cd02e302433333142db502ab1566fab71d8489630b164927177b',
-    '0x7bf5274804a6008ebfbd9bfe766defb7fd5aa5fe6777419c2b6531ec99120b55'
-
-  ]
-};
-
-/**
  * Get all package IDs that a user has used to create circles
  * @param userAddress The user's address
  * @returns Promise<string[]> Array of package IDs used by the user
@@ -370,51 +384,71 @@ export async function getUserPackageIds(userAddress: string): Promise<string[]> 
       : 'https://fullnode.testnet.sui.io:443';
 
     console.log(`🔍 getUserPackageIds: Using official RPC ${officialRpcUrl} for package discovery`);
-    const client = new SuiClient({ url: officialRpcUrl });
+    const client = getPooledSuiClient({
+      network: currentNetwork,
+      rpcUrl: officialRpcUrl,
+    });
     const packageIds = new Set<string>();
     
-    // Always include the current package lineage IDs for lookup coverage.
-    getPackageLookupIdsForCurrentNetwork().forEach(id => packageIds.add(id));
-    
-    // Add all known package IDs for the current network
-    const knownIds = KNOWN_PACKAGE_IDS[currentNetwork] || [];
+    // Always include the full known lookup set for the current network so
+    // member-only circles from previous deployments remain discoverable.
+    const knownIds = getPackageLookupIdsForCurrentNetwork();
     knownIds.forEach(id => packageIds.add(id));
-    console.log(`📦 Added ${knownIds.length} known package IDs for ${currentNetwork}`);
+    console.log(`📦 Added ${knownIds.length} known package lookup IDs for ${currentNetwork}`);
     
-    // Get user's transactions to find package IDs they've interacted with
+    // Get the user's transactions to find package IDs they have interacted with.
+    // Paginate so older deployments do not disappear once the account exceeds 1k txs.
     try {
-      const response = await client.queryTransactionBlocks({
-        filter: { FromAddress: userAddress },
-        limit: 1000, // No artificial limits with official Sui RPC
-        options: { showEvents: true, showObjectChanges: true }
-      });
-      
-      for (const tx of response.data) {
-        // Look through events for CircleCreated events
-        if (tx.events) {
-          for (const event of tx.events) {
-            if (event.type.includes('::njangi_circles::CircleCreated')) {
-              // Extract package ID from the event type
-              const match = event.type.match(/^(0x[a-f0-9]+)::/);
-              if (match && match[1]) {
-                packageIds.add(normalizePackageId(match[1]) ?? match[1]);
+      let cursor: string | undefined;
+      let pageCount = 0;
+      let hasNextPage = true;
+
+      while (hasNextPage && pageCount < MAX_USER_PACKAGE_DISCOVERY_PAGES) {
+        const response = await client.queryTransactionBlocks({
+          filter: { FromAddress: userAddress },
+          cursor,
+          limit: 1000,
+          options: { showEvents: true, showObjectChanges: true },
+          order: 'descending',
+        });
+
+        for (const tx of response.data) {
+          // Look through events for CircleCreated events
+          if (tx.events) {
+            for (const event of tx.events) {
+              if (event.type.includes('::njangi_circles::CircleCreated')) {
+                // Extract package ID from the event type
+                const match = event.type.match(/^(0x[a-f0-9]+)::/);
+                if (match && match[1]) {
+                  packageIds.add(normalizePackageId(match[1]) ?? match[1]);
+                }
+              }
+            }
+          }
+
+          // Look through object changes for objects from different packages
+          if (tx.objectChanges) {
+            for (const change of tx.objectChanges) {
+              if (change.type === 'created' && change.objectType?.includes('::njangi_circles::Circle')) {
+                // Extract package ID from the object type
+                const match = change.objectType.match(/^(0x[a-f0-9]+)::/);
+                if (match && match[1]) {
+                  packageIds.add(normalizePackageId(match[1]) ?? match[1]);
+                }
               }
             }
           }
         }
-        
-        // Look through object changes for objects from different packages
-        if (tx.objectChanges) {
-          for (const change of tx.objectChanges) {
-            if (change.type === 'created' && change.objectType?.includes('::njangi_circles::Circle')) {
-              // Extract package ID from the object type
-              const match = change.objectType.match(/^(0x[a-f0-9]+)::/);
-              if (match && match[1]) {
-                packageIds.add(normalizePackageId(match[1]) ?? match[1]);
-              }
-            }
-          }
-        }
+
+        pageCount += 1;
+        hasNextPage = response.hasNextPage;
+        cursor = response.nextCursor ?? undefined;
+      }
+
+      if (hasNextPage) {
+        console.warn(
+          `Package discovery stopped after ${MAX_USER_PACKAGE_DISCOVERY_PAGES} pages for ${userAddress}; older package IDs may still exist.`,
+        );
       }
     } catch (error) {
       console.warn('Error querying user transactions:', error);
@@ -442,10 +476,19 @@ const clientPool = new Map<string, SuiClient>();
  * Reuses existing connections to reduce overhead
  */
 export function getSuiClientFromPool(rpcUrl: string): SuiClient {
-  if (!clientPool.has(rpcUrl)) {
-    clientPool.set(rpcUrl, new SuiClient({ url: rpcUrl }));
+  const currentNetwork = getCurrentNetwork();
+  const poolKey = `${currentNetwork}:${rpcUrl}`;
+
+  if (!clientPool.has(poolKey)) {
+    clientPool.set(
+      poolKey,
+      getPooledSuiClient({
+        network: currentNetwork,
+        rpcUrl,
+      }),
+    );
   }
-  return clientPool.get(rpcUrl)!;
+  return clientPool.get(poolKey)!;
 }
 
 /**
@@ -592,10 +635,17 @@ export async function batchQueryEvents(
     maxConcurrent?: number;
     limit?: number;
     order?: 'ascending' | 'descending';
+    maxPagesPerPackage?: number;
     onProgress?: (processed: number, total: number) => void;
   } = {}
 ): Promise<Array<Record<string, unknown>>> {
-  const { maxConcurrent = 5, limit = 1000, order = 'descending', onProgress } = options;
+  const {
+    maxConcurrent = 5,
+    limit = 1000,
+    order = 'descending',
+    maxPagesPerPackage = MAX_EVENT_QUERY_PAGES_PER_PACKAGE,
+    onProgress,
+  } = options;
   
   const allEvents: Array<Record<string, unknown>> = [];
   const queue = [...packageIds];
@@ -614,15 +664,33 @@ export async function batchQueryEvents(
         
         while (retryCount < maxRetries) {
           try {
-            const response = await client.queryEvents({
-              query: { MoveEventType: `${packageId}::njangi_circles::${eventType}` },
-              limit,
-              order
-            });
-            
-            if (response?.data) {
-              allEvents.push(...response.data.map(e => e as Record<string, unknown>));
+            let cursor: { txDigest: string; eventSeq: string } | null | undefined;
+            let pageCount = 0;
+            let hasNextPage = true;
+
+            while (hasNextPage && pageCount < maxPagesPerPackage) {
+              const response = await client.queryEvents({
+                query: { MoveEventType: `${packageId}::njangi_circles::${eventType}` },
+                cursor,
+                limit,
+                order,
+              });
+
+              if (response?.data) {
+                allEvents.push(...response.data.map(e => e as Record<string, unknown>));
+              }
+
+              pageCount += 1;
+              hasNextPage = response.hasNextPage;
+              cursor = response.nextCursor ?? undefined;
             }
+
+            if (hasNextPage) {
+              console.warn(
+                `Stopped paginating ${eventType} for package ${packageId} after ${maxPagesPerPackage} pages; older events may remain.`,
+              );
+            }
+
             break; // Success, exit retry loop
           } catch (error) {
             retryCount++;

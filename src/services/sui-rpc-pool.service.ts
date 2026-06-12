@@ -3,7 +3,7 @@
  * Manages a pool of RPC connections with retry logic, health checks, and failover
  */
 
-import { SuiClient, getFullnodeUrl } from '@mysten/sui.js/client';
+import { SuiClient } from '@mysten/sui.js/client';
 import { appLogger } from '../utils/logger';
 import { RpcConnectionConfig, EventListenerState } from '../utils/sui-event-types';
 
@@ -191,10 +191,11 @@ export class SuiRpcPoolService {
     }
 
     this.state.connectionRetries++;
+    const rawCode = (error as Error & { code?: string | number }).code;
     this.state.lastError = {
       message: error.message,
       timestamp: Date.now(),
-      code: (error as any).code,
+      code: rawCode === undefined ? undefined : String(rawCode),
     };
   }
 

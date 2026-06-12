@@ -32,6 +32,44 @@ describe('recovery liveness helpers', () => {
     });
   });
 
+  it('parses an inlined recovery proposal struct payload', () => {
+    const status = parseRecoveryStatus({
+      recovery_state: '1',
+      recovery_proposal: {
+        type: '0x1::recovery::RecoveryProposal',
+        fields: {
+          proposer: ADMIN_ADDRESS,
+          created_at: '7000',
+          deadline: '9000',
+          passed_at: null,
+          yes_votes: '1',
+          no_votes: '0',
+          majority_threshold: '2',
+          eligible_voters: [ADMIN_ADDRESS, DELEGATE_ADDRESS, MEMBER_ADDRESS],
+          votes: [],
+        },
+      },
+      auto_release_enabled: true,
+      auto_release_delay_ms: '1000',
+      auto_release_start_time: '5000',
+      next_in_command: DELEGATE_ADDRESS,
+      recovery_state_updated_at: '7500',
+    });
+
+    expect(status?.rawState).toBe(1);
+    expect(status?.proposal).toMatchObject({
+      proposer: ADMIN_ADDRESS,
+      createdAt: 7000,
+      deadline: 9000,
+      passedAt: null,
+      yesVotes: 1,
+      noVotes: 0,
+      majorityThreshold: 2,
+      eligibleVoters: [ADMIN_ADDRESS, DELEGATE_ADDRESS, MEMBER_ADDRESS],
+      votes: [],
+    });
+  });
+
   it('authorizes the valid delegate first when expiry is reached', () => {
     const state = getRecoveryAutoReleaseUiState({
       recoveryStatus: {

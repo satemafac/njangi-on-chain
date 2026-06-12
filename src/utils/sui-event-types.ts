@@ -12,7 +12,7 @@ export interface SuiEvent {
   transactionModule: string;
   sender: string;
   type: string;
-  parsedJson: Record<string, any>;
+  parsedJson: Record<string, unknown>;
   bcs?: string;
   timestampMs?: string;
 }
@@ -99,7 +99,7 @@ export interface PayoutReminderEvent {
   circleId: string;
   reminderType: 'pending_approval' | 'ready_to_send' | 'delayed' | 'custom';
   recipient: string;
-  reminderData: Record<string, any>;
+  reminderData: Record<string, unknown>;
   txDigest: string;
   timestamp: number;
 }

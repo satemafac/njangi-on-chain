@@ -7,10 +7,12 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import crypto from 'crypto';
-import { SuiClient } from '@mysten/sui/client';
 import { appLogger } from '../../../utils/logger';
 import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry-service';
 import { getCircleStatus, formatCircleStatusForWhatsAppWithNames } from '../../../services/circle-status.service';
+import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
+import { fetchAndDecryptPII } from '../../../lib/walrus-pii';
+import { lookupCirclesForPhone } from '../../../lib/whatsapp-link-index';
 
 interface WebhookResponse {
   success?: boolean;
@@ -29,9 +31,49 @@ function getWhatsAppNetwork(): 'testnet' | 'mainnet' {
 }
 
 /**
- * Query the WhatsApp Link Registry on-chain to find ALL linked circles for a phone number
+ * Decode a Move `vector<u8>` field returned by the RPC layer. Sui clients
+ * may surface byte vectors as either an array of numbers or a base64
+ * string; this normalizes to a Uint8Array.
+ */
+function decodeBytesField(raw: unknown): Uint8Array {
+  if (!raw) return new Uint8Array();
+  if (raw instanceof Uint8Array) return raw;
+  if (Array.isArray(raw)) return new Uint8Array(raw as number[]);
+  if (typeof raw === 'string') {
+    return /^[0-9a-fA-F]+$/.test(raw)
+      ? new Uint8Array(Buffer.from(raw, 'hex'))
+      : new Uint8Array(Buffer.from(raw, 'base64'));
+  }
+  return new Uint8Array();
+}
+
+/**
+ * Resolves which circles are linked to the supplied phone number. The
+ * Phase 2 Postgres HMAC index (`lookupCirclesForPhone`) gives O(1) lookup
+ * for any link recorded since indexing was enabled. We still fall back to
+ * the legacy O(N) on-chain scan + Walrus decrypt when the index is empty
+ * (e.g. early dev environments or after a salt rotation), which keeps the
+ * webhook functional even if Postgres is unavailable.
  */
 async function getAllLinkedCirclesFromRegistry(phoneNumber: string): Promise<string[]> {
+  try {
+    const indexed = await lookupCirclesForPhone(phoneNumber);
+    if (indexed.length > 0) {
+      appLogger.info('Resolved linked circles via HMAC index', {
+        phoneNumber: phoneNumber.replace(/^\+/, ''),
+        count: indexed.length,
+      });
+      return indexed.map((row) => row.circleId);
+    }
+  } catch (error) {
+    appLogger.warn('HMAC index lookup failed, falling back to on-chain scan', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return scanRegistryAndDecryptForPhone(phoneNumber);
+}
+
+async function scanRegistryAndDecryptForPhone(phoneNumber: string): Promise<string[]> {
   try {
     const network = getWhatsAppNetwork();
     const registries = getActiveWhatsAppRegistries(network);
@@ -44,15 +86,13 @@ async function getAllLinkedCirclesFromRegistry(phoneNumber: string): Promise<str
     const rpcUrl = network === 'testnet'
       ? (process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://fullnode.testnet.sui.io:443')
       : (process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://fullnode.mainnet.sui.io:443');
-    const suiClient = new SuiClient({ url: rpcUrl });
-    
+    const suiClient = getPooledSuiClient({ network, rpcUrl });
+
     const normalizedPhone = phoneNumber.replace(/^\+/, '');
 
     const registryObject = await suiClient.getObject({
       id: registry.registryObjectId,
-      options: {
-        showContent: true,
-      },
+      options: { showContent: true },
     });
 
     if (!registryObject.data?.content || registryObject.data.content.dataType !== 'moveObject') {
@@ -63,30 +103,36 @@ async function getAllLinkedCirclesFromRegistry(phoneNumber: string): Promise<str
     const links = registryFields?.links || [];
 
     type LinkFields = {
-      admin_phone_number?: string;
+      walrus_blob_id?: unknown;
       circle_id?: string;
       enabled?: boolean;
     };
-    type LinkEntry = {
-      fields?: LinkFields;
-    } & LinkFields;
+    type LinkEntry = { fields?: LinkFields } & LinkFields;
 
     const linkedCircles: string[] = [];
 
     for (const linkItem of links) {
       const link = linkItem as LinkEntry;
       const fields = link.fields || link;
-      const linkPhone = fields.admin_phone_number;
       const circleId = fields.circle_id;
       const isEnabled = fields.enabled === true;
-      
-      if (linkPhone && isEnabled && circleId) {
-        // Normalize both phone numbers by removing leading '+' for consistent comparison
-        // This handles all formats: +1234567890, 1234567890
-        const linkPhoneNormalized = linkPhone.replace(/^\+/, '');
-        if (linkPhoneNormalized === normalizedPhone) {
+      if (!isEnabled || !circleId || !fields.walrus_blob_id) continue;
+
+      const blobBytes = decodeBytesField(fields.walrus_blob_id);
+      const walrusBlobId = new TextDecoder().decode(blobBytes);
+      if (!walrusBlobId) continue;
+
+      try {
+        const payload = await fetchAndDecryptPII(walrusBlobId);
+        const candidate = payload.phone_e164?.replace(/^\+/, '');
+        if (candidate && candidate === normalizedPhone) {
           linkedCircles.push(circleId);
         }
+      } catch (err) {
+        appLogger.warn('Failed to decrypt WhatsApp PII envelope during webhook lookup', {
+          error: err instanceof Error ? err.message : String(err),
+          circleId,
+        });
       }
     }
 
@@ -525,4 +571,3 @@ async function handler(
 }
 
 export default handler;
-

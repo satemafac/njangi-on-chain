@@ -6,6 +6,7 @@ import { ActivityDetector } from '@/components/ActivityDetector';
 import { IdleWarningModal } from '@/components/IdleWarningModal';
 import { useAuth } from '@/contexts/AuthContext';
 import { Navbar } from '@/components/ui/Navbar';
+import LocaleDirSync from '@/components/LocaleDirSync';
 import { Toaster } from 'react-hot-toast';
 import dynamic from 'next/dynamic';
 
@@ -20,6 +21,7 @@ function AppContent({ Component, pageProps }: AppProps) {
 
   return (
     <ActivityDetector>
+      <LocaleDirSync />
       {isAuthenticated && (
         <>
           <Navbar />

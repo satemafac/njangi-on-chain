@@ -1,6 +1,7 @@
 import { createLogger, format, transports } from 'winston';
 import joinRequestService from './join-request-service';
-import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
+import { SuiClient } from '@mysten/sui/client';
+import { getPooledSuiClient } from './sui-rpc-failover';
 import {
   getCirclePackageId,
   getPackageLookupIdsForCurrentNetwork,
@@ -61,11 +62,12 @@ export class CircleMemberManagerService {
   private readonly CACHE_DURATION = 10 * 60 * 1000; // 10 minutes
 
   private constructor() {
-    // Initialize SUI client
-    this.suiClient = new SuiClient({ 
-      url: getFullnodeUrl(process.env.NODE_ENV === 'production' ? 'mainnet' : 'testnet') 
+    // Failover-backed pooled client (cooldown handling + RPC fallbacks) instead
+    // of a bare per-fullnode client. Same network selection as before.
+    this.suiClient = getPooledSuiClient({
+      network: process.env.NODE_ENV === 'production' ? 'mainnet' : 'testnet',
     });
-    
+
     logger.info('Circle Member Manager Service initialized');
   }
 

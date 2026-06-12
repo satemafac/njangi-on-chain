@@ -1,0 +1,25 @@
+# Ignore ephemeral and device-specific files
+# Only track: skills/, settings.json, bootstrap.sh, README.md
+
+# Device-local configuration
+settings.local.json
+
+# Runtime state (if any gets created)
+.credentials.json
+history.jsonl
+sessions/
+projects/
+session-env/
+file-history/
+cache/
+backups/
+shell-snapshots/
+telemetry/
+tasks/
+stats-cache.json
+
+# Plugin data (hydrated by Claude Code)
+plugins/marketplaces/
+
+# Logs
+*.log

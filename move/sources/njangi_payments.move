@@ -24,8 +24,8 @@ module njangi::njangi_payments {
     const EAuctionNotActive: u64 = 27;
     const EInvalidMilestone: u64 = 28;
     const EMilestoneTargetInvalid: u64 = 32;
-    const EUnsupportedToken: u64 = 37;
     const EAmountOverflow: u64 = 38;
+    const ENotScheduledRecipient: u64 = 39;
     const MAX_U64: u64 = 0xFFFF_FFFF_FFFF_FFFF;
     
     // ----------------------------------------------------------
@@ -104,15 +104,6 @@ module njangi::njangi_payments {
         milestone_number: u64,
         submitted_by: address,
         proof_type: u8,
-        timestamp: u64,
-    }
-    
-    public struct SecurityDepositReturned has copy, drop {
-        circle_id: ID,
-        wallet_id: ID,
-        member: address,
-        amount: u64,
-        coin_type: String,
         timestamp: u64,
     }
     
@@ -236,9 +227,10 @@ module njangi::njangi_payments {
         assert!(members::get_status(member) == 0, 14); // MEMBER_STATUS_ACTIVE
         assert!(option::is_none(&members::get_suspension_end_time(member)), 13); // EMemberSuspended
 
-        // IMPORTANT: First deposit the payment into the wallet BEFORE updating counters
-        // This ensures the funds are available before any potential withdrawal attempt
-        custody::deposit(wallet, payment, ctx);
+        // IMPORTANT: First deposit the payment into the wallet BEFORE updating counters.
+        // The package-internal contribution path verifies wallet activity but no longer
+        // grants admin discretion over the deposited funds.
+        custody::deposit_contribution_coin<SUI>(wallet, payment, sender, clock, ctx);
 
         // Update stats AFTER the funds are deposited
         let member_mut = circles::get_member_mut(circle, sender);
@@ -254,11 +246,11 @@ module njangi::njangi_payments {
             amount: payment_amount,
             cycle: circles::get_current_cycle(circle),
         });
-        
-        // Check if the circle is active and if all members have contributed for this cycle
-        // But we DONT attempt to trigger the payout automatically after a contribution
-        // This avoids the race condition between contribution and withdrawal
-        // Admin must explicitly trigger payouts with admin_trigger_payout
+
+        // Payouts are NOT auto-triggered here to avoid contribute/payout race
+        // conditions. Anyone may call `trigger_payout` once all members have
+        // contributed; the scheduled recipient may also call `claim_payout<T>`
+        // directly to pull their funds.
     }
 
     fun debit_active_member_recovery_sui_contributions(
@@ -422,7 +414,7 @@ module njangi::njangi_payments {
             let member_mut = circles::get_member_mut(circle, recipient);
             members::set_received_payout(member_mut, true);
 
-            let stablecoin = custody::withdraw_stablecoin<CoinType>(
+            let stablecoin = custody::release_stablecoin_to_member<CoinType>(
                 wallet,
                 stablecoin_payout_amount,
                 recipient,
@@ -484,7 +476,7 @@ module njangi::njangi_payments {
         let member_mut = circles::get_member_mut(circle, recipient);
         members::set_received_payout(member_mut, true);
 
-        let payout_coin = custody::withdraw(wallet, payout_amount, ctx);
+        let payout_coin = custody::release_sui_to_member(wallet, payout_amount, recipient, clock, ctx);
         transfer::public_transfer(payout_coin, recipient);
 
         debit_active_member_recovery_sui_contributions(circle, payout_amount);
@@ -550,83 +542,6 @@ module njangi::njangi_payments {
         let member_mut = circles::get_member_mut(circle, recipient);
         members::set_received_payout(member_mut, true);
         
-        transfer::public_transfer(payout_coin, recipient);
-        
-        event::emit(PayoutProcessed {
-            circle_id: circles::get_id(circle),
-            recipient,
-            amount: payout_amount,
-            cycle: circles::get_current_cycle(circle),
-            payout_type: circles::get_goal_type(circle),
-        });
-    }
-    
-    // ----------------------------------------------------------
-    // Process payout from custody wallet
-    // ----------------------------------------------------------
-    public fun process_custody_payout(
-        circle: &mut Circle,
-        wallet: &mut CustodyWallet,
-        recipient: address,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ) {
-        let sender = tx_context::sender(ctx);
-        let current_time = clock::timestamp_ms(clock);
-        
-        // Only circle admin can process payouts
-        assert!(sender == circles::get_admin(circle), 7);
-        
-        // Circle must be active for payouts
-        assert!(circles::is_circle_active(circle), 54);
-        
-        // Verify custody wallet belongs to this circle
-        assert!(custody::get_circle_id(wallet) == circles::get_id(circle), 46);
-        
-        // Wallet must be active
-        assert!(custody::is_wallet_active(wallet), 43);
-        
-        // Check if wallet is time-locked
-        if (custody::is_wallet_locked(wallet)) {
-            let lock_time = custody::get_lock_time(wallet);
-            assert!(current_time >= lock_time, 44);
-        };
-        
-        // Verify recipient is a member
-        assert!(circles::is_member(circle, recipient), 8);
-        
-        // Check timing and member status for payout
-        let member = circles::get_member(circle, recipient);
-        
-        assert!(current_time >= circles::get_next_payout_time(circle), EInvalidPayoutSchedule);
-        assert!(!members::has_received_payout(member), EPayoutAlreadyProcessed);
-        
-        // Calculate payout amount
-        let contribution_amount = circles::get_contribution_amount(circle);
-        let payout_amount = if (circles::has_goal_type(circle)) {
-            // Proportional payout based on contribution
-            let (total_contributions, _, _) = circles::get_treasury_balances(circle);
-            (members::get_total_contributed(member) * total_contributions)
-            / (contribution_amount * circles::get_member_count(circle))
-        } else {
-            // Standard rotational payout
-            contribution_amount * circles::get_member_count(circle)
-        };
-        
-        // Verify sufficient funds in wallet
-        assert!(custody::get_balance(wallet) >= payout_amount, 12);
-        
-        // Check daily withdrawal limit
-        assert!(custody::check_withdrawal_limit(wallet, payout_amount), 45);
-        
-        // Process payout
-        let payout_coin = custody::withdraw(wallet, payout_amount, ctx);
-        
-        // Mark member as paid
-        let member_mut = circles::get_member_mut(circle, recipient);
-        members::set_received_payout(member_mut, true);
-        
-        // Send the payout to recipient
         transfer::public_transfer(payout_coin, recipient);
         
         event::emit(PayoutProcessed {
@@ -924,395 +839,56 @@ module njangi::njangi_payments {
     }
     
     // ----------------------------------------------------------
-    // Admin function to manually trigger the automatic payout
-    // This function:
-    // 1. Verifies all members have contributed for the current cycle
-    // 2. Analyzes wallet contents to determine the best payout method (SUI or stablecoin)
-    // 3. Calculates appropriate payout amount 
-    // 4. Executes the payout and updates cycle/rotation state
+    // Permissionless payout trigger. Anyone may call this once the cycle has
+    // been fully funded; the recipient address is derived deterministically
+    // from the circle's rotation order, so no admin discretion is involved.
+    // CoinType selects the routing currency (USDC-first when sufficient
+    // stablecoin balance exists; SUI fallback otherwise).
     // ----------------------------------------------------------
-    public fun admin_trigger_payout<CoinType>(
+    public fun trigger_payout<CoinType>(
         circle: &mut Circle,
         wallet: &mut CustodyWallet,
         clock: &Clock,
         ctx: &mut TxContext
     ) {
-        let sender = tx_context::sender(ctx);
-        
-        // Only admin can trigger manual payout
-        assert!(sender == circles::get_admin(circle), 7);
-        
         // Circle must be active for payouts
         assert!(circles::is_circle_active(circle), 54);
-        
-        // Check if all members have contributed for this cycle
-        assert!(circles::has_all_members_contributed(circle), 56); 
-        
-        // USDC-first routing is selected by passing USDC as CoinType.
+
+        // Cycle must be fully funded before a payout can be released
+        assert!(circles::has_all_members_contributed(circle), 56);
+
         trigger_automatic_payout<CoinType>(circle, wallet, clock, ctx);
     }
-    
-    // ----------------------------------------------------------
-    // Admin function to force a payout to a specific member
-    // ----------------------------------------------------------
-    public fun admin_force_payout(
-        circle: &mut Circle,
-        wallet: &mut CustodyWallet,
-        recipient: address,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ) {
-        let sender = tx_context::sender(ctx);
-        
-        // Only admin can force a payout
-        assert!(sender == circles::get_admin(circle), 7);
-        
-        // Circle must be active for payouts
-        assert!(circles::is_circle_active(circle), 54);
-        
-        // Verify recipient is a member
-        assert!(circles::is_member(circle, recipient), 8);
-        
-        // Get member and check they haven't already been paid
-        let member = circles::get_member(circle, recipient);
-        assert!(!members::has_received_payout(member), EPayoutAlreadyProcessed);
-        
-        // Calculate payout amount - for rotational circles, it's contribution_amount * member_count
-        let contribution_amount = circles::get_contribution_amount(circle);
-        let member_count = circles::get_member_count(circle);
-        let mut payout_amount = core::to_decimals(contribution_amount) * member_count;
-        
-        // Verify sufficient funds in wallet
-        // Use custody::get_raw_balance which checks only the main balance, not dynamic fields
-        let sui_balance = custody::get_raw_balance(wallet);
-        
-        // For a forced payout, we still need to check that we have enough funds
-        // but we don't necessarily expect all members to have contributed
-        assert!(sui_balance > 0, EInsufficientTreasuryBalance);
-        
-        // CHANGE: Adjust payout amount to match available funds
-        // This allows admin to force a partial payout with whatever is available
-        if (sui_balance < payout_amount) {
-            payout_amount = sui_balance;
-        };
-        
-        // Mark member as paid before making payment (to prevent reentrancy)
-        let member_mut = circles::get_member_mut(circle, recipient);
-        members::set_received_payout(member_mut, true);
-        
-        // Process payout from custody wallet
-        let payout_coin = custody::withdraw(wallet, payout_amount, ctx);
-        
-        // Transfer the payout to the recipient
-        transfer::public_transfer(payout_coin, recipient);
 
-        debit_active_member_recovery_sui_contributions(circle, payout_amount);
-        
-        // Reset the contributions counter for this cycle
-        circles::reset_contributions_this_cycle(circle);
-        
-        // Update rotation state
-        // For forced payouts, we need to ensure the current position aligns with the paid member
-        // Find the recipient's position in the rotation order
-        let rotation_order = circles::get_rotation_order(circle);
-        let mut member_position = 0;
-        let mut found = false;
-        
-        let mut i = 0;
-        let len = vector::length(&rotation_order);
-        
-        while (i < len) {
-            let addr = *vector::borrow(&rotation_order, i);
-            if (addr == recipient) {
-                member_position = i;
-                found = true;
-                break
-            };
-            i = i + 1;
-        };
-        
-        // Set the current position to the member's position before advancing
-        if (found) {
-            // This is an internal module function that needs to be exposed as package visibility in circles module
-            circles::set_current_position(circle, member_position);
-            // Now advance to the next position
-            circles::advance_rotation_position_and_cycle(circle, recipient, clock);
-        };
-        
-        // Emit payout event
-        event::emit(PayoutProcessed {
-            circle_id: circles::get_id(circle),
-            recipient,
-            amount: contribution_amount * member_count, // Use human-readable amount for the event
-            cycle: circles::get_current_cycle(circle),
-            payout_type: circles::get_goal_type(circle),
-        });
-    }
-    
     // ----------------------------------------------------------
-    // Admin function to trigger payout using USDC stablecoin
-    // This function handles direct stablecoin payments when there's insufficient SUI
+    // Recipient-pull claim. Only the scheduled rotation recipient may call
+    // this, and only after every member has contributed for the current
+    // cycle. CoinType controls payout currency routing (USDC-first, SUI
+    // fallback) just like trigger_payout. The function deletes any admin
+    // discretion over which member is paid.
     // ----------------------------------------------------------
-    public fun admin_trigger_usdc_payout<CoinType>(
+    public fun claim_payout<CoinType>(
         circle: &mut Circle,
         wallet: &mut CustodyWallet,
         clock: &Clock,
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
-        
-        // Only admin can trigger manual payout
-        assert!(sender == circles::get_admin(circle), 7);
-        
+
         // Circle must be active for payouts
         assert!(circles::is_circle_active(circle), 54);
-        
-        // Check if all members have contributed for this cycle
+
+        // Cycle must be fully funded
         assert!(circles::has_all_members_contributed(circle), 56);
-        
-        // Verify this is a stablecoin type
-        assert!(custody::has_stablecoin_balance<CoinType>(wallet), EUnsupportedToken);
-        
-        // Get the next recipient
-        let recipient_opt = circles::get_next_payout_recipient(circle);
-        assert!(option::is_some(&recipient_opt), 29); // No valid recipient
-        let recipient = *option::borrow(&recipient_opt);
-        
-        // Verify recipient is a member and hasn't been paid
-        assert!(circles::is_member(circle, recipient), 8);
-        let member = circles::get_member(circle, recipient);
-        assert!(!members::has_received_payout(member), EPayoutAlreadyProcessed);
-        
-        // Calculate stablecoin payout amount 
-        let contribution_amount_usd = circles::get_contribution_amount_usd(circle);
-        let member_count = circles::get_member_count(circle);
-        
-        // Convert USD cents (2dp) to USDC micro-units (6dp) and multiply by member count.
-        let contribution_amount_micro = custody::usd_cents_to_usdc_amount(contribution_amount_usd);
-        let theoretical_payout_amount = safe_mul(contribution_amount_micro, member_count);
-        
-        // Verify sufficient stablecoin balance
-        let total_stablecoin_balance = custody::get_stablecoin_balance<CoinType>(wallet);
-        
-        // Debug print to check current payout time
-        std::debug::print(&b"Current next_payout_time BEFORE update:");
-        std::debug::print(&circles::get_next_payout_time(circle));
-        
-        // Calculate security deposit amount in USDC
-        let security_deposit_usd = circles::get_security_deposit_usd(circle);
-        let security_deposit_micro = custody::usd_cents_to_usdc_amount(security_deposit_usd);
-        let security_deposit_amount = safe_mul(security_deposit_micro, member_count);
-        
-        // The available balance for payout is the total balance minus the security deposits
-        let available_balance = if (total_stablecoin_balance > security_deposit_amount) {
-            total_stablecoin_balance - security_deposit_amount
-        } else {
-            // If there's not enough to cover security deposits, this could be an issue,
-            // but we'll continue with whatever balance is available for testing purposes
-            0
-        };
-        
-        // Verify there's something to withdraw
-        assert!(available_balance > 0, EInsufficientTreasuryBalance);
-        
-        // Determine actual payout amount - ensure it doesn't exceed available balance
-        let actual_payout_amount = if (theoretical_payout_amount <= available_balance) {
-            theoretical_payout_amount
-        } else {
-            available_balance
-        };
-        
-        // Mark member as paid before making payment (to prevent reentrancy)
-        let member_mut = circles::get_member_mut(circle, recipient);
-        members::set_received_payout(member_mut, true);
-        
-        // Process stablecoin payout from custody wallet
-        let stablecoin = custody::withdraw_stablecoin<CoinType>(
-            wallet,
-            actual_payout_amount,
-            recipient,
-            clock,
-            ctx
-        );
-        
-        // Transfer directly to recipient
-        transfer::public_transfer(stablecoin, recipient);
 
-        debit_active_member_recovery_stablecoin_contributions(circle, actual_payout_amount);
-        
-        // Reset contributions counter
-        circles::reset_contributions_this_cycle(circle);
-        
-        // Update rotation state
-        circles::advance_rotation_position_and_cycle(circle, recipient, clock);
-        
-        // Debug print to check updated payout time
-        std::debug::print(&b"Current next_payout_time AFTER update:");
-        std::debug::print(&circles::get_next_payout_time(circle));
-        
-        // Emit payout event (use local currency amount for display)
-        event::emit(PayoutProcessed {
-            circle_id: circles::get_id(circle),
-            recipient,
-            amount: contribution_amount_usd, // Local currency cents
-            cycle: circles::get_current_cycle(circle),
-            payout_type: circles::get_goal_type(circle),
-        });
-    }
-    
-    // ----------------------------------------------------------
-    // Admin function to pay out SUI security deposit to a member when the circle
-    // is inactive or paused after a cycle. This is a specialized version for SUI deposits.
-    // ----------------------------------------------------------
-    public fun admin_payout_security_deposit_sui(
-        circle: &mut Circle,
-        wallet: &mut CustodyWallet,
-        member_addr: address,
-        ctx: &mut TxContext
-    ) {
-        let sender = tx_context::sender(ctx);
-        
-        // Only admin can trigger security deposit payout
-        assert!(sender == circles::get_admin(circle), 7);
-        
-        // Circle must be inactive or paused after a cycle
-        assert!(!circles::is_circle_active(circle) || circles::is_paused_after_cycle(circle), 58);
-        
-        // Verify member is a circle member
-        assert!(circles::is_member(circle, member_addr), 8);
-        
-        // Verify wallet belongs to this circle
-        assert!(custody::get_circle_id(wallet) == circles::get_id(circle), 46);
-        
-        // Wallet must be active
-        assert!(custody::is_wallet_active(wallet), 43);
-        
-        // Get the member and check security deposit details
-        let member = circles::get_member(circle, member_addr);
-        let deposit_amount = members::get_deposit_balance(member);
-        assert!(deposit_amount > 0, 59); // New error for no deposit to return
-        
-        // Check if deposit has already been returned
-        assert!(members::has_paid_deposit(member), 60); // Must have paid deposit
-        
-        // Mark the member's deposit as no longer paid
-        let member_mut = circles::get_member_mut(circle, member_addr);
-        members::set_deposit_paid(member_mut, false); // Set not paid (returned)
-        members::set_deposit_balance(member_mut, 0); // Zero out the balance
-        members::clear_recovery_sui_deposit(member_mut);
-        
-        // Check if there's enough balance in the wallet
-        let wallet_balance = custody::get_total_wallet_balance(wallet);
-        assert!(wallet_balance >= deposit_amount, EInsufficientTreasuryBalance);
-        
-        // Try to withdraw from dynamic fields first, if that fails use the regular withdraw
-        let deposit_coin = if (custody::has_stablecoin_balance<SUI>(wallet)) {
-            // Check if we have enough in dynamic fields
-            let dynamic_balance = custody::get_stablecoin_balance<SUI>(wallet);
-            if (dynamic_balance >= deposit_amount) {
-                custody::withdraw_from_dynamic_fields(
-                    wallet,
-                    deposit_amount,
-                    ctx
-                )
-            } else {
-                // Fall back to regular withdraw
-                custody::withdraw(
-                    wallet,
-                    deposit_amount,
-                    ctx
-                )
-            }
-        } else {
-            // Use regular withdraw if no dynamic fields exist
-            custody::withdraw(
-                wallet,
-                deposit_amount,
-                ctx
-            )
-        };
-        
-        // Transfer to the member
-        transfer::public_transfer(deposit_coin, member_addr);
-        
-        // Emit event for security deposit return
-        event::emit(SecurityDepositReturned {
-            circle_id: circles::get_id(circle),
-            wallet_id: custody::get_circle_id(wallet),
-            member: member_addr,
-            amount: deposit_amount,
-            coin_type: string::utf8(b"sui"),
-            timestamp: tx_context::epoch_timestamp_ms(ctx)
-        });
-    }
-    
-    // ----------------------------------------------------------
-    // Admin function to pay out stablecoin security deposit to a member when the circle
-    // is inactive or paused after a cycle. This is the generic version for stablecoin deposits.
-    // ----------------------------------------------------------
-    public fun admin_payout_security_deposit_stablecoin<CoinType>(
-        circle: &mut Circle,
-        wallet: &mut CustodyWallet,
-        member_addr: address,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ) {
-        let sender = tx_context::sender(ctx);
-        
-        // Only admin can trigger security deposit payout
-        assert!(sender == circles::get_admin(circle), 7);
-        
-        // Circle must be inactive or paused after a cycle
-        assert!(!circles::is_circle_active(circle) || circles::is_paused_after_cycle(circle), 58);
-        
-        // Verify member is a circle member
-        assert!(circles::is_member(circle, member_addr), 8);
-        
-        // Verify wallet belongs to this circle
-        assert!(custody::get_circle_id(wallet) == circles::get_id(circle), 46);
-        
-        // Wallet must be active
-        assert!(custody::is_wallet_active(wallet), 43);
-        
-        // Get the member and check security deposit details
-        let member = circles::get_member(circle, member_addr);
-        let deposit_amount = members::get_deposit_balance(member);
-        assert!(deposit_amount > 0, 59); // New error for no deposit to return
-        
-        // Check if deposit has already been returned
-        assert!(members::has_paid_deposit(member), 60); // Must have paid deposit
-        
-        // Mark the member's deposit as no longer paid
-        let member_mut = circles::get_member_mut(circle, member_addr);
-        members::set_deposit_paid(member_mut, false); // Set not paid (returned)
-        members::set_deposit_balance(member_mut, 0); // Zero out the balance
-        members::clear_recovery_stablecoin_deposit(member_mut);
-        
-        // Check if there's enough balance of this coin type in the wallet
-        let wallet_balance = custody::get_stablecoin_balance<CoinType>(wallet);
-        assert!(wallet_balance >= deposit_amount, EInsufficientTreasuryBalance);
-        
-        // Withdraw the deposit and transfer it to the member
-        let deposit_coin = custody::withdraw_stablecoin<CoinType>(
-            wallet,
-            deposit_amount,
-            member_addr, // Return directly to member
-            clock,
-            ctx
-        );
-        
-        // Transfer to the member
-        transfer::public_transfer(deposit_coin, member_addr);
-        
-        // Emit event for security deposit return
-        event::emit(SecurityDepositReturned {
-            circle_id: circles::get_id(circle),
-            wallet_id: custody::get_circle_id(wallet),
-            member: member_addr,
-            amount: deposit_amount,
-            coin_type: string::utf8(b"stablecoin"),
-            timestamp: clock::timestamp_ms(clock)
-        });
+        // The scheduled recipient is derived deterministically from the
+        // rotation order; only that address may claim.
+        let recipient_opt = circles::get_next_payout_recipient(circle);
+        assert!(option::is_some(&recipient_opt), 29);
+        let scheduled = *option::borrow(&recipient_opt);
+        assert!(sender == scheduled, ENotScheduledRecipient);
+
+        trigger_automatic_payout<CoinType>(circle, wallet, clock, ctx);
     }
 
     #[test]

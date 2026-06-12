@@ -103,10 +103,13 @@ cd move
 - **💳 [Coinbase Onramp Setup and Operations](docs/coinbase-onramp-setup-operations.md)** - Env setup, API route reference, troubleshooting
 - **✅ [Coinbase Onramp Staging and Rollout Checklist](docs/coinbase-onramp-staging-rollout-checklist.md)** - UAT scenarios, production checklist, rollback runbook
 
-## Security Deposits & Upcoming Yield
-Security deposits protect the circle against missed contributions.  
-We are integrating a staking module that will deploy these deposits to a DeFi yield source while they remain locked, allowing members to earn extra rewards.  
-Stay tuned for details in a future release.
+## Security Deposits
+Security deposits protect the circle against missed contributions and are held
+in a per-circle wallet that no operator can drain. Funds are released back to
+the depositor through member-initiated recovery flows, not by admin discretion.
+Yield-generating deposit features are out of scope for the non-custodial Phase 1
+release; if reintroduced in a later release they will ship as a separately
+licensed product.
 
 ## Development Quick-Start
 ```bash

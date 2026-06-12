@@ -405,8 +405,8 @@ export default function WhatIsNjangiPage() {
           <section className="bg-gradient-to-r from-green-600 to-emerald-600 rounded-lg text-white p-8 mt-12 text-center">
             <h2 className="text-2xl font-bold mb-4">Ready to Join the Future of Community Savings?</h2>
             <p className="text-green-100 mb-6">
-              Start your digital Njangi journey today and connect with trusted communities worldwide 
-              while earning yields on your contributions.
+              Start your digital Njangi journey today and connect with trusted communities worldwide
+              with non-custodial coordination and partner-led on/off ramps.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link 

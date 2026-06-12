@@ -27,11 +27,14 @@ const StablecoinSwapForm: React.FC<StablecoinSwapFormProps> = ({
   const SUI_COIN_TYPE = '0x2::sui::SUI';
   const USDC_COIN_TYPE = getCurrentCoinTypes().USDC;
 
-  // Fetch swap quote when component mounts
+  // Fetch swap quote when component mounts / contribution amount changes.
   React.useEffect(() => {
     if (contributionAmount > 0) {
       getSwapEstimate();
     }
+    // `getSwapEstimate` is a stable closure that reads the latest amount;
+    // including it in deps would refetch on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contributionAmount]);
 
   const getSwapEstimate = async () => {

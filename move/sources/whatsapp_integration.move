@@ -1,7 +1,20 @@
 module njangi::whatsapp_integration {
     use sui::table::{Self, Table};
     use sui::event;
-    use std::string::String;
+
+    // ----------------------------------------------------------
+    // Compliance redesign — Phase 1
+    //
+    // The previous version of this module stored raw phone numbers, group
+    // IDs, and group names directly in `WhatsAppLink` struct fields and
+    // emitted them in events, which is incompatible with GDPR-style data
+    // minimization. PII now lives entirely off-chain: the server encrypts
+    // the WhatsApp routing payload and uploads it to Walrus; only the
+    // resulting `walrus_blob_id` and an opaque random `link_nonce` are
+    // anchored on-chain. No salted hash of the phone number is stored on
+    // chain because the phone-number space is too low entropy for hashing
+    // to provide meaningful protection.
+    // ----------------------------------------------------------
 
     // ----------------------------------------------------------
     // Error codes
@@ -12,13 +25,14 @@ module njangi::whatsapp_integration {
     const E_ALREADY_LINKED: u64 = 6;
     const E_UNAUTHORIZED_ADMIN: u64 = 7;
     const E_INVALID_ADMIN_PROOF: u64 = 8;
+    const E_INVALID_NONCE_LENGTH: u64 = 9;
 
     // ----------------------------------------------------------
     // Constants
     // ----------------------------------------------------------
     const LINK_TYPE_INDIVIDUAL: u8 = 1;
     const LINK_TYPE_GROUP: u8 = 2;
-    
+
     const MAX_MESSAGES_PER_HOUR: u64 = 10;
     const MAX_MESSAGES_PER_DAY: u64 = 100;
     const SECONDS_PER_HOUR: u64 = 3600;
@@ -27,32 +41,27 @@ module njangi::whatsapp_integration {
     const ADMIN_ACTION_UNLINK: u8 = 2;
     const ADMIN_ACTION_LOG_NOTIFICATION: u8 = 3;
 
+    // 32-byte random nonce, generated server-side at link time.
+    const LINK_NONCE_BYTES: u64 = 32;
+
     // ----------------------------------------------------------
     // Structs
     // ----------------------------------------------------------
 
-    /// Individual WhatsApp link entry
+    /// Individual WhatsApp link entry. Holds only opaque pointers to the
+    /// Walrus-encrypted payload and the link metadata required for
+    /// recovery; no PII fields remain.
     #[allow(lint(missing_key))]
     public struct WhatsAppLink has store {
         id: UID,
         circle_id: ID,
-        link_type: u8,                            // 1 = individual, 2 = group
-        admin_phone_number: Option<String>,       // If personal
-        group_id: Option<String>,                 // If group (e.g., "group-id@g.us")
-        group_name: Option<String>,
-        linked_by: address,                       // Admin who linked it
-        linked_at: u64,                           // Timestamp
+        link_type: u8,                 // 1 = individual, 2 = group
+        walrus_blob_id: vector<u8>,    // pointer to encrypted PII in Walrus
+        link_nonce: vector<u8>,        // 32 random bytes; opaque correlation handle
+        linked_by: address,            // Admin who linked it
+        linked_at: u64,                // Timestamp
         enabled: bool,
-        last_notification_sent: u64,              // Last notification timestamp
-    }
-
-    /// Message log entry
-    #[allow(unused_field)]
-    public struct LogEntry has store, copy, drop {
-        message_type: u8,
-        recipient: String,
-        sent_at: u64,
-        success: bool,
+        last_notification_sent: u64,   // Last notification timestamp
     }
 
     /// Rate limit bucket for tracking message frequency
@@ -63,12 +72,14 @@ module njangi::whatsapp_integration {
         day_count: u64,
     }
 
-    /// Global registry of WhatsApp links
+    /// Global registry of WhatsApp links. The previous group_to_link reverse
+    /// index has been removed because it required a plaintext group ID. All
+    /// reverse lookups happen off-chain via the encrypted Walrus blobs and a
+    /// separately maintained server-side index.
     public struct WhatsAppLinksRegistry has key {
         id: UID,
         links: vector<WhatsAppLink>,
         circle_to_link: Table<ID, u64>,          // Quick lookup: circle_id → link index
-        group_to_link: Table<String, u64>,       // Quick lookup: group_id → link index
         total_links: u64,
     }
 
@@ -81,27 +92,30 @@ module njangi::whatsapp_integration {
     }
 
     // ----------------------------------------------------------
-    // Events
+    // Events — none of these carry PII; recipients are referenced by the
+    // opaque `link_nonce` so off-chain consumers can correlate events to a
+    // Walrus blob without exposing phone numbers or group IDs on chain.
     // ----------------------------------------------------------
 
     public struct CircleLinked has copy, drop {
         circle_id: ID,
         link_type: u8,
         admin_address: address,
-        recipient: String,                        // phone or group ID
+        link_nonce: vector<u8>,
         linked_at: u64,
     }
 
     public struct CircleUnlinked has copy, drop {
         circle_id: ID,
         admin_address: address,
+        link_nonce: vector<u8>,
         unlinked_at: u64,
     }
 
     public struct NotificationSent has copy, drop {
         circle_id: ID,
         message_type: u8,
-        recipient: String,
+        link_nonce: vector<u8>,
         sent_at: u64,
         success: bool,
     }
@@ -110,7 +124,7 @@ module njangi::whatsapp_integration {
     public struct RateLimitExceeded has copy, drop {
         link_id: ID,
         circle_id: ID,
-        recipient: String,
+        link_nonce: vector<u8>,
         attempted_at: u64,
     }
 
@@ -178,7 +192,6 @@ module njangi::whatsapp_integration {
             id: object::new(ctx),
             links: vector::empty(),
             circle_to_link: table::new(ctx),
-            group_to_link: table::new(ctx),
             total_links: 0,
         };
         transfer::share_object(registry);
@@ -188,23 +201,31 @@ module njangi::whatsapp_integration {
     // Functions - Linking & Unlinking
     // ----------------------------------------------------------
 
-    /// Link a circle to WhatsApp (personal or group)
+    /// Link a circle to WhatsApp by anchoring an encrypted Walrus blob.
+    /// `walrus_blob_id` is the publisher-returned blob handle for the
+    /// encrypted PII payload; `link_nonce` is a 32-byte random correlation
+    /// handle generated server-side. Neither value reveals the underlying
+    /// phone number or group ID.
     public fun link_circle(
         registry: &mut WhatsAppLinksRegistry,
         circle_id: ID,
         link_type: u8,
-        phone_or_group: String,
+        walrus_blob_id: vector<u8>,
+        link_nonce: vector<u8>,
         admin_address: address,
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
-        
+
         // Verify sender is the admin
         assert!(sender == admin_address, E_NOT_CIRCLE_ADMIN);
-        
+
         // Validate link type
         assert!(link_type == LINK_TYPE_INDIVIDUAL || link_type == LINK_TYPE_GROUP, E_INVALID_LINK_TYPE);
-        
+
+        // Validate nonce length to keep correlation handles consistent.
+        assert!(vector::length(&link_nonce) == LINK_NONCE_BYTES, E_INVALID_NONCE_LENGTH);
+
         // Check if circle already linked
         assert!(!table::contains(&registry.circle_to_link, circle_id), E_ALREADY_LINKED);
 
@@ -212,21 +233,8 @@ module njangi::whatsapp_integration {
             id: object::new(ctx),
             circle_id,
             link_type,
-            admin_phone_number: if (link_type == LINK_TYPE_INDIVIDUAL) {
-                option::some(phone_or_group)
-            } else {
-                option::none()
-            },
-            group_id: if (link_type == LINK_TYPE_GROUP) {
-                option::some(phone_or_group)
-            } else {
-                option::none()
-            },
-            group_name: if (link_type == LINK_TYPE_GROUP) {
-                option::some(phone_or_group)
-            } else {
-                option::none()
-            },
+            walrus_blob_id,
+            link_nonce,
             linked_by: sender,
             linked_at: tx_context::epoch(ctx),
             enabled: true,
@@ -234,25 +242,21 @@ module njangi::whatsapp_integration {
         };
 
         let link_index = vector::length(&registry.links);
-        
-        // Store in main vector
+
+        // Store in main vector and the circle-keyed lookup. There is no
+        // longer a reverse index by phone/group because doing so would
+        // require leaking those identifiers on chain.
+        let nonce_for_event = new_link.link_nonce;
         vector::push_back(&mut registry.links, new_link);
-        
-        // Store in lookup tables
-        if (link_type == LINK_TYPE_INDIVIDUAL) {
-            table::add(&mut registry.circle_to_link, circle_id, link_index);
-        } else {
-            table::add(&mut registry.circle_to_link, circle_id, link_index);
-            table::add(&mut registry.group_to_link, phone_or_group, link_index);
-        };
-        
+        table::add(&mut registry.circle_to_link, circle_id, link_index);
+
         registry.total_links = registry.total_links + 1;
 
         event::emit(CircleLinked {
             circle_id,
             link_type,
             admin_address: sender,
-            recipient: phone_or_group,
+            link_nonce: nonce_for_event,
             linked_at: tx_context::epoch(ctx),
         });
     }
@@ -266,37 +270,26 @@ module njangi::whatsapp_integration {
     ) {
         // Find link by circle_id
         assert!(table::contains(&registry.circle_to_link, circle_id), E_LINK_NOT_FOUND);
-        
+
         let link_index = *table::borrow(&registry.circle_to_link, circle_id);
         let link = vector::borrow_mut(&mut registry.links, link_index);
-        
+
         // Verify admin
         assert!(link.linked_by == admin_address, E_NOT_CIRCLE_ADMIN);
-        
-        // Store the link type and phone/group for cleanup
-        let link_type = link.link_type;
-        let group_id = if (link_type == LINK_TYPE_GROUP) {
-            link.group_id
-        } else {
-            option::none()
-        };
-        
-        // Disable the link instead of removing it from the vector
-        // This preserves the vector structure while marking the link as inactive
+
+        // Disable the link instead of removing it from the vector.
+        let nonce_for_event = link.link_nonce;
         link.enabled = false;
-        
-        // Remove from lookup tables
+
+        // Remove from the circle-keyed lookup table.
         table::remove(&mut registry.circle_to_link, circle_id);
-        if (option::is_some(&group_id)) {
-            let group = option::borrow(&group_id);
-            table::remove(&mut registry.group_to_link, *group);
-        };
-        
+
         registry.total_links = registry.total_links - 1;
 
         event::emit(CircleUnlinked {
             circle_id,
             admin_address,
+            link_nonce: nonce_for_event,
             unlinked_at: tx_context::epoch(ctx),
         });
     }
@@ -305,24 +298,43 @@ module njangi::whatsapp_integration {
     // Functions - Querying Links
     // ----------------------------------------------------------
 
-    /// Get recipient for a circle (phone or group)
-    public fun get_recipient(
+    /// Returns the Walrus blob pointer for a circle. The caller must fetch
+    /// and decrypt the blob off-chain to obtain the actual phone or group
+    /// address. Returns `option::none()` if the circle is not linked or has
+    /// been disabled.
+    public fun get_link_blob_id(
         registry: &WhatsAppLinksRegistry,
         circle_id: ID,
-    ): Option<String> {
+    ): Option<vector<u8>> {
         if (table::contains(&registry.circle_to_link, circle_id)) {
             let link_index = *table::borrow(&registry.circle_to_link, circle_id);
             let link = vector::borrow(&registry.links, link_index);
-            
+
             if (!link.enabled) {
                 return option::none()
             };
-            
-            if (link.link_type == LINK_TYPE_INDIVIDUAL) {
-                link.admin_phone_number
-            } else {
-                link.group_id
-            }
+
+            option::some(link.walrus_blob_id)
+        } else {
+            option::none()
+        }
+    }
+
+    /// Returns the opaque nonce associated with a circle link, used for
+    /// correlating off-chain notification logs with on-chain events.
+    public fun get_link_nonce(
+        registry: &WhatsAppLinksRegistry,
+        circle_id: ID,
+    ): Option<vector<u8>> {
+        if (table::contains(&registry.circle_to_link, circle_id)) {
+            let link_index = *table::borrow(&registry.circle_to_link, circle_id);
+            let link = vector::borrow(&registry.links, link_index);
+
+            if (!link.enabled) {
+                return option::none()
+            };
+
+            option::some(link.link_nonce)
         } else {
             option::none()
         }
@@ -354,12 +366,12 @@ module njangi::whatsapp_integration {
     // Functions - Logging Notifications
     // ----------------------------------------------------------
 
-    /// Record a notification was sent
+    /// Record a notification was sent. The recipient identifier never appears
+    /// on chain; only the link's opaque nonce is emitted.
     public fun log_notification(
         registry: &mut WhatsAppLinksRegistry,
         circle_id: ID,
         message_type: u8,
-        recipient: String,
         success: bool,
         ctx: &mut TxContext
     ) {
@@ -367,18 +379,19 @@ module njangi::whatsapp_integration {
         if (!table::contains(&registry.circle_to_link, circle_id)) {
             return
         };
-        
+
         let link_index = *table::borrow(&registry.circle_to_link, circle_id);
         let link = vector::borrow_mut(&mut registry.links, link_index);
-        
+
         // Update last notification timestamp
         link.last_notification_sent = tx_context::epoch(ctx);
+        let nonce_for_event = link.link_nonce;
 
         // Emit event
         event::emit(NotificationSent {
             circle_id,
             message_type,
-            recipient,
+            link_nonce: nonce_for_event,
             sent_at: tx_context::epoch(ctx),
             success,
         });
@@ -415,12 +428,12 @@ module njangi::whatsapp_integration {
         current_timestamp: u64,
     ): bool {
         let current_hour = get_current_hour_bucket(current_timestamp);
-        
+
         // If hour changed, reset counter
         if (current_hour != bucket.hour_bucket) {
             return true
         };
-        
+
         // Check if under limit
         bucket.message_count < MAX_MESSAGES_PER_HOUR
     }
@@ -431,12 +444,12 @@ module njangi::whatsapp_integration {
         current_timestamp: u64,
     ): bool {
         let current_day = get_current_day_bucket(current_timestamp);
-        
+
         // If day changed, reset counter
         if (current_day != bucket.day_bucket) {
             return true
         };
-        
+
         // Check if under limit
         bucket.day_count < MAX_MESSAGES_PER_DAY
     }
@@ -580,10 +593,10 @@ module njangi::whatsapp_integration {
         ctx: &mut TxContext
     ): AdminAction {
         let sender = tx_context::sender(ctx);
-        
+
         // Verify sender is the admin
         assert!(sender == admin_address, E_UNAUTHORIZED_ADMIN);
-        
+
         // Verify action type is valid
         assert!(
             action_type == ADMIN_ACTION_LINK ||
@@ -605,20 +618,22 @@ module njangi::whatsapp_integration {
         registry: &mut WhatsAppLinksRegistry,
         circle_id: ID,
         link_type: u8,
-        phone_or_group: String,
+        walrus_blob_id: vector<u8>,
+        link_nonce: vector<u8>,
         admin_action: &AdminAction,
         ctx: &mut TxContext
     ) {
         // Verify admin authorization
         assert!(admin_action.verified, E_UNAUTHORIZED_ADMIN);
         assert!(admin_action.action_type == ADMIN_ACTION_LINK, E_INVALID_ADMIN_PROOF);
-        
+
         // Proceed with linking
         link_circle(
             registry,
             circle_id,
             link_type,
-            phone_or_group,
+            walrus_blob_id,
+            link_nonce,
             admin_action.admin_address,
             ctx
         );
@@ -634,7 +649,7 @@ module njangi::whatsapp_integration {
         // Verify admin authorization
         assert!(admin_action.verified, E_UNAUTHORIZED_ADMIN);
         assert!(admin_action.action_type == ADMIN_ACTION_UNLINK, E_INVALID_ADMIN_PROOF);
-        
+
         // Proceed with unlinking
         unlink_circle(
             registry,
@@ -649,7 +664,6 @@ module njangi::whatsapp_integration {
         registry: &mut WhatsAppLinksRegistry,
         circle_id: ID,
         message_type: u8,
-        recipient: String,
         success: bool,
         admin_action: &AdminAction,
         ctx: &mut TxContext
@@ -657,13 +671,12 @@ module njangi::whatsapp_integration {
         // Verify admin authorization
         assert!(admin_action.verified, E_UNAUTHORIZED_ADMIN);
         assert!(admin_action.action_type == ADMIN_ACTION_LOG_NOTIFICATION, E_INVALID_ADMIN_PROOF);
-        
+
         // Proceed with logging
         log_notification(
             registry,
             circle_id,
             message_type,
-            recipient,
             success,
             ctx
         );

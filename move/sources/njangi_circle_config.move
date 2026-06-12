@@ -1,7 +1,7 @@
 module njangi::njangi_circle_config {
     use sui::clock::{Self, Clock};
     use sui::dynamic_field;
-    use std::string::String;
+    use std::string::{Self, String};
 
     use njangi::njangi_core as core;
 

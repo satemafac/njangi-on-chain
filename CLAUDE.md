@@ -46,29 +46,31 @@ docker-compose up -d
 ## Architecture Overview
 
 ### Core System Integration
-This is a **DeFi-enabled rotational savings application** built on Sui blockchain with three integrated systems:
+This is a **non-custodial rotational savings coordinator** built on Sui blockchain.
+Phase 1 ships three subsystems:
 
-1. **zkLogin Authentication**: Social OAuth (Google/Facebook/Apple) → zkProofs → Sui addresses via Enoki service
-2. **Move Smart Contracts**: Modular circle management with integrated yield generation capabilities  
-3. **Cetus DEX Integration**: Real protocol integration for yield generation from security deposits
+1. **zkLogin Authentication**: Social OAuth (Google/Facebook/Apple) → zkProofs → Sui addresses via Enoki service. Server holds no persistent ephemeral key material.
+2. **Move Smart Contracts**: Per-circle escrow + permissionless `trigger_payout`/`claim_payout`. No admin discretionary fund movement; member-initiated recovery only.
+3. **Partner-led fiat ramps**: Coinbase Onramp, MoonPay, and Transak hosted widgets. Njangi never settles fiat directly.
 
 ### Key Components
 
 **Move Contracts (move/sources/)**:
 - `njangi_core.move`: Time utilities, decimal scaling, currency conversion
 - `njangi_circles.move`: Circle lifecycle, rotation logic, treasury management
-- `njangi_yield_integration.move`: Real Cetus & NAVI protocol integration
+- `njangi_payments.move`: Permissionless `trigger_payout` + recipient-pull `claim_payout<T>`
+- `njangi_custody.move`: Wallet primitives; only package-internal code can move funds
+- `njangi_price_validator.move`: Exact-type AssetRegistry; no substring oracle matching
+- `whatsapp_integration.move`: On-chain anchors for Walrus-encrypted PII (no plaintext)
 
 **Frontend Services (src/services/)**:
-- `zkLoginService.ts`: Social auth wrapper
-- `enokiZkLoginService.ts`: Complete zkLogin implementation
-- `cetus-service.ts`: DEX integration with real testnet addresses
-- `yield-tracking-service.ts`: Blockchain event aggregation for earnings
+- `enokiZkLoginService.ts`: zkLogin auth + sponsored transaction execution
+- `coinbase-onramp-service.ts`, `moonpay-service.ts`, `transak-service.ts`: Fiat ramp adapters
+- `whatsapp-registry-service.ts`: Off-chain index for the on-chain Walrus pointers
 
-**Yield Management (src/components/YieldManagement/)**:
-- Abstraction layer presenting DeFi strategies as familiar financial products
-- Real-time APR fetching from live Cetus/NAVI APIs
-- Strategy types: Conservative (NAVI), Balanced (NAVI+Cetus), Aggressive (Advanced)
+**PII Storage**:
+- `src/lib/walrus-pii.ts`: AES-256-GCM encrypts WhatsApp routing data and uploads
+  to Sui Walrus. Only the resulting blob ID + opaque nonce are anchored on chain.
 
 ### Transaction Flow Pattern
 ```
@@ -81,21 +83,23 @@ Frontend → zkLogin API (/api/zkLogin) → Move Contract → Event Parsing → 
 - Always `cd move` before building/testing contracts
 - Use `./build_and_test.sh` for comprehensive build/publish/test cycle
 - Package ID updates automatically sync to `.env.local` as `NEXT_PUBLIC_PACKAGE_ID`
+- Never hand-edit `move/Move.toml` — it is a copy of `move/config/{testnet,mainnet}.toml`.
+  Switch networks with `bash move/scripts/switch-network.sh {testnet|mainnet}` and
+  verify the active manifest with `npm run validate:move-network` (CI guard).
 
 **zkLogin Integration**:
 - Development uses Docker services (ports 5001, 5003)
 - zkLogin session state persists across OAuth flows
 - Address generation is deterministic based on social identity
 
-**Cetus Integration**:
-- Uses real testnet addresses and pools
-- Pool ID: `0xb01b068bd0360bb3308b81eb42386707e460b7818816709b7f51e1635d542d40` (SUI-USDC)
-- Package: `0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12`
+**Cetus Integration** (swap routing only):
+- Used for non-custodial token swaps when a member needs to convert one
+  asset into the circle's contribution currency. Not used for yield.
 
-**Yield System Architecture**:
-- Two-step process: YieldConfig creation → SecurityDeposit processing
-- Dynamic fields store member-specific yield data on-chain
-- Event-driven earnings tracking with real-time calculations
+**Fiat ramps**:
+- Partner-led; Coinbase + MoonPay + Transak. See `src/components/RampPicker.tsx`
+  for geo-aware selection. The protocol contract is non-custodial; ramps run
+  KYC and AML checks under their own licenses.
 
 ### Database Integration
 - Primary: Sui blockchain (financial data, circle state)
@@ -112,3 +116,256 @@ Key environment variables:
 - `NEXT_PUBLIC_PACKAGE_ID`: Auto-updated by build script
 - `ZKLOGIN_SECRET`: Session encryption
 - Various API keys for Cetus, NAVI, zkLogin services
+
+## Claude Code Skills
+
+Project-specific slash commands available in `.claude/skills/`:
+
+- `/test-contracts` - Run Move contract test suite
+- `/build-deploy` - Build and optionally deploy contracts
+- `/verify-circle` - Check circle state on-chain
+- `/start-zklogin` - Start Docker zkLogin services
+- `/check-env` - Validate environment configuration
+- `/deploy-testnet` - Full testnet deployment workflow
+
+(The legacy `/check-yield` skill was retired with the yield module in the
+Phase 1 compliance redesign.)
+
+## Troubleshooting Guide
+
+### Move Contract Issues
+
+**Build Failures**:
+- Ensure you're in the `move/` directory
+- Check Sui CLI version: `sui --version` (requires v1.0+)
+- Verify dependencies in `Move.toml`
+- Clear build cache: `rm -rf build/`
+
+**Test Failures**:
+- Time-related tests may fail due to clock synchronization
+- Check test constants match contract parameters
+- Verify test gas budget is sufficient
+- Run individual tests: `sui move test --filter test_name`
+
+**Deployment Issues**:
+- Confirm wallet has sufficient SUI for gas
+- Check network connectivity to Sui RPC
+- Verify package dependencies are published
+- Use `--skip-dependency-verification` only for testing
+
+### Frontend Issues
+
+**zkLogin Not Working**:
+- Verify Docker services are running: `docker ps`
+- Check ports 5001, 5003 are not in use
+- Restart services: `docker-compose down && docker-compose up -d`
+- Clear zkLogin session state in browser
+- Check ZKLOGIN_SECRET in .env.local
+
+**Fiat Ramp Errors**:
+- Verify provider is enabled: `NEXT_PUBLIC_COINBASE_ONRAMP_ENABLED`,
+  `NEXT_PUBLIC_MOONPAY_ENABLED`, `NEXT_PUBLIC_TRANSAK_ENABLED`
+- Check signed-URL secret keys are set server-side (`MOONPAY_SECRET_KEY`,
+  `TRANSAK_API_SECRET`)
+- Inspect webhook payload signatures via `pages/api/onramp/<provider>/webhook.ts`
+
+**RPC Connection Issues**:
+- Use `sui-rpc-failover` service for reliability
+- Check Sui testnet status: https://status.sui.io
+- Verify RPC endpoints in configuration
+- Implement retry logic for transient failures
+
+### Operations
+
+**Publish runbook (testnet)**:
+1. `npm run validate:move-network` — Move.toml byte-equal to canonical
+   testnet config.
+2. `npm run preflight` — TypeScript + lint + Move build clean.
+3. `npm run migrate:postgres` — creates the seven application tables.
+   Idempotent; safe on a fresh DB or an existing one.
+4. `npm run generate:secrets` — fills any missing
+   `WALRUS_PII_MASTER_KEY`, `WALRUS_LOOKUP_SALT`,
+   `COMPLIANCE_REF_HMAC_SALT`, `INTERNAL_NOTIFY_SECRET`,
+   `COMPLIANCE_ISSUANCE_SECRET` in `.env.local`. Existing values are
+   preserved.
+5. `bash move/scripts/switch-network.sh testnet` if not already there.
+6. `bash move/build_and_test.sh` — builds, publishes, captures the
+   package id into `.env.local`, then prompts to run the post-publish
+   bootstrap. Answer `y` so the script auto-calls
+   `whatsapp_integration::init_registry`,
+   `njangi_price_validator::init_registry`, and captures the
+   `AttestorCap` object id minted by `njangi_compliance::init`.
+7. `npm run validate:env` — confirms every required active-network id is
+   populated, including the new `NEXT_PUBLIC_TESTNET_NJANGI_ATTESTOR_CAP_ID`
+   and `NEXT_PUBLIC_TESTNET_NJANGI_ASSET_REGISTRY_ID`.
+8. Start the app (`npm run dev`) and run `npm run smoke:testnet` against
+   it. Six steps; expect all PASS.
+9. Manual UX walk-through: open `/admin/compliance`, confirm the queue
+   + stale list + recent notifications render. Open
+   `/circle/<id>/contribute`, confirm the "Link your WhatsApp" prompt
+   shows when the circle has no link.
+10. Re-run `npm run preflight` once more before pushing.
+
+**Re-running the bootstrap manually**:
+`node scripts/bootstrap-package.mjs <packageId>` — re-issues the registry
+inits if the env file got out of sync. Skips inits for any registry env
+var that's already populated, so it's safe to re-run.
+
+**Cycle-finalized WhatsApp notifier**:
+- Worker script: `scripts/cycle-finalized-notifier.mjs`. Launches via
+  `npm run notifier:cycle-finalized` or the `notifier` process in
+  `Procfile`. Polls `CycleFinalized` events every `POLL_INTERVAL_MS`
+  (default 60s), persists its cursor to `.cycle-finalized-cursor.json`
+  (git-ignored), and POSTs to `/api/whatsapp/notify/your-turn` for each
+  new recipient.
+- Required env on the worker dyno:
+  `PACKAGE_ID`, `NOTIFY_ENDPOINT` (points at the web dyno),
+  `INTERNAL_NOTIFY_SECRET` (must match the web dyno),
+  `NETWORK` (`testnet`/`mainnet`), `SUI_RPC_URL` (optional override),
+  `COIN_DECIMALS`, `COIN_SYMBOL`.
+- Deploying on Heroku: `heroku ps:scale notifier=1 -a <app>` after pushing
+  this Procfile. Rotate `INTERNAL_NOTIFY_SECRET` by setting the new value
+  on both the web and notifier dynos in the same release.
+
+**Compliance attestor console**:
+- Page: `/admin/compliance`. Uses the Phase 2 client-side signer, so the
+  operator never posts their ephemeral key to the server.
+- Required env:
+  `COMPLIANCE_REF_HMAC_SALT` (server),
+  `COMPLIANCE_ISSUANCE_SECRET` or fallback `INTERNAL_NOTIFY_SECRET`
+  (server, sent by the console as `x-internal-auth`),
+  `NJANGI_ATTESTOR_CAP_ID` (ops-side reference of the AttestorCap object),
+  `NEXT_PUBLIC_NJANGI_ATTESTATION_ISSUER` (browser-visible issuer pin).
+- Flow: enter AttestorCap id + subject + provider case id + TTL → the page
+  calls `/api/compliance/prepare-issuance` to hash the policy server-side,
+  then signs `njangi_compliance::issue(cap, subject, policy_hash,
+  ref_hash, ttl, clock)` locally.
+
+**Build Errors**:
+- Clear Next.js cache: `rm -rf .next/`
+- Reinstall dependencies: `rm -rf node_modules && npm install`
+- Check TypeScript errors: `npm run type-check`
+- Verify environment variables are loaded
+
+### Common Patterns
+
+**Adding a New Circle Function**:
+1. Update Move contract in `move/sources/njangi_circles.move`
+2. Add tests in contract file
+3. Run `sui move test` to verify
+4. Deploy with `./build_and_test.sh`
+5. Update frontend service in `src/services/circle-service.ts`
+6. Add UI component in `src/pages/circle/[id]/`
+7. Test end-to-end flow
+
+**Adding a Fiat Ramp Provider**:
+1. Add `<provider>-service.ts` under `src/services/` with a signed-URL builder
+2. Add `pages/api/onramp/<provider>/session.ts` and `webhook.ts`
+3. Add `<provider>Launcher.tsx` under `src/components/`
+4. Wire into `RampPicker.tsx` (geo-aware ordering)
+5. Update `.env.example` with public + secret keys
+
+**Debugging On-Chain State**:
+1. Use Sui Explorer: https://suiexplorer.com
+2. Query objects: `sui client object <OBJECT_ID>`
+3. Check events: `sui client events --package <PACKAGE_ID>`
+4. Use `/verify-circle` skill for quick checks
+
+## Quick Reference
+
+### File Locations
+
+**Contracts**: `move/sources/`
+- Core utilities: `njangi_core.move`
+- Circle logic: `njangi_circles.move`
+- Payments + payouts: `njangi_payments.move`
+- Custody primitives: `njangi_custody.move`
+- Asset registry / oracle gating: `njangi_price_validator.move`
+- WhatsApp link anchors (Walrus-backed PII): `whatsapp_integration.move`
+
+**Services**: `src/services/`
+- Circle operations: `circle-service.ts`
+- zkLogin: `enokiZkLoginService.ts`
+- Fiat ramps: `coinbase-onramp-service.ts`, `moonpay-service.ts`, `transak-service.ts`
+- RPC failover: `sui-rpc-failover.ts`
+
+**Libraries**: `src/lib/`
+- Walrus PII encryption: `walrus-pii.ts`
+- Recovery liveness: `recovery-liveness.ts`
+
+**Components**: `src/components/`
+- Ramp launchers: `CoinbaseOnrampLauncher.tsx`, `MoonPayLauncher.tsx`, `TransakLauncher.tsx`, `RampPicker.tsx`
+- Circle pages: `src/pages/circle/[id]/`
+
+**Tests**:
+- Move: In source files with `#[test]`
+- Frontend: `src/**/__tests__/`
+
+### Development Workflow
+
+**Daily Development**:
+1. Pull latest: `git pull`
+2. Start zkLogin: `docker-compose up -d`
+3. Run dev server: `npm run dev`
+4. Check environment: `/check-env`
+5. Run tests before committing
+
+**Making Changes**:
+1. Create feature branch
+2. Make incremental changes
+3. Run relevant tests frequently
+4. Use `/test-contracts` for Move changes
+5. Commit with descriptive messages
+6. Create PR when ready
+
+**Pre-Deployment Checklist**:
+- [ ] All tests passing (`/test-contracts`)
+- [ ] Linting passes (`npm run lint`)
+- [ ] TypeScript compiles (`npm run build`)
+- [ ] Manual testing completed
+- [ ] Environment variables updated
+- [ ] Deployment gas budget confirmed
+- [ ] Backup of current package ID
+
+## Best Practices
+
+### Smart Contract Development
+- Always test time-dependent logic thoroughly
+- Use decimal scaling (1e9) for currency values
+- Validate inputs at entry points
+- Emit events for all state changes
+- Document complex yield calculations
+- Test edge cases (zero deposits, max members, etc.)
+
+### Frontend Development
+- Use TypeScript strictly
+- Handle loading states for blockchain queries
+- Implement error boundaries
+- Cache RPC responses when appropriate
+- Validate user inputs before transactions
+- Show clear transaction feedback
+
+### Security Considerations
+- Never commit private keys or secrets
+- Validate all on-chain data before using
+- Implement proper access controls
+- Test recovery/upgrade scenarios
+- Monitor for unusual activity
+- Keep dependencies updated
+
+### Performance Tips
+- Batch RPC calls when possible
+- Use dynamic fields efficiently
+- Implement pagination for large datasets
+- Cache static data (pool addresses, etc.)
+- Minimize re-renders in React components
+- Profile transaction gas costs
+
+## Resources
+
+- Sui Documentation: https://docs.sui.io
+- Cetus Protocol: https://cetus.zone
+- NAVI Protocol: https://naviprotocol.io
+- zkLogin Guide: https://docs.sui.io/build/zk_login
+- Sui Explorer: https://suiexplorer.com
+- Project Issues: Use GitHub Issues for tracking

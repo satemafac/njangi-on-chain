@@ -70,8 +70,10 @@ function clearAll(): void {
 }
 
 // Export the service functions
-export default {
+const localSaltService = {
   getSalt,
   resetSalt,
-  clearAll
-}; 
+  clearAll,
+};
+
+export default localSaltService;

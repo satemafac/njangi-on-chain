@@ -57,7 +57,7 @@ function buildRegistryCatalog(): Record<NetworkType, WhatsAppRegistryConfig[]> {
   };
 }
 
-let WHATSAPP_REGISTRIES: Record<NetworkType, WhatsAppRegistryConfig[]> = buildRegistryCatalog();
+const WHATSAPP_REGISTRIES: Record<NetworkType, WhatsAppRegistryConfig[]> = buildRegistryCatalog();
 
 /**
  * Configuration for deployment coins per network

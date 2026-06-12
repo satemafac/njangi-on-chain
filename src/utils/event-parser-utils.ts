@@ -6,16 +6,14 @@
 import {
   ParsedBlockchainEvent,
   EventFilterCriteria,
-  NewCycleStartedEvent,
   MemberContributedEvent,
-  AllMembersContributedEvent,
   DeadlineApproachingEvent,
-  PayoutOverdueEvent,
-  ContributorOverdueEvent,
   PayoutReminderEvent,
   NotificationSentEvent,
 } from './sui-event-types';
 import { appLogger } from './logger';
+
+type EventWithCircleId = ParsedBlockchainEvent & { circleId?: string };
 
 /**
  * Advanced filtering predicate builder
@@ -28,7 +26,10 @@ export class EventFilterBuilder {
    */
   public byCircleIds(circleIds: string[]): this {
     if (circleIds.length > 0) {
-      this.predicates.push((event) => circleIds.includes((event as any).circleId));
+      this.predicates.push((event) => {
+        const id = (event as EventWithCircleId).circleId;
+        return typeof id === 'string' && circleIds.includes(id);
+      });
     }
     return this;
   }
@@ -170,7 +171,7 @@ export class EventGrouper {
     const grouped = new Map<string, ParsedBlockchainEvent[]>();
 
     for (const event of events) {
-      const circleId = (event as any).circleId;
+      const circleId = (event as EventWithCircleId).circleId;
       if (!grouped.has(circleId)) {
         grouped.set(circleId, []);
       }
@@ -227,7 +228,7 @@ export class EventGrouper {
     const hierarchical = new Map<string, Map<string, ParsedBlockchainEvent[]>>();
 
     for (const event of events) {
-      const circleId = (event as any).circleId;
+      const circleId = (event as EventWithCircleId).circleId;
 
       if (!hierarchical.has(circleId)) {
         hierarchical.set(circleId, new Map());
@@ -354,7 +355,7 @@ export class EventTransformer {
    */
   public static toJSON(
     event: ParsedBlockchainEvent
-  ): Record<string, any> {
+  ): Record<string, unknown> {
     return {
       ...event,
       timestamp: new Date(event.timestamp).toISOString(),
@@ -381,7 +382,7 @@ export class EventTransformer {
       byType.set(event.type, (byType.get(event.type) || 0) + 1);
 
       // Count by circle
-      const circleId = (event as any).circleId;
+      const circleId = (event as EventWithCircleId).circleId;
       byCircle.set(circleId, (byCircle.get(circleId) || 0) + 1);
 
       // Track time range

@@ -17,10 +17,8 @@ module njangi::njangi_custody {
     // ----------------------------------------------------------
     // Error codes
     // ----------------------------------------------------------
-    const ENotWalletOwner: u64 = 42;
     const EWalletNotActive: u64 = 43;
     const EFundsTimeLocked: u64 = 44;
-    const EExceedsWithdrawalLimit: u64 = 45;
     const EUnsupportedToken: u64 = 50;
     const EInsufficientAmount: u64 = 53;
     const EInvalidPriceInfo: u64 = 54;
@@ -28,8 +26,6 @@ module njangi::njangi_custody {
     const EInvalidDecimalPrecision: u64 = 56;
     const EDecimalConversionOverflow: u64 = 57;
     const EPrecisionLoss: u64 = 58;
-    const ALLOWLISTED_MAINNET_SUI_USDE: vector<u8> = b"0x41d587e5336f1c86cad50d38a7136db99333bb9bda91cea4ba69115defeb1402::sui_usde::SUI_USDE";
-    const ALLOWLISTED_MAINNET_ESUIUSDE_RECEIPT: vector<u8> = b"0xc360f622a9e77bb774061c44c11915e3cfc4242488cd668652dbff39cf0cdd58::esuiusde::ESUIUSDE";
     
     // ----------------------------------------------------------
     // Local constants from core
@@ -51,9 +47,6 @@ module njangi::njangi_custody {
         created_at: u64,
         locked_until: Option<u64>,
         is_active: bool,
-        daily_withdrawal_limit: u64,  // Maximum withdrawal per day
-        last_withdrawal_time: u64,    // Timestamp of last withdrawal
-        daily_withdrawal_total: u64,  // Running total of withdrawals for the day
         transaction_history: vector<CustodyTransaction>, // History of transactions
     }
     
@@ -151,9 +144,6 @@ module njangi::njangi_custody {
             created_at: timestamp,
             locked_until: option::none(),
             is_active: true,
-            daily_withdrawal_limit: core::to_decimals(10000),
-            last_withdrawal_time: 0,
-            daily_withdrawal_total: 0,
             transaction_history: vector::empty(),
         };
         
@@ -236,117 +226,12 @@ module njangi::njangi_custody {
     }
     
     // ----------------------------------------------------------
-    // Deposit to custody wallet
+    // Compliance note: the public `deposit`, `withdraw`, `lock_wallet`,
+    // `unlock_wallet`, and `withdraw_from_dynamic_fields` admin levers were
+    // removed in the non-custodial Phase 1 cleanup. Contributions flow
+    // through njangi_payments, payouts use the recipient-pull `claim_payout`,
+    // and refunds use the member-initiated recovery helpers below.
     // ----------------------------------------------------------
-    public fun deposit(
-        wallet: &mut CustodyWallet,
-        payment: Coin<SUI>,
-        ctx: &mut TxContext
-    ) {
-        let sender = tx_context::sender(ctx);
-        let amount = coin::value(&payment);
-        
-        // Wallet must be active
-        assert!(wallet.is_active, EWalletNotActive);
-        
-        // Check if sender is admin or authorized depositor
-        assert!(sender == wallet.admin || is_authorized_depositor(wallet.circle_id, sender), ENotWalletOwner);
-        
-        // Add to wallet balance
-        balance::join(&mut wallet.balance, coin::into_balance(payment));
-        
-        // Add transaction record to history
-        let txn = create_transaction(
-            core::custody_op_deposit(),
-            sender,
-            amount,
-            tx_context::epoch_timestamp_ms(ctx)
-        );
-        vector::push_back(&mut wallet.transaction_history, txn);
-        
-        // Emit deposit event
-        event::emit(CustodyDeposited {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            member: sender,
-            amount,
-            operation_type: core::custody_op_deposit(),
-        });
-    }
-    
-    // Helper to check if sender is authorized to deposit
-    fun is_authorized_depositor(_circle_id: ID, _sender: address): bool {
-        // In a production implementation, this would check if sender is a member of the circle
-        // For now, we'll just return true to simplify
-        true
-    }
-    
-    // ----------------------------------------------------------
-    // Withdraw from custody wallet
-    // ----------------------------------------------------------
-    public fun withdraw(
-        wallet: &mut CustodyWallet,
-        amount: u64,
-        ctx: &mut TxContext
-    ): Coin<SUI> {
-        let sender = tx_context::sender(ctx);
-        let current_time = tx_context::epoch_timestamp_ms(ctx);
-        
-        // Only admin can withdraw
-        assert!(sender == wallet.admin, ENotWalletOwner);
-        
-        // Wallet must be active
-        assert!(wallet.is_active, EWalletNotActive);
-        
-        // Check if wallet is time-locked
-        if (option::is_some(&wallet.locked_until)) {
-            let lock_time = *option::borrow(&wallet.locked_until);
-            assert!(current_time >= lock_time, EFundsTimeLocked);
-        };
-        
-        // Check sufficient balance
-        assert!(balance::value(&wallet.balance) >= amount, 12); // EInsufficientBalance
-        
-        // Check daily withdrawal limit
-        let is_new_day = current_time > wallet.last_withdrawal_time + core::ms_per_day();
-        
-        if (is_new_day) {
-            // Reset daily total if it's a new day
-            wallet.daily_withdrawal_total = amount;
-        } else {
-            // Add to daily total and check limit
-            let new_daily_total = wallet.daily_withdrawal_total + amount;
-            assert!(new_daily_total <= wallet.daily_withdrawal_limit, EExceedsWithdrawalLimit);
-            wallet.daily_withdrawal_total = new_daily_total;
-        };
-        
-        // Update last withdrawal time
-        wallet.last_withdrawal_time = current_time;
-        
-        // Process withdrawal
-        let withdrawal_balance = balance::split(&mut wallet.balance, amount);
-        let withdrawal_coin = coin::from_balance(withdrawal_balance, ctx);
-        
-        // Add transaction record to history
-        let txn = create_transaction(
-            core::custody_op_withdrawal(),
-            sender,
-            amount,
-            current_time
-        );
-        vector::push_back(&mut wallet.transaction_history, txn);
-        
-        // Emit withdrawal event
-        event::emit(CustodyWithdrawn {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            recipient: sender,
-            amount,
-            operation_type: core::custody_op_withdrawal(),
-        });
-        
-        withdrawal_coin
-    }
 
     public(package) fun withdraw_sui_for_recovery(
         wallet: &mut CustodyWallet,
@@ -378,36 +263,87 @@ module njangi::njangi_custody {
 
         withdrawal_coin
     }
-    
+
     // ----------------------------------------------------------
-    // Lock custody wallet until a specific time
+    // Package-internal payout helpers. Trust boundary: callers (njangi_payments,
+    // njangi_circles) verify recipient eligibility (rotation order, membership,
+    // refund amount). Custody just exposes the mechanism without admin discretion.
     // ----------------------------------------------------------
-    public fun lock_wallet(
+    public(package) fun release_sui_to_member(
         wallet: &mut CustodyWallet,
-        until_timestamp: u64,
+        amount: u64,
+        recipient: address,
+        clock: &Clock,
         ctx: &mut TxContext
-    ) {
-        let sender = tx_context::sender(ctx);
-        
-        // Only admin can lock the wallet
-        assert!(sender == wallet.admin, ENotWalletOwner);
-        
-        wallet.locked_until = option::some(until_timestamp);
+    ): Coin<SUI> {
+        let current_time = clock::timestamp_ms(clock);
+
+        assert_wallet_can_release_funds(wallet, amount, current_time);
+        let withdrawal_coin = withdraw_sui_from_all_storage(wallet, amount, ctx);
+
+        let txn = create_transaction(
+            core::custody_op_withdrawal(),
+            recipient,
+            amount,
+            current_time
+        );
+        vector::push_back(&mut wallet.transaction_history, txn);
+
+        event::emit(CustodyWithdrawn {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            recipient,
+            amount,
+            operation_type: core::custody_op_withdrawal(),
+        });
+
+        withdrawal_coin
     }
-    
-    // ----------------------------------------------------------
-    // Unlock custody wallet
-    // ----------------------------------------------------------
-    public fun unlock_wallet(
+
+    public(package) fun release_stablecoin_to_member<CoinType>(
         wallet: &mut CustodyWallet,
+        amount: u64,
+        recipient: address,
+        clock: &Clock,
         ctx: &mut TxContext
-    ) {
-        let sender = tx_context::sender(ctx);
-        
-        // Only admin can unlock the wallet
-        assert!(sender == wallet.admin, ENotWalletOwner);
-        
-        wallet.locked_until = option::none();
+    ): Coin<CoinType> {
+        let current_time = clock::timestamp_ms(clock);
+
+        assert_wallet_can_release_funds(wallet, amount, current_time);
+
+        let previous_balance = get_stablecoin_balance<CoinType>(wallet);
+        assert!(previous_balance >= amount, 12);
+
+        let coin_to_send = withdraw_coin_from_storage<CoinType>(wallet, amount, ctx);
+        let new_balance = get_stablecoin_balance<CoinType>(wallet);
+        let coin_type_str = balance_field_name<CoinType>();
+
+        let txn = create_transaction(
+            core::custody_op_withdrawal(),
+            recipient,
+            amount,
+            current_time
+        );
+        vector::push_back(&mut wallet.transaction_history, txn);
+
+        event::emit(CustodyWithdrawn {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            recipient,
+            amount,
+            operation_type: core::custody_op_withdrawal(),
+        });
+
+        event::emit(StablecoinHoldingUpdated {
+            circle_id: wallet.circle_id,
+            wallet_id: object::uid_to_inner(&wallet.id),
+            coin_type: coin_type_str,
+            previous_balance,
+            new_balance,
+            timestamp: current_time,
+        });
+
+        coin_to_send
     }
     
     // ----------------------------------------------------------
@@ -467,100 +403,10 @@ module njangi::njangi_custody {
     }
     
     // ----------------------------------------------------------
-    // Check if withdrawal amount is within limit
-    // ----------------------------------------------------------
-    public fun check_withdrawal_limit(wallet: &CustodyWallet, amount: u64): bool {
-        // Use the last withdrawal time as a reference instead of trying to get current time
-        // This is a workaround since tx_context::dummy() is not available
-        let current_time = if (wallet.last_withdrawal_time == 0) {
-            // If no withdrawals yet, use a default timestamp
-            1000000000000 // Some arbitrary future timestamp
-        } else {
-            // Otherwise, use last withdrawal time as reference
-            wallet.last_withdrawal_time
-        };
-        
-        let is_new_day = current_time > wallet.last_withdrawal_time + core::ms_per_day();
-        
-        if (is_new_day) {
-            amount <= wallet.daily_withdrawal_limit
-        } else {
-            wallet.daily_withdrawal_total + amount <= wallet.daily_withdrawal_limit
-        }
-    }
-    
-    // ----------------------------------------------------------
     // Get wallet admin
     // ----------------------------------------------------------
     public fun get_admin(wallet: &CustodyWallet): address {
         wallet.admin
-    }
-    
-    // ----------------------------------------------------------
-    // Withdraw SUI from dynamic fields
-    // ----------------------------------------------------------
-    public fun withdraw_from_dynamic_fields(
-        wallet: &mut CustodyWallet,
-        amount: u64,
-        ctx: &mut TxContext
-    ): Coin<SUI> {
-        let sender = tx_context::sender(ctx);
-        let current_time = tx_context::epoch_timestamp_ms(ctx);
-        
-        // Only admin can withdraw
-        assert!(sender == wallet.admin, ENotWalletOwner);
-        
-        // Wallet must be active
-        assert!(wallet.is_active, EWalletNotActive);
-        assert!(amount > 0, EInsufficientAmount);
-        
-        // Check if wallet is time-locked
-        if (option::is_some(&wallet.locked_until)) {
-            let lock_time = *option::borrow(&wallet.locked_until);
-            assert!(current_time >= lock_time, EFundsTimeLocked);
-        };
-        
-        // Get previous balance for events
-        let previous_balance = get_stablecoin_balance<SUI>(wallet);
-        assert!(previous_balance >= amount, 12); // EInsufficientBalance
-
-        // Withdraw using hybrid storage-aware logic.
-        let coin_to_send = withdraw_coin_from_storage<SUI>(wallet, amount, ctx);
-        
-        // Get new balance for events
-        let new_balance = get_stablecoin_balance<SUI>(wallet);
-        
-        // Add transaction record to history
-        let txn = create_transaction(
-            core::custody_op_withdrawal(), 
-            sender, 
-            amount, 
-            current_time
-        );
-        vector::push_back(&mut wallet.transaction_history, txn);
-        
-        // Emit withdrawal event
-        event::emit(CustodyWithdrawn {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            recipient: sender,
-            amount,
-            operation_type: core::custody_op_withdrawal(),
-        });
-        
-        // Emit updated balance event for SUI coins
-        event::emit(CoinDeposited {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            coin_type: string::utf8(b"sui"),
-            amount: 0, // Amount withdrawn (not deposited but reusing event)
-            member: sender,
-            previous_balance,
-            new_balance,
-            timestamp: current_time,
-        });
-        
-        coin_to_send
     }
     
     // ----------------------------------------------------------
@@ -954,66 +800,6 @@ module njangi::njangi_custody {
         });
     }
     
-    // ----------------------------------------------------------
-    // Withdraw stablecoin from custody wallet
-    // ----------------------------------------------------------
-    public fun withdraw_stablecoin<CoinType>(
-        wallet: &mut CustodyWallet,
-        amount: u64,
-        _recipient: address,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ): Coin<CoinType> {
-        let sender = tx_context::sender(ctx);
-        let current_time = clock::timestamp_ms(clock);
-        
-        // Only admin can withdraw stablecoins
-        assert!(sender == wallet.admin, ENotWalletOwner);
-        
-        // Wallet must be active
-        assert!(wallet.is_active, EWalletNotActive);
-        assert!(amount > 0, EInsufficientAmount);
-        
-        // Check if wallet is time-locked
-        if (option::is_some(&wallet.locked_until)) {
-            let lock_time = *option::borrow(&wallet.locked_until);
-            assert!(current_time >= lock_time, EFundsTimeLocked);
-        };
-        
-        // Get previous balance for events
-        let previous_balance = get_stablecoin_balance<CoinType>(wallet);
-        assert!(previous_balance >= amount, 12); // EInsufficientBalance
-
-        // Withdraw using hybrid storage-aware logic.
-        let coin_to_send = withdraw_coin_from_storage<CoinType>(wallet, amount, ctx);
-        
-        // Get new balance for events
-        let new_balance = get_stablecoin_balance<CoinType>(wallet);
-        
-        // Add transaction record to history
-        let txn = create_transaction(
-            core::custody_op_withdrawal(), 
-            sender, 
-            amount, 
-            current_time
-        );
-        vector::push_back(&mut wallet.transaction_history, txn);
-        
-        // Emit updated balance event
-        let coin_type_str = string::utf8(b"stablecoin");
-        
-        event::emit(StablecoinHoldingUpdated {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            coin_type: coin_type_str,
-            previous_balance,
-            new_balance,
-            timestamp: current_time,
-        });
-        
-        coin_to_send
-    }
-
     public(package) fun withdraw_stablecoin_for_recovery<CoinType>(
         wallet: &mut CustodyWallet,
         amount: u64,
@@ -1060,51 +846,6 @@ module njangi::njangi_custody {
         coin_to_send
     }
 
-    // ----------------------------------------------------------
-    // Admin-only allowlisted redeposit path for Ember lifecycle assets
-    // ----------------------------------------------------------
-    public fun admin_redeposit_allowlisted_ember_asset<CoinType>(
-        wallet: &mut CustodyWallet,
-        redeposit_coin: Coin<CoinType>,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ) {
-        let sender = tx_context::sender(ctx);
-        let amount = coin::value(&redeposit_coin);
-        let current_time = clock::timestamp_ms(clock);
-
-        // Only admin can perform managed redeposit into custody.
-        assert!(sender == wallet.admin, ENotWalletOwner);
-        assert!(wallet.is_active, EWalletNotActive);
-        assert!(amount > 0, EInsufficientAmount);
-        assert!(is_allowlisted_ember_redeposit_type<CoinType>(), EUnsupportedToken);
-
-        let previous_balance = get_stablecoin_balance<CoinType>(wallet);
-        store_coin_balance<CoinType>(wallet, redeposit_coin);
-        let new_balance = get_stablecoin_balance<CoinType>(wallet);
-        let coin_type_ascii = type_name::into_string(type_name::get<CoinType>());
-        let coin_type_str = string::utf8(ascii::into_bytes(coin_type_ascii));
-
-        let txn = create_transaction(
-            core::custody_op_stablecoin_deposit(),
-            sender,
-            amount,
-            current_time
-        );
-        vector::push_back(&mut wallet.transaction_history, txn);
-
-        event::emit(CoinDeposited {
-            circle_id: wallet.circle_id,
-            wallet_id: object::uid_to_inner(&wallet.id),
-            coin_type: coin_type_str,
-            amount,
-            member: sender,
-            previous_balance,
-            new_balance,
-            timestamp: current_time,
-        });
-    }
-    
     // ----------------------------------------------------------
     // Get total stablecoin value in USD (simplified)
     // ----------------------------------------------------------
@@ -1301,13 +1042,6 @@ module njangi::njangi_custody {
         };
         
         false
-    }
-
-    fun is_allowlisted_ember_redeposit_type<CoinType>(): bool {
-        let coin_type = type_name::into_string(type_name::get<CoinType>());
-        let type_bytes = ascii::into_bytes(coin_type);
-        type_bytes == ALLOWLISTED_MAINNET_SUI_USDE ||
-            type_bytes == ALLOWLISTED_MAINNET_ESUIUSDE_RECEIPT
     }
 
     #[test]

@@ -11,7 +11,10 @@ import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
 import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink, ArrowRightLeft, ChevronDown, ChevronUp } from 'lucide-react';
 import MoonPayWrapper from '@/components/MoonPayWrapper';
+import TransakLauncher from '@/components/TransakLauncher';
 import CoinbaseOnrampLauncher from '@/components/CoinbaseOnrampLauncher';
+import NjangiRoundAlerts from '@/components/NjangiRoundAlerts';
+import type { NetworkType } from '@/services/whatsapp-registry-service';
 import {
   mapCurrencyCodeToIntent,
   mapIntentToMoonPayCurrency,
@@ -19,6 +22,8 @@ import {
   shouldUseCoinbaseProvider,
 } from '@/lib/onramp-provider';
 import { resolveCircleLifecycleState } from '@/lib/circle-chain';
+import { discoverMemberCircleIds } from '@/lib/membership-discovery';
+import { readObjects } from '@/lib/sui-read';
 import { cetusService } from '@/lib/cetus-service';
 import { getCircleConfigFieldsByObjectId, getCircleConfigObjectId } from '@/lib/circle-config';
 import { clearWalletBalanceCache, refreshWalletBalances } from '@/lib/wallet';
@@ -53,6 +58,11 @@ import {
   setCachedCircleObject,
   clearStaleCircleCache
 } from '../services/circle-service';
+import {
+  getRpcCandidateUrls,
+  getSuiRpcErrorMessage,
+  isRateLimitedSuiRpcError,
+} from '@/services/sui-rpc-failover';
 
 // Global type declaration for network config
 declare global {
@@ -106,23 +116,7 @@ const isEndpointBlacklisted = (url: string): boolean => {
 // Enhanced helper function to get RPC URL with blacklisting and rotation
 const getJsonRpcUrl = (fallbackIndex: number = 0, excludeBlacklisted: boolean = true): string => {
   const currentNetwork = getCurrentNetwork();
-
-  // Network-specific RPC URLs - prioritize official Sui RPC endpoints
-  const testnetUrls = [
-    'https://fullnode.testnet.sui.io:443', // Official Sui RPC first
-    'https://sui-testnet.nodeinfra.com',   // Alternative reliable endpoint
-    process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://sui-testnet-endpoint.blockvision.org', // BlockVision as fallback
-    'https://sui-testnet-endpoint.blockvision.org'
-  ];
-
-  const mainnetUrls = [
-    'https://fullnode.mainnet.sui.io:443', // Official Sui RPC first
-    'https://sui-mainnet.nodeinfra.com',   // Alternative reliable endpoint
-    process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://sui-mainnet-endpoint.blockvision.org', // BlockVision as fallback
-    'https://sui-mainnet-endpoint.blockvision.org'
-  ];
-
-  let rpcUrls = currentNetwork === 'mainnet' ? mainnetUrls : testnetUrls;
+  let rpcUrls = getRpcCandidateUrls(currentNetwork);
 
   // Filter out blacklisted endpoints if requested
   if (excludeBlacklisted) {
@@ -131,7 +125,7 @@ const getJsonRpcUrl = (fallbackIndex: number = 0, excludeBlacklisted: boolean = 
 
     if (rpcUrls.length === 0) {
       console.warn('⚠️ All RPC endpoints are blacklisted, using original list');
-      rpcUrls = currentNetwork === 'mainnet' ? mainnetUrls : testnetUrls;
+      rpcUrls = getRpcCandidateUrls(currentNetwork);
     } else if (rpcUrls.length < originalLength) {
       console.log(`📍 Filtered out ${originalLength - rpcUrls.length} blacklisted RPC endpoints`);
     }
@@ -150,29 +144,91 @@ const getJsonRpcUrl = (fallbackIndex: number = 0, excludeBlacklisted: boolean = 
       return getJsonRpcUrl(fallbackIndex + 1, excludeBlacklisted);
     }
     // Final fallback based on network
-    return currentNetwork === 'mainnet'
-      ? 'https://fullnode.mainnet.sui.io:443'
-      : 'https://fullnode.testnet.sui.io:443';
+    return getRpcCandidateUrls(currentNetwork)[0];
   }
 };
 
-// Helper function to create SuiClient with retries
-const createSuiClientWithRetry = (customRpcUrl?: string, retryCount = 0): SuiClient => {
-  const maxRetries = 3;
-  const rpcUrl = customRpcUrl || getJsonRpcUrl();
-  
+const isNetworkTransportError = (error: unknown): boolean => {
+  const errorMessage = getSuiRpcErrorMessage(error);
+  return (
+    errorMessage.includes('Failed to fetch') ||
+    errorMessage.includes('Network request failed') ||
+    errorMessage.includes('fetch failed')
+  );
+};
+
+const isObjectNotFoundError = (error: unknown): boolean => {
+  const errorMessage = getSuiRpcErrorMessage(error);
+  return (
+    errorMessage.includes('not found') ||
+    errorMessage.includes('does not exist') ||
+    errorMessage.includes('Object does not exist') ||
+    errorMessage.includes('404')
+  );
+};
+
+const isCrossPackageQueryError = (error: unknown): boolean => {
+  const errorMessage = getSuiRpcErrorMessage(error);
+  return (
+    errorMessage.includes('Could not find the referenced transaction events') ||
+    errorMessage.includes('referenced transaction') ||
+    (errorMessage.includes('TransactionDigest') && errorMessage.includes('not found'))
+  );
+};
+
+// Some transactions in a user's history (e.g. system txs, or txs whose effects
+// a given fullnode hasn't fully materialized) have empty effects. Asking that
+// node for balance/object changes then fails with an InvalidParams error. This
+// is a data condition, not a bug — degrade the affected page gracefully rather
+// than surfacing it as a runtime error overlay.
+const isEmptyEffectsError = (error: unknown): boolean => {
+  const errorMessage = getSuiRpcErrorMessage(error).toLowerCase();
+  return (
+    errorMessage.includes('unable to derive balance/object changes because effect is empty') ||
+    errorMessage.includes('effect is empty')
+  );
+};
+
+const isGracefulDashboardQueryError = (error: unknown): boolean => (
+  isRateLimitedSuiRpcError(error) ||
+  isNetworkTransportError(error) ||
+  isObjectNotFoundError(error) ||
+  isCrossPackageQueryError(error) ||
+  isEmptyEffectsError(error)
+);
+
+// Verify a receipt-discovered circle still reflects CURRENT membership. The
+// soulbound CircleMembership receipt is only a discovery hint: it persists
+// after an admin removes a member, so before trusting a receipt-only candidate
+// we confirm the user is the admin or is present in the circle's live members
+// table (removed members are deleted from that table). Bounded by the user's
+// own memberships — O(user), not O(protocol). Mirrors the MemberRemoved
+// filtering the event-discovery path already performs.
+const userIsCurrentMemberOrAdmin = async (
+  client: SuiClient,
+  circleId: string,
+  userAddress: string,
+): Promise<boolean> => {
   try {
-    console.log(`Creating SuiClient with URL: ${rpcUrl} (attempt ${retryCount + 1})`);
-    return getSuiClientFromPool(rpcUrl);
-  } catch (error) {
-    console.error(`Failed to create SuiClient (attempt ${retryCount + 1}):`, error);
-    
-    if (retryCount < maxRetries) {
-      console.log(`Retrying SuiClient creation...`);
-      return createSuiClientWithRetry(customRpcUrl, retryCount + 1);
-    }
-    
-    throw new Error(`Failed to create SuiClient after ${maxRetries} attempts: ${error}`);
+    const obj = await client.getObject({ id: circleId, options: { showContent: true } });
+    const content = obj.data?.content;
+    if (!content || !('fields' in content)) return false;
+    const fields = content.fields as {
+      admin?: string;
+      members?: { fields?: { id?: { id?: string } } };
+    };
+    if (fields.admin === userAddress) return true;
+    const membersTableId = fields.members?.fields?.id?.id;
+    if (!membersTableId) return false;
+    const memberField = await client.getDynamicFieldObject({
+      parentId: membersTableId,
+      name: { type: 'address', value: userAddress },
+    });
+    return Boolean(memberField.data?.content);
+  } catch {
+    // On a transient read failure, fail closed (don't surface an unverified
+    // circle). The event path / next refresh will pick it up.
+    return false;
   }
 };
 
@@ -257,9 +313,7 @@ class RateLimitedRequestQueue {
         request.resolve(result);
       } catch (error) {
         // Check if this is a 429 error and trigger global pause
-        if (error instanceof Error &&
-            (error.message.includes('429') || error.message.includes('Too Many Requests') ||
-             error.message.includes('rate limit'))) {
+        if (isRateLimitedSuiRpcError(error)) {
           this.triggerGlobalPause();
         }
 
@@ -328,6 +382,7 @@ const retryApiCall = async (
   gracefulFailure: boolean = false // If true, return null instead of throwing for expected errors
 ): Promise<any> => {
   let lastError: Error | null = null;
+  let lastExpectedHandledError = false;
   let rpcRotationAttempted = false;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -343,25 +398,23 @@ const retryApiCall = async (
       return result;
     } catch (error) {
       lastError = error as Error;
-      console.error(`${operationName} failed (attempt ${attempt + 1}):`, error);
+      const errorMessage = getSuiRpcErrorMessage(error);
 
       // Enhanced error categorization with 429 detection and multi-package support
-      const isRateLimited = error instanceof Error &&
-        (error.message.includes('429') || error.message.includes('Too Many Requests') ||
-         error.message.includes('rate limit'));
+      const isRateLimited = isRateLimitedSuiRpcError(error);
+      const isNetworkError = isNetworkTransportError(error);
+      const isObjectNotFound = isObjectNotFoundError(error);
+      const isCrossPackageError = isCrossPackageQueryError(error);
+      const isEmptyEffects = isEmptyEffectsError(error);
+      const isExpectedHandledError =
+        gracefulFailure || isRateLimited || isNetworkError || isObjectNotFound || isCrossPackageError || isEmptyEffects;
+      lastExpectedHandledError = isExpectedHandledError;
 
-      const isNetworkError = error instanceof TypeError &&
-        (error.message.includes('Failed to fetch') || error.message.includes('Network request failed'));
-
-      const isObjectNotFound = error instanceof Error &&
-        (error.message.includes('not found') || error.message.includes('does not exist') ||
-         error.message.includes('Object does not exist') || error.message.includes('404'));
-
-      // Multi-package specific error: transaction events from different package deployment
-      const isCrossPackageError = error instanceof Error &&
-        (error.message.includes('Could not find the referenced transaction events') ||
-         error.message.includes('referenced transaction') ||
-         error.message.includes('TransactionDigest') && error.message.includes('not found'));
+      if (isExpectedHandledError) {
+        console.warn(`${operationName} failed (attempt ${attempt + 1}): ${errorMessage}`);
+      } else {
+        console.error(`${operationName} failed (attempt ${attempt + 1}):`, error);
+      }
 
       // Handle 429 errors with blacklisting and RPC rotation
       if (isRateLimited) {
@@ -415,7 +468,11 @@ const retryApiCall = async (
         console.log(`Retrying ${operationName} in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       } else if (attempt === maxRetries - 1) {
-        console.error(`${operationName} failed after ${maxRetries} attempts`);
+        if (lastExpectedHandledError) {
+          console.warn(`${operationName} failed after ${maxRetries} attempts`);
+        } else {
+          console.error(`${operationName} failed after ${maxRetries} attempts`);
+        }
         break;
       } else {
         // Non-retryable error, don't retry
@@ -427,13 +484,9 @@ const retryApiCall = async (
 
   // Handle graceful failure mode for cross-package queries
   if (gracefulFailure && lastError) {
-    const errorMsg = lastError.message || '';
-
-    // These are expected errors for cross-package/cross-network queries
-    if (errorMsg.includes('Failed to fetch') ||
-        errorMsg.includes('Network request failed') ||
-        errorMsg.includes('not found') ||
-        errorMsg.includes('does not exist')) {
+    // These are expected errors for cross-package/cross-network queries and
+    // supplementary lookups that should not break the whole dashboard load.
+    if (isGracefulDashboardQueryError(lastError)) {
       console.log(`${operationName} - Graceful failure: returning empty result for expected cross-package error`);
       return { data: [] }; // Return empty result instead of throwing
     }
@@ -484,12 +537,12 @@ interface MemberJoinedEvent {
   circle_id: string;
   member: string;
   position?: number;
-  member_status: number;                  // Member status (0=active, 1=pending, 2=suspended, 3=exited)
-  currency_type: string;                  // Currency code (e.g., "USD", "XAF", "NGN")
-  contribution_amount_local: string;      // Contribution amount in local currency
-  security_deposit_local: string;         // Security deposit in local currency
-  deposit_paid: boolean;                  // Whether the member has paid their deposit
-  joined_at: string;                      // Timestamp when member joined (as string from blockchain)
+  member_status?: number;                 // Optional on older deployments
+  currency_type?: string;                 // Currency code (e.g., "USD", "XAF", "NGN")
+  contribution_amount_local?: string;     // Contribution amount in local currency
+  security_deposit_local?: string;        // Security deposit in local currency
+  deposit_paid?: boolean;                 // Whether the member has paid their deposit
+  joined_at?: string;                     // Timestamp when member joined (as string from blockchain)
 }
 
 // MemberRemoved event interface - emitted when admin removes a member
@@ -509,6 +562,36 @@ const MEMBER_STATUS = {
   SUSPENDED: 2,
   EXITED: 3
 } as const;
+
+const isDiscoverableMemberEvent = (event: MemberJoinedEvent): boolean => (
+  event.member_status == null ||
+  event.member_status === MEMBER_STATUS.ACTIVE ||
+  event.member_status === MEMBER_STATUS.PENDING
+);
+
+const mergeDiscoveredCircleEvents = (primaryEvents: any[], supplementalEvents: any[]): any[] => {
+  const mergedEvents = new Map<string, any>();
+
+  const getEventKey = (event: any): string => {
+    const txDigest = event?.id?.txDigest;
+    const eventSeq = event?.id?.eventSeq;
+    if (txDigest && eventSeq != null) {
+      return `${txDigest}:${eventSeq}`;
+    }
+
+    const eventType = typeof event?.type === 'string' ? event.type : 'unknown';
+    const circleId = (event?.parsedJson as { circle_id?: string } | undefined)?.circle_id ?? 'unknown';
+    return `${eventType}:${circleId}:${event?.timestampMs ?? ''}`;
+  };
+
+  for (const event of [...primaryEvents, ...supplementalEvents]) {
+    mergedEvents.set(getEventKey(event), event);
+  }
+
+  return Array.from(mergedEvents.values()).sort(
+    (left, right) => Number(right?.timestampMs || 0) - Number(left?.timestampMs || 0),
+  );
+};
 
 interface CustodyDepositedEvent {
   circle_id: string;
@@ -807,22 +890,14 @@ const getTransactionHistoryLabel = (
     return 'Contribution';
   }
 
-  if (
-    functions.some(
-      (value) =>
-        value.endsWith('::admin_payout_security_deposit_sui') ||
-        value.endsWith('::admin_payout_security_deposit_stablecoin'),
-    ) ||
-    eventTypes.some((value) => value.includes('SecurityDepositReturned'))
-  ) {
+  if (eventTypes.some((value) => value.includes('SecurityDepositReturned'))) {
     return 'Deposit Return';
   }
 
   if (
     functions.some(
       (value) =>
-        value.endsWith('::admin_trigger_payout') ||
-        value.endsWith('::admin_trigger_usdc_payout') ||
+        value.endsWith('::trigger_payout') ||
         value.endsWith('::claim_payout'),
     )
   ) {
@@ -1537,6 +1612,9 @@ const isCoinbaseOnrampEnabled =
 const isMoonPayEnabled =
   (process.env.NEXT_PUBLIC_MOONPAY_ENABLED ?? 'false').toLowerCase() ===
   'true';
+const isTransakEnabled =
+  (process.env.NEXT_PUBLIC_TRANSAK_ENABLED ?? 'false').toLowerCase() ===
+  'true';
 const shouldAutoOpenMoonPayFallback =
   (process.env.NEXT_PUBLIC_ONRAMP_AUTO_MOONPAY_FALLBACK ?? 'false').toLowerCase() ===
   'true';
@@ -2087,15 +2165,9 @@ export default function Dashboard() {
 
     const activeNetwork = getCurrentNetwork();
     const activeNetworkConfig = getCurrentNetworkConfig();
-    const officialRpcUrl = activeNetwork === 'mainnet'
-      ? 'https://fullnode.mainnet.sui.io:443'
-      : 'https://fullnode.testnet.sui.io:443';
-
     const rpcCandidates = Array.from(new Set([
       activeNetworkConfig.rpcUrl,
-      getJsonRpcUrl(0, true),
-      getJsonRpcUrl(1, true),
-      officialRpcUrl,
+      ...getRpcCandidateUrls(activeNetwork),
     ].filter(Boolean)));
 
     let lastErrorMessage = 'Unknown error';
@@ -2824,6 +2896,12 @@ export default function Dashboard() {
 
           try {
             const adminResponse = await retryApiCall(
+              // NOTE: Sui JSON-RPC `queryEvents` takes a SINGLE filter — there
+              // is no AND-combinator to pair MoveEventType with Sender, so we
+              // can't server-side-scope this to the user here. Admin-circle
+              // discovery is instead handled scalably by getUserPackageIds via
+              // `queryTransactionBlocks({ filter: { FromAddress } })`, which IS
+              // server-side-filtered to the user's own transactions.
               () => client.queryEvents({
                 query: { MoveEventType: `${packageId}::njangi_circles::CircleCreated` },
                 limit: 1000,
@@ -2970,9 +3048,9 @@ export default function Dashboard() {
                     order: 'descending'
                   });
                 } catch (err) {
-                  // Immediately catch and suppress "Failed to fetch" for deleted packages
-                  const errorMsg = err instanceof Error ? err.message : String(err);
-                  if (errorMsg.includes('Failed to fetch')) {
+                  // Wallet event enrichment is supplementary, so expected RPC/network
+                  // failures should degrade to empty results instead of surfacing.
+                  if (isGracefulDashboardQueryError(err)) {
                     return { data: [] }; // Return empty result for deleted packages
                   }
                   throw err; // Re-throw other errors
@@ -2987,8 +3065,8 @@ export default function Dashboard() {
             );
           } catch (queryError) {
             // Expected for packages not on current network or deleted circles
-            const errorMsg = queryError instanceof Error ? queryError.message : String(queryError);
-            if (errorMsg.includes('Failed to fetch') || errorMsg.includes('not found')) {
+            const errorMsg = getSuiRpcErrorMessage(queryError);
+            if (isGracefulDashboardQueryError(queryError)) {
               console.log(`💰 Package ${packageId} not accessible, skipping wallet events...`);
             } else {
               console.warn(`💰 Wallet events query failed for ${packageId}:`, errorMsg);
@@ -3013,8 +3091,8 @@ export default function Dashboard() {
           }
         } catch (error) {
           // Final catch-all - handle deleted packages gracefully
-          const errorMsg = error instanceof Error ? error.message : String(error);
-          if (errorMsg.includes('Failed to fetch')) {
+          const errorMsg = getSuiRpcErrorMessage(error);
+          if (isGracefulDashboardQueryError(error)) {
             console.log(`💰 Package ${packageId} deleted or not available (likely from package upgrade)`);
           } else {
             console.warn(`💰 Unexpected error for package ${packageId}:`, errorMsg.substring(0, 100));
@@ -3027,12 +3105,12 @@ export default function Dashboard() {
         return allRelevantWalletEvents;
 
       } catch (error) {
-        console.error('Error in multi-package wallet events query:', error);
+        console.warn('Wallet event enrichment failed, continuing without it:', error);
         return [];
       }
     } catch (outerError) {
       // Absolute final safety net - ensure function never throws
-      console.error('CRITICAL: Unhandled error in queryWalletEventsForCircles:', outerError);
+      console.warn('Wallet event enrichment hit an unexpected error, continuing without it:', outerError);
       return [];
     }
   }, []);
@@ -3087,14 +3165,9 @@ export default function Dashboard() {
 
     const currentHistoryNetwork = network === 'mainnet' ? 'mainnet' : 'testnet';
     const activeNetworkConfig = getCurrentNetworkConfig();
-    const officialRpcUrl = currentHistoryNetwork === 'mainnet'
-      ? 'https://fullnode.mainnet.sui.io:443'
-      : 'https://fullnode.testnet.sui.io:443';
     const rpcCandidates = Array.from(new Set([
-      officialRpcUrl,
       getCurrentRpcUrl(),
-      getJsonRpcUrl(0, true),
-      getJsonRpcUrl(1, true),
+      ...getRpcCandidateUrls(currentHistoryNetwork),
     ].filter(Boolean)));
     
     setIsLoadingHistory(true);
@@ -3237,29 +3310,34 @@ export default function Dashboard() {
       // we can directly process the events without additional function checking
       if (tx.events && tx.events.length > 0) {
         for (const event of tx.events) {
+          const eventWithTimestamp = {
+            ...event,
+            timestampMs: event.timestampMs ?? tx.timestampMs,
+          };
+
           // Parse event types and filter for relevant ones
           if (event.type && event.parsedJson) {
             if (event.type.includes('CircleCreated')) {
               const eventData = event.parsedJson as CircleCreatedEvent;
               if (eventData.admin === userAddress) {
-                circleEvents.push(event);
+                circleEvents.push(eventWithTimestamp);
               }
             } else if (event.type.includes('MemberJoined')) {
               const eventData = event.parsedJson as MemberJoinedEvent;
               if (eventData.member === userAddress) {
-                memberEvents.push(event);
+                memberEvents.push(eventWithTimestamp);
               }
             } else if (event.type.includes('CustodyDeposited')) {
               const eventData = event.parsedJson as CustodyDepositedEvent;
               if (eventData.member === userAddress) {
-                custodyDepositedEvents.push(event);
+                custodyDepositedEvents.push(eventWithTimestamp);
               }
             } else if (event.type.includes('CircleActivated')) {
               // CircleActivated events are relevant for all users to know activation status
-              activationEvents.push(event);
+              activationEvents.push(eventWithTimestamp);
             } else if (event.type.includes('CustodyWalletCreated')) {
               // Wallet creation events are useful for mapping circle IDs to wallet IDs
-              walletEvents.push(event);
+              walletEvents.push(eventWithTimestamp);
             }
           }
         }
@@ -3276,6 +3354,61 @@ export default function Dashboard() {
       walletEvents
     };
   }, []);
+
+  const queryUserCircleEventsFromTransactions = useCallback(async (
+    client: SuiClient,
+    userAddress: string
+  ): Promise<any[]> => {
+    const relevantTransactions: any[] = [];
+    let cursor: string | undefined;
+    let pageCount = 0;
+    let hasNextPage = true;
+    const maxPages = 10;
+
+    while (hasNextPage && pageCount < maxPages) {
+      const response = await retryApiCall(
+        () => client.queryTransactionBlocks({
+          filter: { FromAddress: userAddress },
+          cursor,
+          limit: 1000,
+          order: 'descending',
+          options: { showEvents: true }
+        }),
+        2,
+        1000,
+        `queryUserCircleTransactions page ${pageCount + 1}`,
+        3,
+        undefined,
+        true
+      );
+
+      const transactions = response?.data ?? [];
+      relevantTransactions.push(
+        ...transactions.filter((tx: any) =>
+          Array.isArray(tx?.events) &&
+          tx.events.some((event: any) =>
+            typeof event?.type === 'string' &&
+            event.type.includes('::njangi_circles::')
+          )
+        )
+      );
+
+      pageCount += 1;
+      hasNextPage = Boolean(response?.hasNextPage);
+      cursor = response?.nextCursor ?? undefined;
+    }
+
+    if (hasNextPage) {
+      console.warn(`Stopped transaction-based circle discovery after ${maxPages} pages for ${userAddress}`);
+    }
+
+    const { circleEvents, memberEvents } = await extractCircleEventsFromTransactions(
+      relevantTransactions,
+      userAddress,
+    );
+
+    return mergeDiscoveredCircleEvents(circleEvents, memberEvents);
+  }, [extractCircleEventsFromTransactions]);
   // Helper function to get all user addresses (current implementation returns single address)
   // TODO: Extend this to support multiple addresses per user across different OAuth providers
   const getAllUserAddresses = useCallback(async (): Promise<string[]> => {
@@ -3303,11 +3436,6 @@ export default function Dashboard() {
       return;
     }
 
-    // FORCE CLEAR ALL CACHE FOR DEBUGGING
-    console.log('🔍 DEBUG: Force clearing all cache for debugging...');
-    clearUserCache(userAddress);
-    forceRefresh = true;
-    
     const cacheKey = getCacheKey(userAddress, 'circles');
     const isInitialLoadWithCache = circles.length > 0;
     const cacheStale = isCacheStale(cacheKey, CACHE_CONFIG.CIRCLES_TTL);
@@ -3357,13 +3485,11 @@ export default function Dashboard() {
       }
       
       // Use official Sui RPC for circle fetching to avoid rate limits
-      const officialRpcUrl = currentNetwork === 'mainnet'
-        ? 'https://fullnode.mainnet.sui.io:443'
-        : 'https://fullnode.testnet.sui.io:443';
-      console.log('🌍 fetchUserCircles: Using official Sui RPC:', officialRpcUrl);
+      const rpcCandidates = getRpcCandidateUrls(currentNetwork);
+      console.log('🌍 fetchUserCircles: Using shared RPC candidates:', rpcCandidates);
 
-      // Create the Sui client with official RPC (no retry wrapper needed for simple operations)
-      const client = getSuiClientFromPool(officialRpcUrl);
+      // Use the first shared candidate and let the pooled client transport fail over.
+      const client = getSuiClientFromPool(rpcCandidates[0]);
       
       // Get all user addresses for comprehensive circle fetching
       const allUserAddresses = await getAllUserAddresses();
@@ -3382,13 +3508,32 @@ export default function Dashboard() {
       };
       
       try {
-        // Use cache for initial load if available
+        // The two discovery sources (event-based circle scan + the user's own
+        // transaction-derived events) are independent, so run them concurrently
+        // instead of one-after-the-other. Both are cached via cachedApiCall.
         const initialCacheKey = getCacheKey(userAddress, 'initialCircles');
-        initialResults = await cachedApiCall(
-          initialCacheKey,
-          () => queryInitialUserCircles(client, userAddress, currentPackageId, INITIAL_LOAD_SIZE),
-          CACHE_CONFIG.CIRCLES_TTL / 2 // Shorter cache for initial load to keep it fresh
-        );
+        const transactionDiscoveryCacheKey = getCacheKey(userAddress, 'transactionCircleEvents');
+        const [initialResultsFromScan, transactionDiscoveredEvents] = await Promise.all([
+          cachedApiCall(
+            initialCacheKey,
+            () => queryInitialUserCircles(client, userAddress, currentPackageId, INITIAL_LOAD_SIZE),
+            CACHE_CONFIG.CIRCLES_TTL / 2, // Shorter cache for initial load to keep it fresh
+          ),
+          cachedApiCall(
+            transactionDiscoveryCacheKey,
+            () => queryUserCircleEventsFromTransactions(client, userAddress),
+            CACHE_CONFIG.CIRCLES_TTL / 2,
+          ),
+        ]);
+        initialResults = initialResultsFromScan;
+
+        if (transactionDiscoveredEvents.length > 0) {
+          initialResults = {
+            ...initialResults,
+            circles: mergeDiscoveredCircleEvents(initialResults.circles, transactionDiscoveredEvents),
+          };
+          console.log(`🧾 Supplemented initial discovery with ${transactionDiscoveredEvents.length} transaction-derived circle events`);
+        }
         
         console.log(`🚀 Fast initial load results:`, {
           circles: initialResults.circles.length,
@@ -3451,18 +3596,42 @@ export default function Dashboard() {
         return eventData.circle_id;
       }).filter(Boolean);
       
-      // Get wallet events only for the circles we found (much more efficient)
+      // Two independent wallet-id sources — targeted wallet events and the
+      // circles' dynamic fields — feed separate maps that are merged below, so
+      // fetch them concurrently instead of one-after-the-other. Both are
+      // best-effort: on failure the page still renders without wallet ids.
       let walletEvents: any[] = [];
+      let dynamicFieldsMap: Map<string, Array<Record<string, unknown>>> = new Map();
       if (initialCircleIds.length > 0) {
         setLoadingProgress({ stage: 'fetching_events', current: 2, total: 3, message: 'Loading wallet info...' });
-        try {
-          walletEvents = await queryWalletEventsForCircles(client, currentPackageId, initialCircleIds, userAddress);
-        } catch (error) {
-          console.error('Error fetching wallet events:', error);
-          // Continue without wallet events
-        }
+        const [walletEventsResult, dynamicFieldsResult] = await Promise.all([
+          queryWalletEventsForCircles(client, currentPackageId, initialCircleIds, userAddress).catch((error) => {
+            console.warn('Wallet event enrichment failed, continuing without it:', error);
+            return [] as any[];
+          }),
+          batchFetchDynamicFields(
+            initialCircleIds.slice(0, 20), // Limit to first 20 for initial load
+            client,
+            {
+              maxConcurrent: 2,
+              onProgress: (fetched, total) => {
+                setLoadingProgress({
+                  stage: 'fetching_metadata',
+                  current: fetched,
+                  total,
+                  message: `Loading wallet info: ${fetched}/${total}...`
+                });
+              }
+            }
+          ).catch((error) => {
+            console.warn('Dynamic-field enrichment failed, continuing without it:', error);
+            return new Map<string, Array<Record<string, unknown>>>();
+          }),
+        ]);
+        walletEvents = walletEventsResult;
+        dynamicFieldsMap = dynamicFieldsResult;
       }
-      
+
       // Create a map of circle IDs to wallet IDs (from targeted wallet events)
       const circleWalletMap = new Map<string, string>();
       for (const event of walletEvents) {
@@ -3474,49 +3643,43 @@ export default function Dashboard() {
         }
       }
       console.log('Circle to wallet ID mapping:', Object.fromEntries(circleWalletMap));
-      
-      // Batch fetch all dynamic fields at once (2 concurrent max for rate limiting)
-      const dynamicFieldsMap = await batchFetchDynamicFields(
-        initialCircleIds.slice(0, 20), // Limit to first 20 for initial load
-        client,
-        { 
-          maxConcurrent: 2,
-          onProgress: (fetched, total) => {
-            setLoadingProgress({
-              stage: 'fetching_metadata',
-              current: fetched,
-              total,
-              message: `Loading wallet info: ${fetched}/${total}...`
-            });
-          }
-        }
-      );
 
-      // Create wallet map from batched results
+      // Resolve wallet-id dynamic fields in ONE batched read: collect every
+      // matching field's object id, then fetch them all via readObjects
+      // (chunked multiGetObjects + failover + cache) instead of awaiting a
+      // getObject per field in a nested loop.
       const circleWalletMapFromDynamic = new Map<string, string>();
+      const walletFieldRefs: Array<{ circleId: string; objectId: string }> = [];
       for (const [circleId, fields] of dynamicFieldsMap.entries()) {
         for (const field of fields) {
           const fieldName = field?.name && typeof field.name === 'object' && 'type' in field.name ? field.name.type : '';
           const fieldType = field?.type ?? '';
           if ((fieldName as string)?.includes?.('vector<u8>') && (fieldType as string)?.includes?.('wallet_id')) {
             if (field.objectId) {
-              try {
-                const walletField = await client.getObject({
-                  id: field.objectId as string,
-                  options: { showContent: true }
-                });
-                const contentFields = walletField.data?.content && 
-                                      typeof walletField.data.content === 'object' && 
-                                      'fields' in walletField.data.content ? 
-                                      walletField.data.content.fields as { value?: string } : null;
-                if (contentFields?.value) {
-                  circleWalletMapFromDynamic.set(circleId, contentFields.value);
-                }
-              } catch (e) {
-                // Continue if wallet field fetch fails
-              }
+              walletFieldRefs.push({ circleId, objectId: field.objectId as string });
             }
           }
+        }
+      }
+      if (walletFieldRefs.length > 0) {
+        try {
+          const walletFieldObjects = await readObjects(
+            walletFieldRefs.map((ref) => ref.objectId),
+            { showContent: true },
+            { network: currentNetwork },
+          );
+          walletFieldRefs.forEach((ref, idx) => {
+            const content = walletFieldObjects[idx]?.data?.content;
+            const contentFields = content && typeof content === 'object' && 'fields' in content
+              ? (content.fields as { value?: string })
+              : null;
+            if (contentFields?.value) {
+              circleWalletMapFromDynamic.set(ref.circleId, contentFields.value);
+            }
+          });
+        } catch (e) {
+          // Enrichment is best-effort; continue without dynamic-field wallet ids.
+          console.warn('Batched wallet-field fetch failed, continuing without it:', e);
         }
       }
 
@@ -3624,8 +3787,7 @@ export default function Dashboard() {
             // Only track as member-only if:
             // 1. Not already tracked as admin (prevents duplicate tracking)
             // 2. User is ACTIVE or PENDING member (exclude EXITED/SUSPENDED)
-            const isActiveMember = parsedEvent.member_status === MEMBER_STATUS.ACTIVE || 
-                                   parsedEvent.member_status === MEMBER_STATUS.PENDING;
+            const isActiveMember = isDiscoverableMemberEvent(parsedEvent);
             
             if (!circleMetadata.has(parsedEvent.circle_id) && isActiveMember) {
               circleMetadata.set(parsedEvent.circle_id, { 
@@ -3639,6 +3801,44 @@ export default function Dashboard() {
         }
       }
       
+      // Scalable membership discovery (L3): owned soulbound CircleMembership
+      // receipts. getOwnedObjects is server-side filtered by owner+type — cost
+      // scales with the user's memberships, not the global MemberJoined stream
+      // (which can't be filtered by member address server-side). Additive: only
+      // surfaces circles the event scan missed.
+      //
+      // A receipt is a HINT, not proof of current membership: it's soulbound
+      // and survives a removal, so each candidate the event scan didn't already
+      // surface is VERIFIED against the circle's live members table before we
+      // trust it — the receipt path's equivalent of the event path's
+      // MemberRemoved filtering. Verification is O(the user's receipt circles).
+      try {
+        const receiptCircleIds = await discoverMemberCircleIds(userAddress, { network: currentNetwork });
+        const undiscovered = receiptCircleIds.filter((cid) => !allUserCircleIds.has(cid));
+        const verified = await Promise.all(
+          undiscovered.map(async (cid) =>
+            (await userIsCurrentMemberOrAdmin(client, cid, userAddress)) ? cid : null,
+          ),
+        );
+        let surfaced = 0;
+        for (const cid of verified) {
+          if (!cid) continue;
+          allUserCircleIds.add(cid);
+          if (!circleMetadata.has(cid)) {
+            // isAdmin is recomputed from the loaded object in processCircleObject
+            // and the safeCircleData spread now uses processedCircle.isAdmin, so
+            // this placeholder is never the displayed value.
+            circleMetadata.set(cid, { isAdmin: false, eventData: undefined });
+          }
+          surfaced += 1;
+        }
+        if (surfaced > 0) {
+          console.log(`🎟️ Membership receipts surfaced ${surfaced} verified circle(s) the event scan missed`);
+        }
+      } catch (membershipError) {
+        console.warn('Membership receipt discovery failed (non-fatal, falling back to event scan):', membershipError);
+      }
+
       console.log(`Found ${allUserCircleIds.size} unique circles for user:`, Array.from(allUserCircleIds));
 
       setLoadingProgress({ stage: 'validating_circles', current: 2, total: 4, message: `Processing ${allUserCircleIds.size} circles on ${getCurrentNetwork()}...` });
@@ -3652,7 +3852,11 @@ export default function Dashboard() {
       setLoadingProgress({ stage: 'processing_circles', current: 3, total: 4, message: `Processing ${circleIds.length} validated circles...` });
 
       console.log(`📦 OPTIMIZED: Batch fetching ${circleIds.length} circles using multiGetObjects...`);
-      const batchSize = 10; // Reduced from 50 to 10 for better reliability
+      // 50 is Sui's multiGetObjects cap — one round-trip covers up to 50
+      // circles. The failover transport (cooldown + RPC fallback) now handles
+      // the reliability concern that previously forced this down to 10, so most
+      // users load all their circles in a single batch with no inter-batch wait.
+      const batchSize = 50;
       const allProcessedCircles: Circle[] = [];
 
       for (let i = 0; i < circleIds.length; i += batchSize) {
@@ -3819,7 +4023,10 @@ export default function Dashboard() {
                   id: processedCircle?.id ?? '',
                   name: typeof processedCircle?.name === 'string' ? processedCircle.name : '',
                   admin: typeof processedCircle?.admin === 'string' ? processedCircle.admin : '',
-                  isAdmin: metadata.isAdmin, // Use the metadata to determine if user is admin
+                  // Use the value recomputed from the loaded object (admin === userAddress).
+                  // metadata.isAdmin is a placeholder (false) for receipt-only-discovered
+                  // circles, so trusting it here would mis-label a receipt-discovered admin.
+                  isAdmin: processedCircle?.isAdmin ?? metadata.isAdmin,
                   memberStatus: 'active' as const
                 } as Circle;
                 
@@ -3862,10 +4069,12 @@ export default function Dashboard() {
           }
         });
         
-        // Add delay between batches to avoid overwhelming RPC
+        // Light spacer between batches (only reached by users with >50 circles).
+        // The failover client already backs off on rate limits, so the previous
+        // fixed 1s wait was the dominant wall-clock cost for no added safety.
         if (i + batchSize < circleIds.length) {
           console.log('Waiting between batches...');
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, 200));
         }
       }
       
@@ -3985,7 +4194,7 @@ export default function Dashboard() {
       setLoading(false);
       setIsBackgroundRefreshing(false);
     }
-  }, [userAddress, isBackgroundRefreshing, extractCircleEventsFromTransactions, getAllUserAddresses]); // Updated dependencies
+  }, [userAddress, isBackgroundRefreshing, getAllUserAddresses, queryUserCircleEventsFromTransactions]); // Updated dependencies
 
   // Network switching function
   const switchNetwork = useCallback((newNetwork: 'testnet' | 'mainnet') => {
@@ -4140,10 +4349,7 @@ export default function Dashboard() {
     try {
       const currentPackageId = getCurrentPackageId();
       // Use official Sui RPC for loading more circles to avoid rate limits
-      const officialRpcUrl = getCurrentNetwork() === 'mainnet'
-        ? 'https://fullnode.mainnet.sui.io:443'
-        : 'https://fullnode.testnet.sui.io:443';
-      const client = getSuiClientFromPool(officialRpcUrl);
+      const client = getSuiClientFromPool(getRpcCandidateUrls(getCurrentNetwork())[0]);
 
       // Load more circles using cursors
       const moreResults = await queryMoreUserCircles(
@@ -6296,6 +6502,17 @@ export default function Dashboard() {
 
       <main className="mx-auto max-w-7xl px-4 pt-8 pb-[max(2rem,env(safe-area-inset-bottom))] sm:px-6 lg:px-8">
         <div className="space-y-8">
+          {userAddress ? (
+            <NjangiRoundAlerts
+              circles={circles.map((c) => ({
+                id: c.id,
+                name: c.name,
+                admin: c.admin,
+              }))}
+              userAddress={userAddress}
+              network={network as NetworkType}
+            />
+          ) : null}
           <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr),380px]">
             <section className={primarySurfaceClass}>
               <div className="p-6 sm:p-10">
@@ -8617,23 +8834,35 @@ export default function Dashboard() {
                     </p>
                   </div>
 
-                  {isMoonPayEnabled ? (
-                    <button
-                      type="button"
-                      onClick={handleMoonPayFallbackClick}
-                      className={secondaryActionClass}
-                    >
-                      Use MoonPay instead
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleMoonPayFallbackClick}
-                      className="inline-flex items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-800 transition hover:bg-amber-100"
-                    >
-                      MoonPay coming soon
-                    </button>
-                  )}
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    {isMoonPayEnabled ? (
+                      <button
+                        type="button"
+                        onClick={handleMoonPayFallbackClick}
+                        className={secondaryActionClass}
+                      >
+                        Use MoonPay instead
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleMoonPayFallbackClick}
+                        className="inline-flex items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-800 transition hover:bg-amber-100"
+                      >
+                        MoonPay coming soon
+                      </button>
+                    )}
+                    {isTransakEnabled ? (
+                      <TransakLauncher
+                        className="inline-flex"
+                        walletAddress={userAddress || ''}
+                        preferredAssetIntent={coinbaseAssetIntent === 'SUI' ? 'SUI' : 'USDC_ON_SUI'}
+                        fiatAmount={50}
+                        fiatCurrency="USD"
+                        buttonLabel="Use Transak"
+                      />
+                    ) : null}
+                  </div>
                 </div>
               </div>
             </div>

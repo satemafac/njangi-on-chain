@@ -63,8 +63,8 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
     originalId: '0x7bf5274804a6008ebfbd9bfe766defb7fd5aa5fe6777419c2b6531ec99120b55',
   },
   testnet: {
-    publishedAt: '0x0f60c64eda31d4e3456ae84b3edecdb8c9dbe525a5e3c0ab2cc9e4e7eb975967',
-    originalId: '0xb5a3be4da4107df9a64e7157898373e92e0a832e1cb2fe544ce87fd96ef23892',
+    publishedAt: '0xbd5ae9ea680fb6c4b43c89369b72bc4358ce3801fb0fdfb7776f1caf3795c634',
+    originalId: '0xc5aed33e4da2530d0f9b36a64d96d662b109ba2962bb6918bc3fa21be1622465',
   },
 };
 
@@ -135,7 +135,6 @@ export function getPackageLookupIds(args: {
   const normalizedPackageId = normalizePackageId(packageId);
   const normalizedCurrentPackageId = normalizePackageId(currentPackageId);
   const { publishedAt, originalId } = getPublishedPackageMetadata(network);
-
   const lookupIds = new Set<string>();
   const add = (value: string | null | undefined) => {
     const normalized = normalizePackageId(value);

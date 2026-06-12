@@ -96,6 +96,15 @@ requireValue('NEXT_PUBLIC_MAINNET_PACKAGE_ID', read('NEXT_PUBLIC_MAINNET_PACKAGE
 requireValue(`current ${currentNetwork} package ID`, currentPackageId);
 requireValue(`current ${currentNetwork} WhatsApp package ID`, currentWhatsAppPackageId);
 requireValue(`current ${currentNetwork} WhatsApp registry ID`, currentWhatsAppRegistryId);
+
+// Phase 12: post-publish ids written by scripts/bootstrap-package.mjs.
+// We only require them on the active network so testnet pilots don't
+// have to populate mainnet placeholders before they exist.
+const networkUpper = currentNetwork === 'mainnet' ? 'MAINNET' : 'TESTNET';
+const attestorCapKey = `NEXT_PUBLIC_${networkUpper}_NJANGI_ATTESTOR_CAP_ID`;
+const assetRegistryKey = `NEXT_PUBLIC_${networkUpper}_NJANGI_ASSET_REGISTRY_ID`;
+requireValue(attestorCapKey, read(attestorCapKey));
+requireValue(assetRegistryKey, read(assetRegistryKey));
 requireValue('NEXT_PUBLIC_ENOKI_TESTNET', read('NEXT_PUBLIC_ENOKI_TESTNET'));
 requireValue('NEXT_PUBLIC_ENOKI_MAINNET', read('NEXT_PUBLIC_ENOKI_MAINNET'));
 
@@ -112,6 +121,39 @@ for (const key of [
 
 if (read('NEXT_PUBLIC_FACEBOOK_CLIENT_SECRET')) {
   warnings.push('NEXT_PUBLIC_FACEBOOK_CLIENT_SECRET should not exist. Use a server-only variable if a secret is required.');
+}
+
+// Phase 9 compliance-gate invariants: when the UI gate is turned on, the
+// issuer pin + HMAC salt must both be configured. Otherwise the gated
+// contribute/finalize paths will either reject every caller (missing
+// issuer) or fail to hash case ids (missing salt).
+const complianceGateEnabled =
+  (read('NEXT_PUBLIC_COMPLIANCE_GATE_ENABLED') || 'false').toLowerCase() === 'true';
+if (complianceGateEnabled) {
+  if (!read('NEXT_PUBLIC_NJANGI_ATTESTATION_ISSUER')) {
+    errors.push(
+      'NEXT_PUBLIC_COMPLIANCE_GATE_ENABLED is true but NEXT_PUBLIC_NJANGI_ATTESTATION_ISSUER is empty. Gated contribute/collect will reject every caller.',
+    );
+  }
+  if (!read('COMPLIANCE_REF_HMAC_SALT')) {
+    errors.push(
+      'NEXT_PUBLIC_COMPLIANCE_GATE_ENABLED is true but COMPLIANCE_REF_HMAC_SALT is empty. The attestor console cannot hash case ids safely.',
+    );
+  }
+  if (!read('COMPLIANCE_ISSUANCE_SECRET') && !read('INTERNAL_NOTIFY_SECRET')) {
+    errors.push(
+      'NEXT_PUBLIC_COMPLIANCE_GATE_ENABLED is true but neither COMPLIANCE_ISSUANCE_SECRET nor INTERNAL_NOTIFY_SECRET is set. Ramp-partner webhooks cannot enqueue attestations.',
+    );
+  }
+}
+
+// If the ramp-attestation queue has a fallback to INTERNAL_NOTIFY_SECRET,
+// we should warn the operator when that secret is missing but the gate is
+// off, so no surprises when they flip the flag on.
+if (!complianceGateEnabled && !read('INTERNAL_NOTIFY_SECRET')) {
+  warnings.push(
+    'INTERNAL_NOTIFY_SECRET is unset. Required by the WhatsApp "your turn" notifier and the compliance attestor console.',
+  );
 }
 
 if (fs.existsSync(path.join(repoRoot, 'whatsapp-bot-backend', '.env.local'))) {

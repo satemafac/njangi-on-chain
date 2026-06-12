@@ -1357,7 +1357,11 @@ export class CircleLinkListenerService {
       try {
         const events = await this.suiClient.queryEvents({
           query: {
-            MoveEventType: `${packageId}::njangi_payments::SecurityDepositReturned`,
+            // Phase 2: event was relocated from njangi_payments to njangi_circles
+            // when admin_payout_security_deposit_* were removed in the Phase 1
+            // compliance redesign. Schema (circle_id, wallet_id, member, amount,
+            // coin_type, timestamp) is unchanged.
+            MoveEventType: `${packageId}::njangi_circles::SecurityDepositReturned`,
           },
           limit: 50,
           order: 'descending',

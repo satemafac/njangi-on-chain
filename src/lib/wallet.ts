@@ -1,4 +1,4 @@
-import { SuiClient } from '@mysten/sui/client';
+import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 
 export type WalletNetwork = 'testnet' | 'mainnet';
 
@@ -136,7 +136,10 @@ async function refreshCoinBalance(input: {
   }
 
   const rpcUrl = resolveRpcUrl(network, input.options?.rpcUrl);
-  const client = new SuiClient({ url: rpcUrl });
+  const client = getPooledSuiClient({
+    network,
+    rpcUrl,
+  });
   const balance = await client.getBalance({
     owner: walletAddress,
     coinType: input.coinType,

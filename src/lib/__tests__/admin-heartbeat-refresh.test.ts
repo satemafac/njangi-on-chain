@@ -54,7 +54,17 @@ const createStorage = (): Pick<Storage, 'getItem' | 'setItem'> => {
 
 const createConfigObject = (fields: Record<string, unknown>) => ({
   data: {
+    // Mock SuiObjectResponse shape — the fields the runtime actually reads
+    // are under `data.content.fields.value.fields`; the other required
+    // SuiObjectData keys are filled in with placeholders so the mock
+    // satisfies the full interface for TypeScript.
+    objectId: '0xmock-object',
+    version: '1',
+    digest: 'mock-digest',
     content: {
+      dataType: 'moveObject',
+      type: '0x1::circle_config::CircleConfig',
+      hasPublicTransfer: false,
       fields: {
         value: {
           fields,
@@ -73,9 +83,11 @@ describe('admin heartbeat refresh helpers', () => {
     const now = 1_710_000_000_000;
     const staleHeartbeat = now - ADMIN_LOGIN_HEARTBEAT_STALE_THRESHOLD_MS - 10_000;
     const freshHeartbeat = now - 5 * 60 * 1000;
-    const client: Pick<SuiClient, 'getDynamicFields' | 'getObject' | 'queryEvents'> = {
+    const client = {
       getDynamicFields: jest.fn(async ({ parentId }: { parentId: string }) => ({
         data: [{ objectId: `config-${parentId}`, objectType: '0x1::circle_config::CircleConfig' }],
+        nextCursor: null,
+        hasNextPage: false,
       })),
       getObject: jest.fn(async ({ id }: { id: string }) => {
         if (id === 'config-0xstale') {
@@ -139,7 +151,10 @@ describe('admin heartbeat refresh helpers', () => {
 
     const circles = await discoverStaleAdminHeartbeatCircles({
       userAddress: account.userAddr,
-      client,
+      // The mock only implements the three methods the helper calls;
+      // cast through `unknown` so TypeScript is happy without dragging
+      // the 50+ other SuiClient members into scope.
+      client: client as unknown as SuiClient,
       now,
     });
 
@@ -333,12 +348,18 @@ describe('admin heartbeat refresh helpers', () => {
   it('deduplicates concurrent auth-triggered refresh attempts for the same wallet', async () => {
     const now = 1_710_000_000_000;
     const storage = createStorage();
-    let resolveDiscovery: ((value: Array<{
-      circleId: string;
-      lastAdminHeartbeatAt: number;
-      autoReleaseTriggerTime: number | null;
-      recoveryState: number;
-    }>) => void) | null = null;
+    type DiscoveryResolver = (
+      value: Array<{
+        circleId: string;
+        lastAdminHeartbeatAt: number;
+        autoReleaseTriggerTime: number | null;
+        recoveryState: number;
+      }>,
+    ) => void;
+    // TypeScript narrows this to `never` via the async assignment chain
+    // if we start it at `null`; explicit union keeps the call signature
+    // reachable when we invoke it below.
+    let resolveDiscovery: DiscoveryResolver | undefined;
 
     const heartbeatClient = {
       batchHeartbeatAdminLiveness: jest.fn(async () => ({ digest: '0xdeadbeef' })),

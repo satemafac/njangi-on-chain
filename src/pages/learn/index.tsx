@@ -151,8 +151,8 @@ export default function LearnIndexPage() {
                 <div className="text-sm text-gray-600">Annual volume through informal savings systems</div>
               </div>
               <div>
-                <div className="text-3xl font-bold text-orange-600 mb-2">8%</div>
-                <div className="text-sm text-gray-600">Average yield potential with blockchain integration</div>
+                <div className="text-3xl font-bold text-orange-600 mb-2">100%</div>
+                <div className="text-sm text-gray-600">Non-custodial: no operator can move member funds</div>
               </div>
             </div>
           </div>
@@ -297,12 +297,12 @@ export default function LearnIndexPage() {
               </div>
 
               <div className="bg-white rounded-lg p-6 shadow-lg">
-                <h3 className="text-lg font-semibold text-gray-900 mb-3">DeFi Integration</h3>
+                <h3 className="text-lg font-semibold text-gray-900 mb-3">Partner-led Fiat Ramps</h3>
                 <ul className="space-y-2 text-sm text-gray-600">
-                  <li>• Yield generation strategies</li>
-                  <li>• Multi-currency support</li>
-                  <li>• Risk management protocols</li>
-                  <li>• Real-world implementation</li>
+                  <li>• Coinbase, MoonPay, Transak on/off-ramps</li>
+                  <li>• Multi-currency support (USD, EUR, XAF, NGN, KES…)</li>
+                  <li>• KYC and AML handled by licensed partners</li>
+                  <li>• Geo-aware provider selection</li>
                 </ul>
               </div>
             </div>
@@ -314,8 +314,8 @@ export default function LearnIndexPage() {
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-center">
             <h2 className="text-3xl font-bold mb-4">Ready to Apply What You&rsquo;ve Learned?</h2>
             <p className="text-xl text-indigo-100 mb-8 max-w-3xl mx-auto">
-              Join thousands of people worldwide who are using blockchain technology to enhance 
-              their traditional savings circles with security, transparency, and yield generation.
+              Join thousands of people worldwide who are using blockchain technology to enhance
+              their traditional savings circles with non-custodial security and full transparency.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link 

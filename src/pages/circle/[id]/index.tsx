@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../../../contexts/AuthContext';
-import { SuiClient } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
 import {
   ArrowLeft,
@@ -35,7 +34,9 @@ import {
 import { getRecoveryProposalUiState } from '@/lib/recovery-ui';
 import { resolveStablecoinMetadata } from '@/lib/stablecoin-metadata';
 import { priceService } from '../../../services/price-service';
-import { getCirclePackageId } from '../../../services/circle-service';
+import { getCirclePackageId, getSuiClientFromPool } from '../../../services/circle-service';
+import { readObject, queryEventsCached, invalidateObject, invalidateSuiRead } from '@/lib/sui-read';
+import { logSuiReadError } from '@/services/sui-rpc-failover';
 import { ZkLoginClient, ZkLoginError } from '../../../services/zkLoginClient';
 import { getCurrentNetwork, getCurrentRpcUrl } from '../../../services/network-config';
 
@@ -173,14 +174,11 @@ export default function CircleDetails() {
     if (!id || !userAddress) return false;
     
     try {
-      const client = new SuiClient({ url: getCurrentRpcUrl() });
+      const client = getSuiClientFromPool(getCurrentRpcUrl());
       const determinedPackageId = await getCirclePackageId(id as string, userAddress);
       
       // First check if user is the admin
-      const objectData = await client.getObject({
-        id: id as string,
-        options: { showContent: true }
-      });
+      const objectData = await readObject(id as string, { showContent: true });
       
       if (objectData.data?.content && 'fields' in objectData.data.content) {
         const fields = objectData.data.content.fields as Record<string, SuiFieldValue>;
@@ -212,7 +210,7 @@ export default function CircleDetails() {
       }
       
       // Check if user ever joined this circle and get their join events
-      const joinEvents = await client.queryEvents({
+      const joinEvents = await queryEventsCached({
         query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
         limit: 100
       });
@@ -233,7 +231,7 @@ export default function CircleDetails() {
       console.log(`[Membership] User's latest join timestamp: ${new Date(latestJoinTimestamp).toISOString()}`);
       
       // Check for MemberRemoved events to see if user was removed
-      const removedEvents = await client.queryEvents({
+      const removedEvents = await queryEventsCached({
         query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberRemoved` },
         limit: 100
       });
@@ -264,7 +262,7 @@ export default function CircleDetails() {
       return true;
       
     } catch (error) {
-      console.error('[Membership] Error verifying membership:', error);
+      logSuiReadError('[Membership] Error verifying membership:', error);
       return null;
     }
   };
@@ -310,8 +308,13 @@ export default function CircleDetails() {
   const fetchCircleDetails = async () => {
     if (!id || !userAddress) return;
     console.log('Details - Fetching circle details:', id);
-    const client = new SuiClient({ url: getCurrentRpcUrl() });
-    
+    const client = getSuiClientFromPool(getCurrentRpcUrl());
+
+    // Central refetch (also called after recovery votes/actions): drop cached
+    // reads for this circle so we reflect the latest chain state.
+    invalidateObject(id as string);
+    invalidateSuiRead('events:');
+
     try {
       setLoading(true);
       
@@ -320,10 +323,7 @@ export default function CircleDetails() {
       console.log('Details - Using package ID:', determinedPackageId);
       setCirclePackageId(determinedPackageId);
       // Get object data
-      const objectData = await client.getObject({
-        id: id as string,
-        options: { showContent: true, showType: true }
-      });
+      const objectData = await readObject(id as string, { showContent: true, showType: true });
       
       console.log('Details - Circle object data:', objectData);
       if (!objectData.data?.content || !('fields' in objectData.data.content)) {
@@ -350,7 +350,7 @@ export default function CircleDetails() {
       let circleCreationEventData: CircleCreatedEvent | undefined;
 
         try {
-        const circleEvents = await client.queryEvents({
+        const circleEvents = await queryEventsCached({
           query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleCreated` },
             limit: 50
           });
@@ -386,7 +386,7 @@ export default function CircleDetails() {
           }
         }
         } catch (error) {
-        console.error('Details - Error fetching transaction data:', error);
+        logSuiReadError('Details - Error fetching transaction data:', error);
         }
         
       // --- Process Extracted Data --- 
@@ -453,7 +453,7 @@ export default function CircleDetails() {
           setRecoveryStatus(null);
         }
       } catch (error) {
-        console.error('Details - Error fetching CircleConfig fields:', error);
+        logSuiReadError('Details - Error fetching CircleConfig fields:', error);
         setRecoveryStatus(null);
       }
       console.log('Details - Config after Dynamic Fields:', configValues);
@@ -485,7 +485,7 @@ export default function CircleDetails() {
       // Check activation status
       let isActive = false;
       try {
-        const activationEvents = await client.queryEvents({
+        const activationEvents = await queryEventsCached({
           query: { MoveEventType: `${determinedPackageId}::njangi_circles::CircleActivated` },
           limit: 50
         });
@@ -494,7 +494,7 @@ export default function CircleDetails() {
         );
         console.log('Details - Circle activation status:', isActive);
       } catch (error) {
-        console.error('Details - Error checking activation:', error);
+        logSuiReadError('Details - Error checking activation:', error);
       }
 
       // Calculate member count
@@ -502,7 +502,7 @@ export default function CircleDetails() {
       const memberAddresses = new Set<string>();
       if (typeof fields.admin === 'string') memberAddresses.add(fields.admin);
       try {
-        const memberEvents = await client.queryEvents({
+        const memberEvents = await queryEventsCached({
           query: { MoveEventType: `${determinedPackageId}::njangi_circles::MemberJoined` },
           limit: 1000
         });
@@ -516,14 +516,14 @@ export default function CircleDetails() {
           actualMemberCount = memberAddresses.size;
         console.log(`Details - Calculated member count: ${actualMemberCount}`);
         } catch (error) {
-        console.error('Details - Error calculating member count:', error);
+        logSuiReadError('Details - Error calculating member count:', error);
         actualMemberCount = Number(fields.current_members || 1);
         }
 
       let custodyWalletId: string | null = null;
       let custodyStablecoinCoinType: string | undefined;
       try {
-        const custodyWalletEvents = await client.queryEvents({
+        const custodyWalletEvents = await queryEventsCached({
           query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyWalletCreated` },
           limit: 50,
         });
@@ -533,10 +533,7 @@ export default function CircleDetails() {
         custodyWalletId = (custodyEvent?.parsedJson as { wallet_id?: string })?.wallet_id || null;
 
         if (custodyWalletId) {
-          const walletData = await client.getObject({
-            id: custodyWalletId,
-            options: { showContent: true },
-          });
+          const walletData = await readObject(custodyWalletId, { showContent: true });
 
           if (walletData.data?.content && 'fields' in walletData.data.content) {
             const walletFields = walletData.data.content.fields as Record<string, SuiFieldValue>;
@@ -552,7 +549,7 @@ export default function CircleDetails() {
           }
         }
       } catch (error) {
-        console.error('Details - Error fetching custody wallet info:', error);
+        logSuiReadError('Details - Error fetching custody wallet info:', error);
       }
       
       // Set circle state
@@ -580,8 +577,11 @@ export default function CircleDetails() {
         });
 
     } catch (error) {
-      console.error('Details - Error fetching circle details:', error);
-      toast.error('Error loading circle details');
+      // Transient cooldowns log quietly and skip the toast (self-heals on
+      // refresh); only genuine failures surface to the user.
+      if (!logSuiReadError('Details - Error fetching circle details:', error)) {
+        toast.error('Error loading circle details');
+      }
     } finally {
       setLoading(false);
     }
@@ -592,12 +592,12 @@ export default function CircleDetails() {
 
     setLoadingRecoveryStatus(true);
     try {
-      const client = new SuiClient({ url: getCurrentRpcUrl() });
+      const client = getSuiClientFromPool(getCurrentRpcUrl());
       const dynamicFieldsResult = await client.getDynamicFields({ parentId: id as string });
       const configFields = await getCircleConfigFieldsFromDynamicFields(client, dynamicFieldsResult.data);
       setRecoveryStatus(parseRecoveryStatus(configFields));
     } catch (error) {
-      console.error('Details - Error refreshing recovery status:', error);
+      logSuiReadError('Details - Error refreshing recovery status:', error);
     } finally {
       setLoadingRecoveryStatus(false);
     }
@@ -627,7 +627,7 @@ export default function CircleDetails() {
         setCirclePackageId(resolvedPackageId);
       }
 
-      const client = new SuiClient({ url: getCurrentRpcUrl() });
+      const client = getSuiClientFromPool(getCurrentRpcUrl());
       const [executionStatus, stablecoinCoinType] = await Promise.all([
         loadRecoveryExecutionStatus({
           client,
@@ -644,7 +644,7 @@ export default function CircleDetails() {
       setRecoveryExecution(executionStatus);
       setRecoveryStablecoinType(stablecoinCoinType);
     } catch (error) {
-      console.error('Details - Error refreshing recovery execution state:', error);
+      logSuiReadError('Details - Error refreshing recovery execution state:', error);
     } finally {
       setLoadingRecoveryExecution(false);
     }
@@ -659,7 +659,7 @@ export default function CircleDetails() {
 
     setLoadingRecoveryLiveness(true);
     try {
-      const client = new SuiClient({ url: getCurrentRpcUrl() });
+      const client = getSuiClientFromPool(getCurrentRpcUrl());
       const configuredDelegate = nextInCommandOverride ?? recoveryStatus?.nextInCommand ?? null;
       const readEligibility = async (address: string | null | undefined): Promise<boolean> => {
         if (!address) {
@@ -692,7 +692,7 @@ export default function CircleDetails() {
       setViewerCanAutoReleaseFallback(viewerEligible);
       setDelegateCanAutoReleaseFallback(delegateEligible);
     } catch (error) {
-      console.error('Details - Error refreshing recovery liveness state:', error);
+      logSuiReadError('Details - Error refreshing recovery liveness state:', error);
       setViewerCanAutoReleaseFallback(false);
       setDelegateCanAutoReleaseFallback(false);
     } finally {
@@ -705,10 +705,15 @@ export default function CircleDetails() {
 
     void fetchRecoveryStatus();
     void fetchRecoveryExecutionState();
+    // Recovery is a slow-moving safety status (liveness/grace windows are hours),
+    // not a live feed — poll gently and skip while the tab is backgrounded. The
+    // old 15s cadence on every open circle page was a top contributor to RPC
+    // rate-limit cooldowns.
     const intervalId = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       void fetchRecoveryStatus();
       void fetchRecoveryExecutionState();
-    }, 15000);
+    }, 60000);
 
     return () => {
       window.clearInterval(intervalId);

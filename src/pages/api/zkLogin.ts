@@ -10,25 +10,23 @@ import {
 import { AggregatorClient, Env } from '@cetusprotocol/aggregator-sdk';
 import BN from 'bn.js';
 import { Transaction } from '@mysten/sui/transactions';
-import * as fs from 'fs';
 import { enokiZkLoginService } from '@/services/enokiZkLoginService';
-import { 
-  getCurrentNetwork, 
-  getCurrentRpcUrl, 
-  getCurrentCoinTypes, 
+import {
+  getCurrentNetwork,
+  getCurrentRpcUrl,
+  getCurrentCoinTypes,
   getCurrentCetusConfig,
   getCurrentTokens,
-  getCurrentEmberConfig,
   setCurrentNetwork,
   NetworkType,
   getCurrentPackageId,
   getPackageIdForNetwork
 } from '@/services/network-config';
-import {
-  emberErrorResponse,
-  buildDeploySuccessResponse,
-  buildRedemptionSuccessResponse
-} from '@/lib/ember-operation-response';
+import { getHealthySuiClient } from '@/services/sui-rpc-failover';
+// Phase 4 cleanup: Ember vault response helpers and config were orphaned
+// when deployToEmberVault / requestEmberRedemption dispatch cases were
+// stubbed to 410 Gone. Re-import here if a separately audited yield
+// product reintroduces those flows.
 import { getCanonicalBaseOrigin, normalizeOrigin, preferCanonicalOrigin } from '@/lib/canonical-host';
 import {
   normalizePackageId,
@@ -116,72 +114,27 @@ async function resolveCirclePackageIdForTransaction(args: {
   return resolvedPackageId;
 }
 
-// Persistent session store using localStorage (client) or an external store (server)
-// We'll use a more persistent approach than just the in-memory Map
+// In-memory session store. The previous implementation persisted session
+// material — including ephemeral private keys — to `./zklogin-sessions.json`
+// in development. That made the server an effective custodian and was
+// removed as part of the Phase 1 compliance redesign. Sessions now live
+// only in memory; restart the server to clear them. Production deployments
+// behind multiple replicas should swap this for Redis / Enoki rather than
+// re-introducing a disk file.
 const sessions = (() => {
-  // Create a wrapper around Map to persist sessions between API calls
-  // In a production app, you would use Redis, a database, or other external store
   const sessionData = new Map<string, SetupData & { account?: AccountData }>();
-
-  // Save sessions to a file on disk in development (for testing)
-  const SESSION_FILE = './zklogin-sessions.json';
-  
-  // Try to load any existing sessions from file
-  try {
-    if (process.env.NODE_ENV === 'development' && fs.existsSync(SESSION_FILE)) {
-      const savedSessions = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
-      if (savedSessions && typeof savedSessions === 'object') {
-        Object.entries(savedSessions).forEach(([key, value]) => {
-          sessionData.set(key, value as SetupData & { account?: AccountData });
-        });
-        console.log(`Loaded ${sessionData.size} sessions from disk`);
-      }
-    }
-  } catch (err) {
-    console.error('Error loading sessions from disk:', err);
-  }
 
   return {
     get: (key: string) => sessionData.get(key),
     set: (key: string, value: SetupData & { account?: AccountData }) => {
       sessionData.set(key, value);
-      // In development, save to disk for persistence between API calls
-      if (process.env.NODE_ENV === 'development') {
-        try {
-          const sessionObj = Object.fromEntries(sessionData.entries());
-          fs.writeFileSync(SESSION_FILE, JSON.stringify(sessionObj, null, 2));
-        } catch (err) {
-          console.error('Error saving sessions to disk:', err);
-        }
-      }
       return sessionData;
     },
-    delete: (key: string) => {
-      const result = sessionData.delete(key);
-      // Update the file when we delete a session too
-      if (process.env.NODE_ENV === 'development') {
-        try {
-          const sessionObj = Object.fromEntries(sessionData.entries());
-          fs.writeFileSync(SESSION_FILE, JSON.stringify(sessionObj, null, 2));
-        } catch (err) {
-          console.error('Error saving sessions to disk:', err);
-        }
-      }
-      return result;
-    },
+    delete: (key: string) => sessionData.delete(key),
     has: (key: string) => sessionData.has(key),
     size: () => sessionData.size,
-    clear: () => {
-      sessionData.clear();
-      if (process.env.NODE_ENV === 'development') {
-        try {
-          fs.writeFileSync(SESSION_FILE, '{}');
-        } catch (err) {
-          console.error('Error clearing sessions file:', err);
-        }
-      }
-    },
-    entries: () => sessionData.entries()
+    clear: () => sessionData.clear(),
+    entries: () => sessionData.entries(),
   };
 })();
 
@@ -329,33 +282,19 @@ async function getAggregatorSDK(): Promise<AggregatorClient> {
   }
 }
 
-// Function to get the JSON RPC URL
-function getJsonRpcUrl(): string {
-  const networkRpcUrl = getNetworkRpcUrl();
-  const rpcUrl = networkRpcUrl;
-  
-  // Validate the URL format
-  try {
-    new URL(rpcUrl);
-    return rpcUrl;
-  } catch (error) {
-    console.error('Invalid network RPC URL:', rpcUrl, 'Error:', error);
-    console.log('Using network fallback RPC URL:', networkRpcUrl);
-    return networkRpcUrl;
-  }
-}
-
 // Helper function to safely create SuiClient instances
-function createSuiClient(): SuiClient {
+async function createSuiClient(targetNetwork?: NetworkType): Promise<SuiClient> {
+  const network = targetNetwork ?? getCurrentNetwork();
+
   try {
-    const rpcUrl = getJsonRpcUrl();
-    console.log('Creating SuiClient with URL:', rpcUrl);
-    return new SuiClient({ url: rpcUrl });
+    const { client, rpcUrl, isFallback } = await getHealthySuiClient(
+      network,
+      'api.zkLogin.createSuiClient',
+    );
+    console.log('Creating SuiClient with URL:', rpcUrl, isFallback ? '(fallback)' : '(primary)');
+    return client;
   } catch (error) {
     console.error('Error creating SuiClient:', error);
-    if (error instanceof Error && error.message.includes('Failed to parse URL')) {
-      console.error('❌ Failed to parse network RPC URL for SuiClient creation. URL:', getJsonRpcUrl());
-    }
     throw error;
   }
 }
@@ -433,7 +372,7 @@ function deserializeTransactionPayload(input: unknown): Transaction {
 // When using swapAndDepositCetus, replace accessing the private suiClient directly with the proper API
 const getEpochData = async (): Promise<{ epoch: string }> => {
   try {
-    const suiClient = createSuiClient();
+    const suiClient = await createSuiClient();
     return await suiClient.getLatestSuiSystemState();
   } catch (error) {
     console.error('Error in getEpochData:', error);
@@ -445,7 +384,7 @@ const getEpochData = async (): Promise<{ epoch: string }> => {
 const checkPoolLiquidity = async () => {
   try {
     console.log('Checking available liquidity in SUI-USDC pools...');
-    const suiClient = createSuiClient();
+    const suiClient = await createSuiClient();
     
     // First check which pools actually exist
     const validPools = [];
@@ -657,40 +596,19 @@ async function getAllCoinsByType(
   return allCoins;
 }
 
-type EmberSourceAsset = 'SUI' | 'USDC' | 'USDT' | 'SUI_USDE';
+// Phase 4 cleanup: EmberSourceAsset / EmberDeployPayload / EmberRedeemPayload
+// types, along with isValidObjectId, validateAdminWalletContext, and
+// mapEmberAbortMessage helpers, were orphaned when the Ember vault dispatch
+// cases were stubbed to 410 Gone. Recreate these alongside a separately
+// audited yield product if and when one is reintroduced.
 
-interface EmberDeployPayload {
-  circleId: string;
-  walletId: string;
-  sourceAsset: EmberSourceAsset;
-  sourceAmount: string;
-  targetCoinType: 'SUI_USDE';
-  slippageBps?: number;
-  emberVaultId?: string;
-  emberVaultPackageId?: string;
-  emberProtocolConfigId?: string;
-}
-
-interface EmberRedeemPayload {
-  circleId: string;
-  walletId: string;
-  receiptAmount: string;
-  receiptCoinType?: string;
-  emberVaultId?: string;
-  emberVaultPackageId?: string;
-  emberProtocolConfigId?: string;
-  receiver?: string;
-}
-
+// Lightweight address + object helpers retained for the few callers that
+// still need them (adminRemoveMember, security deposit context checks).
+// Left deliberately outside the deleted Ember helpers so the compiler
+// can see them.
 function normalizeAddress(address: string): string {
   const trimmed = address.trim().toLowerCase();
   return trimmed.startsWith('0x') ? trimmed : `0x${trimmed}`;
-}
-
-function isValidObjectId(value: string): boolean {
-  if (!value || typeof value !== 'string') return false;
-  const normalized = value.startsWith('0x') ? value.slice(2) : value;
-  return normalized.length > 0 && /^[0-9a-fA-F]+$/.test(normalized);
 }
 
 function parseU64Amount(value: unknown, fieldName: string): bigint {
@@ -698,14 +616,12 @@ function parseU64Amount(value: unknown, fieldName: string): bigint {
     if (value < 0n) throw new Error(`${fieldName} must be non-negative`);
     return value;
   }
-
   if (typeof value === 'number') {
     if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
       throw new Error(`${fieldName} must be a non-negative integer`);
     }
     return BigInt(value);
   }
-
   if (typeof value === 'string') {
     const trimmed = value.trim();
     if (!/^\d+$/.test(trimmed)) {
@@ -713,7 +629,6 @@ function parseU64Amount(value: unknown, fieldName: string): bigint {
     }
     return BigInt(trimmed);
   }
-
   throw new Error(`${fieldName} is required`);
 }
 
@@ -721,13 +636,11 @@ function extractMoveFields(content: unknown): Record<string, unknown> | null {
   if (!content || typeof content !== 'object' || !('fields' in content)) {
     return null;
   }
-
   const fields = (content as { fields: Record<string, unknown> }).fields;
   const value = fields.value;
   if (value && typeof value === 'object' && 'fields' in value) {
     return (value as { fields: Record<string, unknown> }).fields;
   }
-
   return fields;
 }
 
@@ -745,98 +658,6 @@ function extractIdLike(value: unknown): string | null {
   return null;
 }
 
-async function getCircleAdminAddress(suiClient: SuiClient, circleId: string): Promise<string | null> {
-  const circle = await suiClient.getObject({
-    id: circleId,
-    options: { showContent: true }
-  });
-
-  if (!circle.data?.content) return null;
-  const fields = extractMoveFields(circle.data.content);
-  if (!fields) return null;
-
-  const admin = fields.admin;
-  if (typeof admin === 'string') {
-    return normalizeAddress(admin);
-  }
-  return null;
-}
-
-async function getWalletCircleAndAdmin(
-  suiClient: SuiClient,
-  walletId: string
-): Promise<{ circleId: string | null; admin: string | null }> {
-  const wallet = await suiClient.getObject({
-    id: walletId,
-    options: { showContent: true }
-  });
-
-  if (!wallet.data?.content) {
-    return { circleId: null, admin: null };
-  }
-
-  const fields = extractMoveFields(wallet.data.content);
-  if (!fields) {
-    return { circleId: null, admin: null };
-  }
-
-  const circleId = extractIdLike(fields.circle_id);
-  const admin = typeof fields.admin === 'string' ? normalizeAddress(fields.admin) : null;
-  return {
-    circleId: circleId ? normalizeAddress(circleId) : null,
-    admin
-  };
-}
-
-async function validateAdminWalletContext(
-  suiClient: SuiClient,
-  circleId: string,
-  walletId: string,
-  sender: string
-): Promise<{ valid: boolean; status: number; error?: string }> {
-  const normalizedSender = normalizeAddress(sender);
-  const normalizedCircleId = normalizeAddress(circleId);
-
-  const circleAdmin = await getCircleAdminAddress(suiClient, circleId);
-  if (!circleAdmin) {
-    return { valid: false, status: 400, error: 'Unable to resolve circle admin from on-chain object.' };
-  }
-  if (circleAdmin !== normalizedSender) {
-    return { valid: false, status: 403, error: 'Only the circle admin can perform this Ember action.' };
-  }
-
-  const walletContext = await getWalletCircleAndAdmin(suiClient, walletId);
-  if (!walletContext.circleId) {
-    return { valid: false, status: 400, error: 'Unable to resolve custody wallet context from on-chain object.' };
-  }
-  if (walletContext.circleId !== normalizedCircleId) {
-    return { valid: false, status: 400, error: 'Custody wallet does not belong to the provided circle.' };
-  }
-  if (walletContext.admin && walletContext.admin !== normalizedSender) {
-    return { valid: false, status: 403, error: 'Only the custody wallet admin can perform this Ember action.' };
-  }
-
-  return { valid: true, status: 200 };
-}
-
-function mapEmberAbortMessage(message: string): { status: number; error: string } | null {
-  if (message.includes('2004')) {
-    return { status: 400, error: 'Invalid Ember amount. Amount must be greater than zero.' };
-  }
-  if (message.includes('2006')) {
-    return { status: 400, error: 'Ember vault is paused.' };
-  }
-  if (message.includes('2008')) {
-    return { status: 403, error: 'Address is blacklisted in the Ember vault.' };
-  }
-  if (message.includes('2009')) {
-    return { status: 400, error: 'Requested redemption shares are below Ember minimum withdrawal shares.' };
-  }
-  if (message.includes('2016')) {
-    return { status: 400, error: 'Ember vault max TVL would be exceeded by this deposit.' };
-  }
-  return null;
-}
 
 type SecurityDepositCoinKind = 'sui' | 'stablecoin';
 
@@ -1619,13 +1440,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           
           // Get the correct RPC URL for the requested network
           const networkToUse = requestedNetwork || getCurrentNetwork();
-          const rpcUrl = networkToUse === 'testnet' 
-            ? (process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://fullnode.testnet.sui.io:443')
-            : (process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://fullnode.mainnet.sui.io:443');
-          
-          // Initialize SUI client with the correct network's RPC URL
-          const suiClient = new SuiClient({ url: rpcUrl });
-          console.log(`Using ${networkToUse} network with RPC: ${rpcUrl}`);
+          const suiClient = await createSuiClient(networkToUse);
+          console.log(`Using ${networkToUse} network for wallet lookup`);
           
           // If no wallet ID was provided, try to find it from events
           if (!walletId) {
@@ -2350,13 +2166,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             
             // Get the correct RPC URL for the requested network
             const networkToUse = requestedNetwork || getCurrentNetwork();
-            const rpcUrl = networkToUse === 'testnet' 
-              ? (process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://fullnode.testnet.sui.io:443')
-              : (process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://fullnode.mainnet.sui.io:443');
-            
-            // Create SuiClient for the correct network to validate objects exist
-            const suiClient = new SuiClient({ url: rpcUrl });
-            console.log(`[adminRemoveMember] Using ${networkToUse} network with RPC: ${rpcUrl}`);
+            const suiClient = await createSuiClient(networkToUse);
+            console.log(`[adminRemoveMember] Using ${networkToUse} network for object validation`);
             
             // Verify the circle exists on the requested network
             let circleObj;
@@ -2474,32 +2285,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   (txb: Transaction) => {
                     txb.setSender(account.userAddr);
 
-                    // Return any paid security deposit before removing the member so
-                    // admin_remove_member never falls back to withdrawing from the wallet's SUI balance.
-                    if (depositContext.hasPaidDeposit && depositContext.depositBalance > 0n) {
-                      if (depositContext.coinKind === 'stablecoin') {
-                        txb.moveCall({
-                          target: `${packageIdToUse}::njangi_payments::admin_payout_security_deposit_stablecoin`,
-                          typeArguments: [depositContext.stablecoinTypeArg],
-                          arguments: [
-                            txb.object(req.body.circleId),
-                            txb.object(req.body.walletId),
-                            txb.pure.address(normalizedMemberAddress),
-                            txb.object(CLOCK_OBJECT_ID)
-                          ]
-                        });
-                      } else {
-                        txb.moveCall({
-                          target: `${packageIdToUse}::njangi_payments::admin_payout_security_deposit_sui`,
-                          arguments: [
-                            txb.object(req.body.circleId),
-                            txb.object(req.body.walletId),
-                            txb.pure.address(normalizedMemberAddress)
-                          ]
-                        });
-                      }
+                    // Phase 4 cleanup: the prepended admin_payout_security_deposit_*
+                    // calls targeted Move functions deleted in Phase 1. The new
+                    // `admin_remove_member` returns SUI deposits inline via
+                    // `release_sui_to_member`. Stablecoin deposit refunds now
+                    // require the member-initiated recovery flow
+                    // (src/lib/recovery-execution.ts); surface a warning so ops
+                    // don't assume a stablecoin removal silently refunded.
+                    if (
+                      depositContext.hasPaidDeposit &&
+                      depositContext.depositBalance > 0n &&
+                      depositContext.coinKind === 'stablecoin'
+                    ) {
+                      console.warn(
+                        '[adminRemoveMember] Stablecoin security-deposit return is not attached to admin_remove_member anymore. ' +
+                          'The member must run the recovery liveness flow to receive their refund.',
+                        { member: normalizedMemberAddress, balance: depositContext.depositBalance.toString() }
+                      );
                     }
-                    
+
                     txb.moveCall({
                       target: `${packageIdToUse}::njangi_circles::admin_remove_member`,
                       arguments: [
@@ -2700,7 +2504,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const effectiveSlippage = Math.max(slippage, MIN_AGGREGATOR_SLIPPAGE);
 
           // *** NEW: Check if user has already paid security deposit ***
-          const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+          const suiClient = await createSuiClient();
           let userDepositPaid = false;
           
           try {
@@ -3323,749 +3127,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         break;
 
+      // Phase 4 cleanup: deployToEmberVault and requestEmberRedemption
+      // were the admin-only Ember vault yield deployment + redemption flows.
+      // The yield product line was removed in the Phase 1 compliance redesign
+      // (njangi_yield_integration deleted, custody admin levers gutted), so
+      // these dispatch cases now respond 410 Gone for callers that still ship
+      // legacy buttons. Reintroduce as a separately licensed product if and
+      // when audited yield support returns.
       case 'deployToEmberVault':
-        if (!account) {
-          return res.status(400).json(
-            emberErrorResponse('deployToEmberVault', 'validation', 'Account data is required', 'EACCOUNT_REQUIRED')
-          );
-        }
-
-        if (!req.body.payload) {
-          return res.status(400).json(
-            emberErrorResponse('deployToEmberVault', 'validation', 'Missing required parameter: payload', 'EPAYLOAD_REQUIRED')
-          );
-        }
-
-        try {
-          const payload = req.body.payload as Partial<EmberDeployPayload>;
-          const {
-            circleId: deployCircleId,
-            walletId: deployWalletId,
-            sourceAsset,
-            sourceAmount,
-            targetCoinType,
-            emberVaultId: deployVaultIdFromPayload,
-            emberVaultPackageId: deployVaultPackageFromPayload,
-            emberProtocolConfigId: deployProtocolConfigFromPayload
-          } = payload;
-
-          if (!deployCircleId || !deployWalletId || !sourceAsset || !sourceAmount || !targetCoinType) {
-            return res.status(400).json(
-              emberErrorResponse(
-                'deployToEmberVault',
-                'validation',
-                'Missing required payload fields: circleId, walletId, sourceAsset, sourceAmount, targetCoinType',
-                'EINVALID_PAYLOAD'
-              )
-            );
-          }
-
-          if (!isValidObjectId(deployCircleId) || !isValidObjectId(deployWalletId)) {
-            return res.status(400).json(
-              emberErrorResponse(
-                'deployToEmberVault',
-                'validation',
-                'circleId and walletId must be valid object IDs.',
-                'EINVALID_OBJECT_ID'
-              )
-            );
-          }
-
-          if (targetCoinType !== 'SUI_USDE') {
-            return res.status(400).json(
-              emberErrorResponse(
-                'deployToEmberVault',
-                'validation',
-                'Only SUI_USDE targetCoinType is supported for Ember deploy.',
-                'EUNSUPPORTED_TARGET'
-              )
-            );
-          }
-
-          if (!['SUI', 'USDC', 'USDT', 'SUI_USDE'].includes(sourceAsset)) {
-            return res.status(400).json(
-              emberErrorResponse(
-                'deployToEmberVault',
-                'validation',
-                'Unsupported sourceAsset. Supported values: SUI, USDC, USDT, SUI_USDE.',
-                'EUNSUPPORTED_SOURCE'
-              )
-            );
-          }
-
-          const deployAmount = parseU64Amount(sourceAmount, 'sourceAmount');
-          if (deployAmount <= 0n) {
-            return res.status(400).json(
-              emberErrorResponse('deployToEmberVault', 'validation', 'sourceAmount must be greater than zero.', 'EINVALID_AMOUNT')
-            );
-          }
-
-          const maxU64 = (1n << 64n) - 1n;
-          if (deployAmount > maxU64) {
-            return res.status(400).json(
-              emberErrorResponse('deployToEmberVault', 'validation', 'sourceAmount exceeds u64 max value.', 'EAMOUNT_OVERFLOW')
-            );
-          }
-
-          const session = validateSession(sessionId, 'sendTransaction');
-          if (!session.account) {
-            if (sessionId) sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              ...emberErrorResponse(
-                'deployToEmberVault',
-                'auth',
-                'Invalid session: No account data found. Please authenticate first.',
-                'EINVALID_SESSION'
-              ),
-              requireRelogin: true,
-            });
-          }
-
-          if (
-            session.account.userAddr !== account.userAddr ||
-            session.ephemeralPrivateKey !== account.ephemeralPrivateKey
-          ) {
-            if (sessionId) sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              ...emberErrorResponse(
-                'deployToEmberVault',
-                'auth',
-                'Session mismatch: Please refresh your authentication',
-                'ESESSION_MISMATCH'
-              ),
-              requireRelogin: true,
-            });
-          }
-
-          const requestedNetwork = req.body.network;
-          const originalNetwork = getCurrentNetwork();
-          const shouldSwitchNetwork =
-            requestedNetwork &&
-            (requestedNetwork === 'mainnet' || requestedNetwork === 'testnet') &&
-            requestedNetwork !== originalNetwork;
-
-          try {
-            if (shouldSwitchNetwork) {
-              console.log(
-                `Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for Ember deploy`
-              );
-              setCurrentNetwork(requestedNetwork as NetworkType);
-              instance.initializeWithNetwork();
-            }
-
-            if (getCurrentNetwork() !== 'mainnet') {
-              return res.status(400).json(
-                emberErrorResponse(
-                  'deployToEmberVault',
-                  'network',
-                  'Ember deploy is currently mainnet-only. Switch network to mainnet and retry.',
-                  'EMAINNET_ONLY'
-                )
-              );
-            }
-
-            const emberConfig = getCurrentEmberConfig();
-            const coinTypes = getCurrentCoinTypes();
-            const tokens = getCurrentTokens();
-            const packageIdToUse = getCurrentPackageId();
-            const suiUsdeCoinType = coinTypes.SUI_USDE || tokens.SUI_USDE || '';
-            const usdtCoinType = tokens.USDT || '';
-            const emberVaultId = deployVaultIdFromPayload || emberConfig.suiUsdeVaultId || '';
-            const emberVaultPackageId = deployVaultPackageFromPayload || emberConfig.vaultPackage || '';
-            const emberProtocolConfigId = deployProtocolConfigFromPayload || emberConfig.protocolConfigId || '';
-            const emberReceiptCoinType = emberConfig.receiptCoinType || '';
-            const sourceCoinTypeByAsset: Record<EmberSourceAsset, string> = {
-              SUI: SUI_COIN_TYPE,
-              USDC: coinTypes.USDC,
-              USDT: usdtCoinType,
-              SUI_USDE: suiUsdeCoinType
-            };
-            const sourceCoinType = sourceCoinTypeByAsset[sourceAsset];
-
-            if (!suiUsdeCoinType || !emberReceiptCoinType || !emberVaultId || !emberVaultPackageId || !emberProtocolConfigId) {
-              return res.status(400).json(
-                emberErrorResponse(
-                  'deployToEmberVault',
-                  'config',
-                  'Missing Ember mainnet configuration. Expected SUI_USDE coin type, receipt coin type, vault ID, vault package, and protocol config ID.',
-                  'ECONFIG_MISSING'
-                )
-              );
-            }
-            if (!sourceCoinType) {
-              return res.status(400).json(
-                emberErrorResponse(
-                  'deployToEmberVault',
-                  'config',
-                  `Source asset ${sourceAsset} is not configured on the active network.`,
-                  'ESOURCE_NOT_CONFIGURED'
-                )
-              );
-            }
-
-            if (![emberVaultId, emberVaultPackageId, emberProtocolConfigId].every(isValidObjectId)) {
-              return res.status(400).json(
-                emberErrorResponse(
-                  'deployToEmberVault',
-                  'validation',
-                  'Invalid Ember object IDs. vault/package/protocolConfig must be valid object IDs.',
-                  'EINVALID_EMBER_IDS'
-                )
-              );
-            }
-
-            const effectiveSlippage = Math.max(
-              Number(payload.slippageBps ?? MIN_AGGREGATOR_SLIPPAGE),
-              MIN_AGGREGATOR_SLIPPAGE
-            );
-            let aggregator: AggregatorClient | null = null;
-            let routerData: Awaited<ReturnType<AggregatorClient['findRouters']>> | null = null;
-
-            if (sourceAsset !== 'SUI_USDE') {
-              aggregator = await getAggregatorSDK();
-              routerData = await aggregator.findRouters({
-                from: sourceCoinType,
-                target: suiUsdeCoinType,
-                amount: new BN(deployAmount.toString()),
-                byAmountIn: true,
-              });
-
-              if (
-                !routerData ||
-                !routerData.routes ||
-                routerData.routes.length === 0 ||
-                routerData.insufficientLiquidity
-              ) {
-                return res.status(400).json(
-                  emberErrorResponse(
-                    'deployToEmberVault',
-                    'route',
-                    `No valid swap route from ${sourceAsset} to SUI_USDE for the requested amount.`,
-                    'ENO_SWAP_ROUTE',
-                    { sourceAsset, targetCoinType: 'SUI_USDE' }
-                  )
-                );
-              }
-            }
-
-            const suiClient = createSuiClient();
-            const contextValidation = await validateAdminWalletContext(
-              suiClient,
-              deployCircleId,
-              deployWalletId,
-              session.account.userAddr
-            );
-            if (!contextValidation.valid) {
-              return res.status(contextValidation.status).json(
-                emberErrorResponse(
-                  'deployToEmberVault',
-                  'authorization',
-                  contextValidation.error || 'Invalid admin wallet context.',
-                  contextValidation.status === 403 ? 'EADMIN_REQUIRED' : 'EINVALID_CONTEXT'
-                )
-              );
-            }
-
-            const txResult = await instance.sendTransaction(
-              session.account,
-              async (txb: Transaction) => {
-                txb.setSender(session.account!.userAddr);
-
-                const withdrawnSourceCoin =
-                  sourceAsset === 'SUI'
-                    ? txb.moveCall({
-                        target: `${packageIdToUse}::njangi_custody::withdraw_from_dynamic_fields`,
-                        arguments: [txb.object(deployWalletId), txb.pure.u64(deployAmount)]
-                      })
-                    : txb.moveCall({
-                        target: `${packageIdToUse}::njangi_custody::withdraw_stablecoin`,
-                        typeArguments: [sourceCoinType],
-                        arguments: [
-                          txb.object(deployWalletId),
-                          txb.pure.u64(deployAmount),
-                          txb.pure.address(session.account!.userAddr),
-                          txb.object(CLOCK_OBJECT_ID)
-                        ]
-                      });
-
-                const swappedSuiUsdeCoin =
-                  sourceAsset === 'SUI_USDE'
-                    ? withdrawnSourceCoin
-                    : await (aggregator as AggregatorClient).routerSwap({
-                        routers: routerData as NonNullable<typeof routerData>,
-                        inputCoin: withdrawnSourceCoin,
-                        slippage: effectiveSlippage,
-                        txb
-                      });
-
-                const suiUsdeBalance = txb.moveCall({
-                  target: '0x2::coin::into_balance',
-                  typeArguments: [suiUsdeCoinType],
-                  arguments: [swappedSuiUsdeCoin]
-                });
-
-                const emberReceiptCoin = txb.moveCall({
-                  target: `${emberVaultPackageId}::vault::deposit_asset`,
-                  typeArguments: [suiUsdeCoinType, emberReceiptCoinType],
-                  arguments: [txb.object(emberVaultId), txb.object(emberProtocolConfigId), suiUsdeBalance]
-                });
-
-                txb.moveCall({
-                  target: `${packageIdToUse}::njangi_custody::admin_redeposit_allowlisted_ember_asset`,
-                  typeArguments: [emberReceiptCoinType],
-                  arguments: [txb.object(deployWalletId), emberReceiptCoin, txb.object(CLOCK_OBJECT_ID)]
-                });
-              },
-              { gasBudget: 250000000 }
-            );
-
-            return res.status(200).json(
-              buildDeploySuccessResponse({
-                digest: txResult.digest,
-                status: txResult.status,
-                gasUsed: txResult.gasUsed,
-                circleId: deployCircleId,
-                walletId: deployWalletId,
-                network: getCurrentNetwork(),
-                sourceAsset,
-                sourceCoinType,
-                targetCoinType,
-                sourceAmount: deployAmount.toString(),
-                swapExecuted: sourceAsset !== 'SUI_USDE',
-                estimatedSuiUsdeOut:
-                  routerData && routerData.amountOut ? routerData.amountOut.toString() : deployAmount.toString(),
-                slippageBps: sourceAsset !== 'SUI_USDE' ? effectiveSlippage : undefined,
-                vaultId: emberVaultId,
-                vaultPackageId: emberVaultPackageId,
-                protocolConfigId: emberProtocolConfigId,
-                receiptCoinType: emberReceiptCoinType
-              })
-            );
-          } finally {
-            if (shouldSwitchNetwork) {
-              console.log(`Restoring server network back to ${originalNetwork}`);
-              setCurrentNetwork(originalNetwork as NetworkType);
-              instance.initializeWithNetwork();
-            }
-          }
-        } catch (error) {
-          console.error('Error deploying to Ember vault:', error);
-
-          if (
-            error instanceof Error &&
-            (error.message.includes('proof verify failed') ||
-              error.message.includes('Session expired') ||
-              error.message.includes('re-authenticate'))
-          ) {
-            if (sessionId) sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({
-              ...emberErrorResponse(
-                'deployToEmberVault',
-                'auth',
-                'Your session has expired. Please login again.',
-                'ESESSION_EXPIRED'
-              ),
-              requireRelogin: true,
-            });
-          }
-
-          if (error instanceof Error) {
-            const emberMappedError = mapEmberAbortMessage(error.message);
-            if (emberMappedError) {
-              return res.status(emberMappedError.status).json(
-                emberErrorResponse(
-                  'deployToEmberVault',
-                  'transaction',
-                  emberMappedError.error,
-                  'EEMBER_MOVE_ABORT'
-                )
-              );
-            }
-
-            if (error.message.includes('ENotWalletOwner') || error.message.includes('ENotAdmin')) {
-              return res.status(403).json(
-                emberErrorResponse(
-                  'deployToEmberVault',
-                  'authorization',
-                  'Only the custody wallet admin can deploy to Ember.',
-                  'EADMIN_REQUIRED'
-                )
-              );
-            }
-            if (error.message.includes('EUnsupportedToken')) {
-              return res.status(400).json(
-                emberErrorResponse(
-                  'deployToEmberVault',
-                  'validation',
-                  'Unsupported token for Ember deposit path.',
-                  'EUNSUPPORTED_TOKEN'
-                )
-              );
-            }
-            if (error.message.includes('EInsufficientBalance')) {
-              return res.status(400).json(
-                emberErrorResponse(
-                  'deployToEmberVault',
-                  'transaction',
-                  'Insufficient custody balance for Ember deploy amount.',
-                  'EINSUFFICIENT_BALANCE'
-                )
-              );
-            }
-          }
-
-          return res.status(500).json({
-            ...emberErrorResponse(
-              'deployToEmberVault',
-              'transaction',
-              error instanceof Error ? error.message : 'Failed to deploy to Ember vault',
-              'EDEPLOY_FAILED'
-            ),
-            requireRelogin: false
-          });
-        }
-                break;
-
       case 'requestEmberRedemption':
-        if (!account) {
-          return res.status(400).json(
-            emberErrorResponse('requestEmberRedemption', 'validation', 'Account data is required', 'EACCOUNT_REQUIRED')
-          );
-        }
+        return res.status(410).json({
+          error: 'Ember vault flow was removed in the non-custodial Phase 1 redesign.',
+          code: 'EMBER_FLOW_REMOVED',
+        });
 
-        if (!req.body.payload) {
-          return res.status(400).json(
-            emberErrorResponse('requestEmberRedemption', 'validation', 'Missing required parameter: payload', 'EPAYLOAD_REQUIRED')
-          );
-        }
-
-        try {
-          const payload = req.body.payload as Partial<EmberRedeemPayload>;
-          const {
-            circleId: redeemCircleId,
-            walletId: redeemWalletId,
-            receiptAmount,
-            receiptCoinType: receiptCoinTypeFromPayload,
-            emberVaultId: redeemVaultIdFromPayload,
-            emberVaultPackageId: redeemVaultPackageFromPayload,
-            emberProtocolConfigId: redeemProtocolConfigFromPayload,
-            receiver
-          } = payload;
-
-          if (!redeemCircleId || !redeemWalletId || !receiptAmount) {
-            return res.status(400).json(
-              emberErrorResponse(
-                'requestEmberRedemption',
-                'validation',
-                'Missing required payload fields: circleId, walletId, receiptAmount',
-                'EINVALID_PAYLOAD'
-              )
-            );
-          }
-
-          if (!isValidObjectId(redeemCircleId) || !isValidObjectId(redeemWalletId)) {
-            return res.status(400).json(
-              emberErrorResponse(
-                'requestEmberRedemption',
-                'validation',
-                'circleId and walletId must be valid object IDs.',
-                'EINVALID_OBJECT_ID'
-              )
-            );
-          }
-
-          const requestedReceiptAmount = parseU64Amount(receiptAmount, 'receiptAmount');
-          if (requestedReceiptAmount <= 0n) {
-            return res.status(400).json(
-              emberErrorResponse(
-                'requestEmberRedemption',
-                'validation',
-                'receiptAmount must be greater than zero.',
-                'EINVALID_AMOUNT'
-              )
-            );
-          }
-
-          const maxU64 = (1n << 64n) - 1n;
-          if (requestedReceiptAmount > maxU64) {
-            return res.status(400).json(
-              emberErrorResponse(
-                'requestEmberRedemption',
-                'validation',
-                'receiptAmount exceeds u64 max value.',
-                'EAMOUNT_OVERFLOW'
-              )
-            );
-          }
-
-          const session = validateSession(sessionId, 'sendTransaction');
-          if (!session.account) {
-            if (sessionId) sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({
-              ...emberErrorResponse(
-                'requestEmberRedemption',
-                'auth',
-                'Invalid session: No account data found. Please authenticate first.',
-                'EINVALID_SESSION'
-              ),
-              requireRelogin: true,
-            });
-          }
-
-          if (
-            session.account.userAddr !== account.userAddr ||
-            session.ephemeralPrivateKey !== account.ephemeralPrivateKey
-          ) {
-            if (sessionId) sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({
-              ...emberErrorResponse(
-                'requestEmberRedemption',
-                'auth',
-                'Session mismatch: Please refresh your authentication',
-                'ESESSION_MISMATCH'
-              ),
-              requireRelogin: true,
-            });
-          }
-
-          const requestedNetwork = req.body.network;
-          const originalNetwork = getCurrentNetwork();
-          const shouldSwitchNetwork =
-            requestedNetwork &&
-            (requestedNetwork === 'mainnet' || requestedNetwork === 'testnet') &&
-            requestedNetwork !== originalNetwork;
-
-          try {
-            if (shouldSwitchNetwork) {
-              console.log(
-                `Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for Ember redemption request`
-              );
-              setCurrentNetwork(requestedNetwork as NetworkType);
-              instance.initializeWithNetwork();
-            }
-
-            if (getCurrentNetwork() !== 'mainnet') {
-              return res.status(400).json(
-                emberErrorResponse(
-                  'requestEmberRedemption',
-                  'network',
-                  'Ember redemption request is currently mainnet-only. Switch network to mainnet and retry.',
-                  'EMAINNET_ONLY'
-                )
-              );
-            }
-
-            const emberConfig = getCurrentEmberConfig();
-            const coinTypes = getCurrentCoinTypes();
-            const tokens = getCurrentTokens();
-            const packageIdToUse = getCurrentPackageId();
-            const suiUsdeCoinType = coinTypes.SUI_USDE || tokens.SUI_USDE || '';
-            const emberVaultId = redeemVaultIdFromPayload || emberConfig.suiUsdeVaultId || '';
-            const emberVaultPackageId = redeemVaultPackageFromPayload || emberConfig.vaultPackage || '';
-            const emberProtocolConfigId = redeemProtocolConfigFromPayload || emberConfig.protocolConfigId || '';
-            const emberReceiptCoinType = receiptCoinTypeFromPayload || emberConfig.receiptCoinType || '';
-            const receiverAddress = receiver ? normalizeAddress(receiver) : normalizeAddress(session.account.userAddr);
-
-            if (
-              !suiUsdeCoinType ||
-              !emberReceiptCoinType ||
-              !emberVaultId ||
-              !emberVaultPackageId ||
-              !emberProtocolConfigId
-            ) {
-              return res.status(400).json(
-                emberErrorResponse(
-                  'requestEmberRedemption',
-                  'config',
-                  'Missing Ember mainnet configuration. Expected SUI_USDE coin type, receipt coin type, vault ID, vault package, and protocol config ID.',
-                  'ECONFIG_MISSING'
-                )
-              );
-            }
-
-            if (![emberVaultId, emberVaultPackageId, emberProtocolConfigId].every(isValidObjectId)) {
-              return res.status(400).json(
-                emberErrorResponse(
-                  'requestEmberRedemption',
-                  'validation',
-                  'Invalid Ember object IDs. vault/package/protocolConfig must be valid object IDs.',
-                  'EINVALID_EMBER_IDS'
-                )
-              );
-            }
-
-            if (!isValidObjectId(receiverAddress)) {
-              return res.status(400).json(
-                emberErrorResponse(
-                  'requestEmberRedemption',
-                  'validation',
-                  'receiver must be a valid Sui address.',
-                  'EINVALID_RECEIVER'
-                )
-              );
-            }
-
-            const suiClient = createSuiClient();
-            const contextValidation = await validateAdminWalletContext(
-              suiClient,
-              redeemCircleId,
-              redeemWalletId,
-              session.account.userAddr
-            );
-            if (!contextValidation.valid) {
-              return res.status(contextValidation.status).json(
-                emberErrorResponse(
-                  'requestEmberRedemption',
-                  'authorization',
-                  contextValidation.error || 'Invalid admin wallet context.',
-                  contextValidation.status === 403 ? 'EADMIN_REQUIRED' : 'EINVALID_CONTEXT'
-                )
-              );
-            }
-
-            const txResult = await instance.sendTransaction(
-              session.account,
-              (txb: Transaction) => {
-                txb.setSender(session.account!.userAddr);
-
-                const withdrawnReceiptCoin = txb.moveCall({
-                  target: `${packageIdToUse}::njangi_custody::withdraw_stablecoin`,
-                  typeArguments: [emberReceiptCoinType],
-                  arguments: [
-                    txb.object(redeemWalletId),
-                    txb.pure.u64(requestedReceiptAmount),
-                    txb.pure.address(session.account!.userAddr),
-                    txb.object(CLOCK_OBJECT_ID)
-                  ]
-                });
-
-                const receiptBalance = txb.moveCall({
-                  target: '0x2::coin::into_balance',
-                  typeArguments: [emberReceiptCoinType],
-                  arguments: [withdrawnReceiptCoin]
-                });
-
-                txb.moveCall({
-                  target: `${emberVaultPackageId}::vault::redeem_shares`,
-                  typeArguments: [suiUsdeCoinType, emberReceiptCoinType],
-                  arguments: [
-                    txb.object(emberVaultId),
-                    txb.object(emberProtocolConfigId),
-                    receiptBalance,
-                    txb.pure.address(receiverAddress),
-                    txb.object(CLOCK_OBJECT_ID)
-                  ]
-                });
-              },
-              { gasBudget: 250000000 }
-            );
-
-            return res.status(200).json(
-              buildRedemptionSuccessResponse({
-                digest: txResult.digest,
-                status: txResult.status,
-                gasUsed: txResult.gasUsed,
-                circleId: redeemCircleId,
-                walletId: redeemWalletId,
-                network: getCurrentNetwork(),
-                receiptAmount: requestedReceiptAmount.toString(),
-                receiptCoinType: emberReceiptCoinType,
-                vaultId: emberVaultId,
-                vaultPackageId: emberVaultPackageId,
-                protocolConfigId: emberProtocolConfigId,
-                receiver: receiverAddress
-              })
-            );
-          } finally {
-            if (shouldSwitchNetwork) {
-              console.log(`Restoring server network back to ${originalNetwork}`);
-              setCurrentNetwork(originalNetwork as NetworkType);
-              instance.initializeWithNetwork();
-            }
-          }
-        } catch (error) {
-          console.error('Error requesting Ember redemption:', error);
-
-          if (
-            error instanceof Error &&
-            (error.message.includes('proof verify failed') ||
-              error.message.includes('Session expired') ||
-              error.message.includes('re-authenticate'))
-          ) {
-            if (sessionId) sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({
-              ...emberErrorResponse(
-                'requestEmberRedemption',
-                'auth',
-                'Your session has expired. Please login again.',
-                'ESESSION_EXPIRED'
-              ),
-              requireRelogin: true,
-            });
-          }
-
-          if (error instanceof Error) {
-            const emberMappedError = mapEmberAbortMessage(error.message);
-            if (emberMappedError) {
-              return res.status(emberMappedError.status).json(
-                emberErrorResponse(
-                  'requestEmberRedemption',
-                  'transaction',
-                  emberMappedError.error,
-                  'EEMBER_MOVE_ABORT'
-                )
-              );
-            }
-
-            if (error.message.includes('ENotWalletOwner') || error.message.includes('ENotAdmin')) {
-              return res.status(403).json(
-                emberErrorResponse(
-                  'requestEmberRedemption',
-                  'authorization',
-                  'Only the custody wallet admin can request Ember redemption.',
-                  'EADMIN_REQUIRED'
-                )
-              );
-            }
-            if (error.message.includes('EUnsupportedToken')) {
-              return res.status(400).json(
-                emberErrorResponse(
-                  'requestEmberRedemption',
-                  'validation',
-                  'Unsupported receipt token for Ember redemption path.',
-                  'EUNSUPPORTED_TOKEN'
-                )
-              );
-            }
-            if (error.message.includes('EInsufficientBalance')) {
-              return res.status(400).json(
-                emberErrorResponse(
-                  'requestEmberRedemption',
-                  'transaction',
-                  'Insufficient Ember receipt balance for requested redemption.',
-                  'EINSUFFICIENT_BALANCE'
-                )
-              );
-            }
-          }
-
-          return res.status(500).json({
-            ...emberErrorResponse(
-              'requestEmberRedemption',
-              'transaction',
-              error instanceof Error ? error.message : 'Failed to request Ember redemption',
-              'EREDEMPTION_REQUEST_FAILED'
-            ),
-            requireRelogin: false
-          });
-        }
-        break;
 
       case 'paySecurityDeposit':
         if (!account) {
@@ -4147,7 +3222,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
             console.log(`Using package ID for paySecurityDeposit: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
 
-            const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+            const suiClient = await createSuiClient();
             if (currencyResolution.currency === 'USDC') {
               const configFields = await getCircleConfigFields(suiClient, circleId);
               const securityDepositUsdCents = getConfigUsdCents(configFields, ['security_deposit_usd']);
@@ -4337,7 +3412,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
           
           // Initialize SUI client for checking coin value
-          const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+          const suiClient = await createSuiClient();
           
           // REMOVED: Backend check for userDepositPaid - rely on frontend status
           console.log(`Frontend reports deposit status: ${depositIsPaid ? 'PAID' : 'NOT PAID'}`);
@@ -4875,7 +3950,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
             console.log(`[contributeFromCustody] Using package ID: ${packageIdToUse} (network: ${getCurrentNetwork()})`);
 
-            const client = new SuiClient({ url: getJsonRpcUrl() });
+            const client = await createSuiClient();
             if (currencyResolution.currency === 'USDC') {
               const configFields = await getCircleConfigFields(client, String(circleId));
               const contributionUsdCents = getConfigUsdCents(configFields, [
@@ -5364,7 +4439,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             try {
               console.log('Attempting to query blockchain for USDC coins...');
               // We'll make this request conditionally to avoid unnecessary API calls
-              const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+              const suiClient = await createSuiClient();
               
               // Look for USDC coins owned by the user
               const userCoins = await suiClient.getCoins({
@@ -5804,7 +4879,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
 
           // First, perform all async operations to gather the necessary data
-          const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+          const suiClient = await createSuiClient();
           
           // Get current versions of shared objects
           console.log(`Fetching current versions of shared objects (circle and wallet)...`);
@@ -6170,392 +5245,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         break;
 
+      // Phase 4 cleanup: withdrawWalletFunds and returnSecurityDeposit were
+      // admin-discretionary custody operations that targeted Move functions
+      // deleted in Phase 1 (njangi_custody::withdraw_all,
+      // njangi_payments::admin_payout_security_deposit_{sui,stablecoin}).
+      // Non-custodial Phase 1 makes the admin an incompatible caller;
+      // member-initiated recovery liveness is the supported refund path.
       case 'withdrawWalletFunds':
-        if (!account) {
-          return res.status(400).json({ error: 'Account data is required' });
-        }
-
-        if (!sessionId) {
-          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
-        }
-
-        try {
-          // Validate session
-          const session = validateSession(sessionId, 'withdrawWalletFunds');
-          
-          // Get wallet ID from request
-          const walletId = req.body.walletId;
-          if (!walletId) {
-            return res.status(400).json({ error: 'Wallet ID is required' });
-          }
-          
-          // Handle network parameter if provided by frontend
-          const requestedNetwork = req.body.network;
-          if (requestedNetwork && (requestedNetwork === 'testnet' || requestedNetwork === 'mainnet')) {
-            console.log(`Frontend requested network: ${requestedNetwork}, current server network: ${getCurrentNetwork()}`);
-          }
-          
-          // Get the correct RPC URL for the requested network
-          const networkToUse = requestedNetwork || getCurrentNetwork();
-          const rpcUrl = networkToUse === 'testnet' 
-            ? (process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://fullnode.testnet.sui.io:443')
-            : (process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://fullnode.mainnet.sui.io:443');
-          
-          // Initialize SUI client with the correct network's RPC URL
-          const suiClient = new SuiClient({ url: rpcUrl });
-          console.log(`Using ${networkToUse} network with RPC: ${rpcUrl}`);
-          
-          // Get wallet details to check balance
-          try {
-            const walletObj = await suiClient.getObject({
-              id: walletId,
-              options: { showContent: true }
-            });
-            
-            if (!walletObj.data?.content) {
-              console.error(`Wallet ${walletId} not found or has no content`);
-              return res.status(400).json({ 
-                error: 'Wallet not found'
-              });
-            }
-            
-            // Extract wallet balance and owner
-            const walletContent = walletObj.data.content as { 
-              fields?: { 
-                balance?: { fields?: { value?: string } },
-                circle_id?: string 
-              },
-              owner?: { 
-                AddressOwner?: string, 
-                ObjectOwner?: string, 
-                Shared?: Record<string, unknown> 
-              } 
-            };
-            
-            // Check if wallet has any balance
-            const balance = walletContent?.fields?.balance?.fields?.value 
-              ? BigInt(walletContent.fields.balance.fields.value)
-              : BigInt(0);
-              
-            if (balance <= 0) {
-              return res.status(400).json({ 
-                error: 'Wallet has no SUI balance to withdraw'
-              });
-            }
-            
-            console.log(`Withdrawing ${balance.toString()} from wallet ${walletId}`);
-            
-            // Temporarily set the network to match the frontend request
-            const originalNetwork = getCurrentNetwork();
-            let txResult;
-            
-            try {
-              if (requestedNetwork && requestedNetwork !== originalNetwork) {
-                console.log(`Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for transaction`);
-                setCurrentNetwork(requestedNetwork as NetworkType);
-                // Reinitialize the EnokiZkLoginService with the new network configuration
-                instance.initializeWithNetwork();
-              }
-              
-              // Get the network-aware package ID dynamically
-              const networkPackageId = getCurrentPackageId();
-              
-              // Create transaction to withdraw funds to user's address
-              txResult = await instance.sendTransaction(
-                session.account!,
-                (txb: Transaction) => {
-                  txb.setSender(session.account!.userAddr);
-                  
-                  // Call withdraw_all function from the custody module
-                  txb.moveCall({
-                    target: `${networkPackageId}::njangi_custody::withdraw_all`,
-                    arguments: [
-                      txb.object(walletId)
-                    ]
-                  });
-                },
-                { gasBudget: 100000000 }
-              );
-            } finally {
-              // Always restore the original network and reinitialize the service
-              if (requestedNetwork && requestedNetwork !== originalNetwork) {
-                console.log(`Restoring server network back to ${originalNetwork}`);
-                setCurrentNetwork(originalNetwork as NetworkType);
-                instance.initializeWithNetwork();
-              }
-            }
-            
-            console.log('Withdraw successful:', JSON.stringify(txResult, null, 2));
-            return res.status(200).json({ 
-              digest: txResult.digest,
-              status: txResult.status,
-              gasUsed: txResult.gasUsed
-            });
-          } catch (error) {
-            console.error('Error getting wallet details:', error);
-            return res.status(500).json({ 
-              error: 'Failed to withdraw funds', 
-              details: error instanceof Error ? error.message : String(error) 
-            });
-          }
-        } catch (err) {
-          console.error('Withdrawal error:', err);
-          return res.status(500).json({ 
-            error: 'Failed to withdraw funds', 
-            details: err instanceof Error ? err.message : String(err) 
-          });
-        }
-
-      case 'returnSecurityDeposit': {
-        try {
-          // Validate required parameters
-          if (!account) {
-            return res.status(400).json({ error: 'Account data is required' });
-          }
-          
-          if (!sessionId) {
-            return res.status(401).json({ error: 'No session found. Please authenticate first.' });
-          }
-          
-          const circleId = req.body.circleId;
-          const walletId = req.body.walletId;
-          const memberAddress = req.body.memberAddress;
-          
-          if (!circleId || !walletId || !memberAddress) {
-            return res.status(400).json({ 
-              error: 'Circle ID, wallet ID, and member address are required' 
-            });
-          }
-          
-          // Validate session
-          const session = validateSession(sessionId, 'returnSecurityDeposit');
-          
-          // Handle network parameter if provided by frontend
-          const requestedNetwork = req.body.network;
-          const currentServerNetwork = getCurrentNetwork();
-          
-          console.log(`[returnSecurityDeposit] Network info - Frontend requested: ${requestedNetwork}, Server current: ${currentServerNetwork}`);
-          
-          if (requestedNetwork && (requestedNetwork === 'testnet' || requestedNetwork === 'mainnet')) {
-            if (requestedNetwork !== currentServerNetwork) {
-              console.log(`[returnSecurityDeposit] Network mismatch detected! Frontend: ${requestedNetwork}, Server: ${currentServerNetwork}`);
-            }
-          }
-          
-          // Get the correct RPC URL for the requested network
-          const networkToUse = requestedNetwork || currentServerNetwork;
-          const rpcUrl = networkToUse === 'testnet' 
-            ? (process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://fullnode.testnet.sui.io:443')
-            : (process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://fullnode.mainnet.sui.io:443');
-          
-          // Initialize SUI client with the correct network's RPC URL
-          const suiClient = new SuiClient({ url: rpcUrl });
-          console.log(`[returnSecurityDeposit] Using ${networkToUse} network with RPC: ${rpcUrl}`);
-          
-          // Verify the wallet exists and is accessible
-          let walletObj;
-          try {
-            walletObj = await suiClient.getObject({
-              id: walletId,
-              options: { showContent: true }
-            });
-            
-            if (!walletObj.data?.content) {
-              console.log(`Wallet ${walletId} not found on ${networkToUse} network`);
-              return res.status(400).json({ 
-                error: `Wallet not found on ${networkToUse} network`
-              });
-            }
-          } catch (error) {
-            console.log(`Error accessing wallet ${walletId}:`, error);
-            return res.status(400).json({ 
-              error: `Cannot access wallet on ${networkToUse} network`
-            });
-          }
-          
-          // Temporarily set the network to match the frontend request
-          const originalNetwork = getCurrentNetwork();
-          let txResult;
-          
-          try {
-            if (requestedNetwork && requestedNetwork !== originalNetwork) {
-              console.log(`Temporarily switching server network from ${originalNetwork} to ${requestedNetwork} for transaction`);
-              setCurrentNetwork(requestedNetwork as NetworkType);
-              // Reinitialize the EnokiZkLoginService with the new network configuration
-              instance.initializeWithNetwork();
-            }
-            
-            console.log(`Returning security deposit from wallet ${walletId} to member ${memberAddress}`);
-            
-            // Get the network-aware package ID dynamically
-            const networkPackageId = getCurrentPackageId();
-            console.log(`[returnSecurityDeposit] Network-aware package ID: ${networkPackageId}`);
-            
-            // First, get detailed object information with better error handling
-            console.log(`Attempting to fetch circle object ${circleId} from ${networkToUse} network using RPC: ${rpcUrl}`);
-            
-            let circleObj;
-            try {
-              circleObj = await suiClient.getObject({
-                id: circleId,
-                options: { 
-                  showContent: true,
-                  showType: true,
-                  showOwner: true
-                }
-              });
-            } catch (error) {
-              console.error('Error fetching circle object:', error);
-              return res.status(400).json({ 
-                error: `Failed to fetch circle object: ${error instanceof Error ? error.message : String(error)}`
-              });
-            }
-            
-            console.log('Raw circle object response:', JSON.stringify(circleObj, null, 2));
-            
-            if (!circleObj.data) {
-              return res.status(400).json({ 
-                error: `Circle object ${circleId} not found on ${networkToUse} network. The object might not exist or might be on a different network.`
-              });
-            }
-            
-            console.log('Circle object type:', circleObj.data.type);
-            console.log('Circle object owner:', circleObj.data.owner);
-            
-            // Verify this is actually a Circle object and extract the correct package ID
-            const objectType = circleObj.data.type;
-            if (!objectType || (!objectType.includes('njangi_circles::Circle') && !objectType.includes('Circle'))) {
-              return res.status(400).json({ 
-                error: `Object ${circleId} is not a Circle object. Found type: ${objectType || 'undefined'}. This might indicate a network mismatch - please ensure you're on the correct network.`
-              });
-            }
-            
-            // Extract the actual package ID from the object type
-            // Object type format: "0x<package_id>::njangi_circles::Circle"
-            const objectPackageId = objectType.split('::')[0];
-            console.log(`[returnSecurityDeposit] Circle object package ID: ${objectPackageId}`);
-            console.log(`[returnSecurityDeposit] Current network package ID: ${networkPackageId}`);
-            const packageIdToUse = await resolveCirclePackageIdForTransaction({
-              context: 'returnSecurityDeposit',
-              network: networkToUse,
-              circleId,
-              objectPackageId,
-              userAddress: account.userAddr,
-            });
-            console.log(`[returnSecurityDeposit] Effective package ID for transaction: ${packageIdToUse}`);
-
-            const normalizedMemberAddress = normalizeAddress(memberAddress);
-            if (circleObj.data?.content && 'fields' in circleObj.data.content) {
-              const fields = circleObj.data.content.fields as Record<string, unknown>;
-              console.log('Circle is_active:', fields.is_active);
-              console.log('Circle is_paused_after_cycle:', fields.paused_after_cycle);
-
-              const canReturnSecurityDeposit = fields.is_active !== true || fields.paused_after_cycle === true;
-              if (!canReturnSecurityDeposit) {
-                return res.status(400).json({ 
-                  error: `Circle must be inactive or paused after a cycle to return security deposits. Current state: is_active=${fields.is_active}, paused_after_cycle=${fields.paused_after_cycle}.`
-                });
-              }
-            }
-
-            const depositContext = await resolveMemberSecurityDepositContext({
-              suiClient,
-              packageId: packageIdToUse,
-              circleId,
-              walletId,
-              memberAddress: normalizedMemberAddress,
-              circleContent: circleObj.data.content,
-              walletContent: walletObj.data?.content,
-            });
-
-            console.log('[returnSecurityDeposit] Resolved member deposit context:', {
-              memberAddress: normalizedMemberAddress,
-              hasPaidDeposit: depositContext.hasPaidDeposit,
-              depositBalance: depositContext.depositBalance.toString(),
-              coinKind: depositContext.coinKind,
-              stablecoinTypeArg: depositContext.stablecoinTypeArg,
-            });
-
-            txResult = await instance.sendTransaction(
-              session.account!,
-              (txb: Transaction) => {
-                txb.setSender(session.account!.userAddr);
-
-                if (depositContext.coinKind === 'stablecoin') {
-                  txb.moveCall({
-                    target: `${packageIdToUse}::njangi_payments::admin_payout_security_deposit_stablecoin`,
-                    typeArguments: [depositContext.stablecoinTypeArg],
-                    arguments: [
-                      txb.object(circleId),
-                      txb.object(walletId),
-                      txb.pure.address(normalizedMemberAddress),
-                      txb.object(CLOCK_OBJECT_ID)
-                    ]
-                  });
-                } else {
-                  txb.moveCall({
-                    target: `${packageIdToUse}::njangi_payments::admin_payout_security_deposit_sui`,
-                    arguments: [
-                      txb.object(circleId),
-                      txb.object(walletId),
-                      txb.pure.address(normalizedMemberAddress)
-                    ]
-                  });
-                }
-              },
-              { gasBudget: 100000000 }
-            );
-          } finally {
-            // Always restore the original network and reinitialize the service
-            if (requestedNetwork && requestedNetwork !== originalNetwork) {
-              console.log(`Restoring server network back to ${originalNetwork}`);
-              setCurrentNetwork(originalNetwork as NetworkType);
-              instance.initializeWithNetwork();
-            }
-          }
-          
-          console.log('Security deposit return result:', JSON.stringify(txResult, null, 2));
-          
-          // Check if transaction actually succeeded
-          if (txResult.status === 'failure') {
-            console.error('Security deposit return transaction failed:', txResult.error);
-            
-            const errorStr = txResult.error || '';
-            const errorMessage = mapSecurityDepositErrorMessage(errorStr);
-            
-            return res.status(400).json({
-              error: errorMessage,
-              digest: txResult.digest,
-              status: txResult.status,
-              details: txResult.error,
-              requireRelogin: false
-            });
-          }
-          
-          return res.status(200).json({ 
-            digest: txResult.digest,
-            status: txResult.status,
-            gasUsed: txResult.gasUsed
-          });
-          
-        } catch (error) {
-          console.error('Error returning security deposit:', error);
-          
-          const errorStr = error instanceof Error ? error.message : String(error);
-
-          if (errorStr.includes('MoveAbort')) {
-            return res.status(400).json({ 
-              error: mapSecurityDepositErrorMessage(errorStr, 'Failed to return security deposit'),
-              details: errorStr
-            });
-          }
-          
-          return res.status(500).json({ 
-            error: 'Failed to return security deposit', 
-            details: errorStr
-          });
-        }
-      }
+      case 'returnSecurityDeposit':
+        return res.status(410).json({
+          error: 'Admin-discretionary custody operations were removed in the non-custodial Phase 1 redesign. Use the member-initiated recovery flow instead.',
+          code: 'CUSTODY_OP_REMOVED',
+        });
 
       case 'adminSetMaxMembers': {
         // Handle network parameter if provided by frontend
@@ -6742,8 +5443,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             session.account,
             (txb: Transaction) => {
               txb.setSender(session.account!.userAddr);
+              // Phase 1 compliance update: the on-chain function is now
+              // the permissionless `trigger_payout`. Anyone (admin or otherwise)
+              // can call it once every member has contributed; the recipient
+              // is derived deterministically from the rotation order.
               txb.moveCall({
-                target: `${packageIdToUse}::njangi_payments::admin_trigger_payout`,
+                target: `${packageIdToUse}::njangi_payments::trigger_payout`,
                 arguments: [
                   txb.object(circleId),
                   txb.object(req.body.walletId),
@@ -6818,142 +5523,183 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       } // End case 'adminTriggerPayout'
 
-      case 'adminTriggerUsdcPayout': {
-        // Handle network switching for correct package ID
-        const { network: usdcRequestedNetwork } = req.body;
-        const usdcOriginalNetwork = getCurrentNetwork();
-        
-        try {
-          // Switch to requested network if specified
-          if (usdcRequestedNetwork && usdcRequestedNetwork !== usdcOriginalNetwork) {
-            console.log(`🌍 adminTriggerUsdcPayout: Switching network from ${usdcOriginalNetwork} to ${usdcRequestedNetwork}`);
-            setCurrentNetwork(usdcRequestedNetwork as 'testnet' | 'mainnet');
-            // CRITICAL: Reinitialize the service with the new network's RPC URL
-            instance.initializeWithNetwork();
-          }
-          
-          // Validate required parameters
-          if (!account) {
-            return res.status(400).json({ error: 'Account data is required' });
-          }
-          if (!circleId) {
-            return res.status(400).json({ error: 'Circle ID is required' });
-          }
-          if (!req.body.walletId) {
-            return res.status(400).json({ error: 'Wallet ID is required' });
-          }
+      // Phase 2 cleanup: 'adminTriggerUsdcPayout' was a duplicate of
+      // 'adminTriggerPayout' that targeted the deleted Move function
+      // `admin_trigger_usdc_payout`. The new permissionless `trigger_payout<T>`
+      // covers both routing paths via the CoinType generic, so any caller
+      // that previously dispatched 'adminTriggerUsdcPayout' should send
+      // 'adminTriggerPayout' instead with the desired CoinType.
 
-          // Validate session
-          if (!sessionId) {
-            return res.status(401).json({ error: 'No session found. Please authenticate first.' });
-          }
+      // ====================================================================
+      // Phase 3: per-cycle CycleEscrow dispatch cases.
+      //
+      // These expose `njangi_cycle_escrow::open_cycle / contribute /
+      // finalize_and_redeem` through the legacy server-signing flow so that
+      // existing UI code paths can migrate without also rewriting their
+      // signing layer. New flows should prefer `useZkLoginSigner` on the
+      // client so the ephemeral key never leaves the browser.
+      // ====================================================================
+
+      case 'openCycleEscrow': {
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+        if (!sessionId) {
+          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+        }
+        try {
           const session = validateSession(sessionId, 'sendTransaction');
           if (!session.account) {
             sessions.delete(sessionId);
             clearSessionCookie(res);
-            return res.status(401).json({
-              error: 'Invalid session: No account data found. Please authenticate first.',
-              requireRelogin: true
-            });
+            return res.status(401).json({ error: 'Invalid session', requireRelogin: true });
           }
-
-          console.log(`Admin triggering USDC payout for circle ${circleId} with wallet ${req.body.walletId} on network ${getCurrentNetwork()}`);
+          const { circleId: escrowCircleId, coinType } = req.body as {
+            circleId?: string;
+            coinType?: string;
+          };
+          if (!escrowCircleId) return res.status(400).json({ error: 'circleId required' });
+          if (!coinType) return res.status(400).json({ error: 'coinType required' });
 
           const packageIdToUse = await resolveCirclePackageIdForTransaction({
-            context: 'adminTriggerUsdcPayout',
+            context: 'openCycleEscrow',
             network: getCurrentNetwork(),
-            circleId,
+            circleId: escrowCircleId,
             userAddress: session.account.userAddr,
           });
-          console.log(`Using package ID ${packageIdToUse} for circle ${circleId} on ${getCurrentNetwork()}`);
 
-          // Define the USDC coin type using network config
-          const USDC_TYPE = getCurrentCoinTypes().USDC;
-
-          // Send the transaction
           const txResult = await instance.sendTransaction(
             session.account,
             (txb: Transaction) => {
               txb.setSender(session.account!.userAddr);
               txb.moveCall({
-                target: `${packageIdToUse}::njangi_payments::admin_trigger_usdc_payout`,
-                arguments: [
-                  txb.object(circleId),
-                  txb.object(req.body.walletId),
-                  txb.object("0x6"), // Clock object
-                ],
-                typeArguments: [USDC_TYPE] // Specify the USDC coin type
+                target: `${packageIdToUse}::njangi_cycle_escrow::open_cycle`,
+                typeArguments: [coinType],
+                arguments: [txb.object(escrowCircleId), txb.object('0x6')],
               });
             },
-            { gasBudget: 100000000 } // Higher gas budget for payout operation
+            { gasBudget: 80_000_000 },
           );
-
-          console.log('Admin trigger USDC payout transaction successful:', txResult);
-          
-          // Restore original network
-          if (usdcRequestedNetwork && usdcRequestedNetwork !== usdcOriginalNetwork) {
-            setCurrentNetwork(usdcOriginalNetwork as 'testnet' | 'mainnet');
-            instance.initializeWithNetwork();
-          }
-          
           return res.status(200).json({
             digest: txResult.digest,
             status: txResult.status,
-            gasUsed: txResult.gasUsed
+            gasUsed: txResult.gasUsed,
           });
-
         } catch (error) {
-          // Restore original network on error
-          if (usdcRequestedNetwork && usdcRequestedNetwork !== usdcOriginalNetwork) {
-            setCurrentNetwork(usdcOriginalNetwork as 'testnet' | 'mainnet');
-            instance.initializeWithNetwork();
-          }
-          
-          console.error('Error triggering USDC payout:', error);
-
-          // Handle authentication errors
-          if (error instanceof Error &&
-              (error.message.includes('proof verify failed') ||
-              error.message.includes('Session expired') ||
-              error.message.includes('re-authenticate'))) {
-
-            if (sessionId) {
-              sessions.delete(sessionId);
-              clearSessionCookie(res);
-            }
-            return res.status(401).json({
-              error: 'Your session has expired. Please login again.',
-              requireRelogin: true
-            });
-          }
-
-          // Handle specific contract errors
-          if (error instanceof Error) {
-            if (error.message.includes('ENotAdmin') || error.message.includes('ENotCircleAdmin') || error.message.includes(', 7)')) {
-              return res.status(403).json({ error: 'Only the circle admin can trigger payouts.' });
-            }
-            if (error.message.includes('ECircleNotActive') || error.message.includes(', 54)')) {
-              return res.status(400).json({ error: 'Cannot trigger payout: The circle is not active.' });
-            }
-            if (error.message.includes('EPayoutAlreadyProcessed') || error.message.includes(', 23)')) {
-              return res.status(400).json({ error: 'The current member in rotation has already received a payout for this cycle.' });
-            }
-            if (error.message.includes('EInsufficientTreasuryBalance') || error.message.includes(', 25)')) {
-              return res.status(400).json({ error: 'Insufficient funds in treasury to process the payout.' });
-            }
-            if (error.message.includes('EUnsupportedToken') || error.message.includes(', 37)')) {
-              return res.status(400).json({ error: 'This circle does not have USDC configured or available.' });
-            }
-          }
-
-          // Generic error
+          console.error('openCycleEscrow failed', error);
           return res.status(500).json({
-            error: error instanceof Error ? error.message : 'Failed to trigger USDC payout',
-            details: error instanceof Error ? error.stack : String(error),
-            requireRelogin: false
+            error: error instanceof Error ? error.message : 'Failed to open cycle escrow',
           });
         }
-      } // End case 'adminTriggerUsdcPayout'
+      }
+
+      case 'contributeToCycleEscrow': {
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+        if (!sessionId) {
+          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+        }
+        try {
+          const session = validateSession(sessionId, 'sendTransaction');
+          if (!session.account) {
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ error: 'Invalid session', requireRelogin: true });
+          }
+          const { escrowId, paymentCoinId, coinType } = req.body as {
+            escrowId?: string;
+            paymentCoinId?: string;
+            coinType?: string;
+          };
+          if (!escrowId) return res.status(400).json({ error: 'escrowId required' });
+          if (!paymentCoinId) return res.status(400).json({ error: 'paymentCoinId required' });
+          if (!coinType) return res.status(400).json({ error: 'coinType required' });
+
+          const packageIdToUse = await resolveCirclePackageIdForTransaction({
+            context: 'contributeToCycleEscrow',
+            network: getCurrentNetwork(),
+            circleId: escrowId,
+            userAddress: session.account.userAddr,
+          });
+
+          const txResult = await instance.sendTransaction(
+            session.account,
+            (txb: Transaction) => {
+              txb.setSender(session.account!.userAddr);
+              txb.moveCall({
+                target: `${packageIdToUse}::njangi_cycle_escrow::contribute`,
+                typeArguments: [coinType],
+                arguments: [txb.object(escrowId), txb.object(paymentCoinId)],
+              });
+            },
+            { gasBudget: 80_000_000 },
+          );
+          return res.status(200).json({
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed,
+          });
+        } catch (error) {
+          console.error('contributeToCycleEscrow failed', error);
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to contribute to cycle escrow',
+          });
+        }
+      }
+
+      case 'finalizeAndRedeemCycleEscrow': {
+        if (!account) {
+          return res.status(400).json({ error: 'Account data is required' });
+        }
+        if (!sessionId) {
+          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
+        }
+        try {
+          const session = validateSession(sessionId, 'sendTransaction');
+          if (!session.account) {
+            sessions.delete(sessionId);
+            clearSessionCookie(res);
+            return res.status(401).json({ error: 'Invalid session', requireRelogin: true });
+          }
+          const { escrowId, coinType } = req.body as {
+            escrowId?: string;
+            coinType?: string;
+          };
+          if (!escrowId) return res.status(400).json({ error: 'escrowId required' });
+          if (!coinType) return res.status(400).json({ error: 'coinType required' });
+
+          const packageIdToUse = await resolveCirclePackageIdForTransaction({
+            context: 'finalizeAndRedeemCycleEscrow',
+            network: getCurrentNetwork(),
+            circleId: escrowId,
+            userAddress: session.account.userAddr,
+          });
+
+          const txResult = await instance.sendTransaction(
+            session.account,
+            (txb: Transaction) => {
+              txb.setSender(session.account!.userAddr);
+              txb.moveCall({
+                target: `${packageIdToUse}::njangi_cycle_escrow::finalize_and_redeem`,
+                typeArguments: [coinType],
+                arguments: [txb.object(escrowId), txb.object('0x6')],
+              });
+            },
+            { gasBudget: 100_000_000 },
+          );
+          return res.status(200).json({
+            digest: txResult.digest,
+            status: txResult.status,
+            gasUsed: txResult.gasUsed,
+          });
+        } catch (error) {
+          console.error('finalizeAndRedeemCycleEscrow failed', error);
+          return res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to finalize and redeem',
+          });
+        }
+      }
 
       case 'resumeCycle':
         // Validate required parameters
@@ -7243,7 +5989,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             circleId,
             userAddress: account.userAddr,
           });
-          const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+          const suiClient = await createSuiClient();
           const stablecoinTypeArg = await resolveRecoveryWalletCoinType(suiClient, recoveryWalletId);
 
           const txResult = await instance.sendTransaction(
@@ -7328,7 +6074,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             circleId,
             userAddress: account.userAddr,
           });
-          const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+          const suiClient = await createSuiClient();
           const stablecoinTypeArg = await resolveRecoveryWalletCoinType(suiClient, recoveryWalletId);
 
           const txResult = await instance.sendTransaction(
@@ -7377,907 +6123,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      case 'payoutSecurityDepositSui':
-        // Validate required parameters
-        if (!account) {
-          return res.status(400).json({ error: 'Account data is required' });
-        }
-        
-        // Extract parameters from request body
-        const { circleId: payoutCircleId, memberAddress, walletId: payoutWalletId } = req.body;
-        
-        if (!payoutCircleId) {
-          return res.status(400).json({ error: 'Circle ID is required' });
-        }
-        
-        if (!memberAddress) {
-          return res.status(400).json({ error: 'Member address is required' });
-        }
-        
-        if (!payoutWalletId) {
-          return res.status(400).json({ error: 'Wallet ID is required' });
-        }
-        
-        try {
-          // Validate the session
-          try {
-            if (!sessionId) {
-              throw new Error('No session ID provided');
-            }
-            // Just validate the session without storing the result
-            validateSession(sessionId, 'sendTransaction');
-          } catch (validationError) {
-            console.error('Session validation failed:', validationError);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              error: validationError instanceof Error ? validationError.message : 'Session validation failed',
-              requireRelogin: true
-            });
-          }
-          
-          console.log(`Processing SUI security deposit payout for member ${memberAddress} in circle ${payoutCircleId} with wallet ${payoutWalletId}`);
-
-          // Normalize address to ensure it's in the correct format
-          const normalizedAddress = memberAddress.startsWith('0x') ? memberAddress : `0x${memberAddress}`;
-          console.log(`Processing SUI security deposit payout for member ${normalizedAddress} in circle ${payoutCircleId} with wallet ${payoutWalletId}`);
-          const packageIdToUse = await resolveCirclePackageIdForTransaction({
-            context: 'payoutSecurityDepositSui',
-            network: getCurrentNetwork(),
-            circleId: payoutCircleId,
-            userAddress: account.userAddr,
-          });
-
-          // Send transaction using zkLogin service
-          const txResult = await instance.sendTransaction(
-            account,
-            (txb: Transaction) => {
-              txb.setSender(account.userAddr);
-              
-              // Call the admin_payout_security_deposit_sui function - no clock parameter needed
-              txb.moveCall({
-                target: `${packageIdToUse}::njangi_payments::admin_payout_security_deposit_sui`,
-                arguments: [
-                  txb.object(payoutCircleId),
-                  txb.object(payoutWalletId),
-                  txb.pure.address(normalizedAddress)
-                ]
-              });
-            },
-            { gasBudget: 100000000 } // Higher gas budget for payout
-          );
-          
-          console.log('Security deposit SUI payout successful:', txResult);
-          return res.status(200).json({
-            digest: txResult.digest,
-            status: txResult.status,
-            gasUsed: txResult.gasUsed
-          });
-        } catch (error) {
-          console.error('Error processing security deposit SUI payout:', error);
-          
-          // Handle authentication errors
-          if (error instanceof Error &&
-              (error.message.includes('proof verify failed') ||
-              error.message.includes('Session expired') ||
-              error.message.includes('re-authenticate'))) {
-            
-            if (sessionId) {
-              sessions.delete(sessionId);
-              clearSessionCookie(res);
-            }
-            return res.status(401).json({
-              error: 'Your session has expired. Please login again.',
-              requireRelogin: true
-            });
-          }
-          
-          // Handle specific contract errors
-          if (error instanceof Error) {
-            if (error.message.includes('ENotAdmin') || error.message.includes('ENotCircleAdmin')) {
-              return res.status(403).json({ error: 'Only the circle admin can process security deposit payouts.' });
-            }
-            if (error.message.includes('EMemberNotFound') || error.message.includes('EMemberNotActive')) {
-              return res.status(400).json({ error: 'Member not found or not active in this circle.' });
-            }
-            if (error.message.includes('ENoSecurityDeposit') || error.message.includes('EDepositNotPaid')) {
-              return res.status(400).json({ error: 'This member has not paid a security deposit or it has already been withdrawn.' });
-            }
-            if (error.message.includes('EInsufficientBalance')) {
-              return res.status(400).json({ error: 'Insufficient SUI balance to process the security deposit payout.' });
-            }
-          }
-          
-          // Generic error
-          return res.status(500).json({
-            error: error instanceof Error ? error.message : 'Failed to process security deposit payout',
-            details: error instanceof Error ? error.stack : String(error),
-            requireRelogin: false
-          });
-        }
-        break;
-
-      case 'payoutSecurityDepositStablecoin':
-        // Validate required parameters
-        if (!account) {
-          return res.status(400).json({ error: 'Account data is required' });
-        }
-        
-        // Extract parameters from request body
-        const { circleId: stablecoinPayoutCircleId, memberAddress: stablecoinPayoutMember, walletId: stablecoinWalletId } = req.body;
-        
-        if (!stablecoinPayoutCircleId) {
-          return res.status(400).json({ error: 'Circle ID is required' });
-        }
-        
-        if (!stablecoinPayoutMember) {
-          return res.status(400).json({ error: 'Member address is required' });
-        }
-        
-        if (!stablecoinWalletId) {
-          return res.status(400).json({ error: 'Wallet ID is required' });
-        }
-        
-        try {
-          // Validate the session
-          try {
-            if (!sessionId) {
-              throw new Error('No session ID provided');
-            }
-            // Just validate the session without storing the result
-            validateSession(sessionId, 'sendTransaction');
-          } catch (validationError) {
-            console.error('Session validation failed:', validationError);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              error: validationError instanceof Error ? validationError.message : 'Session validation failed',
-              requireRelogin: true
-            });
-          }
-          
-          console.log(`Processing stablecoin security deposit payout for member ${stablecoinPayoutMember} in circle ${stablecoinPayoutCircleId} with wallet ${stablecoinWalletId}`);
-
-          // Normalize address to ensure it's in the correct format
-          const normalizedStablecoinAddress = stablecoinPayoutMember.startsWith('0x') ? stablecoinPayoutMember : `0x${stablecoinPayoutMember}`;
-          console.log(`Processing stablecoin security deposit payout for member ${normalizedStablecoinAddress} in circle ${stablecoinPayoutCircleId} with wallet ${stablecoinWalletId}`);
-
-          // Use the standard USDC type from constants
-          const depositUsedUsdcType = USDC_COIN_TYPE;
-          console.log(`Using stablecoin type: ${depositUsedUsdcType}`);
-          const packageIdToUse = await resolveCirclePackageIdForTransaction({
-            context: 'payoutSecurityDepositStablecoin',
-            network: getCurrentNetwork(),
-            circleId: stablecoinPayoutCircleId,
-            userAddress: account.userAddr,
-          });
-
-          // Send transaction using zkLogin service
-          const txResult = await instance.sendTransaction(
-            account,
-            (txb: Transaction) => {
-              txb.setSender(account.userAddr);
-              
-              // Call the admin_payout_security_deposit_stablecoin function
-              txb.moveCall({
-                target: `${packageIdToUse}::njangi_payments::admin_payout_security_deposit_stablecoin`,
-                typeArguments: [depositUsedUsdcType],
-                arguments: [
-                  txb.object(stablecoinPayoutCircleId),
-                  txb.object(stablecoinWalletId),
-                  txb.pure.address(normalizedStablecoinAddress),
-                  txb.object(CLOCK_OBJECT_ID) // Clock object
-                ]
-              });
-            },
-            { gasBudget: 100000000 } // Higher gas budget for payout
-          );
-          
-          console.log('Security deposit stablecoin payout successful:', txResult);
-          return res.status(200).json({
-            digest: txResult.digest,
-            status: txResult.status,
-            gasUsed: txResult.gasUsed
-          });
-        } catch (error) {
-          console.error('Error processing security deposit stablecoin payout:', error);
-          
-          // Handle authentication errors
-          if (error instanceof Error &&
-              (error.message.includes('proof verify failed') ||
-              error.message.includes('Session expired') ||
-              error.message.includes('re-authenticate'))) {
-            
-            if (sessionId) {
-              sessions.delete(sessionId);
-              clearSessionCookie(res);
-            }
-            return res.status(401).json({
-              error: 'Your session has expired. Please login again.',
-              requireRelogin: true
-            });
-          }
-          
-          // Handle specific contract errors
-          if (error instanceof Error) {
-            if (error.message.includes('ENotAdmin') || error.message.includes('ENotCircleAdmin')) {
-              return res.status(403).json({ error: 'Only the circle admin can process security deposit payouts.' });
-            }
-            if (error.message.includes('EMemberNotFound') || error.message.includes('EMemberNotActive')) {
-              return res.status(400).json({ error: 'Member not found or not active in this circle.' });
-            }
-            if (error.message.includes('ENoSecurityDeposit') || error.message.includes('EDepositNotPaid')) {
-              return res.status(400).json({ error: 'This member has not paid a security deposit or it has already been withdrawn.' });
-            }
-            if (error.message.includes('EInsufficientBalance')) {
-              return res.status(400).json({ error: 'Insufficient stablecoin balance to process the security deposit payout.' });
-            }
-            if (error.message.includes('EUnsupportedToken')) {
-              return res.status(400).json({ error: 'This circle does not support stablecoin security deposit payouts.' });
-            }
-          }
-          
-          // Generic error
-          return res.status(500).json({
-            error: error instanceof Error ? error.message : 'Failed to process stablecoin security deposit payout',
-            details: error instanceof Error ? error.stack : String(error),
-            requireRelogin: false
-          });
-        }
-        break;
-
-      // ========================================
-      // YIELD MANAGEMENT ENDPOINTS
-      // ========================================
-      
-      case 'createYieldConfig':
-        if (!account) {
-          return res.status(400).json({ error: 'Account data is required' });
-        }
-
-        if (!sessionId) {
-          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
-        }
-
-        try {
-          validateSession(sessionId, 'createYieldConfig');
-          const { circleId: yieldCircleId, strategy, autoCompound = true } = req.body;
-
-          if (!yieldCircleId) {
-            return res.status(400).json({ error: 'Circle ID is required' });
-          }
-
-          if (!strategy || !['conservative', 'balanced', 'aggressive'].includes(strategy)) {
-            return res.status(400).json({ error: 'Valid strategy is required (conservative, balanced, aggressive)' });
-          }
-
-          // Map strategy to smart contract values
-          const strategyMap = {
-            'conservative': 0,
-            'balanced': 1, 
-            'aggressive': 2
-          };
-
-          console.log(`Creating yield config for circle ${yieldCircleId} with strategy ${strategy}`);
-          const packageIdToUse = await resolveCirclePackageIdForTransaction({
-            context: 'createYieldConfig',
-            network: getCurrentNetwork(),
-            circleId: yieldCircleId,
-            userAddress: account.userAddr,
-          });
-
-          const txResult = await instance.sendTransaction(
-            account,
-            (txb: Transaction) => {
-              txb.setSender(account.userAddr);
-              
-              txb.moveCall({
-                target: `${packageIdToUse}::njangi_yield_integration::create_yield_config`,
-                arguments: [
-                  txb.object(yieldCircleId),
-                  txb.pure.u8(strategyMap[strategy as keyof typeof strategyMap]),
-                  txb.pure.bool(autoCompound),
-                  txb.object(CLOCK_OBJECT_ID)
-                ]
-              });
-            },
-            { gasBudget: 100000000 }
-          );
-
-          console.log('Yield config creation successful:', txResult);
-          return res.status(200).json({
-            digest: txResult.digest,
-            status: txResult.status,
-            gasUsed: txResult.gasUsed,
-            strategy
-          });
-        } catch (error) {
-          console.error('Error creating yield config:', error);
-          
-          if (error instanceof Error &&
-              (error.message.includes('proof verify failed') ||
-              error.message.includes('Session expired') ||
-              error.message.includes('re-authenticate'))) {
-            
-            if (sessionId) {
-              sessions.delete(sessionId);
-              clearSessionCookie(res);
-            }
-            return res.status(401).json({
-              error: 'Your session has expired. Please login again.',
-              requireRelogin: true
-            });
-          }
-
-          if (error instanceof Error) {
-            if (error.message.includes('ENotCircleAdmin')) {
-              return res.status(403).json({ error: 'Only the circle admin can create yield configurations.' });
-            }
-            if (error.message.includes('EInvalidYieldStrategy')) {
-              return res.status(400).json({ error: 'Invalid yield strategy selected.' });
-            }
-          }
-
-          return res.status(500).json({
-            error: error instanceof Error ? error.message : 'Failed to create yield configuration',
-            requireRelogin: false
-          });
-        }
-        break;
-
-      case 'changeYieldStrategy':
-        if (!account) {
-          return res.status(400).json({ error: 'Account data is required' });
-        }
-
-        if (!sessionId) {
-          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
-        }
-
-        try {
-          validateSession(sessionId, 'changeYieldStrategy');
-          const { yieldConfigId, strategy } = req.body;
-
-          if (!yieldConfigId) {
-            return res.status(400).json({ error: 'Yield config ID is required' });
-          }
-
-          if (!strategy || !['conservative', 'balanced', 'aggressive'].includes(strategy)) {
-            return res.status(400).json({ error: 'Valid strategy is required (conservative, balanced, aggressive)' });
-          }
-
-          // Map strategy to smart contract values
-          const strategyMap = {
-            'conservative': 0,
-            'balanced': 1,
-            'aggressive': 2
-          };
-
-          console.log(`Changing yield strategy to ${strategy} for config ${yieldConfigId}`);
-          const packageIdToUse = await getObjectTransactionPackageId(yieldConfigId);
-
-          const txResult = await instance.sendTransaction(
-            account,
-            (txb: Transaction) => {
-              txb.setSender(account.userAddr);
-              
-              // For now, we'll create a new config with the new strategy
-              // In a future update, we could add an update_yield_strategy function to the smart contract
-              txb.moveCall({
-                target: `${packageIdToUse}::njangi_yield_integration::create_yield_config`,
-                arguments: [
-                  txb.object(yieldConfigId), // This would need to be updated to use proper circle ID
-                  txb.pure.u8(strategyMap[strategy as keyof typeof strategyMap]),
-                  txb.pure.bool(true), // auto_compound
-                  txb.object(CLOCK_OBJECT_ID)
-                ]
-              });
-            },
-            { gasBudget: 100000000 }
-          );
-
-          console.log('Yield strategy change successful:', txResult);
-          return res.status(200).json({
-            digest: txResult.digest,
-            status: txResult.status,
-            gasUsed: txResult.gasUsed,
-            newStrategy: strategy
-          });
-        } catch (error) {
-          console.error('Error changing yield strategy:', error);
-          
-          if (error instanceof Error &&
-              (error.message.includes('proof verify failed') ||
-              error.message.includes('Session expired') ||
-              error.message.includes('re-authenticate'))) {
-            
-            if (sessionId) {
-              sessions.delete(sessionId);
-              clearSessionCookie(res);
-            }
-            return res.status(401).json({
-              error: 'Your session has expired. Please login again.',
-              requireRelogin: true
-            });
-          }
-
-          if (error instanceof Error) {
-            if (error.message.includes('ENotCircleAdmin')) {
-              return res.status(403).json({ error: 'Only the circle admin can change yield strategies.' });
-            }
-            if (error.message.includes('EYieldStrategyNotActive')) {
-              return res.status(400).json({ error: 'Yield strategy is not currently active.' });
-            }
-          }
-
-          return res.status(500).json({
-            error: error instanceof Error ? error.message : 'Failed to change yield strategy',
-            requireRelogin: false
-          });
-        }
-        break;
-
-      case 'generateYieldOnDeposit':
-        if (!account) {
-          return res.status(400).json({ error: 'Account data is required' });
-        }
-
-        if (!sessionId) {
-          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
-        }
-
-        try {
-          validateSession(sessionId, 'generateYieldOnDeposit');
-          const { circleId: depositCircleId, walletId: depositWalletId, yieldConfigId, memberAddress, depositAmount } = req.body;
-
-          if (!depositCircleId || !depositWalletId || !yieldConfigId || !memberAddress || !depositAmount) {
-            return res.status(400).json({ error: 'Circle ID, wallet ID, yield config ID, member address, and deposit amount are required' });
-          }
-
-          const depositAmountBig = BigInt(depositAmount);
-          if (depositAmountBig <= 0) {
-            return res.status(400).json({ error: 'Deposit amount must be greater than 0' });
-          }
-
-          console.log(`Generating yield on deposit for member ${memberAddress} with amount ${depositAmount} SUI`);
-          const packageIdToUse = await resolveCirclePackageIdForTransaction({
-            context: 'generateYieldOnDeposit',
-            network: getCurrentNetwork(),
-            circleId: depositCircleId,
-            userAddress: account.userAddr,
-          });
-
-          const txResult = await instance.sendTransaction(
-            account,
-            (txb: Transaction) => {
-              txb.setSender(account.userAddr);
-              
-              // FIXED: Now we pass the deposit amount directly - the function will withdraw from custody wallet
-              // Call generate_yield_on_security_deposit - now returns only YieldReceipt  
-              const yieldReceipt = txb.moveCall({
-                target: `${packageIdToUse}::njangi_yield_integration::generate_yield_on_security_deposit`,
-                arguments: [
-                  txb.object(depositCircleId),
-                  txb.object(depositWalletId),
-                  txb.object(yieldConfigId),
-                  txb.pure.address(memberAddress),
-                  txb.pure.u64(depositAmountBig), // Pass amount directly instead of coin
-                  txb.object(CLOCK_OBJECT_ID)
-                ]
-              });
-              
-              // Transfer the YieldReceipt to the member
-              txb.transferObjects([yieldReceipt], memberAddress);
-            },
-            { gasBudget: 150000000 } // Higher gas for DeFi operations
-          );
-
-          console.log('Yield generation on deposit successful:', txResult);
-          return res.status(200).json({
-            digest: txResult.digest,
-            status: txResult.status,
-            gasUsed: txResult.gasUsed
-          });
-        } catch (error) {
-          console.error('Error generating yield on deposit:', error);
-          
-          if (error instanceof Error &&
-              (error.message.includes('proof verify failed') ||
-              error.message.includes('Session expired') ||
-              error.message.includes('re-authenticate'))) {
-            
-            if (sessionId) {
-              sessions.delete(sessionId);
-              clearSessionCookie(res);
-            }
-            return res.status(401).json({
-              error: 'Your session has expired. Please login again.',
-              requireRelogin: true
-            });
-          }
-
-          if (error instanceof Error) {
-            if (error.message.includes('ENotCircleAdmin')) {
-              return res.status(403).json({ error: 'Only the circle admin can initiate yield generation.' });
-            }
-            if (error.message.includes('EYieldStrategyNotActive')) {
-              return res.status(400).json({ error: 'Yield strategy is not currently active.' });
-            }
-            if (error.message.includes('EInsufficientYieldBalance')) {
-              return res.status(400).json({ error: 'Insufficient balance for yield generation.' });
-            }
-          }
-
-          return res.status(500).json({
-            error: error instanceof Error ? error.message : 'Failed to generate yield on deposit',
-            requireRelogin: false
-          });
-        }
-        break;
-
-      case 'collectYield':
-        if (!account) {
-          return res.status(400).json({ error: 'Account data is required' });
-        }
-
-        if (!sessionId) {
-          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
-        }
-
-        try {
-          validateSession(sessionId, 'collectYield');
-          const { circleId: collectCircleId, walletId: collectWalletId, yieldConfigId, packageId } = req.body;
-
-          if (!collectCircleId || !collectWalletId || !yieldConfigId) {
-            return res.status(400).json({ error: 'Circle ID, wallet ID, and yield config ID are required' });
-          }
-
-          const targetPackageId = await resolveCirclePackageIdForTransaction({
-            context: 'collectYield',
-            network: getCurrentNetwork(),
-            circleId: collectCircleId,
-            requestedPackageId: packageId,
-            userAddress: account.userAddr,
-          });
-          console.log('Using package ID for yield collection:', targetPackageId);
-
-          console.log(`Collecting yield for circle ${collectCircleId}`);
-
-          const txResult = await instance.sendTransaction(
-            account,
-            (txb: Transaction) => {
-              txb.setSender(account.userAddr);
-              
-              txb.moveCall({
-                target: `${targetPackageId}::njangi_yield_integration::collect_yield`,
-                arguments: [
-                  txb.object(collectCircleId),
-                  txb.object(collectWalletId),
-                  txb.object(yieldConfigId),
-                  txb.object(CLOCK_OBJECT_ID)
-                ]
-              });
-            },
-            { gasBudget: 150000000 } // Higher gas for DeFi operations
-          );
-
-          console.log('Yield collection successful:', txResult);
-          return res.status(200).json({
-            digest: txResult.digest,
-            status: txResult.status,
-            gasUsed: txResult.gasUsed
-          });
-        } catch (error) {
-          console.error('Error collecting yield:', error);
-          
-          if (error instanceof Error &&
-              (error.message.includes('proof verify failed') ||
-              error.message.includes('Session expired') ||
-              error.message.includes('re-authenticate'))) {
-            
-            if (sessionId) {
-              sessions.delete(sessionId);
-              clearSessionCookie(res);
-            }
-            return res.status(401).json({
-              error: 'Your session has expired. Please login again.',
-              requireRelogin: true
-            });
-          }
-
-          if (error instanceof Error) {
-            if (error.message.includes('ENotCircleAdmin')) {
-              return res.status(403).json({ error: 'Only the circle admin can collect yield.' });
-            }
-            if (error.message.includes('EYieldCollectionFailed')) {
-              return res.status(400).json({ error: 'Failed to collect yield from DeFi protocols.' });
-            }
-          }
-
-          return res.status(500).json({
-            error: error instanceof Error ? error.message : 'Failed to collect yield',
-            requireRelogin: false
-          });
-        }
-        break;
-
-      case 'emergencyWithdrawYield':
-        if (!account) {
-          return res.status(400).json({ error: 'Account data is required' });
-        }
-
-        if (!sessionId) {
-          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
-        }
-
-        try {
-          validateSession(sessionId, 'emergencyWithdrawYield');
-          const { circleId: emergencyCircleId, walletId: emergencyWalletId, yieldConfigId, packageId, reason = 'Emergency withdrawal' } = req.body;
-
-          if (!emergencyCircleId || !emergencyWalletId || !yieldConfigId) {
-            return res.status(400).json({ error: 'Circle ID, wallet ID, and yield config ID are required' });
-          }
-
-          const targetPackageId = await resolveCirclePackageIdForTransaction({
-            context: 'emergencyWithdrawYield',
-            network: getCurrentNetwork(),
-            circleId: emergencyCircleId,
-            requestedPackageId: packageId,
-            userAddress: account.userAddr,
-          });
-          console.log('Using package ID for emergency yield withdrawal:', targetPackageId);
-
-          console.log(`Emergency withdrawing yield for circle ${emergencyCircleId}, reason: ${reason}`);
-
-          const txResult = await instance.sendTransaction(
-            account,
-            (txb: Transaction) => {
-              txb.setSender(account.userAddr);
-              
-              txb.moveCall({
-                target: `${targetPackageId}::njangi_yield_integration::emergency_withdraw_all`,
-                arguments: [
-                  txb.object(emergencyCircleId),
-                  txb.object(emergencyWalletId),
-                  txb.object(yieldConfigId),
-                  txb.pure.string(reason),
-                  txb.object(CLOCK_OBJECT_ID)
-                ]
-              });
-            },
-            { gasBudget: 200000000 } // Higher gas for emergency operations
-          );
-
-          console.log('Emergency yield withdrawal successful:', txResult);
-          return res.status(200).json({
-            digest: txResult.digest,
-            status: txResult.status,
-            gasUsed: txResult.gasUsed
-          });
-        } catch (error) {
-          console.error('Error with emergency yield withdrawal:', error);
-          
-          if (error instanceof Error &&
-              (error.message.includes('proof verify failed') ||
-              error.message.includes('Session expired') ||
-              error.message.includes('re-authenticate'))) {
-            
-            if (sessionId) {
-              sessions.delete(sessionId);
-              clearSessionCookie(res);
-            }
-            return res.status(401).json({
-              error: 'Your session has expired. Please login again.',
-              requireRelogin: true
-            });
-          }
-
-          if (error instanceof Error) {
-            if (error.message.includes('ENotCircleAdmin')) {
-              return res.status(403).json({ error: 'Only the circle admin can perform emergency withdrawals.' });
-            }
-            if (error.message.includes('EEmergencyWithdrawalFailed')) {
-              return res.status(400).json({ error: 'Emergency withdrawal failed.' });
-            }
-          }
-
-          return res.status(500).json({
-            error: error instanceof Error ? error.message : 'Failed to perform emergency withdrawal',
-            requireRelogin: false
-          });
-        }
-        break;
-
-      case 'addCetusLiquidity':
-        // Legacy Cetus-based path retained for backward compatibility.
-        // Not used by the Ember suiUSDe admin flow.
-        if (!account) {
-          return res.status(400).json({ error: 'Account data is required' });
-        }
-
-        if (!sessionId) {
-          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
-        }
-
-        try {
-          validateSession(sessionId, 'sendTransaction');
-          const { yieldData, packageId } = req.body;
-
-          if (!yieldData || !yieldData.sui_amount || !yieldData.circle_id || !yieldData.custody_wallet_id) {
-            return res.status(400).json({ error: 'Yield data with SUI amount, circle ID, and custody wallet ID are required' });
-          }
-
-          const targetPackageId = await resolveCirclePackageIdForTransaction({
-            context: 'addCetusLiquidity',
-            network: getCurrentNetwork(),
-            circleId: yieldData.circle_id,
-            requestedPackageId: packageId,
-            userAddress: account.userAddr,
-          });
-          console.log('Using package ID for legacy yield configuration:', targetPackageId);
-
-          console.log(`Setting up legacy yield integration for circle ${yieldData.circle_id}:`, {
-            suiAmount: yieldData.sui_amount,
-            poolId: yieldData.pool_id,
-            circleId: yieldData.circle_id,
-            custodyWalletId: yieldData.custody_wallet_id,
-            totalSecurityDeposits: yieldData.total_security_deposits
-          });
-
-          console.log('Implementing legacy yield contract integration:', {
-            custodyWalletId: yieldData.custody_wallet_id,
-            circleId: yieldData.circle_id,
-            requiredAmount: '1 SUI'
-          });
-
-          // Legacy STEP 1: create legacy yield configuration (separate from processing).
-          // The active admin flow for eSui-dollar uses deployToEmberVault/requestEmberRedemption.
-          const txResult = await instance.sendTransaction(
-            account,
-            (txb: Transaction) => {
-              txb.setSender(account.userAddr);
-              
-              // Create yield configuration - this will be a shared object
-              txb.moveCall({
-                target: `${targetPackageId}::njangi_yield_integration::create_yield_config`,
-                arguments: [
-                  txb.object(yieldData.circle_id), // circle: &Circle
-                  txb.pure.u8(0), // strategy: u8 (legacy compatibility value)
-                  txb.pure.bool(true), // auto_compound: bool
-                  txb.object(CLOCK_OBJECT_ID), // clock: &Clock
-                ]
-              });
-
-              console.log('Creating YieldConfig for later use in processSecurityDeposits');
-            },
-            { gasBudget: 100_000_000 }
-          );
-
-          console.log('Legacy yield integration transaction successful:', txResult);
-          return res.status(200).json({
-            digest: txResult.digest,
-            status: txResult.status,
-            gasUsed: txResult.gasUsed,
-            txHash: txResult.digest,
-            step: 'yield_config_created',
-            custodyWalletId: yieldData.custody_wallet_id,
-            circleId: yieldData.circle_id,
-            yieldStrategy: 'Legacy Compatibility Yield Path',
-            message: 'Legacy yield configuration created successfully.',
-            nextStep:
-              'For active eSui-dollar operations, use Deploy to Ember Vault and Request Redemption.',
-            details: {
-              configurationCreated: true,
-              readyForProcessing: true,
-              autoCompound: true,
-              strategy: 'Legacy compatibility contract path',
-              pendingAmount: yieldData.sui_amount,
-              custodyWalletId: yieldData.custody_wallet_id
-            }
-          });
-
-        } catch (error) {
-          console.error('Yield configuration creation failed:', error);
-          const errorMessage = (error as Error).message || 'Unknown error occurred during yield configuration creation';
-          return res.status(500).json({ 
-            error: errorMessage,
-            step: 'yield_config_creation_failed'
-          });
-        }
-        break; // Add missing break statement
-
-      case 'processSecurityDeposits':
-        if (!account) {
-          return res.status(400).json({ error: 'Account data is required' });
-        }
-
-        if (!sessionId) {
-          return res.status(401).json({ error: 'No session found. Please authenticate first.' });
-        }
-
-        try {
-          validateSession(sessionId, 'sendTransaction');
-          const { yieldData, packageId } = req.body;
-
-          if (!yieldData || !yieldData.config_id || !yieldData.circle_id || !yieldData.custody_wallet_id || !yieldData.deposit_amount) {
-            return res.status(400).json({ 
-              error: 'Yield data with config ID, circle ID, custody wallet ID, and deposit amount are required' 
-            });
-          }
-
-          const targetPackageId = await resolveCirclePackageIdForTransaction({
-            context: 'processSecurityDeposits',
-            network: getCurrentNetwork(),
-            circleId: yieldData.circle_id,
-            requestedPackageId: packageId,
-            userAddress: account.userAddr,
-          });
-          console.log('Using package ID for legacy security deposit processing:', targetPackageId);
-
-          console.log(`Processing security deposits via legacy yield path:`, {
-            configId: yieldData.config_id,
-            circleId: yieldData.circle_id,
-            custodyWalletId: yieldData.custody_wallet_id,
-            depositAmount: yieldData.deposit_amount
-          });
-
-          // Legacy processing path retained for backward compatibility.
-          // The active eSui-dollar flow is Ember deposit + Ember redemption request.
-          const txResult = await instance.sendTransaction(
-            account,
-            (txb: Transaction) => {
-              txb.setSender(account.userAddr);
-              
-              // FIXED: Pass deposit amount directly - function will withdraw from custody wallet
-              const depositAmount = BigInt(yieldData.deposit_amount); // Amount in MIST
-              
-              // Call generate_yield_on_security_deposit with the created YieldConfig
-              // This function now returns only YieldReceipt and withdraws directly from custody wallet
-              const yieldReceipt = txb.moveCall({
-                target: `${targetPackageId}::njangi_yield_integration::generate_yield_on_security_deposit`,
-                arguments: [
-                  txb.object(yieldData.circle_id), // circle: &Circle
-                  txb.object(yieldData.custody_wallet_id), // wallet: &mut CustodyWallet
-                  txb.object(yieldData.config_id), // config: &mut YieldConfig (shared object)
-                  txb.pure.address(account.userAddr), // member_addr: address
-                  txb.pure.u64(depositAmount), // deposit_amount: u64 (withdrawn from custody wallet)
-                  txb.object(CLOCK_OBJECT_ID), // clock: &Clock
-                ]
-              });
-              
-              // Transfer the YieldReceipt to the user to avoid UnusedValueWithoutDrop error
-              // The YieldReceipt has `key, store` but not `drop`, so it must be transferred
-              txb.transferObjects([yieldReceipt], account.userAddr);
-
-              console.log('Legacy security deposit processing prepared');
-            },
-            { gasBudget: 150_000_000 } // Higher budget for complex DeFi operations
-          );
-
-          console.log('Legacy security deposit processing successful:', txResult);
-          return res.status(200).json({
-            digest: txResult.digest,
-            status: txResult.status,
-            gasUsed: txResult.gasUsed,
-            txHash: txResult.digest,
-            step: 'security_deposits_processed',
-            configId: yieldData.config_id,
-            custodyWalletId: yieldData.custody_wallet_id,
-            circleId: yieldData.circle_id,
-            depositAmount: yieldData.deposit_amount,
-            message: 'Legacy security-deposit processing completed.',
-            yieldDetails: {
-              depositsProcessed: true,
-              strategy: 'Legacy compatibility contract path'
-            }
-          });
-
-        } catch (error) {
-          console.error('Security deposit processing failed:', error);
-          const errorMessage = (error as Error).message || 'Unknown error occurred during security deposit processing';
-          return res.status(500).json({ 
-            error: errorMessage,
-            step: 'security_deposit_processing_failed'
-          });
-        }
+      // Phase 2 cleanup: payoutSecurityDepositSui, payoutSecurityDepositStablecoin,
+      // and the legacy yield-management dispatch cases (createYieldConfig,
+      // changeYieldStrategy, generateYieldOnDeposit, collectYield,
+      // emergencyWithdrawYield, addCetusLiquidity, processSecurityDeposits) were
+      // removed. They targeted Move functions deleted in the Phase 1 compliance
+      // redesign (admin_payout_security_deposit_*, njangi_yield_integration::*).
+      // Recovery refunds now flow through njangi_circles::admin_remove_member,
+      // and the yield product line is out of scope until separately audited.
 
       case 'sendTokens':
         if (!account) {
@@ -8364,7 +6217,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const selectedCoins: { objectId: string; balance: bigint }[] = [];
           
           if (coinType !== '0x2::sui::SUI') {
-            const suiClient = new SuiClient({ url: getJsonRpcUrl() });
+            const suiClient = await createSuiClient();
             
             // Get user's coins for this type
             const coins = await suiClient.getCoins({

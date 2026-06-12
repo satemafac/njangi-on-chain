@@ -7,6 +7,7 @@ import { Bell, User, Menu, X } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useRouter } from 'next/router';
 import type { JoinRequest } from '@/services/database-service';
+import LocaleSwitcher from '@/components/ui/LocaleSwitcher';
 
 const wordmarkFont = Instrument_Serif({
   subsets: ['latin'],
@@ -299,7 +300,8 @@ export const Navbar: React.FC = () => {
           </div>
 
           {account && (
-            <div className="flex items-center md:hidden">
+            <div className="flex items-center gap-2 md:hidden">
+              <LocaleSwitcher compact />
               <button
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                 className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-stone-200 bg-white text-slate-600 transition hover:border-stone-300 hover:bg-stone-50 focus:outline-none focus:ring-2 focus:ring-stone-300 focus:ring-offset-2"
@@ -354,6 +356,8 @@ export const Navbar: React.FC = () => {
                   </Tooltip.Portal>
                 </Tooltip.Root>
               </Tooltip.Provider>
+
+              <LocaleSwitcher />
 
               <div className="relative" ref={notificationsRef}>
                 <button

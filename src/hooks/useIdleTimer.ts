@@ -49,6 +49,11 @@ export function useIdleTimer({
         clearTimeout(timeoutRef.current);
       }
     };
+    // `resetTimer` is recreated on every render; including it would
+    // re-attach the event listeners continuously. It's safe to skip
+    // because the handler closes over the same `idleTime` / `onIdle`
+    // we already track.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idleTime, onIdle, events]);
 
   return {

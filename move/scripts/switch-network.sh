@@ -25,11 +25,42 @@ display_usage() {
     echo -e "  ${GREEN}testnet${NC}  - Switch to testnet configuration"
     echo -e "  ${GREEN}mainnet${NC}  - Switch to mainnet configuration"
     echo -e "  ${GREEN}status${NC}   - Show current network configuration"
+    echo -e "  ${GREEN}verify${NC}   - Exit non-zero if Move.toml drifts from the canonical config"
     echo -e ""
     echo -e "Examples:"
     echo -e "  $0 testnet     # Switch to testnet"
     echo -e "  $0 mainnet     # Switch to mainnet"
     echo -e "  $0 status      # Show current network"
+    echo -e "  $0 verify      # CI guard: fail if Move.toml was hand-edited"
+}
+
+# Function to verify Move.toml matches one of the canonical configs byte-for-byte.
+# Designed for CI: exits non-zero when the active manifest has drifted from
+# either testnet.toml or mainnet.toml so hand-edits can't slip in.
+verify_manifest() {
+    if [[ ! -f "$MOVE_TOML" ]]; then
+        echo -e "${RED}❌ Move.toml is missing${NC}"
+        return 1
+    fi
+    local testnet_config="$CONFIG_DIR/testnet.toml"
+    local mainnet_config="$CONFIG_DIR/mainnet.toml"
+    if cmp -s "$MOVE_TOML" "$testnet_config"; then
+        echo -e "${GREEN}✅ Move.toml matches testnet canonical config${NC}"
+        return 0
+    fi
+    if cmp -s "$MOVE_TOML" "$mainnet_config"; then
+        echo -e "${GREEN}✅ Move.toml matches mainnet canonical config${NC}"
+        return 0
+    fi
+    echo -e "${RED}❌ Move.toml has drifted from both canonical configs.${NC}"
+    echo -e "   Re-run this script with \`testnet\` or \`mainnet\` to reset,"
+    echo -e "   or update the appropriate file in move/config/ and re-copy."
+    echo ""
+    echo -e "${YELLOW}Diff vs. testnet:${NC}"
+    diff "$MOVE_TOML" "$testnet_config" | head -40
+    echo -e "${YELLOW}Diff vs. mainnet:${NC}"
+    diff "$MOVE_TOML" "$mainnet_config" | head -40
+    return 1
 }
 
 # Function to get current network from Move.toml
@@ -145,6 +176,9 @@ case "${1:-}" in
         ;;
     "status")
         show_status
+        ;;
+    "verify")
+        verify_manifest
         ;;
     "")
         display_usage

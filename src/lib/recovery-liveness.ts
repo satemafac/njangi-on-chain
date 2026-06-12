@@ -177,8 +177,12 @@ export const getRecoveryStateLabel = (value: number): string => {
 };
 
 const parseRecoveryProposal = (value: unknown): RecoveryProposalSummary | null => {
-  const proposalValue = moveOptionToValue(value);
-  const fields = asRecord(unwrapMoveValue(proposalValue));
+  const directFields = asRecord(unwrapMoveValue(value));
+  const optionFields = asRecord(unwrapMoveValue(moveOptionToValue(value)));
+  const fields =
+    directFields && typeof directFields.proposer === 'string'
+      ? directFields
+      : optionFields;
   if (!fields || typeof fields.proposer !== 'string') {
     return null;
   }

@@ -43,7 +43,27 @@ get_sui_env() {
     sui client active-env 2>/dev/null | grep -v warning | tr -d '[:space:]'
 }
 
+ensure_manifest_canonical() {
+    local switch_script="./scripts/switch-network.sh"
+    if [[ ! -x "$switch_script" ]]; then
+        echo -e "${YELLOW}switch-network.sh not found; skipping manifest verify guard.${NC}"
+        return 0
+    fi
+    if ! bash "$switch_script" verify >/dev/null 2>&1; then
+        echo -e "${RED}Move.toml has drifted from move/config/{testnet,mainnet}.toml.${NC}"
+        echo -e "${YELLOW}Run 'bash scripts/switch-network.sh verify' for the diff,${NC}"
+        echo -e "${YELLOW}or 'bash scripts/switch-network.sh testnet|mainnet' to reset.${NC}"
+        return 1
+    fi
+    echo -e "${GREEN}Move.toml matches the canonical per-network config.${NC}"
+    return 0
+}
+
 ensure_network_consistency() {
+    if ! ensure_manifest_canonical; then
+        return 1
+    fi
+
     local move_network
     move_network=$(get_move_network)
     local sui_env
@@ -449,7 +469,32 @@ if [[ "$publish_response" == "y" || "$publish_response" == "Y" ]]; then
     fi
 
     update_circle_chain_lineage "$ACTIVE_ENV" "$PACKAGE_ID"
-    
+
+    # Phase 12 publish-readiness: auto-bootstrap the post-publish init
+    # calls so the operator never has to copy object ids by hand. Wrapped
+    # in a confirmation so existing manual workflows can opt out.
+    echo -e "${YELLOW}Run post-publish bootstrap (init_registry calls + AttestorCap capture)? (y/n)${NC}"
+    read bootstrap_response
+    if [[ "$bootstrap_response" == "y" || "$bootstrap_response" == "Y" ]]; then
+        bootstrap_args=("$PACKAGE_ID")
+        if command_exists node; then
+            (
+                cd ..
+                NJANGI_BOOTSTRAP_NETWORK="$ACTIVE_ENV" \
+                NJANGI_BOOTSTRAP_GAS_BUDGET="$gas_budget" \
+                node scripts/bootstrap-package.mjs "${bootstrap_args[@]}"
+            )
+            BOOTSTRAP_STATUS=$?
+            if [ $BOOTSTRAP_STATUS -ne 0 ]; then
+                echo -e "${YELLOW}⚠️  bootstrap-package.mjs exited ${BOOTSTRAP_STATUS}. Re-run manually with: node scripts/bootstrap-package.mjs ${PACKAGE_ID}${NC}"
+            fi
+        else
+            echo -e "${YELLOW}node binary not on PATH; skipping bootstrap. Run manually: node scripts/bootstrap-package.mjs ${PACKAGE_ID}${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Skipping bootstrap. Re-run later with: node scripts/bootstrap-package.mjs ${PACKAGE_ID}${NC}"
+    fi
+
     # Prompt user to test one of the module's functions
     echo -e "${YELLOW}Do you want to test a function from the published modules? (y/n)${NC}"
     read test_response

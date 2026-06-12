@@ -74,7 +74,6 @@ tsconfig.tsbuildinfo
 # Node.js dependencies
 node_modules/
 .npm
-package-lock.json
 yarn.lock
 
 # Environment variables
@@ -112,6 +111,7 @@ frontend-fix3/
 salt-service/
 walrus-sites/
 zklogin-sessions.json
+.cycle-finalized-cursor.json
 
 # Added by Task Master AI
 dev-debug.log
@@ -160,7 +160,11 @@ src/pages/*.md
 
 # Task files
 tasks.json
-tasks/ 
-src/lib/__tests__/circle-chain.test.ts
-.gitignore
-src/lib/__tests__/circle-config.test.ts
+tasks/
+
+# PII / runtime artifacts — never commit (history scrubbed 2026-06-12)
+salt-database.json
+.encryption-key
+src/services/*.log
+src/services/*.db
+.claude/scheduled_tasks.lock

@@ -231,6 +231,29 @@ module njangi::njangi_circles {
         deposit_amount: u64,
     }
 
+    // ----------------------------------------------------------
+    // Membership receipt — soulbound discovery index
+    // ----------------------------------------------------------
+    // A `key`-only (non-transferable by holders) object minted to a member when
+    // they join a circle. It exists purely so the frontend can discover "which
+    // circles is this address a member of" with a single, server-side-indexed
+    // `getOwnedObjects({ owner, filter: { StructType: CircleMembership } })`
+    // call — O(the user's memberships) instead of scanning the global
+    // `MemberJoined` event stream (which cannot be filtered by member address
+    // server-side, since that field lives in the event payload).
+    //
+    // The receipt is a HINT, not the source of truth: the Circle's `members`
+    // table remains authoritative. The frontend treats discovered receipts as
+    // candidate circle ids and verifies current membership against the circle
+    // object, so a stale receipt left behind after a removal is simply filtered
+    // out (we never need to reach into the member's wallet to delete it).
+    public struct CircleMembership has key {
+        id: UID,
+        circle_id: ID,
+        member: address,
+        joined_at: u64,
+    }
+
     // Event struct defined within this module
     /// Event emitted when a stablecoin contribution is made to a circle
     /// * `circle_id` - ID of the circle receiving the contribution
@@ -314,6 +337,20 @@ module njangi::njangi_circles {
         removed_by: address,
         deposit_returned: bool,
         deposit_amount: u64,
+        timestamp: u64,
+    }
+
+    // Security Deposit Returned Event - Emitted whenever a security deposit is
+    // released back to its rightful owner (admin removal, recovery payouts, etc.).
+    // Schema mirrors the legacy `njangi_payments::SecurityDepositReturned` event
+    // that was deleted in the Phase 1 compliance redesign so the WhatsApp bot
+    // listener in whatsapp-bot-backend keeps working without refactor.
+    public struct SecurityDepositReturned has copy, drop {
+        circle_id: ID,
+        wallet_id: ID,
+        member: address,
+        amount: u64,
+        coin_type: std::string::String,
         timestamp: u64,
     }
 
@@ -538,6 +575,9 @@ module njangi::njangi_circles {
             deposit_paid: false,
             joined_at: current_time,
         });
+
+        // Mint the admin's soulbound membership receipt for scalable discovery.
+        issue_membership(object::uid_to_inner(&circle.id), admin, current_time, ctx);
 
         // Make the newly created `Circle` object shared
         transfer::share_object(circle);
@@ -1401,6 +1441,56 @@ module njangi::njangi_circles {
     }
 
     // ----------------------------------------------------------
+    // Membership receipt helpers
+    // ----------------------------------------------------------
+    // Mint a soulbound membership receipt to `member_addr`. Called from every
+    // path that adds a member (create_circle admin auto-join + admin approvals).
+    fun issue_membership(
+        circle_id: ID,
+        member_addr: address,
+        joined_at: u64,
+        ctx: &mut TxContext,
+    ) {
+        transfer::transfer(
+            CircleMembership {
+                id: object::new(ctx),
+                circle_id,
+                member: member_addr,
+                joined_at,
+            },
+            member_addr,
+        );
+    }
+
+    // Backfill path: any current member of a circle can mint their own receipt.
+    // Lets memberships that predate this upgrade become discoverable via
+    // getOwnedObjects without admin involvement. Duplicate receipts are
+    // harmless — the frontend dedups by circle_id and verifies against the
+    // circle's members table.
+    public fun claim_membership(
+        circle: &Circle,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert!(is_member(circle, sender), ENotMember);
+        issue_membership(
+            object::uid_to_inner(&circle.id),
+            sender,
+            clock::timestamp_ms(clock),
+            ctx,
+        );
+    }
+
+    // Holder cleanup: let a member delete a stale/duplicate receipt (e.g. after
+    // being removed from a circle). Purely optional — discovery already filters
+    // stale receipts against the live members table.
+    public fun burn_membership(receipt: CircleMembership) {
+        let CircleMembership { id, circle_id: _, member: _, joined_at: _ } = receipt;
+        object::delete(id);
+    }
+
+    // ----------------------------------------------------------
     // Admin approve member to join circle - entry function for frontend use
     // ----------------------------------------------------------
     public fun admin_approve_member(
@@ -1431,7 +1521,10 @@ module njangi::njangi_circles {
         // Add the member to the circle
         add_member(circle, member_addr, member);
         touch_admin_heartbeat(circle, clock);
-        
+
+        // Mint the soulbound membership receipt for scalable discovery.
+        issue_membership(object::uid_to_inner(&circle.id), member_addr, current_time, ctx);
+
         // Emit enhanced MemberJoined event so the dashboard can detect this user's membership with full details
         event::emit(MemberJoined {
             circle_id: object::uid_to_inner(&circle.id),
@@ -1485,7 +1578,10 @@ module njangi::njangi_circles {
                 
                 // Add the member to the circle
                 add_member(circle, member_addr, member);
-                
+
+                // Mint the soulbound membership receipt for scalable discovery.
+                issue_membership(object::uid_to_inner(&circle.id), member_addr, current_time, ctx);
+
                 // Emit enhanced MemberJoined event with full member details
                 event::emit(MemberJoined {
                     circle_id: object::uid_to_inner(&circle.id),
@@ -1559,32 +1655,29 @@ module njangi::njangi_circles {
             *vector::borrow_mut(&mut circle.rotation_order, pos) = @0x0;
         };
         
-        // If member had paid a security deposit, return it from custody wallet
+        // If member had paid a security deposit, return it from custody wallet.
+        // The release helper pulls from both the main balance and dynamic-field
+        // storage transparently, so we no longer have to branch on storage shape.
         if (has_deposit && deposit_amount > 0) {
-            // Security deposits are stored in dynamic fields (via internal_store_security_deposit_without_validation)
-            // so we need to withdraw from dynamic fields, not the main balance field.
-            // First try dynamic fields (where security deposits are stored), then fall back to main balance
-            let has_sui_in_dynamic_fields = custody::has_stablecoin_balance<sui::sui::SUI>(wallet);
-            let dynamic_balance = custody::get_stablecoin_balance<sui::sui::SUI>(wallet);
-            
-            let deposit_coin = if (has_sui_in_dynamic_fields && dynamic_balance >= deposit_amount) {
-                // Withdraw from dynamic fields where security deposits are stored
-                custody::withdraw_from_dynamic_fields(
-                    wallet,
-                    deposit_amount,
-                    ctx
-                )
-            } else {
-                // Fall back to main balance if no dynamic field balance or insufficient
-                custody::withdraw(
-                    wallet,
-                    deposit_amount,
-                    ctx
-                )
-            };
+            let deposit_coin = custody::release_sui_to_member(
+                wallet,
+                deposit_amount,
+                member_addr,
+                clock,
+                ctx
+            );
             transfer::public_transfer(deposit_coin, member_addr);
-            
-            // Note: SecurityDepositReturned event will be emitted by the custody module
+
+            // Re-emit the legacy event shape so the WhatsApp bot listener in
+            // whatsapp-bot-backend keeps notifying members without a refactor.
+            event::emit(SecurityDepositReturned {
+                circle_id: object::uid_to_inner(&circle.id),
+                wallet_id: custody::get_circle_id(wallet),
+                member: member_addr,
+                amount: deposit_amount,
+                coin_type: std::string::utf8(b"sui"),
+                timestamp: clock::timestamp_ms(clock),
+            });
         };
         
         // Clean up the removed member object (automatic in Move)
@@ -3613,5 +3706,29 @@ module njangi::njangi_circles {
             9057
         );
         assert!(is_auto_release_member_fallback_open_internal(false, trigger_time, trigger_time), 9058);
+    }
+
+    #[test]
+    fun test_membership_receipt_issue_and_burn() {
+        let admin = @0xA;
+        let mut scenario = sui::test_scenario::begin(admin);
+
+        // Mint a soulbound membership receipt to the admin.
+        let ctx = sui::test_scenario::ctx(&mut scenario);
+        let uid = object::new(ctx);
+        let circle_id = object::uid_to_inner(&uid);
+        issue_membership(circle_id, admin, 1000, ctx);
+        object::delete(uid);
+
+        // It must now be owned by the member, carry the right fields, and be
+        // burnable by the holder.
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let receipt = sui::test_scenario::take_from_sender<CircleMembership>(&scenario);
+        assert!(receipt.member == admin, 9100);
+        assert!(receipt.joined_at == 1000, 9101);
+        assert!(receipt.circle_id == circle_id, 9102);
+        burn_membership(receipt);
+
+        sui::test_scenario::end(scenario);
     }
 }

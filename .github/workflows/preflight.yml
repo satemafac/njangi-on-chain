@@ -1,0 +1,61 @@
+name: preflight
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  preflight:
+    name: Move build + TypeScript + ESLint + manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+
+      - name: Cache Sui CLI
+        id: sui-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin/sui
+          key: sui-cli-${{ runner.os }}-${{ hashFiles('move/Move.toml') }}
+          restore-keys: |
+            sui-cli-${{ runner.os }}-
+
+      - name: Install Sui CLI
+        if: steps.sui-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          # Download a pinned Sui release so preflight builds are reproducible.
+          # Bump the version intentionally when the Move toolchain updates.
+          SUI_VERSION="mainnet-v1.49.0"
+          curl -L --fail \
+            "https://github.com/MystenLabs/sui/releases/download/${SUI_VERSION}/sui-${SUI_VERSION}-ubuntu-x86_64.tgz" \
+            -o /tmp/sui.tgz
+          tar -xzf /tmp/sui.tgz -C "$HOME/.local/bin" sui
+          chmod +x "$HOME/.local/bin/sui"
+
+      - name: Add sui to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Run preflight
+        run: npm run preflight
+        env:
+          # The preflight doesn't touch real networks; provide minimal
+          # placeholders so validate:env-style checks don't complain if
+          # the script is extended to require them.
+          NEXT_PUBLIC_SUI_NETWORK: testnet
+          NEXT_PUBLIC_TESTNET_PACKAGE_ID: '0x0'
+          NEXT_PUBLIC_MAINNET_PACKAGE_ID: '0x0'

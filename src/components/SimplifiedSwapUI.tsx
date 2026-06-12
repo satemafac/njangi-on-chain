@@ -204,6 +204,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
     };
     
     fetchSuiPrice();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Initialize with required amount and calculate suggested amount with buffer
@@ -251,6 +252,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
     } else if (requiredAmount > 0 && suiPrice && !circleId) {
       console.log(`[SimplifiedSwapUI] Waiting for circleId to calculate swap estimate`);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requiredAmount, suiPrice, slippage, currentDepositPaid, paymentType, circleId]);
 
   // Separate effect to handle price updates when amount is already set
@@ -259,6 +261,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
       // Only update estimates, don't change the amount the user has set
       getSwapEstimate(amount);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [suiPrice, circleId]);
 
   // Update suggested amount when slippage changes
@@ -266,6 +269,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
     if (requiredAmount > 0 && suiPrice) {
       calculateSuggestedAmount(requiredAmount, suiPrice, slippage);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slippage, requiredAmount]);
 
   // Update the slippage update effect
@@ -292,6 +296,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
         }
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slippage]);
 
   const calculateSuggestedAmount = (baseAmount: number, price: number, slippagePercent: number) => {
@@ -578,6 +583,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
     if (suiPrice && suiPrice > 0 && (!amount || parseFloat(amount) === 0) && !requiredAmount) {
       setFixedOutput(1.00); // Default to 1.00 USDC only if no required amount
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [suiPrice]);
 
   const handleCustomSlippageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1557,6 +1563,7 @@ const SimplifiedSwapUI: React.FC<SimplifiedSwapUIProps> = ({
     if (requiredAmount > 0 && suiPrice) {
       checkPoolConditionsAndUpdateSlippage();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requiredAmount, currentDepositPaid]);
   
   // Improve the suggested amount button to force update the input value

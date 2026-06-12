@@ -172,3 +172,31 @@ export function createOnrampRequestLogger(
   };
 }
 
+export type RampProvider = 'coinbase' | 'moonpay' | 'transak';
+
+export interface RampEvent {
+  provider: RampProvider;
+  payload: Record<string, unknown>;
+  receivedAt: Date;
+}
+
+/**
+ * Persists a ramp webhook event to the audit log. Phase 1 just writes to
+ * the structured logger; Phase 2 hooks this into Postgres for daily
+ * reconciliation against partner settlement reports. PII is redacted
+ * before logging in line with the existing `redactSensitiveData` rules.
+ */
+export async function recordOnrampEvent(event: RampEvent): Promise<void> {
+  const sanitized = redactSensitiveData(event.payload) as Record<string, unknown>;
+  const record: LogRecord = {
+    timestamp: event.receivedAt.toISOString(),
+    level: 'info',
+    service: 'coinbase-onramp-api',
+    endpoint: `/${event.provider}/webhook`,
+    event: 'ramp_webhook_event',
+    correlationId: randomUUID(),
+    request: { method: 'POST', path: `/${event.provider}/webhook` },
+    metadata: { provider: event.provider, payload: sanitized },
+  };
+  writeLog('info', record);
+}

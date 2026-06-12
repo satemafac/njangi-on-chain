@@ -1,0 +1,61 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '\n📦 njangi-on-chain Development Environment\n💡 Use /test-contracts, /build-deploy, /check-yield, /verify-circle\n🔑 Use /start-zklogin for auth services, /check-env for config\n' || true",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /Volumes/Developing/njangi-on-chain && [ -f package.json ] && npm run lint --silent 2>/dev/null || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /Volumes/Developing/njangi-on-chain && git diff --stat HEAD 2>/dev/null | head -5 || true",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash(git commit)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /Volumes/Developing/njangi-on-chain && git log -1 --oneline || true",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /Volumes/Developing/njangi-on-chain && git status --short 2>/dev/null | head -10 || true",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

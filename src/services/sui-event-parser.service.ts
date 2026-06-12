@@ -26,7 +26,7 @@ export class SuiEventParserService {
    */
   public parseEvent(rawEvent: SuiEvent, eventType: string): ParsedBlockchainEvent | null {
     try {
-      const json = rawEvent.parsedJson as Record<string, any>;
+      const json = rawEvent.parsedJson as Record<string, unknown>;
       const timestamp = rawEvent.timestampMs ? parseInt(rawEvent.timestampMs, 10) : Date.now();
       const txDigest = rawEvent.id.txDigest;
 
@@ -65,7 +65,7 @@ export class SuiEventParserService {
    * Parse NewCycleStartedEvent
    */
   private parseNewCycleStarted(
-    json: Record<string, any>,
+    json: Record<string, unknown>,
     txDigest: string,
     timestamp: number
   ): NewCycleStartedEvent {
@@ -84,7 +84,7 @@ export class SuiEventParserService {
    * Parse MemberContributedEvent
    */
   private parseMemberContributed(
-    json: Record<string, any>,
+    json: Record<string, unknown>,
     txDigest: string,
     timestamp: number
   ): MemberContributedEvent {
@@ -104,7 +104,7 @@ export class SuiEventParserService {
    * Parse AllMembersContributedEvent
    */
   private parseAllMembersContributed(
-    json: Record<string, any>,
+    json: Record<string, unknown>,
     txDigest: string,
     timestamp: number
   ): AllMembersContributedEvent {
@@ -123,7 +123,7 @@ export class SuiEventParserService {
    * Parse DeadlineApproachingEvent
    */
   private parseDeadlineApproaching(
-    json: Record<string, any>,
+    json: Record<string, unknown>,
     txDigest: string,
     timestamp: number
   ): DeadlineApproachingEvent {
@@ -143,7 +143,7 @@ export class SuiEventParserService {
    * Parse PayoutOverdueEvent
    */
   private parsePayoutOverdue(
-    json: Record<string, any>,
+    json: Record<string, unknown>,
     txDigest: string,
     timestamp: number
   ): PayoutOverdueEvent {
@@ -161,7 +161,7 @@ export class SuiEventParserService {
    * Parse ContributorOverdueEvent
    */
   private parseContributorOverdue(
-    json: Record<string, any>,
+    json: Record<string, unknown>,
     txDigest: string,
     timestamp: number
   ): ContributorOverdueEvent {
@@ -180,7 +180,7 @@ export class SuiEventParserService {
    * Parse PayoutReminderEvent
    */
   private parsePayoutReminder(
-    json: Record<string, any>,
+    json: Record<string, unknown>,
     txDigest: string,
     timestamp: number
   ): PayoutReminderEvent {
@@ -193,7 +193,10 @@ export class SuiEventParserService {
         | 'delayed'
         | 'custom') || 'custom',
       recipient: this.normalizeAddress(json.recipient),
-      reminderData: json.reminder_data || {},
+      reminderData:
+        json.reminder_data && typeof json.reminder_data === 'object'
+          ? (json.reminder_data as Record<string, unknown>)
+          : {},
       txDigest,
       timestamp,
     };
@@ -203,7 +206,7 @@ export class SuiEventParserService {
    * Parse NotificationSentEvent
    */
   private parseNotificationSent(
-    json: Record<string, any>,
+    json: Record<string, unknown>,
     txDigest: string,
     timestamp: number
   ): NotificationSentEvent {
@@ -221,50 +224,59 @@ export class SuiEventParserService {
   /**
    * Helper: Normalize ID fields
    */
-  private normalizeId(value: any): string {
+  private normalizeId(value: unknown): string {
     if (typeof value === 'string') {
       return value;
     }
-    if (typeof value === 'object' && value?.id) {
-      return String(value.id);
+    if (value && typeof value === 'object') {
+      const maybe = (value as { id?: unknown }).id;
+      if (maybe !== undefined && maybe !== null) {
+        return String(maybe);
+      }
     }
-    return String(value || '');
+    return String(value ?? '');
   }
 
   /**
    * Helper: Normalize address fields
    */
-  private normalizeAddress(value: any): string {
+  private normalizeAddress(value: unknown): string {
     if (typeof value === 'string') {
       return value.startsWith('0x') ? value : `0x${value}`;
     }
-    if (typeof value === 'object' && value?.address) {
-      const addr = String(value.address);
-      return addr.startsWith('0x') ? addr : `0x${addr}`;
+    if (value && typeof value === 'object') {
+      const maybe = (value as { address?: unknown }).address;
+      if (maybe !== undefined && maybe !== null) {
+        const addr = String(maybe);
+        return addr.startsWith('0x') ? addr : `0x${addr}`;
+      }
     }
-    return `0x${String(value || '')}`;
+    return `0x${String(value ?? '')}`;
   }
 
   /**
    * Helper: Normalize amount fields (handle both string and number)
    */
-  private normalizeAmount(value: any): string {
+  private normalizeAmount(value: unknown): string {
     if (typeof value === 'string') {
       return value;
     }
     if (typeof value === 'number') {
       return String(value);
     }
-    if (typeof value === 'object' && value?.value) {
-      return String(value.value);
+    if (value && typeof value === 'object') {
+      const maybe = (value as { value?: unknown }).value;
+      if (maybe !== undefined && maybe !== null) {
+        return String(maybe);
+      }
     }
-    return String(value || '0');
+    return String(value ?? '0');
   }
 
   /**
    * Helper: Parse numeric values safely
    */
-  private parseNumber(value: any): number {
+  private parseNumber(value: unknown): number {
     if (typeof value === 'number') {
       return value;
     }
@@ -272,8 +284,11 @@ export class SuiEventParserService {
       const parsed = parseInt(value, 10);
       return isNaN(parsed) ? 0 : parsed;
     }
-    if (typeof value === 'object' && value?.value) {
-      return parseInt(String(value.value), 10) || 0;
+    if (value && typeof value === 'object') {
+      const maybe = (value as { value?: unknown }).value;
+      if (maybe !== undefined && maybe !== null) {
+        return parseInt(String(maybe), 10) || 0;
+      }
     }
     return 0;
   }

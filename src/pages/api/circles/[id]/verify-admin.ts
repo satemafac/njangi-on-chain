@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { SuiClient } from '@mysten/sui.js/client';
 import { getCurrentNetworkConfig } from '@/services/network-config';
+import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 
 /**
  * 🔐 Circle Admin Verification API
@@ -32,8 +32,8 @@ export default async function handler(
     }
 
     // Initialize Sui client
-    const suiClient = new SuiClient({
-      url: getCurrentNetworkConfig().rpcUrl,
+    const suiClient = getPooledSuiClient({
+      rpcUrl: getCurrentNetworkConfig().rpcUrl,
     });
 
     // Get circle object from blockchain

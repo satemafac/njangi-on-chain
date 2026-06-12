@@ -5,13 +5,16 @@
 
 import { appLogger } from '../utils/logger';
 import {
-  EventSubscriptionConfig,
   EVENT_TYPES,
   SuiEvent,
   EventHandler,
   ParsedBlockchainEvent,
   EventFilterCriteria,
 } from '../utils/sui-event-types';
+// The sibling RPC pool still lives on `@mysten/sui.js` (the legacy
+// package). Import the matching SuiClient type so client instances the
+// pool hands us are assignable without an `as` cast.
+import type { SuiClient, EventId } from '@mysten/sui.js/client';
 import { getRpcPool, SuiRpcPoolService } from './sui-rpc-pool.service';
 import { SuiEventParserService } from './sui-event-parser.service';
 
@@ -22,7 +25,7 @@ export class SuiEventListenerService {
   private listeningTimer?: NodeJS.Timeout;
   private eventHandlers: Map<string, EventHandler[]> = new Map();
   private pollingIntervalMs = 3000; // 3 seconds
-  private lastProcessedCursor: Map<string, string | null> = new Map();
+  private lastProcessedCursor: Map<string, EventId | null> = new Map();
   private eventBuffer: ParsedBlockchainEvent[] = [];
   private maxBufferSize = 1000;
 
@@ -147,7 +150,7 @@ export class SuiEventListenerService {
   /**
    * Poll for a specific event type
    */
-  private async pollEventType(client: any, eventType: string): Promise<void> {
+  private async pollEventType(client: SuiClient, eventType: string): Promise<void> {
     const cursor = this.lastProcessedCursor.get(eventType);
     const startTime = Date.now();
 
@@ -169,9 +172,14 @@ export class SuiEventListenerService {
           newCursor: response.nextCursor,
         });
 
-        // Parse and process events
+        // Parse and process events. sui.js's generated SuiEvent has
+        // `parsedJson: unknown` so we cast to the repo-local SuiEvent
+        // shape (Record<string, unknown>) here — the parser's helpers
+        // already narrow every access defensively.
         const parsedEvents = events
-          .map((event: SuiEvent) => this.parserService.parseEvent(event, eventType))
+          .map((event) =>
+            this.parserService.parseEvent(event as unknown as SuiEvent, eventType),
+          )
           .filter((event: ParsedBlockchainEvent | null): event is ParsedBlockchainEvent => event !== null);
 
         // Emit events to handlers
@@ -182,10 +190,15 @@ export class SuiEventListenerService {
         // Add to buffer for monitoring
         this.addToBuffer(parsedEvents);
 
-        // Update cursor
+        // Update cursor — sui.js returns an EventId object, but the RPC
+        // pool's cursor store is string-keyed (last tx digest). Encode
+        // the event id pair so subsequent polls can resume from the same
+        // point without caring about the underlying object shape.
         if (response.nextCursor) {
           this.lastProcessedCursor.set(eventType, response.nextCursor);
-          this.rpcPool.updateCursor(response.nextCursor);
+          this.rpcPool.updateCursor(
+            `${response.nextCursor.txDigest}:${response.nextCursor.eventSeq}`,
+          );
         }
 
         // Update metrics
@@ -213,9 +226,9 @@ export class SuiEventListenerService {
     const promises = handlers.map((handler) =>
       handler(event).catch((error) => {
         appLogger.error(`Error in event handler for ${event.type}`, {
-          error: error.message,
+          error: error instanceof Error ? error.message : String(error),
           eventType: event.type,
-          circleId: (event as any).circleId,
+          circleId: (event as ParsedBlockchainEvent & { circleId?: string }).circleId,
         });
       })
     );
@@ -244,7 +257,9 @@ export class SuiEventListenerService {
         events = events.filter((e) => filter.eventTypes!.includes(e.type));
       }
       if (filter.circleId) {
-        events = events.filter((e) => (e as any).circleId === filter.circleId);
+        events = events.filter(
+          (e) => (e as ParsedBlockchainEvent & { circleId?: string }).circleId === filter.circleId,
+        );
       }
       if (filter.fromTimestamp) {
         events = events.filter((e) => e.timestamp >= filter.fromTimestamp!);
@@ -264,7 +279,7 @@ export class SuiEventListenerService {
     isListening: boolean;
     network: string;
     packageId: string;
-    rpcPoolState: any;
+    rpcPoolState: unknown;
     eventHandlers: Record<string, number>;
     bufferedEvents: number;
     uptime: number;

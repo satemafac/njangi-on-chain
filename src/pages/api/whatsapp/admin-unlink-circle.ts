@@ -17,9 +17,9 @@ import { NextApiResponse, NextApiRequest } from 'next';
 import { logAdminAction } from '../../../middleware/admin-auth.middleware';
 import { enokiZkLoginService } from '../../../services/enokiZkLoginService';
 import { AccountData } from '../../../services/zkLoginService';
-import { getNetworkConfig } from '../../../services/network-config';
 import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry-service';
 import type { NetworkType } from '../../../services/whatsapp-registry-service';
+import { deindexWhatsAppLinksForCircle } from '../../../lib/whatsapp-link-index';
 
 interface UnlinkCircleRequest {
   circleId: string;
@@ -99,6 +99,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         { gasBudget: 10_000_000 },
         network as 'testnet' | 'mainnet'  // Pass network override
       );
+
+      // Phase 2: drop the off-chain Postgres index entries so the webhook
+      // stops routing inbound messages to the unlinked circle. Failures are
+      // logged but non-fatal — on-chain state already reflects the unlink.
+      try {
+        await deindexWhatsAppLinksForCircle(circleId);
+      } catch (indexError) {
+        console.warn('[admin-unlink-circle] Failed to deindex WhatsApp link', indexError);
+      }
 
       logAdminAction('UNLINK_CIRCLE_SUCCESS', adminAddr, {
         circleId,

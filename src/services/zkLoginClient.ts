@@ -13,7 +13,52 @@ import {
   type CreateCircleTransactionData,
 } from '@/lib/zklogin-tx-builders';
 import { getCircleTransactionPackageId } from './circle-service';
-import { getCurrentNetwork, getCurrentPackageId } from './network-config';
+import { getCurrentNetwork, getCurrentPackageId, getNetworkConfig } from './network-config';
+
+/**
+ * Phase 5: non-React helper that returns a client-side signer wrapper when
+ * the ephemeral-key session is present in the browser sessionStorage.
+ * Returns null in SSR contexts or when the user hasn't signed in yet so
+ * callers can fall back to the legacy server-signing path transparently.
+ */
+async function tryClientSideSigner(): Promise<
+  | {
+      signAndExecute: (input: {
+        build: (
+          txb: Transaction,
+          client: import('@mysten/sui/client').SuiClient,
+        ) => void | Promise<void>;
+        gasBudget?: number;
+      }) => Promise<{ digest: string }>;
+    }
+  | null
+> {
+  if (typeof window === 'undefined') return null;
+  try {
+    const [{ SuiClient }, signerModule] = await Promise.all([
+      import('@mysten/sui/client'),
+      import('@/lib/zklogin-client-signer'),
+    ]);
+    const session = signerModule.loadSignerSession();
+    if (!session) return null;
+    const client = new SuiClient({
+      url: getNetworkConfig(session.network).rpcUrl,
+    });
+    return {
+      signAndExecute: async (input) => {
+        const res = await signerModule.signAndExecuteWithZkLogin(
+          session,
+          client,
+          input,
+        );
+        return { digest: res.digest };
+      },
+    };
+  } catch (err) {
+    console.warn('[zkLoginClient] client-side signer unavailable', err);
+    return null;
+  }
+}
 
 export interface EmberOperationLifecycle {
   status: string;
@@ -1269,7 +1314,10 @@ export class ZkLoginClient {
   }
 
   /**
-   * Trigger automatic payout for a circle
+   * Trigger the permissionless `trigger_payout<T>` Move function. The
+   * dispatcher accepts a CoinType-specific call (USDC by default) and the
+   * Move function routes USDC-first with a SUI fallback. The previous SUI
+   * → USDC fallback chain has been collapsed into a single call.
    */
   async adminTriggerPayout(
     account: AccountData,
@@ -1279,101 +1327,32 @@ export class ZkLoginClient {
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
     try {
       console.log(`ZkLoginClient: Triggering payout for circle ${circleId} with wallet ${walletId} on network ${network || 'default'}`);
-      
-      // First try with the regular SUI payout method
-      try {
-        const response = await fetch('/api/zkLogin', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'adminTriggerPayout',
-            account,
-            circleId,
-            walletId,
-            network
-          }),
-        });
-        
-        // If the call succeeded, return the result
-        if (response.ok) {
-          const result = await response.json();
-          console.log('Payout succeeded with SUI method:', result);
-          return { 
-            digest: result.digest,
-            requireRelogin: result.requireRelogin
-          };
-        }
-        
-        // If we got here, there was an error with the SUI payout
-        const errorData = await response.json();
-        
-        // Improved error detection for code 100
-        const errorMessage = errorData.error || '';
-        console.log('SUI payout failed with error:', errorMessage);
-        
-        // Check for code 100 in the exact format it appears in MoveAbort errors: ", 100)"
-        // Plus keep the existing fallback conditions
-        if (errorMessage.includes(', 100)') || 
-            errorMessage.includes('error code 100') ||
-            errorMessage.includes('dynamic_field') || 
-            errorMessage.includes('borrow_child_object') ||
-            errorMessage.includes('error code 60')) {
-          
-          console.log('Detected code 100 or other stablecoin indicator. Trying USDC payout method...');
-          
-          // Try the USDC payout method instead - pass network for correct package ID
-          const usdcResponse = await fetch('/api/zkLogin', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'adminTriggerUsdcPayout',
-              account,
-              circleId,
-              walletId,
-              network
-            }),
-          });
-          
-          if (usdcResponse.ok) {
-            const usdcResult = await usdcResponse.json();
-            console.log('Payout succeeded with USDC method:', usdcResult);
-            return { 
-              digest: usdcResult.digest,
-              requireRelogin: usdcResult.requireRelogin
-            };
-          }
-          
-          // If USDC method also failed, throw the new error
-          const usdcErrorData = await usdcResponse.json();
-          throw new ZkLoginError(
-            usdcErrorData.error || 'Failed to trigger USDC payout',
-            usdcErrorData.requireRelogin || false
-          );
-        }
-        
-        // For any other error, just throw it
-        throw new ZkLoginError(
-          errorData.error || 'Failed to trigger payout',
-          errorData.requireRelogin || false
-        );
-      } catch (error) {
-        // This catches any network errors or other issues with the API call itself
-        if (!(error instanceof ZkLoginError)) {
-          console.error('Error triggering payout:', error);
-          throw new ZkLoginError(
-            error instanceof Error ? error.message : 'Unknown error triggering payout',
-            false
-          );
-        }
-        throw error;
+      const response = await fetch('/api/zkLogin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'adminTriggerPayout',
+          account,
+          circleId,
+          walletId,
+          network,
+        }),
+      });
+      if (response.ok) {
+        const result = await response.json();
+        return { digest: result.digest, requireRelogin: result.requireRelogin };
       }
+      const errorData = await response.json();
+      throw new ZkLoginError(
+        errorData.error || 'Failed to trigger payout',
+        errorData.requireRelogin || false,
+      );
     } catch (error) {
-      // Final error handler
       if (!(error instanceof ZkLoginError)) {
         console.error('Error in adminTriggerPayout:', error);
         throw new ZkLoginError(
           error instanceof Error ? error.message : 'Unknown error triggering payout',
-          false
+          false,
         );
       }
       throw error;
@@ -1457,531 +1436,101 @@ export class ZkLoginClient {
     }
   }
 
-  async payoutSecurityDepositSui(
+  // Phase 2 cleanup: payoutSecurityDepositSui, payoutSecurityDepositStablecoin,
+  // addCetusLiquidity, removeCetusLiquidity, collectCetusFees, configureCetusYield,
+  // and rebalanceCetusPosition were removed. They wrapped Move entrypoints that
+  // were deleted in Phase 1 (admin_payout_security_deposit_*, the entire
+  // njangi_yield_integration module). Refunds now run through the recovery
+  // path in njangi_circles, and the yield product line is out of scope.
+
+  // ------------------------------------------------------------------
+  // Phase 5: CycleEscrow wrappers default to the client-side zkLogin
+  // signer (ephemeral key stays in the browser); they only fall back to
+  // the server-signing API when the sessionStorage signer session hasn't
+  // been populated yet. That keeps the legacy admin surfaces working
+  // while giving member-facing flows a non-custodial default.
+  // ------------------------------------------------------------------
+
+  async openCycleEscrow(
     account: AccountData,
     circleId: string,
-    memberAddress: string,
-    walletId: string
+    coinType: string,
+    network: 'testnet' | 'mainnet' = 'testnet',
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      // Ensure address has 0x prefix
-      const normalizedAddress = memberAddress.startsWith('0x') ? memberAddress : `0x${memberAddress}`;
-      console.log(`ZkLoginClient: Paying out SUI security deposit for member ${normalizedAddress} in circle ${circleId} with wallet ${walletId}`);
-
-      // Verify the account has valid proof data
-      if (!account.zkProofs?.proofPoints || 
-          !account.zkProofs.issBase64Details || 
-          !account.zkProofs.headerBase64) {
-        throw new ZkLoginError(
-          'Missing required authentication data. Please login again.',
-          true
-        );
-      }
-
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          action: 'payoutSecurityDepositSui', 
-          account, 
-          circleId,
-          memberAddress: normalizedAddress,
-          walletId
-        }),
-      });
-
-      // Handle errors from the API
-      if (!response.ok) {
-        const errorData = await response.json();
-        if (response.status === 401) {
-          throw new ZkLoginError(
-            errorData.error || 'Authentication failed. Please login again.',
-            true
-          );
-        } else {
-          throw new Error(errorData.error || 'Failed to process security deposit payout');
-        }
-      }
-
-      // Return the transaction digest
-      const result = await response.json();
-      return { 
-        digest: result.digest,
-        requireRelogin: result.requireRelogin
-      };
-    } catch (error) {
-      console.error('Error in payoutSecurityDepositSui:', error);
-      if (error instanceof ZkLoginError) {
-        throw error;
-      } else {
-        throw new Error(error instanceof Error ? error.message : 'Unknown error occurred');
-      }
+    const client = await tryClientSideSigner();
+    if (client) {
+      const { buildOpenCycleTx } = await import('./cycle-escrow-service');
+      const build = buildOpenCycleTx({ network, circleId, coinType });
+      const res = await client.signAndExecute({ build, gasBudget: 80_000_000 });
+      return { digest: res.digest };
     }
+    return this.postCycleEscrowAction('openCycleEscrow', account, { circleId, coinType });
   }
-  
-  // Method for stablecoin security deposit payout
-  async payoutSecurityDepositStablecoin(
+
+  async contributeToCycleEscrow(
     account: AccountData,
-    circleId: string,
-    memberAddress: string,
-    walletId: string
+    escrowId: string,
+    paymentCoinId: string,
+    coinType: string,
+    network: 'testnet' | 'mainnet' = 'testnet',
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      console.log('Paying out security deposit (stablecoin) with account:', {
-        address: account.userAddr,
-        circleId,
-        memberAddress,
-        walletId,
-        hasProofPoints: !!account.zkProofs?.proofPoints,
-        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
-        hasHeaderBase64: !!account.zkProofs?.headerBase64,
-        maxEpoch: account.maxEpoch
-      });
-
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'payoutSecurityDepositStablecoin',
-          account,
-          circleId,
-          memberAddress,
-          walletId
-        })
-      });
-      
-      const responseData: ZkLoginResponse = await response.json();
-
-      // Handle authentication errors (401)
-      if (response.status === 401) {
-        console.error('Authentication error:', responseData);
-        throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
-          true
-        );
-      }
-      
-      // Handle server errors (500)
-      if (!response.ok) {
-        console.error('Security deposit payout failed:', responseData);
-        throw new ZkLoginError(
-          responseData.error || 'Security deposit payout failed', 
-          !!responseData.requireRelogin
-        );
-      }
-      
-      // Even for successful response, check if we have a digest
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      
-      console.log('Security deposit payout succeeded:', responseData);
-      return {
-        digest: responseData.digest,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      console.error('Security deposit payout error in client:', error);
-      // Rethrow ZkLoginError as is
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      // Otherwise wrap in a new error
-      throw new ZkLoginError(String(error), false);
+    const client = await tryClientSideSigner();
+    if (client) {
+      const { buildContributeTx } = await import('./cycle-escrow-service');
+      const build = buildContributeTx({ network, escrowId, paymentCoinId, coinType });
+      const res = await client.signAndExecute({ build, gasBudget: 100_000_000 });
+      return { digest: res.digest };
     }
+    return this.postCycleEscrowAction('contributeToCycleEscrow', account, {
+      escrowId,
+      paymentCoinId,
+      coinType,
+    });
   }
 
-  // ============================================
-  // LEGACY CETUS METHODS (NOT EMBER FLOW)
-  // ============================================
-  // Kept for backward compatibility with old admin tooling.
-  // The active eSui-dollar migration path uses:
-  // - deployToEmberVault
-  // - requestEmberRedemption
-
-  /**
-   * Add liquidity to Cetus DEX pool for yield generation
-   * @param account ZkLogin account data
-   * @param walletId The custody wallet ID
-   * @param liquidityParams Parameters for liquidity provision
-   */
-  public async addCetusLiquidity(
+  async finalizeAndRedeemCycleEscrow(
     account: AccountData,
-    walletId: string,
-    liquidityParams: {
-      poolId: string;
-      suiAmount: number;
-      usdcAmount: number;
-      tickLower?: number;
-      tickUpper?: number;
-      slippage?: number;
-    }
+    escrowId: string,
+    coinType: string,
+    network: 'testnet' | 'mainnet' = 'testnet',
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      console.log('Adding Cetus liquidity with account:', {
-        address: account.userAddr,
-        walletId,
-        liquidityParams,
-        hasProofPoints: !!account.zkProofs?.proofPoints,
-        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
-        hasHeaderBase64: !!account.zkProofs?.headerBase64,
-        maxEpoch: account.maxEpoch
-      });
-
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          action: 'addCetusLiquidity',
-          account, 
-          walletId,
-          liquidityParams
-        })
-      });
-      
-      const responseData: ZkLoginResponse = await response.json();
-
-      // Handle authentication errors (401)
-      if (response.status === 401) {
-        console.error('Authentication error:', responseData);
-        throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
-          true
-        );
-      }
-      
-      // Handle server errors (500)
-      if (!response.ok) {
-        console.error('Add Cetus liquidity failed:', responseData);
-        throw new ZkLoginError(
-          responseData.error || 'Failed to add Cetus liquidity', 
-          !!responseData.requireRelogin
-        );
-      }
-      
-      // Check if we have a digest
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      
-      console.log('Add Cetus liquidity succeeded:', responseData);
-      return {
-        digest: responseData.digest,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      console.error('Add Cetus liquidity error in client:', error);
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      throw new ZkLoginError(String(error), false);
+    const client = await tryClientSideSigner();
+    if (client) {
+      const { buildFinalizeAndRedeemTx } = await import('./cycle-escrow-service');
+      const build = buildFinalizeAndRedeemTx({ network, escrowId, coinType });
+      const res = await client.signAndExecute({ build, gasBudget: 120_000_000 });
+      return { digest: res.digest };
     }
+    return this.postCycleEscrowAction('finalizeAndRedeemCycleEscrow', account, {
+      escrowId,
+      coinType,
+    });
   }
 
-  /**
-   * Remove liquidity from Cetus DEX pool
-   * @param account ZkLogin account data
-   * @param walletId The custody wallet ID
-   * @param removeParams Parameters for liquidity removal
-   */
-  public async removeCetusLiquidity(
+  private async postCycleEscrowAction(
+    action:
+      | 'openCycleEscrow'
+      | 'contributeToCycleEscrow'
+      | 'finalizeAndRedeemCycleEscrow',
     account: AccountData,
-    walletId: string,
-    removeParams: {
-      positionId: string;
-      liquidity: string;
-      amountAMin?: string;
-      amountBMin?: string;
-    }
+    payload: Record<string, string>,
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      console.log('Removing Cetus liquidity with account:', {
-        address: account.userAddr,
-        walletId,
-        removeParams,
-        hasProofPoints: !!account.zkProofs?.proofPoints,
-        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
-        hasHeaderBase64: !!account.zkProofs?.headerBase64,
-        maxEpoch: account.maxEpoch
-      });
-
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'removeCetusLiquidity',
-          account,
-          walletId,
-          removeParams
-        })
-      });
-      
-      const responseData: ZkLoginResponse = await response.json();
-      
-      // Handle authentication errors (401)
-        if (response.status === 401) {
-        console.error('Authentication error:', responseData);
-          throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
-            true
-          );
-      }
-      
-      // Handle server errors (500)
-      if (!response.ok) {
-        console.error('Remove Cetus liquidity failed:', responseData);
-        throw new ZkLoginError(
-          responseData.error || 'Failed to remove Cetus liquidity', 
-          !!responseData.requireRelogin
-        );
-      }
-
-      // Check if we have a digest
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      
-      console.log('Remove Cetus liquidity succeeded:', responseData);
-      return { 
-        digest: responseData.digest,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      console.error('Remove Cetus liquidity error in client:', error);
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      throw new ZkLoginError(String(error), false);
+    const response = await fetch('/api/zkLogin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, account, ...payload }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new ZkLoginError(
+        data.error || `Failed to execute ${action}`,
+        !!data.requireRelogin,
+      );
     }
+    if (!data.digest) {
+      throw new ZkLoginError(`No digest returned from ${action}`, false);
+    }
+    return { digest: data.digest, requireRelogin: data.requireRelogin };
   }
 
-  /**
-   * Collect fees from Cetus DEX liquidity positions
-   * @param account ZkLogin account data
-   * @param walletId The custody wallet ID
-   * @param collectParams Parameters for fee collection
-   */
-  public async collectCetusFees(
-    account: AccountData,
-    walletId: string,
-    collectParams: {
-      positionId: string;
-    }
-  ): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      console.log('Collecting Cetus fees with account:', {
-        address: account.userAddr,
-        walletId,
-        collectParams,
-        hasProofPoints: !!account.zkProofs?.proofPoints,
-        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
-        hasHeaderBase64: !!account.zkProofs?.headerBase64,
-        maxEpoch: account.maxEpoch
-      });
-
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'collectCetusFees',
-          account,
-          walletId,
-          collectParams
-        })
-      });
-      
-      const responseData: ZkLoginResponse = await response.json();
-      
-      // Handle authentication errors (401)
-      if (response.status === 401) {
-        console.error('Authentication error:', responseData);
-        throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
-          true
-        );
-      }
-      
-      // Handle server errors (500)
-      if (!response.ok) {
-        console.error('Collect Cetus fees failed:', responseData);
-        throw new ZkLoginError(
-          responseData.error || 'Failed to collect Cetus fees', 
-          !!responseData.requireRelogin
-        );
-      }
-      
-      // Check if we have a digest
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      
-      console.log('Collect Cetus fees succeeded:', responseData);
-      return {
-        digest: responseData.digest,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      console.error('Collect Cetus fees error in client:', error);
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      throw new ZkLoginError(String(error), false);
-    }
-  }
-
-  /**
-   * Configure Cetus DEX yield settings for a custody wallet
-   * @param account ZkLogin account data
-   * @param walletId The custody wallet ID
-   * @param yieldConfig Configuration for Cetus yield generation
-   */
-  public async configureCetusYield(
-    account: AccountData,
-    walletId: string,
-    yieldConfig: {
-      enabled: boolean;
-      autoCompound: boolean;
-      targetAPR: number;
-      minimumLiquidityAmount: number;
-      collectFeesInterval: number; // in hours
-      slippageTolerance: number;
-    }
-  ): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      console.log('Configuring Cetus yield with account:', {
-        address: account.userAddr,
-        walletId,
-        yieldConfig,
-        hasProofPoints: !!account.zkProofs?.proofPoints,
-        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
-        hasHeaderBase64: !!account.zkProofs?.headerBase64,
-        maxEpoch: account.maxEpoch
-      });
-
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'configureCetusYield',
-          account,
-          walletId,
-          yieldConfig
-        })
-      });
-      
-      const responseData: ZkLoginResponse = await response.json();
-      
-      // Handle authentication errors (401)
-      if (response.status === 401) {
-        console.error('Authentication error:', responseData);
-        throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
-          true
-        );
-      }
-      
-      // Handle server errors (500)
-      if (!response.ok) {
-        console.error('Configure Cetus yield failed:', responseData);
-        throw new ZkLoginError(
-          responseData.error || 'Failed to configure Cetus yield', 
-          !!responseData.requireRelogin
-        );
-      }
-      
-      // Check if we have a digest
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      
-      console.log('Configure Cetus yield succeeded:', responseData);
-      return {
-        digest: responseData.digest,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      console.error('Configure Cetus yield error in client:', error);
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      throw new ZkLoginError(String(error), false);
-    }
-  }
-
-  /**
-   * Rebalance Cetus DEX liquidity position for optimal yield
-   * @param account ZkLogin account data
-   * @param walletId The custody wallet ID
-   * @param rebalanceParams Parameters for rebalancing
-   */
-  public async rebalanceCetusPosition(
-    account: AccountData,
-    walletId: string,
-    rebalanceParams: {
-      currentPositionId: string;
-      newTickLower: number;
-      newTickUpper: number;
-      slippage?: number;
-    }
-  ): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      console.log('Rebalancing Cetus position with account:', {
-        address: account.userAddr,
-        walletId,
-        rebalanceParams,
-        hasProofPoints: !!account.zkProofs?.proofPoints,
-        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
-        hasHeaderBase64: !!account.zkProofs?.headerBase64,
-        maxEpoch: account.maxEpoch
-      });
-
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'rebalanceCetusPosition',
-          account,
-          walletId,
-          rebalanceParams
-        })
-      });
-      
-      const responseData: ZkLoginResponse = await response.json();
-      
-      // Handle authentication errors (401)
-      if (response.status === 401) {
-        console.error('Authentication error:', responseData);
-        throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
-          true
-        );
-      }
-      
-      // Handle server errors (500)
-      if (!response.ok) {
-        console.error('Rebalance Cetus position failed:', responseData);
-        throw new ZkLoginError(
-          responseData.error || 'Failed to rebalance Cetus position', 
-          !!responseData.requireRelogin
-        );
-      }
-      
-      // Check if we have a digest
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      
-      console.log('Rebalance Cetus position succeeded:', responseData);
-      return {
-        digest: responseData.digest,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      console.error('Rebalance Cetus position error in client:', error);
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      throw new ZkLoginError(String(error), false);
-    }
-  }
 } 

@@ -1,7 +1,7 @@
 const mockGetBalance = jest.fn();
 
-jest.mock('@mysten/sui/client', () => ({
-  SuiClient: jest.fn(() => ({
+jest.mock('@/services/sui-rpc-failover', () => ({
+  getPooledSuiClient: jest.fn(() => ({
     getBalance: mockGetBalance,
   })),
 }));

@@ -21,6 +21,7 @@ import {
   getNetworkConfig,
   NetworkType,
 } from './network-config';
+import { getHealthySuiClient, withSuiRpcFailover } from './sui-rpc-failover';
 import { getCanonicalBaseOrigin, preferCanonicalOrigin } from '@/lib/canonical-host';
 
 // Dynamic RPC URL based on network configuration
@@ -168,6 +169,10 @@ export class EnokiZkLoginService {
     return EnokiZkLoginService.instance;
   }
 
+  private resolveEffectiveNetwork(targetNetwork?: NetworkType): NetworkType {
+    return targetNetwork ?? networkOverride ?? getCurrentNetwork();
+  }
+
   public async beginLogin(
     provider: OAuthProvider = 'Google',
     targetNetwork?: NetworkType,
@@ -182,7 +187,7 @@ export class EnokiZkLoginService {
       throw new Error('Missing OAuth configuration');
     }
 
-    const effectiveNetwork = targetNetwork ?? getCurrentNetwork();
+    const effectiveNetwork = this.resolveEffectiveNetwork(targetNetwork);
     const networkConfig = getNetworkConfig(effectiveNetwork);
     this.initializeWithNetwork(effectiveNetwork);
     const resolvedOrigin = this.resolveAuthOrigin(requestOrigin);
@@ -196,7 +201,11 @@ export class EnokiZkLoginService {
     });
 
     // Create a nonce
-    const { epoch } = await this.suiClient.getLatestSuiSystemState();
+    const { epoch } = await withSuiRpcFailover(
+      effectiveNetwork,
+      'enoki.beginLogin.getLatestSuiSystemState',
+      async (suiClient) => suiClient.getLatestSuiSystemState(),
+    );
     const maxEpoch = Number(epoch) + MAX_EPOCH;
     const ephemeralKeyPair = new Ed25519Keypair();
     const randomness = generateRandomness();
@@ -403,7 +412,11 @@ export class EnokiZkLoginService {
     }
 
     // Validate current epoch
-    const { epoch } = await this.suiClient.getLatestSuiSystemState();
+    const { epoch } = await withSuiRpcFailover(
+      this.resolveEffectiveNetwork(),
+      'enoki.validateAccountData.getLatestSuiSystemState',
+      async (suiClient) => suiClient.getLatestSuiSystemState(),
+    );
     if (Number(epoch) >= account.maxEpoch) {
       throw new Error('Proof has expired. Please re-authenticate to get a new proof.');
     }
@@ -750,7 +763,7 @@ export class EnokiZkLoginService {
     account: AccountData,
     prepareBlock: ((txb: TransactionBlock) => void) | TransactionBlock,
     options: TransactionOptions = {},
-    networkOverride?: 'testnet' | 'mainnet'
+    targetNetwork?: 'testnet' | 'mainnet'
   ): Promise<TransactionResult> {
     try {
       // Validate account data and check epoch expiration
@@ -759,10 +772,16 @@ export class EnokiZkLoginService {
       // Get ephemeral keypair from stored private key
       const ephemeralKeyPair = this.keypairFromSecretKey(account.ephemeralPrivateKey);
 
-      // Use network-specific RPC URL if override provided
-      const suiClient = networkOverride 
-        ? new SuiClient({ url: getNetworkConfig(networkOverride).rpcUrl })
-        : this.suiClient;
+      const effectiveNetwork = this.resolveEffectiveNetwork(targetNetwork);
+      const { client: suiClient, rpcUrl, isFallback } = await getHealthySuiClient(
+        effectiveNetwork,
+        'enoki.sendTransaction',
+      );
+      console.log('Using Sui RPC for transaction submission:', {
+        network: effectiveNetwork,
+        rpcUrl,
+        isFallback,
+      });
 
       // Validate current epoch against maxEpoch
       // Note: Sui accepts transactions where currentEpoch < maxEpoch (strictly less than)

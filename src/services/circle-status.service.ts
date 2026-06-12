@@ -4,9 +4,10 @@
  * Fetches on-chain circle data for WhatsApp status responses
  */
 
-import { SuiClient } from '@mysten/sui/client';
 import { getConfiguredNetworkFromEnv, type NetworkType } from '@/config/public-env';
 import { getNetworkConfig } from './network-config';
+import { getPooledSuiClient } from './sui-rpc-failover';
+import { readObject, queryEventsCached } from '@/lib/sui-read';
 
 export interface CircleStatusData {
   name: string;
@@ -51,14 +52,17 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
   console.log('[CircleStatus] Fetching status for circle:', circleId, 'using RPC:', rpcUrl, 'network:', targetNetwork);
   
   try {
-    const client = new SuiClient({ url: rpcUrl });
-    
+    // Failover-backed client: gives getDynamicFields/balance reads cooldown
+    // handling instead of a bare per-call SuiClient that fails hard on 429.
+    const client = getPooledSuiClient({ network: targetNetwork, rpcUrl });
+
     // Get circle object
     console.log('[CircleStatus] Getting circle object...');
-    const objectData = await client.getObject({
-      id: circleId,
-      options: { showContent: true, showType: true }
-    });
+    const objectData = await readObject(
+      circleId,
+      { showContent: true, showType: true },
+      { network: targetNetwork },
+    );
     
     console.log('[CircleStatus] Object data received:', objectData.data ? 'found' : 'not found');
     
@@ -117,10 +121,11 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
       if (field.objectType && typeof field.objectType === 'string' && field.objectType.includes('::CircleConfig')) {
         if (field.objectId) {
           try {
-            const configData = await client.getObject({
-              id: field.objectId,
-              options: { showContent: true }
-            });
+            const configData = await readObject(
+              field.objectId,
+              { showContent: true },
+              { network: targetNetwork },
+            );
             
             if (configData.data?.content && 'fields' in configData.data.content) {
               const outerFields = configData.data.content.fields as { value?: { fields?: Record<string, unknown> } };
@@ -145,10 +150,10 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
     
     // Get custody wallet ID from CustodyWalletCreated event
     try {
-      const custodyEvents = await client.queryEvents({
+      const custodyEvents = await queryEventsCached({
         query: { MoveEventType: `${packageId}::njangi_custody::CustodyWalletCreated` },
         limit: 100
-      });
+      }, { network: targetNetwork });
       
       const custodyEvent = custodyEvents.data.find(event => 
         (event.parsedJson as { circle_id?: string })?.circle_id === circleId
@@ -233,10 +238,10 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
     
     // Get creation event for currency type
     try {
-      const circleEvents = await client.queryEvents({
+      const circleEvents = await queryEventsCached({
         query: { MoveEventType: `${packageId}::njangi_circles::CircleCreated` },
         limit: 50
-      });
+      }, { network: targetNetwork });
       
       const createEvent = circleEvents.data.find(event => 
         (event.parsedJson as { circle_id?: string })?.circle_id === circleId
@@ -256,10 +261,10 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
     
     // Fetch member events as fallback
     try {
-      const memberEvents = await client.queryEvents({
+      const memberEvents = await queryEventsCached({
         query: { MoveEventType: `${packageId}::njangi_circles::MemberJoined` },
         limit: 100
-      });
+      }, { network: targetNetwork });
       
       memberEvents.data
         .filter(event => (event.parsedJson as { circle_id?: string })?.circle_id === circleId)
@@ -322,10 +327,10 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
     // Check if circle is active
     let isActive = false;
     try {
-      const activationEvents = await client.queryEvents({
+      const activationEvents = await queryEventsCached({
         query: { MoveEventType: `${packageId}::njangi_circles::CircleActivated` },
         limit: 50
-      });
+      }, { network: targetNetwork });
       isActive = activationEvents.data.some(event => 
         (event.parsedJson as { circle_id?: string })?.circle_id === circleId
       );

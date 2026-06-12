@@ -6,7 +6,7 @@ import { toast } from 'react-hot-toast';
 import { ArrowLeft } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../../../../services/price-service';
-import { PACKAGE_ID, getCirclePackageId } from '../../../../services/circle-service';
+import { PACKAGE_ID, getCirclePackageId, getSuiClientFromPool } from '../../../../services/circle-service';
 import SimplifiedSwapUI from '../../../../components/SimplifiedSwapUI';
 import { getCoinType } from '../../../../config/constants';
 import {
@@ -18,6 +18,12 @@ import {
 import { cetusService } from '../../../../lib/cetus-service';
 import MoonPayWrapper from '@/components/MoonPayWrapper';
 import CoinbaseOnrampLauncher from '@/components/CoinbaseOnrampLauncher';
+import CycleEscrowPanel from '@/components/CycleEscrowPanel';
+import { resolveCircleSettlementCoin } from '@/lib/circle-settlement';
+import { getSuiRpcErrorMessage, isTransientSuiRpcError, logSuiReadError } from '@/services/sui-rpc-failover';
+import { readObject, invalidateObject } from '@/lib/sui-read';
+import type { NetworkType } from '@/services/whatsapp-registry-service';
+import { lookupMemberNames } from '@/lib/member-name-lookup';
 import {
   mapCurrencyCodeToIntent,
   mapIntentToMoonPayCurrency,
@@ -113,15 +119,6 @@ const formatCurrency = (amount: number, currencyType: string = 'USD') => {
   }
 };
 
-// Create a new interface for contribution progress data
-interface ContributionProgressData {
-  totalMembers: number;
-  contributedMembers: Set<string>;
-  currentCycle: number;
-  memberList: string[]; // Store all members in order
-  currentRecipientAddress?: string | null; // Add recipient address
-}
-
 type ContributeSectionKey = 'wallet' | 'circle' | 'payment';
 
 // IMPORTANT: The values in CircleConfig are stored as follows:
@@ -206,15 +203,6 @@ interface CircleCreatedEvent {
   security_deposit_usd: string;
   max_members: string;
   cycle_length: string;
-}
-
-// Add PayoutProcessedEvent interface for cycle tracking
-interface PayoutProcessedEvent {
-  circle_id: string;
-  recipient: string;
-  amount: string;
-  cycle: string | number;
-  payout_type: string | number;
 }
 
 // Define types for SUI object field values
@@ -420,439 +408,6 @@ const readOutstandingSecurityDepositRaw = async (
   return outstandingTotal;
 };
 
-// Add ContributionProgress component
-const ContributionProgress: React.FC<{
-  circleId: string;
-  maxMembers: number; // This is the total capacity, might differ from active rotation
-  currentCycle: number;
-  className?: string;
-  currentRecipientAddress?: string | null; // Add to props
-  // currentPositionInCycle?: number | null; // REMOVED - No longer used here
-  // totalMembersInRotation?: number | null; // REMOVED - No longer used here
-  isPaused?: boolean; // Add isPaused prop
-  circlePackageId: string; // Add circlePackageId prop
-  refreshKey?: number;
-}> = ({ 
-  circleId, 
-  maxMembers, 
-  currentCycle, 
-  className = '', 
-  currentRecipientAddress,
-  isPaused = false, // Default to false
-  circlePackageId, // Add to destructured props
-  refreshKey = 0
-  // currentPositionInCycle, // REMOVED
-  // totalMembersInRotation // REMOVED
-}) => {
-  const [progressData, setProgressData] = useState<ContributionProgressData>({
-    totalMembers: maxMembers,
-    contributedMembers: new Set<string>(),
-    currentCycle: currentCycle,
-    memberList: [],
-    currentRecipientAddress: currentRecipientAddress, // Initialize from prop
-  });
-  const [isLoading, setIsLoading] = useState(true);
-  const [currentPosition, setCurrentPosition] = useState<number | null>(null); // Internal state for fetched position, distinct from prop
-  const [lastPayoutTime, setLastPayoutTime] = useState<number | null>(null);
-  
-  // Track if we've already fetched data for this cycle
-  const alreadyFetchedForCycle = useRef<number | null>(null);
-
-  useEffect(() => {
-    alreadyFetchedForCycle.current = null;
-  }, [refreshKey]);
-  
-  // Check for payout events to detect cycle changes
-  const checkForPayoutEvents = async () => {
-    if (!circleId || !circlePackageId) return;
-
-    try {
-      const client = new SuiClient({ url: getJsonRpcUrl() });
-      
-      // Query PayoutProcessed events
-      const payoutEvents = await client.queryEvents({
-        query: { MoveEventType: `${circlePackageId}::njangi_payments::PayoutProcessed` },
-        limit: 20
-      });
-      
-      // Find the most recent payout event for this circle
-      const circlePayoutEvents = payoutEvents.data
-        .filter(event => {
-          const parsedJson = event.parsedJson as PayoutProcessedEvent;
-          return parsedJson?.circle_id === circleId;
-        })
-        .sort((a, b) => {
-          // Sort by timestamp (newest first)
-          return (Number(b.timestampMs) || 0) - (Number(a.timestampMs) || 0);
-        });
-      
-      if (circlePayoutEvents.length > 0) {
-        const latestEvent = circlePayoutEvents[0];
-        
-        // Set last payout time
-        if (latestEvent.timestampMs) {
-          const newPayoutTime = Number(latestEvent.timestampMs);
-          
-          // If we have a new payout time that's different from our last recorded one
-          if (!lastPayoutTime || newPayoutTime > lastPayoutTime) {
-            console.log(`[Progress] New payout detected at ${new Date(newPayoutTime).toISOString()}`);
-            setLastPayoutTime(newPayoutTime);
-                
-            // Force a refetch of contribution data
-            fetchTransactionHistory(true);
-            }
-          }
-        }
-      } catch (error) {
-      console.error("Error checking for payout events:", error);
-      }
-  };
-  
-  const fetchTransactionHistory = async (forceRefresh = false) => {
-    if (!circleId || currentCycle <= 0) {
-      setIsLoading(false);
-      return;
-    }
-    
-    if (alreadyFetchedForCycle.current === currentCycle && !forceRefresh) {
-      console.log(`[Progress] Already fetched data for cycle ${currentCycle}, skipping...`);
-      setIsLoading(false);
-      return;
-    }
-    
-    setIsLoading(true);
-    console.log(`[Progress] Fetching member contribution status for Cycle ${currentCycle} in circle ${circleId}`);
-
-    try {
-      const client = new SuiClient({ url: getJsonRpcUrl() });
-      const contributedMembers = new Set<string>();
-      let memberListFromRotation: string[] = [];
-      let currentRecipient: string | null = null;
-            
-      // 1. Fetch the Circle object to get rotation_order and current_position
-      const circleObject = await client.getObject({
-        id: circleId,
-        options: { showContent: true },
-      });
-
-      if (circleObject.data?.content && 'fields' in circleObject.data.content) {
-        const circleFields = circleObject.data.content.fields as {
-          rotation_order?: string[];
-          current_position?: string | number;
-          members?: { fields?: { id?: { id: string } } };
-          paused_after_cycle?: boolean; // Add check for paused state
-          [key: string]: unknown; // Allow other fields
-        };        
-        if (Array.isArray(circleFields.rotation_order)) {
-          memberListFromRotation = circleFields.rotation_order.filter(addr => typeof addr === 'string' && addr !== '0x0');
-        }
-        
-        // Only set current recipient if not paused
-        if (!isPaused && !circleFields.paused_after_cycle) {
-          const position = Number(circleFields.current_position);
-          if (!isNaN(position) && position < memberListFromRotation.length) {
-            currentRecipient = memberListFromRotation[position];
-            setCurrentPosition(position); // Update internal currentPosition state
-            console.log(`[Progress] Current recipient: ${currentRecipient} at position ${position}`);
-          }
-        } else {
-          console.log(`[Progress] Circle is paused - no current recipient`);
-          currentRecipient = null;
-          setCurrentPosition(null);
-        }
-      } else {
-        console.error('[Progress] Could not fetch Circle object content.');
-        setIsLoading(false);
-        return;
-      }
-
-      // 2. Fetch the members table ID
-      let membersTableId: string | null = null;
-      if (circleObject.data?.content && 'fields' in circleObject.data.content) {
-        const circleFields = circleObject.data.content.fields as { 
-          members?: { fields?: { id?: { id: string } } } 
-        };
-        if (circleFields.members?.fields?.id?.id) {
-          membersTableId = circleFields.members.fields.id.id;
-        }
-      }
-
-      if (!membersTableId) {
-        console.error('[Progress] Could not find members table ID in Circle object.');
-        setIsLoading(false);
-        return;
-      }
-      
-      // 3. Iterate through members in rotation_order and check their last_contribution
-      for (const memberAddr of memberListFromRotation) {
-        if (memberAddr === currentRecipient) {
-          // Skip the current recipient as they don't contribute this cycle
-          continue;
-        }
-        
-      try {
-          const memberField = await client.getDynamicFieldObject({
-            parentId: membersTableId,
-            name: { type: 'address', value: memberAddr },
-          });
-
-          if (memberField.data?.content && 'fields' in memberField.data.content) {
-            const memberValue = (memberField.data.content.fields as {
-              value?: { fields?: { last_contribution?: string | number; [key: string]: unknown } };
-              [key: string]: unknown;
-            }).value;
-            if (memberValue?.fields?.last_contribution && Number(memberValue.fields.last_contribution) > 0) {
-              // Consider contributed if last_contribution is non-zero
-              // More sophisticated logic might compare this timestamp with the cycle start time
-              contributedMembers.add(memberAddr);
-              console.log(`[Progress] Member ${memberAddr} has contributed (last_contribution: ${memberValue.fields.last_contribution})`);
-              } else {
-              console.log(`[Progress] Member ${memberAddr} has NOT contributed (last_contribution: ${memberValue?.fields?.last_contribution})`);
-          }
-        }
-      } catch (error) {
-          console.warn(`[Progress] Error fetching member ${memberAddr}:`, error);
-        }
-      }
-      
-      console.log(`[Progress] Total unique contributors (excluding recipient): ${contributedMembers.size}`);
-      console.log(`[Progress] Contributors:`, Array.from(contributedMembers));
-      console.log(`[Progress] All members from rotation:`, memberListFromRotation);
-
-      setProgressData({
-        totalMembers: Number(maxMembers), // Use the prop value
-        contributedMembers,
-        currentCycle,
-        memberList: memberListFromRotation, 
-        currentRecipientAddress: currentRecipient, 
-      });
-      
-      alreadyFetchedForCycle.current = currentCycle;
-    } catch (error) {
-      console.error('[Progress] Error fetching contribution status:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Set up polling to check for payouts every 10 seconds
-  useEffect(() => {
-    // Initial check only, no interval anymore
-    checkForPayoutEvents();
-    
-    // Removed interval code here to stop auto-refresh
-
-    // No need for cleanup function since we don't create an interval
-  }, [circleId, circlePackageId]);
-
-  useEffect(() => {
-    if (circleId && maxMembers > 0 && currentCycle > 0) {
-      console.log("[Progress] Required data available, fetching contribution events...");
-      // Force a refresh when the cycle or recipient changes
-      fetchTransactionHistory(currentRecipientAddress !== progressData.currentRecipientAddress);
-    } else {
-      console.log("[Progress] Waiting for required data:", { circleId, maxMembers, currentCycle });
-    }
-  // Add currentPosition (internal state), lastPayoutTime and currentRecipientAddress to dependency array
-  }, [circleId, maxMembers, currentCycle, currentPosition, lastPayoutTime, currentRecipientAddress, isPaused, refreshKey]);
-
-  // Calculate progress percentage
-  const contributedCount = progressData.contributedMembers.size;
-  const expectedContributors = progressData.currentRecipientAddress ? Math.max(0, progressData.totalMembers - 1) : progressData.totalMembers;
-  
-  const progressPercentage = expectedContributors > 0 
-    ? (contributedCount / expectedContributors) * 100 
-    : 0;
-  
-  // Determine status color based on progress
-  const getStatusColor = () => {
-    if (isPaused) return 'text-amber-500';
-    if (progressPercentage === 100) return 'text-emerald-500';
-    if (progressPercentage > 60) return 'text-slate-900';
-    if (progressPercentage > 30) return 'text-slate-700';
-    return 'text-stone-400';
-  };
-  
-  // Helper to format wallet address for display
-  const formatAddress = (address: string): string => {
-    if (!address.startsWith('0x')) return address;
-    if (address.length <= 10) return address;
-    return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
-  };
-
-  return (
-    <div className={`flex flex-col items-center ${className}`}>
-      <div className="relative h-36 w-36">
-        <svg className="w-full h-full" viewBox="0 0 100 100">
-          <circle
-            cx="50"
-            cy="50"
-            r="45"
-            fill="none"
-            stroke="#e7e5e4"
-            strokeWidth="8"
-          />
-
-          <circle
-            cx="50"
-            cy="50"
-            r="45"
-            fill="none"
-            stroke={isPaused ? '#d97706' : progressPercentage === 100 ? '#10B981' : '#0f172a'}
-            strokeWidth="8"
-            strokeDasharray={`${progressPercentage * 2.83} 283`}
-            strokeDashoffset="0"
-            transform="rotate(-90 50 50)"
-            strokeLinecap="round"
-            className="transition-all duration-500 ease-in-out"
-          />
-
-          {isPaused ? (
-            <>
-              <g transform="translate(50, 42)" className="fill-amber-500">
-                <rect x="-10" y="-15" width="7" height="30" rx="2" />
-                <rect x="3" y="-15" width="7" height="30" rx="2" />
-              </g>
-              <text 
-                x="50" 
-                y="75" 
-                textAnchor="middle" 
-                dominantBaseline="middle"
-                className="fill-current text-xs text-slate-500"
-              >
-                Cycle
-              </text>
-            </>
-          ) : (
-            <>
-              <text 
-                x="50" 
-                y="50" 
-                textAnchor="middle" 
-                dominantBaseline="middle"
-                className={`${getStatusColor()} font-bold text-xl fill-current`}
-              >
-                {isLoading ? "..." : `${Math.round(progressPercentage)}%`}
-              </text>
-              <text 
-                x="50" 
-                y="65" 
-                textAnchor="middle" 
-                dominantBaseline="middle"
-                className="fill-current text-xs text-slate-500"
-              >
-                Complete
-              </text>
-            </>
-          )}
-        </svg>
-
-        {(() => {
-          const membersForDots = progressData.currentRecipientAddress && !isPaused
-            ? progressData.memberList.filter(member => member !== progressData.currentRecipientAddress)
-            : progressData.memberList;
-          const numDots = membersForDots.length;
-
-          return membersForDots.map((memberAddr, index) => {
-            const angle = numDots > 0 ? (index / numDots) * Math.PI * 2 - Math.PI / 2 : 0;
-          const x = 50 + 55 * Math.cos(angle);
-          const y = 50 + 55 * Math.sin(angle);
-          const hasContributed = progressData.contributedMembers.has(memberAddr);
-            const dotColor = isPaused 
-              ? 'bg-amber-300'
-              : hasContributed 
-                ? 'bg-emerald-500' 
-                : 'bg-stone-300';
-          
-          return (
-              <div key={memberAddr} className="group">
-              <div 
-                className={`absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 transform rounded-full border border-white 
-                    ${dotColor} 
-                  hover:scale-125 transition-all duration-200`}
-                style={{ 
-                  left: `${x}%`, 
-                  top: `${y}%`,
-                }}
-              />
-              <div 
-                className="absolute hidden group-hover:block bg-gray-900 text-white text-xs rounded p-2 z-10"
-                style={{ 
-                  left: `${x}%`, 
-                  top: `${y}%`,
-                  transform: 'translate(-50%, -100%)',
-                  marginTop: '-10px',
-                }}
-              >
-                <p className="whitespace-nowrap">
-                  {formatAddress(memberAddr)}
-                    {isPaused 
-                      ? ' (Cycle Paused)' 
-                      : hasContributed 
-                        ? ' ✓' 
-                        : ' ✘'}
-                </p>
-              </div>
-            </div>
-          );
-          });
-      })()}
-      </div>
-      
-      <div className="mt-4 text-center">
-        <p className="text-sm font-medium text-slate-900">
-          {isLoading ? "Loading..." : `${contributedCount} of ${expectedContributors} expected contributors`}
-        </p>
-        <p className="text-xs text-slate-500">
-          {isPaused ? `Cycle ${currentCycle} Completed - Pending Next Cycle` : `Current Cycle Contributions`}
-        </p>
-      </div>
-
-      <div className="mt-3 grid w-full max-w-xs grid-cols-1 gap-2 text-xs">
-        {progressData.memberList.map((memberAddr, index) => {
-          const hasContributed = progressData.contributedMembers.has(memberAddr);
-          const isRecipient = !isPaused && memberAddr === progressData.currentRecipientAddress;
-          
-          const statusText = isPaused 
-            ? 'Waiting for Next Cycle' 
-            : isRecipient 
-              ? 'Receiving Payout' 
-              : hasContributed 
-                ? 'Contributed' 
-                : 'Pending';
-                
-          const statusColorClass = isPaused 
-            ? 'text-amber-600 font-medium' 
-            : isRecipient 
-              ? 'text-sky-700 font-medium' 
-              : hasContributed 
-                ? 'text-emerald-700 font-medium' 
-                : 'text-slate-500';
-                
-          const dotColorClass = isPaused 
-            ? 'bg-amber-300' 
-            : isRecipient 
-              ? 'bg-sky-500' 
-              : hasContributed 
-                ? 'bg-emerald-500' 
-                : 'bg-stone-300';
-
-          return (
-            <div key={index} className="flex items-center justify-between rounded-full border border-stone-200 bg-white px-3 py-2">
-              <div className="flex items-center">
-                <div className={`mr-2 h-3 w-3 rounded-full ${dotColorClass}`}></div>
-                <span className="font-mono">{formatAddress(memberAddr)}</span>
-              </div>
-              <span className={`${statusColorClass} ml-4`}>
-                {statusText}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
 
 export default function ContributeToCircle() {
   const router = useRouter();
@@ -860,7 +415,12 @@ export default function ContributeToCircle() {
   const { isAuthenticated, isLoading: authLoading, userAddress, account } = useAuth();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
+  // Phase 6: display-name map keyed by lowercase address so the
+  // CycleEscrowPanel can show "Aminata" instead of a hex address.
+  const [memberNameMap, setMemberNameMap] = useState<Record<string, string>>({});
+  // Setter retained-as-noop for legacy buttons that still reference it.
+  // Read-only callers below keep using `isProcessing` as a disabled flag.
+  const [isProcessing] = useState(false);
   const [suiPrice, setSuiPrice] = useState(1.25);
   const [isOneClickSwapProcessing, setIsOneClickSwapProcessing] = useState(false);
   const [oneClickSwapDigest, setOneClickSwapDigest] = useState<string | null>(null);
@@ -936,12 +496,10 @@ export default function ContributeToCircle() {
   const [isCurrentRecipient, setIsCurrentRecipient] = useState<boolean>(false);
 
   // Add state for current cycle recipient address
-  const [cycleRecipientAddress, setCycleRecipientAddress] = useState<string | null>(null);
 
   // New states for cycle position tracking
   const [currentPositionInCycle, setCurrentPositionInCycle] = useState<number | null>(null);
   const [totalMembersInRotation, setTotalMembersInRotation] = useState<number | null>(null);
-  const [contributionRefreshKey, setContributionRefreshKey] = useState<number>(0);
 
   // Add a new state variable to track if a user has had their security deposit returned during the current paused cycle
   const [securityDepositReturnedDuringPause, setSecurityDepositReturnedDuringPause] = useState<boolean>(false);
@@ -971,6 +529,7 @@ export default function ContributeToCircle() {
   useEffect(() => {
     setCurrencyTabIndex(isSuiCircleModeEnabled ? 1 : 0);
   }, [isSuiCircleModeEnabled]);
+
 
   const getZkLoginEndpointWithCurrency = (currency: PaymentCurrency) =>
     currency === 'SUI' ? '/api/zkLogin?currency=SUI' : '/api/zkLogin';
@@ -1111,14 +670,12 @@ export default function ContributeToCircle() {
     if (!id || !userAddress) return false;
     
     try {
-      const client = new SuiClient({ url: getCurrentRpcUrl() });
+      const client = getSuiClientFromPool(getCurrentRpcUrl());
       const determinedPackageId = await getCirclePackageId(id as string, userAddress);
       
-      // First check if user is the admin
-      const objectData = await client.getObject({
-        id: id as string,
-        options: { showContent: true }
-      });
+      // First check if user is the admin. Deduped/cached read: the circle
+      // object is fetched by several mount-time checks; they share one RPC.
+      const objectData = await readObject(id as string, { showContent: true });
       
       if (objectData.data?.content && 'fields' in objectData.data.content) {
         const fields = objectData.data.content.fields as Record<string, unknown>;
@@ -1202,6 +759,15 @@ export default function ContributeToCircle() {
       return true;
       
     } catch (error) {
+      if (isTransientSuiRpcError(error)) {
+        // RPC momentarily unavailable (rate-limit / failover cooldown).
+        // Returning null signals "couldn't verify yet"; the caller retries.
+        console.warn(
+          '[Membership] Verification deferred (transient RPC):',
+          getSuiRpcErrorMessage(error),
+        );
+        return null;
+      }
       console.error('[Membership] Error verifying membership:', error);
       return null;
     }
@@ -1243,6 +809,10 @@ export default function ContributeToCircle() {
         fetchCircleDetails();
       });
     }
+    // `verifyMembership` and `fetchCircleDetails` are component-scoped
+    // closures that would change on every render; including them would
+    // refetch the circle on every re-render of the component.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, id, router, router.isReady, userAddress]);
 
   // Add effect to fetch user balance and deposit status when circle data is loaded
@@ -1250,6 +820,8 @@ export default function ContributeToCircle() {
     if (circle && userAddress) {
       fetchUserWalletInfo();
     }
+    // `fetchUserWalletInfo` closes over `circle`/`userAddress` already.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [circle, userAddress]);
 
   // First add console logs to debug the conditions for showing the button
@@ -1410,6 +982,9 @@ export default function ContributeToCircle() {
     };
 
     convertCustodyUsdcBalances();
+    // Only `circle?.currencyType` is read; we intentionally don't re-run on
+    // unrelated `circle` field changes to avoid redundant FX conversions.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [custodyStablecoinBalance, securityDepositBalance, contributionBalance, circle?.currencyType, suiPrice]);
 
   // Fix type assertion issues in the function
@@ -1420,7 +995,7 @@ export default function ContributeToCircle() {
     try {
       const rpcUrl = getJsonRpcUrl();
       console.log('[Balance Fetch] Using RPC URL:', rpcUrl);
-      const client = new SuiClient({ url: rpcUrl }); // Use helper function for URL
+      const client = getSuiClientFromPool(rpcUrl); // Use helper function for URL
       
       let mainSuiBalance = 0;
       let dynamicFieldSuiBalance = 0;
@@ -1528,7 +1103,7 @@ export default function ContributeToCircle() {
       });
 
     } catch (error) {
-      console.error('Error fetching custody wallet SUI balance:', error);
+      logSuiReadError('Error fetching custody wallet SUI balance:', error);
       setCustodySuiBalance(null);
       setSuiSecurityDepositBalance(null);
       setSuiContributionBalance(null);
@@ -1557,13 +1132,11 @@ export default function ContributeToCircle() {
       console.log('Contribute - Using package ID:', determinedPackageId);
       setCirclePackageId(determinedPackageId);
       
-      const client = new SuiClient({ url: getCurrentRpcUrl() });
-      
-      // Get circle object with content
-      const objectData = await client.getObject({
-        id: id as string,
-        options: { showContent: true, showType: true }
-      });
+      const client = getSuiClientFromPool(getCurrentRpcUrl());
+
+      // Get circle object with content (deduped/cached + failover via readObject;
+      // shares the read with the other mount-time circle lookups).
+      const objectData = await readObject(id as string, { showContent: true, showType: true });
       
       if (!objectData.data?.content || !('fields' in objectData.data.content)) {
         throw new Error('Invalid circle object data received');
@@ -1583,6 +1156,15 @@ export default function ContributeToCircle() {
           setCurrentPositionInCycle(position);
           setTotalMembersInRotation(rotationOrderArray.length);
           console.log(`Contribute - Fetched cycle position: ${position + 1} of ${rotationOrderArray.length}`);
+          // Phase 6: hydrate the member-name map so the CycleEscrowPanel can
+          // show "It's Aminata's turn" instead of a hex address. We fire-
+          // and-forget because a missing name falls back to a shortened
+          // address, which is still functional.
+          void lookupMemberNames(id as string, rotationOrderArray as string[])
+            .then((names) => setMemberNameMap(names))
+            .catch((err) =>
+              console.warn('[contribute] Failed to resolve member names', err),
+            );
         }
       }
       
@@ -1606,7 +1188,7 @@ export default function ContributeToCircle() {
           });
           console.log('Contribute - Lifecycle state after activation event fallback:', lifecycleState);
         } catch (err) {
-          console.error('Contribute - Error checking activation events:', err);
+          logSuiReadError('Contribute - Error checking activation events:', err);
         }
       }
 
@@ -1693,27 +1275,34 @@ export default function ContributeToCircle() {
           }
         }
         
-        // 3. Fetch CustodyWalletCreated event for walletId
-        const custodyEvents = await client.queryEvents({
-          query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyWalletCreated` },
-          limit: 100
-        });
-        const custodyEvent = custodyEvents.data.find(event =>
-          event.parsedJson && 
-              typeof event.parsedJson === 'object' &&
-              'circle_id' in event.parsedJson &&
-              'wallet_id' in event.parsedJson &&
-          event.parsedJson.circle_id === id
-        );
-        if (custodyEvent?.parsedJson) {
-          walletId = (custodyEvent.parsedJson as { wallet_id: string }).wallet_id;
-          console.log('Contribute - Found wallet ID from events:', walletId);
-        } else {
-          console.warn('Contribute - No CustodyWalletCreated event found for circle:', id);
+        // 3. Fetch CustodyWalletCreated event for walletId. Per-node indexer
+        // gaps can throw "Could not find the referenced transaction events"
+        // here even when the upstream try/catch is in place — isolate so a
+        // failed wallet lookup doesn't surface as a runtime overlay.
+        try {
+          const custodyEvents = await client.queryEvents({
+            query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyWalletCreated` },
+            limit: 100
+          });
+          const custodyEvent = custodyEvents.data.find(event =>
+            event.parsedJson &&
+                typeof event.parsedJson === 'object' &&
+                'circle_id' in event.parsedJson &&
+                'wallet_id' in event.parsedJson &&
+            event.parsedJson.circle_id === id
+          );
+          if (custodyEvent?.parsedJson) {
+            walletId = (custodyEvent.parsedJson as { wallet_id: string }).wallet_id;
+            console.log('Contribute - Found wallet ID from events:', walletId);
+          } else {
+            console.warn('Contribute - No CustodyWalletCreated event found for circle:', id);
+          }
+        } catch (walletLookupErr) {
+          console.warn('Contribute - CustodyWalletCreated lookup failed (non-fatal):', walletLookupErr);
         }
 
       } catch (error) {
-        console.error('Contribute - Error fetching event/transaction data:', error);
+        logSuiReadError('Contribute - Error fetching event/transaction data:', error);
         // Continue even if this fails, rely on other data sources
         }
 
@@ -1858,7 +1447,7 @@ export default function ContributeToCircle() {
           }
         }
       } catch (error) {
-        console.error('Contribute - Error fetching CircleConfig fields:', error);
+        logSuiReadError('Contribute - Error fetching CircleConfig fields:', error);
       }
       console.log('[CONTRIBUTE DEBUG] Config after Dynamic Fields (CircleConfig):', JSON.parse(JSON.stringify(configValues)));
 
@@ -1975,6 +1564,13 @@ export default function ContributeToCircle() {
       });
 
     } catch (error) {
+      if (isTransientSuiRpcError(error)) {
+        // RPC momentarily in cooldown (rate-limit / failover). The page keeps
+        // its current state and the next mount/refresh recovers — log quietly
+        // instead of tripping the Next.js dev error overlay.
+        console.warn('Contribute - Circle details fetch deferred (transient RPC):', getSuiRpcErrorMessage(error));
+        return;
+      }
       console.error('Contribute - Error fetching circle details:', error);
       toast.error('Could not load circle information');
     } finally {
@@ -1996,9 +1592,15 @@ export default function ContributeToCircle() {
     console.log('[Balance Fetch] Starting fetchUserWalletInfo for:', { userAddress, circleId: circle.id });
     setFetchingBalance(true);
     let depositPaid = false; // Default to false
-    
+    // When the user's Member struct is present in the circle's members table,
+    // its `deposit_paid` field is the authoritative source of truth: removed
+    // members are deleted from the table, so an in-table read already reflects
+    // the current state. We only fall back to (expensive, rate-limit-prone)
+    // event queries when the struct read can't answer.
+    let memberFoundInTable = false;
+
     try {
-      const client = new SuiClient({ url: getJsonRpcUrl() }); // Use helper function for URL
+      const client = getSuiClientFromPool(getJsonRpcUrl()); // Use helper function for URL
       
       // --- Get SUI Balance ---
       console.log('[Balance Fetch] Fetching SUI balance for address:', userAddress);
@@ -2044,23 +1646,21 @@ export default function ContributeToCircle() {
             _rawCircleContrUsd_InCents: circle.contributionAmountUsd
         });
 
-        // Condition 1: Paying Security Deposit (userDepositPaid state is false)
+        // The legacy direct-deposit card now serves the SECURITY DEPOSIT only —
+        // cycle contributions go through the CycleEscrowPanel. (The contribution
+        // branch was removed so members don't get a second, out-of-sync pay
+        // button; renderContributionOptions also returns null once the deposit
+        // is paid.) circleActive/circlePaused stay computed for the logs above.
         if (!userDepositPaid && securityDepositInDollars > 0 && hasEnoughForSecurity) {
           showOption = true;
           console.log("Logic: Showing direct deposit for SECURITY DEPOSIT because it's > 0 and user has enough USDC.");
         }
-        // Condition 2: Making Regular Contribution (userDepositPaid state is true)
-        // Don't allow contributions if circle is paused after cycle
-        else if (userDepositPaid && contributionInDollars > 0 && hasEnoughForContribution && circleActive && !circlePaused) {
-           showOption = true;
-           console.log("Logic: Showing direct deposit for CONTRIBUTION because it's > 0, user has enough USDC, circle active & not paused.");
-        }
-        
+
         setShowDirectDepositOption(showOption);
         // --- End of updated logic ---
 
       } catch (error) {
-        console.error('Error fetching USDC balance:', error);
+        logSuiReadError('Error fetching USDC balance:', error);
         setUserUsdcBalance(null);
         setShowDirectDepositOption(false);
       }
@@ -2070,10 +1670,7 @@ export default function ContributeToCircle() {
       
       // Method 1: Try fetching the Member object directly (Best Source of Truth)
       try {
-        const circleObject = await client.getObject({
-          id: circle.id,
-          options: { showContent: true }
-        });
+        const circleObject = await readObject(circle.id, { showContent: true });
         
         if (circleObject.data?.content && 'fields' in circleObject.data.content) {
           const circleFields = circleObject.data.content.fields as {
@@ -2097,8 +1694,9 @@ export default function ContributeToCircle() {
               const memberFields = memberField.data.content.fields as {
                 value?: { fields?: { deposit_paid?: boolean, [key: string]: unknown } } // Access nested value.fields
               };
-              
+
               if (memberFields.value?.fields?.deposit_paid !== undefined) {
+                memberFoundInTable = true;
                 depositPaid = Boolean(memberFields.value.fields.deposit_paid);
                 console.log(`Deposit status found directly in Member struct: ${depositPaid}`);
               } else {
@@ -2115,8 +1713,9 @@ export default function ContributeToCircle() {
         console.warn('Could not fetch Member object directly, falling back to event checks:', error);
       }
       
-      // Method 2: Check MemberActivated Event (If direct fetch failed)
-      if (!depositPaid) {
+      // Method 2: Check MemberActivated Event (only when the struct read above
+      // couldn't answer — i.e. the user isn't currently in the members table).
+      if (!memberFoundInTable && !depositPaid) {
         console.log('Checking MemberActivated events...');
         try {
           const memberActivatedEvents = await client.queryEvents({
@@ -2135,12 +1734,16 @@ export default function ContributeToCircle() {
             console.log('No MemberActivated event found for this user/circle.');
           }
         } catch (eventError) {
-          console.error('Error fetching MemberActivated events:', eventError);
+          if (isTransientSuiRpcError(eventError)) {
+            console.warn('MemberActivated events deferred (transient RPC):', getSuiRpcErrorMessage(eventError));
+          } else {
+            console.error('Error fetching MemberActivated events:', eventError);
+          }
         }
       }
 
       // Method 3: Check Custody/Stablecoin Events (Further fallback)
-      if (!depositPaid) {
+      if (!memberFoundInTable && !depositPaid) {
         console.log('Checking deposit-related events as final fallback...');
         // Check CustodyDeposited events (operation_type 3)
         const custodyEvents = await client.queryEvents({
@@ -2160,7 +1763,9 @@ export default function ContributeToCircle() {
       // New Step: Check SecurityDepositReturned Event and compare timestamps with deposit events
       // This handles the case where a user was removed (deposit returned), then re-added.
       // We need to compare the MOST RECENT return event with the MOST RECENT deposit event.
-      try {
+      // Skipped when the member is in the table: the struct's deposit_paid is
+      // already authoritative there, and a removed member is gone from the table.
+      if (!memberFoundInTable) try {
         console.log(`[ContributePage] Checking SecurityDepositReturned events for ${userAddress} in circle ${circle.id}...`);
         const securityReturnedEvents = await client.queryEvents({
           query: { MoveEventType: `${circlePackageId}::njangi_payments::SecurityDepositReturned` }, 
@@ -2225,14 +1830,22 @@ export default function ContributeToCircle() {
           }
         }
       } catch (eventError) {
-        console.warn(`[ContributePage] Error checking SecurityDepositReturned events:`, eventError);
+        if (isTransientSuiRpcError(eventError)) {
+          console.warn('[ContributePage] SecurityDepositReturned reconciliation deferred (transient RPC):', getSuiRpcErrorMessage(eventError));
+        } else {
+          console.warn(`[ContributePage] Error checking SecurityDepositReturned events:`, eventError);
+        }
       }
-      
+
       setUserDepositPaid(depositPaid);
       console.log('Final user deposit status:', depositPaid ? 'Paid' : 'Not Paid');
-      
+
     } catch (error) {
-      console.error('Error fetching user wallet info:', error);
+      if (isTransientSuiRpcError(error)) {
+        console.warn('User wallet info fetch deferred (transient RPC):', getSuiRpcErrorMessage(error));
+      } else {
+        console.error('Error fetching user wallet info:', error);
+      }
     } finally {
       setFetchingBalance(false);
     }
@@ -2250,13 +1863,10 @@ export default function ContributeToCircle() {
     }
     
     console.log(`[Contribution Check] Starting check for user ${userAddress} in circle ${circle.id} for cycle ${currentCycle}`);
-    
+
     try {
-      const client = new SuiClient({ url: getJsonRpcUrl() });
-      const circleObject = await client.getObject({
-        id: circle.id,
-        options: { showContent: true }
-      });
+      const client = getSuiClientFromPool(getJsonRpcUrl());
+      const circleObject = await readObject(circle.id, { showContent: true });
 
       if (!circleObject.data?.content || !('fields' in circleObject.data.content)) {
         setUserHasContributed(false);
@@ -2337,6 +1947,10 @@ export default function ContributeToCircle() {
       // Return the result for immediate use
       return hasContributed;
     } catch (error) {
+      if (isTransientSuiRpcError(error)) {
+        console.warn('Contribution check deferred (transient RPC):', getSuiRpcErrorMessage(error));
+        return false;
+      }
       console.error("Error checking user contributions:", error);
       return false;
     }
@@ -2345,27 +1959,21 @@ export default function ContributeToCircle() {
   // Add new function to check if user is the current recipient
   const checkIfUserIsCurrentRecipient = async () => {
     if (!circle || !circle.id || !userAddress || !circle.isActive) {
-      setCycleRecipientAddress(null); // Reset if conditions not met
       return false;
     }
     
     // If circle is paused after cycle, there is no current recipient
     if (circle.pausedAfterCycle) {
       console.log(`[Recipient Check] Circle is paused after cycle - no current recipient`);
-      setCycleRecipientAddress(null);
       setIsCurrentRecipient(false);
       return false;
     }
     
     console.log(`[Recipient Check] Checking if user ${userAddress} is the current recipient in circle ${circle.id}`);
-    
+
     try {
-      const client = new SuiClient({ url: getJsonRpcUrl() });
-      const circleObject = await client.getObject({
-        id: circle.id,
-        options: { showContent: true }
-      });
-      
+      const circleObject = await readObject(circle.id, { showContent: true });
+
       if (circleObject.data?.content && 'fields' in circleObject.data.content) {
         const circleFields = circleObject.data.content.fields as Record<string, unknown>;;
         const currentPosition = Number(circleFields.current_position || 0);
@@ -2387,7 +1995,6 @@ export default function ContributeToCircle() {
             currentPosition >= 0 && 
             currentPosition < rotationOrder.length) {
           const recipientAddress = rotationOrder[currentPosition];
-          setCycleRecipientAddress(recipientAddress); // Set the recipient for the whole cycle
           const isRecipient = recipientAddress === userAddress;
           
           console.log(`[Recipient Check] Recipient address: ${recipientAddress}`);
@@ -2399,12 +2006,10 @@ export default function ContributeToCircle() {
       }
       
       setIsCurrentRecipient(false);
-      setCycleRecipientAddress(null); // Reset on failure
       return false;
     } catch (error) {
-      console.error("Error checking if user is current recipient:", error);
+      logSuiReadError('Error checking if user is current recipient:', error);
       setIsCurrentRecipient(false);
-      setCycleRecipientAddress(null); // Reset on error
       return false;
     }
   };
@@ -2414,7 +2019,7 @@ export default function ContributeToCircle() {
     if (!circle || !circle.id || !userAddress) return false;
     
     try {
-      const client = new SuiClient({ url: getJsonRpcUrl() });
+      const client = getSuiClientFromPool(getJsonRpcUrl());
       console.log(`[SecurityDepositCheck] Checking if ${userAddress} has received security deposit payout in circle ${circle.id}`);
       
       // Look for SecurityDepositReturned events for this user and circle
@@ -2487,7 +2092,7 @@ export default function ContributeToCircle() {
       return false;
       
     } catch (error) {
-      console.error(`[SecurityDepositCheck] Error checking security deposit return status:`, error);
+      logSuiReadError('[SecurityDepositCheck] Error checking security deposit return status:', error);
       return false;
     }
   };
@@ -2497,132 +2102,21 @@ export default function ContributeToCircle() {
     if (circle && userAddress && circle.pausedAfterCycle) {
       checkSecurityDepositReturned();
     }
+    // `checkSecurityDepositReturned` is a stable component closure; deps
+    // captured via circle/userAddress already.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [circle, userAddress]);
 
-  // Modify handleContribute to check if user is the current recipient
+  // Legacy custody contribute retired 2026-04-28. Members now contribute
+  // through the CycleEscrowPanel rendered at the top of this page, which
+  // calls njangi_cycle_escrow::contribute<T> with a frozen CycleSnapshot.
+  // Any legacy callsite still wired to this function gets a toast pointer
+  // instead of a Move call.
   const handleContribute = async () => {
-    if (!circle || !userAddress) return;
-    
-    // Check if the circle is paused after cycle
-    if (circle.pausedAfterCycle) {
-      toast.error('Contributions are disabled while the cycle is paused. Please wait for the admin to resume the cycle.');
-      return;
-    }
-    
-    // Check if user is the current recipient and shouldn't contribute
-    if (isCurrentRecipient) {
-      toast.error('You are the current recipient for this cycle. You don\'t need to contribute.');
-      return;
-    }
-    
-    // Double-check if user has already contributed for this cycle
-    const alreadyContributed = await checkUserContribution();
-    if (alreadyContributed) {
-      toast.error('You have already contributed for this cycle.');
-      return;
-    }
-    
-    setIsProcessing(true);
-    try {
-      if (!userDepositPaid) {
-        toast.error('Security deposit required before contributing');
-        setIsProcessing(false);
-        return;
-      }
-      
-      if (!account) {
-        toast.error('User account not available. Please log in again.');
-        setIsProcessing(false);
-        return;
-      }
-      
-      // Check if walletId is available
-      if (!circle.walletId) {
-        toast.error('Circle wallet information not available. Please refresh the page and try again.');
-        setIsProcessing(false);
-        return;
-      }
-      
-      const isSuiFlow = selectedPaymentCurrency === 'SUI';
-      if (isSuiFlow && !isSuiCircleModeEnabled) {
-        toast.error('This circle is in USDC mode. Ask the admin to enable SUI mode first.');
-        setIsProcessing(false);
-        return;
-      }
-
-      if (!isSuiFlow && userUsdcBalance !== null && userUsdcBalance < requiredContributionUsdc) {
-        toast.error(
-          `Insufficient USDC balance. Need ${requiredContributionUsdc.toFixed(2)} USDC but you have ${userUsdcBalance.toFixed(2)} USDC.`
-        );
-        setIsProcessing(false);
-        return;
-      }
-
-      if (isSuiFlow && userBalance !== null && userBalance < getRequiredContributionAmount()) {
-        toast.error('Insufficient SUI wallet balance for contribution.');
-        setIsProcessing(false);
-        return;
-      }
-
-      console.log('Contribution flow selection:', {
-        selectedPaymentCurrency,
-        userUsdcBalance,
-        requiredContributionUsdc,
-        userSuiBalance: userBalance,
-        requiredSuiAmount: getRequiredContributionAmount(),
-      });
-
-      toast.loading(
-        isSuiFlow
-          ? 'Processing contribution in native SUI...'
-          : 'Processing contribution in USDC...',
-        { id: 'contribute-tx' }
-      );
-      
-      // Execute contribution through the custody wallet
-      const result = await fetch(getZkLoginEndpointWithCurrency(selectedPaymentCurrency), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'contributeFromCustody',
-          account,
-          circleId: circle.id,
-          walletId: circle.walletId,
-          currency: selectedPaymentCurrency,
-          useUSDC: selectedPaymentCurrency === 'USDC',
-          network: getCurrentNetwork() // Include current network selection
-        }),
-      });
-      
-      const responseData = await result.json();
-      
-      if (!result.ok) {
-        console.error('Contribution failed:', responseData);
-        toast.error(responseData.error || 'Failed to process contribution', { id: 'contribute-tx' });
-        return;
-      }
-      
-      toast.success(
-        selectedPaymentCurrency === 'USDC'
-          ? 'Contribution successful in USDC.'
-          : 'Contribution successful in SUI.',
-        { id: 'contribute-tx' }
-      );
-      
-      console.log('Contribution transaction digest:', responseData.digest);
-      
-      // Refresh user wallet info, circle data, and custody wallet balance
-      fetchUserWalletInfo();
-      fetchCircleDetails();
-      fetchCustodyWalletBalance();
-      setContributionRefreshKey(prev => prev + 1);
-      checkUserContribution();
-    } catch (error) {
-      console.error('Error contributing:', error);
-      toast.error('Failed to process contribution');
-    } finally {
-      setIsProcessing(false);
-    }
+    toast(
+      'Contributions now run through the round panel above (per-cycle escrow). Pay your share there.',
+      { icon: 'ℹ️' },
+    );
   };
 
   // Add a helper function to get valid security deposit amount in SUI
@@ -2894,7 +2388,7 @@ export default function ContributeToCircle() {
   };
 
   const pollOneClickSwapTxStatus = async (digest: string): Promise<void> => {
-    const client = new SuiClient({ url: getCurrentRpcUrl() });
+    const client = getSuiClientFromPool(getCurrentRpcUrl());
     const maxAttempts = 15;
     const intervalMs = 2000;
 
@@ -3108,11 +2602,14 @@ export default function ContributeToCircle() {
         }
       );
 
+      // The swap+deposit mutated on-chain state — drop cached circle reads so
+      // the refreshers below reflect it rather than the pre-deposit snapshot.
+      invalidateObject(circle.id);
+
       // Refresh key page state after confirmation.
       fetchUserWalletInfo();
       fetchCircleDetails();
       fetchCustodyWalletBalance();
-      setContributionRefreshKey(prev => prev + 1);
       checkUserContribution();
     } catch (error) {
       const errorMessage =
@@ -3341,6 +2838,8 @@ export default function ContributeToCircle() {
             : 'Security deposit paid successfully in SUI.',
           { id: 'pay-security-deposit' }
         );
+        // Deposit changed on-chain state — drop cached circle reads first.
+        invalidateObject(circle.id);
         // Refresh user's wallet info and circle data
         fetchUserWalletInfo();
         fetchCircleDetails();
@@ -3525,7 +3024,7 @@ export default function ContributeToCircle() {
     setIsInitialBalanceLoad(false);
     
     try {
-      const client = new SuiClient({ url: getCurrentRpcUrl() });
+      const client = getSuiClientFromPool(getCurrentRpcUrl());
       const previousBalance = custodyStablecoinBalance;
       const [walletData, walletDynamicFields, outstandingDepositRaw] = await Promise.all([
         client.getObject({
@@ -3591,7 +3090,7 @@ export default function ContributeToCircle() {
         }
       }
     } catch (error) {
-      console.error('Error fetching custody wallet stablecoin balance:', error);
+      logSuiReadError('Error fetching custody wallet stablecoin balance:', error);
       if (wasManualRefresh && toastId) {
         toast.error('Failed to fetch balance', { id: toastId });
       }
@@ -3603,8 +3102,19 @@ export default function ContributeToCircle() {
   // New function to handle direct USDC deposit
   const handleDirectUsdcDeposit = async () => {
     if (!circle || !userAddress || !userUsdcBalance) return;
-    
+
     const isSecurityDeposit = !userDepositPaid;
+    // Legacy contribute path retired 2026-04-28: route members to the
+    // CycleEscrowPanel for cycle contributions. Security deposits still
+    // run through this handler since they happen before activation, not
+    // per-cycle.
+    if (!isSecurityDeposit) {
+      toast(
+        'Contributions now run through the round panel above (per-cycle escrow). Pay your share there.',
+        { icon: 'ℹ️' },
+      );
+      return;
+    }
     // Values from circle state are in CENTS
     const securityDepositUSDCents = circle.securityDepositUsd || 0;
     const contributionUSDCents = circle.contributionAmountUsd || 0;
@@ -3692,12 +3202,15 @@ export default function ContributeToCircle() {
       }
       
       console.log('Direct USDC deposit transaction digest:', responseData.digest);
-      
+
+      // The deposit just mutated on-chain state; drop cached circle reads so
+      // the refresh below reflects it rather than the pre-write snapshot.
+      invalidateObject(circle.id);
+
       // Refresh user wallet info, circle data, and custody wallet balance
       fetchUserWalletInfo();
       fetchCircleDetails();
       fetchCustodyWalletBalance();
-      setContributionRefreshKey(prev => prev + 1);
       checkUserContribution();
       
     } catch (error) {
@@ -3714,12 +3227,19 @@ export default function ContributeToCircle() {
       checkUserContribution();
       checkIfUserIsCurrentRecipient();
     }
+    // Both callbacks close over circle/userAddress/currentCycle; they
+    // are intentionally omitted from deps to avoid re-creation loops.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [circle, userAddress, currentCycle]);
 
   // Add this function to handle manual refresh
   const handleRefreshContributionStatus = async () => {
     toast.loading('Refreshing contribution status...', { id: 'refresh-status' });
     try {
+      // Explicit user-initiated refresh: bypass the read cache so we re-read
+      // the live circle state, not a recent snapshot.
+      if (circle?.id) invalidateObject(circle.id);
+
       // Refresh the circle information first
       await fetchCircleDetails();
       
@@ -3734,7 +3254,6 @@ export default function ContributeToCircle() {
       
       // Refresh current recipient status
       await checkIfUserIsCurrentRecipient();
-      setContributionRefreshKey(prev => prev + 1);
       
       toast.success('Contribution status refreshed', { id: 'refresh-status' });
     } catch (error) {
@@ -3800,6 +3319,16 @@ export default function ContributeToCircle() {
 
   // Update the renderContributionOptions function to show a message when user is the current recipient
   const renderContributionOptions = () => {
+    // Cycle contributions are handled EXCLUSIVELY by the CycleEscrowPanel at the
+    // top of the page — it reads/writes the on-chain per-cycle escrow, which is
+    // the source of truth for "who has paid this round". This legacy wallet-
+    // payment card deposits via the older custody path and is retained ONLY for
+    // the security-deposit step (which still uses that path). Once the deposit
+    // is paid, suppress it: otherwise members see a second "contribute" button
+    // that pays the wrong place and never reflects in the escrow tracker.
+    if (userDepositPaid) {
+      return null;
+    }
     const paymentLabel = userDepositPaid ? 'Contribution' : 'Security Deposit';
     const currentUsdcPaymentAmount = getCurrentUsdcPaymentAmount();
     const currentUsdcShortfall = getCurrentUsdcShortfallForOneClickSwap();
@@ -4574,25 +4103,19 @@ export default function ContributeToCircle() {
               </div>
             )}
           
-            <button
-              onClick={handleContribute}
-              disabled={isProcessing || 
-                      (selectedPaymentCurrency === 'SUI' && !isSuiCircleModeEnabled) ||
-                      (selectedPaymentCurrency === 'SUI' && userBalance !== null && userBalance < getRequiredContributionAmount()) ||
-                      (selectedPaymentCurrency === 'USDC' && userUsdcBalance !== null && userUsdcBalance < requiredContributionUsdc) ||
-                      !userDepositPaid || 
-                      (!circle?.isActive && userDepositPaid) ||
-                      (circle?.pausedAfterCycle && userDepositPaid) ||
-                      userHasContributed ||
-                      isCurrentRecipient} // Disable if user is current recipient or circle is paused
-              className={`${primaryActionClass} w-full`}
-            >
-              {isProcessing ? 'Processing...' : 
-               isCurrentRecipient ? 'You Are the Current Recipient' : 
-               userHasContributed ? 'Already Contributed' : 
-               circle?.pausedAfterCycle ? 'Circle is Paused After Cycle' : 
-               `Contribute in ${selectedPaymentCurrency}`}
-            </button>
+            {/* Legacy custody contribute button retired 2026-04-28.
+                Members now contribute via the CycleEscrowPanel at the top of
+                this page (which calls njangi_cycle_escrow::contribute<T>).
+                The status block below is informational only. */}
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+              <p className="font-semibold">Contribute in the round panel above</p>
+              <p className="mt-1 text-emerald-800/90">
+                Pay your share through the green &ldquo;This round&rsquo;s pot&rdquo;
+                panel at the top. It runs through the per-cycle escrow with a
+                frozen snapshot, and the recipient claims their payout from the
+                same panel when the round is full.
+              </p>
+            </div>
             
             {/* Add inactive or paused circle message */}
             {circle && (!circle.isActive || circle.pausedAfterCycle) && (
@@ -4700,6 +4223,17 @@ export default function ContributeToCircle() {
                   </div>
                 )}
               </div>
+
+              {!loading && circle && typeof id === 'string' ? (
+                <CycleEscrowPanel
+                  circleId={id}
+                  network={getCurrentNetwork() as NetworkType}
+                  circleName={circle.name}
+                  isAdmin={!!userAddress && circle.admin === userAddress}
+                  memberNames={memberNameMap}
+                  {...resolveCircleSettlementCoin(circle.autoSwapEnabled)}
+                />
+              ) : null}
 
               {!loading && circle && (
                 <div className="grid gap-3 md:hidden">
@@ -4926,50 +4460,11 @@ export default function ContributeToCircle() {
                       )}
                     </div>
 
-                    {circle && circle.isActive && (
-                      <div className={`${mutedPanelClass} md:col-span-2`}>
-                        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                          <div>
-                            <p className={sectionEyebrowClass}>Cycle Progress</p>
-                            <h4 className="mt-2 text-lg font-semibold text-slate-950">
-                              {circle?.pausedAfterCycle
-                                ? `Cycle ${currentCycle} Completed`
-                                : `Contributions Made Cycle ${currentCycle}`}
-                            </h4>
-                            {totalMembersInRotation && typeof currentPositionInCycle === 'number' && currentPositionInCycle >= 0 && !circle?.pausedAfterCycle && (
-                              <p className="mt-1 text-sm text-slate-500">
-                                Position {currentPositionInCycle + 1} of {totalMembersInRotation}
-                              </p>
-                            )}
-                          </div>
-                          <button
-                            onClick={() => {
-                              fetchCircleDetails();
-                              checkUserContribution();
-                              checkIfUserIsCurrentRecipient();
-                              toast.success('Refreshing contribution status...');
-                            }}
-                            className={`${secondaryActionClass} px-3 py-2 text-xs sm:text-sm`}
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="mr-2 h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                            </svg>
-                            Refresh Status
-                          </button>
-                        </div>
-                        <div className="flex justify-center">
-                          <ContributionProgress
-                            circleId={circle.id}
-                            maxMembers={circle.maxMembers || 5}
-                            currentCycle={currentCycle}
-                            currentRecipientAddress={cycleRecipientAddress}
-                            isPaused={circle.pausedAfterCycle}
-                            circlePackageId={circlePackageId}
-                            refreshKey={contributionRefreshKey}
-                          />
-                        </div>
-                      </div>
-                    )}
+                    {/* Cycle Progress is now rendered by the CycleEscrowPanel
+                        ("This round's pot") at the top of the page, which owns
+                        the round ring + per-member status. The legacy
+                        ContributionProgress card was removed to avoid showing
+                        two trackers for the same data. */}
 
                     <div className={`${mutedPanelClass} md:col-span-2`}>
                       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
