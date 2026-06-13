@@ -44,6 +44,7 @@ import {
 } from '../../../../services/zkLoginClient';
 import WhatsAppCircleIntegration from '../../../../components/WhatsAppCircleIntegration';
 import CycleEscrowPanel from '@/components/CycleEscrowPanel';
+import MilestonesManageCard from '@/components/milestones/MilestonesManageCard';
 import { resolveCircleSettlementCoin } from '@/lib/circle-settlement';
 import { readObject, queryEventsCached, invalidateObject, invalidateSuiRead } from '@/lib/sui-read';
 import { logSuiReadError } from '@/services/sui-rpc-failover';
@@ -7887,6 +7888,17 @@ export default function ManageCircle() {
                     </div>
                   )}
                 </div>
+
+                {/* Smart Goals Section */}
+                {circle && typeof id === 'string' && (
+                  <div className={sectionCardClass}>
+                    <MilestonesManageCard
+                      circleId={id}
+                      network={getCurrentNetwork() as NetworkType}
+                      isAdmin={Boolean(userAddress && circle.admin === userAddress)}
+                    />
+                  </div>
+                )}
 
                 {/* WhatsApp Integration Section */}
                 <div className={sectionCardClass}>

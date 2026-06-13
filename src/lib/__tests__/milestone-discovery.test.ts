@@ -14,15 +14,25 @@ jest.mock('@/services/network-config', () => ({
 jest.mock('@/lib/circle-chain', () => ({
   getPublishedPackageMetadata: () => ({ originalId: mockOriginalId, publishedAt: '0xpkg' }),
 }));
+const readEscrowState = jest.fn();
+jest.mock('@/lib/cycle-escrow-discovery', () => ({
+  readCycleEscrowState: (...args: unknown[]) => readEscrowState(...args),
+}));
 
 import type { SuiClient } from '@mysten/sui/client';
 import {
   computeGoalProgress,
   computeMilestoneProgress,
   findCircleMilestones,
+  findUncountedEscrows,
+  isCircleMember,
+  isEscrowCredited,
+  listCircleEscrowEvents,
+  MAX_ESCROW_EVENT_PAGES,
   MAX_MILESTONE_EVENT_PAGES,
   nextIncompleteMilestone,
   parseCircleMilestonesContent,
+  readCircleGoalContext,
   readCircleMilestonesState,
   type MilestoneState,
 } from '@/lib/milestone-discovery';
@@ -86,6 +96,7 @@ const trackerContent = {
 beforeEach(() => {
   getObject.mockReset();
   queryEvents.mockReset();
+  readEscrowState.mockReset();
   mockOriginalId = '0xorig';
 });
 
@@ -99,6 +110,7 @@ describe('parseCircleMilestonesContent', () => {
     expect(state!.nextToComplete).toBe(1);
     expect(state!.cumulativeContributed).toBe('2000000000');
     expect(state!.creditedEscrowCount).toBe(1);
+    expect(state!.creditedTableId).toBe('0xtable');
     expect(state!.locked).toBe(true);
     expect(state!.goalAchieved).toBe(false);
     expect(state!.milestones).toHaveLength(2);
@@ -441,5 +453,394 @@ describe('computeGoalProgress', () => {
     });
     // (1750e9 - 1700e9) / (1800e9 - 1700e9) = 50%
     expect(progress[1]).toEqual({ index: 1, percent: 50, conditionMet: false });
+  });
+});
+
+describe('isEscrowCredited', () => {
+  const getDynamicFieldObject = jest.fn();
+  const dfClient = { getDynamicFieldObject } as unknown as SuiClient;
+
+  beforeEach(() => getDynamicFieldObject.mockReset());
+
+  it('returns true when the credited table holds the escrow id', async () => {
+    getDynamicFieldObject.mockResolvedValueOnce({ data: { objectId: '0xfield' } });
+    await expect(
+      isEscrowCredited('0xtable', '0xescrow', 'testnet', dfClient),
+    ).resolves.toBe(true);
+    expect(getDynamicFieldObject).toHaveBeenCalledWith({
+      parentId: '0xtable',
+      name: { type: '0x2::object::ID', value: '0xescrow' },
+    });
+  });
+
+  it('returns false when the dynamic field does not exist (never credited)', async () => {
+    getDynamicFieldObject.mockResolvedValueOnce({
+      error: { code: 'dynamicFieldNotFound' },
+    });
+    await expect(
+      isEscrowCredited('0xtable', '0xescrow', 'testnet', dfClient),
+    ).resolves.toBe(false);
+  });
+
+  it('returns null (unknown) on other errors so the UI hides the affordance', async () => {
+    getDynamicFieldObject.mockResolvedValueOnce({ error: { code: 'somethingElse' } });
+    await expect(
+      isEscrowCredited('0xtable', '0xescrow', 'testnet', dfClient),
+    ).resolves.toBeNull();
+    getDynamicFieldObject.mockRejectedValueOnce(new Error('rpc down'));
+    await expect(
+      isEscrowCredited('0xtable', '0xescrow', 'testnet', dfClient),
+    ).resolves.toBeNull();
+  });
+
+  it('returns null without a table or escrow id', async () => {
+    await expect(isEscrowCredited('', '0xescrow', 'testnet', dfClient)).resolves.toBeNull();
+    await expect(isEscrowCredited('0xtable', '', 'testnet', dfClient)).resolves.toBeNull();
+    expect(getDynamicFieldObject).not.toHaveBeenCalled();
+  });
+});
+
+describe('listCircleEscrowEvents', () => {
+  const openedEvent = (circleId: string, escrowId: string, cycleNo: string) => ({
+    parsedJson: {
+      circle_id: circleId,
+      escrow_id: escrowId,
+      cycle_no: cycleNo,
+      opened_at_ms: '1000',
+      recipient: '0xr',
+    },
+  });
+
+  it('queries CycleEscrowOpened oldest-first, anchored to the ORIGINAL package id', async () => {
+    queryEvents.mockResolvedValueOnce({ data: [], hasNextPage: false, nextCursor: null });
+    await listCircleEscrowEvents(fakeClient, 'testnet', '0xc1');
+    expect(queryEvents).toHaveBeenCalledWith({
+      query: { MoveEventType: '0xorig::njangi_cycle_escrow::CycleEscrowOpened' },
+      limit: 50,
+      order: 'ascending',
+      cursor: undefined,
+    });
+  });
+
+  it('collects EVERY escrow for the circle across pages, not one recent window', async () => {
+    // A multi-cycle goal: round 1's escrow sits on an earlier page than
+    // round 2's. Both must come back, oldest first.
+    queryEvents
+      .mockResolvedValueOnce({
+        data: [
+          openedEvent('0xc1', '0xesc1', '1'),
+          openedEvent('0xother', '0xforeign', '1'),
+        ],
+        hasNextPage: true,
+        nextCursor: { txDigest: 'tx-1', eventSeq: '0' },
+      })
+      .mockResolvedValueOnce({
+        data: [openedEvent('0xc1', '0xesc2', '2')],
+        hasNextPage: false,
+        nextCursor: null,
+      });
+    const events = await listCircleEscrowEvents(fakeClient, 'testnet', '0xc1');
+    expect(events).toEqual([
+      { escrowId: '0xesc1', cycleNo: 1, openedAtMs: 1000 },
+      { escrowId: '0xesc2', cycleNo: 2, openedAtMs: 1000 },
+    ]);
+    expect(queryEvents).toHaveBeenCalledTimes(2);
+    expect(queryEvents).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ cursor: { txDigest: 'tx-1', eventSeq: '0' } }),
+    );
+  });
+
+  it('dedupes repeated escrow ids and ignores malformed events', async () => {
+    queryEvents.mockResolvedValueOnce({
+      data: [
+        openedEvent('0xc1', '0xesc1', '1'),
+        openedEvent('0xc1', '0xesc1', '1'),
+        { parsedJson: { circle_id: '0xc1', cycle_no: '2' } }, // no escrow_id
+      ],
+      hasNextPage: false,
+      nextCursor: null,
+    });
+    const events = await listCircleEscrowEvents(fakeClient, 'testnet', '0xc1');
+    expect(events).toHaveLength(1);
+    expect(events[0].escrowId).toBe('0xesc1');
+  });
+
+  it('stops at the page safety cap instead of looping forever', async () => {
+    queryEvents.mockResolvedValue({
+      data: [openedEvent('0xother', '0xforeign', '1')],
+      hasNextPage: true,
+      nextCursor: { txDigest: 'tx-loop', eventSeq: '0' },
+    });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const events = await listCircleEscrowEvents(fakeClient, 'testnet', '0xc1');
+      expect(events).toEqual([]);
+      expect(queryEvents).toHaveBeenCalledTimes(MAX_ESCROW_EVENT_PAGES);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('returns [] instead of throwing on RPC errors', async () => {
+    queryEvents.mockRejectedValueOnce(new Error('rpc down'));
+    await expect(
+      listCircleEscrowEvents(fakeClient, 'testnet', '0xc1'),
+    ).resolves.toEqual([]);
+  });
+});
+
+describe('findUncountedEscrows', () => {
+  const getDynamicFieldObject = jest.fn();
+  const escrowClient = {
+    queryEvents,
+    getDynamicFieldObject,
+  } as unknown as SuiClient;
+
+  const openedEvent = (escrowId: string, cycleNo: string) => ({
+    parsedJson: {
+      circle_id: '0xc1',
+      escrow_id: escrowId,
+      cycle_no: cycleNo,
+      opened_at_ms: '1000',
+    },
+  });
+
+  beforeEach(() => getDynamicFieldObject.mockReset());
+
+  it('surfaces EVERY claimed-but-uncredited escrow, oldest first — even after newer cycles open', async () => {
+    // Three rounds: round 1 credited, round 2 claimed but never credited
+    // (the window everyone missed), round 3 still collecting. Round 2 must
+    // surface even though it is no longer the most recent escrow.
+    queryEvents.mockResolvedValueOnce({
+      data: [
+        openedEvent('0xesc1', '1'),
+        openedEvent('0xesc2', '2'),
+        openedEvent('0xesc3', '3'),
+      ],
+      hasNextPage: false,
+      nextCursor: null,
+    });
+    getDynamicFieldObject
+      .mockResolvedValueOnce({ data: { objectId: '0xfield1' } }) // esc1 credited
+      .mockResolvedValueOnce({ error: { code: 'dynamicFieldNotFound' } }) // esc2 not
+      .mockResolvedValueOnce({ error: { code: 'dynamicFieldNotFound' } }); // esc3 not
+    readEscrowState
+      .mockResolvedValueOnce({ claimed: true, cycleNo: 2 }) // esc2 settled
+      .mockResolvedValueOnce({ claimed: false, cycleNo: 3 }); // esc3 running
+
+    const uncounted = await findUncountedEscrows(
+      escrowClient,
+      'testnet',
+      '0xc1',
+      '0xtable',
+    );
+    expect(uncounted).toEqual([{ escrowId: '0xesc2', cycleNo: 2 }]);
+    // Credited escrows never get a state read.
+    expect(readEscrowState).toHaveBeenCalledTimes(2);
+    expect(readEscrowState).toHaveBeenNthCalledWith(1, '0xesc2', 'testnet', escrowClient);
+  });
+
+  it('returns multiple stragglers in rotation (oldest-first) order', async () => {
+    queryEvents.mockResolvedValueOnce({
+      data: [openedEvent('0xesc1', '1'), openedEvent('0xesc2', '2')],
+      hasNextPage: false,
+      nextCursor: null,
+    });
+    getDynamicFieldObject.mockResolvedValue({
+      error: { code: 'dynamicFieldNotFound' },
+    });
+    readEscrowState
+      .mockResolvedValueOnce({ claimed: true, cycleNo: 1 })
+      .mockResolvedValueOnce({ claimed: true, cycleNo: 2 });
+    const uncounted = await findUncountedEscrows(
+      escrowClient,
+      'testnet',
+      '0xc1',
+      '0xtable',
+    );
+    expect(uncounted).toEqual([
+      { escrowId: '0xesc1', cycleNo: 1 },
+      { escrowId: '0xesc2', cycleNo: 2 },
+    ]);
+  });
+
+  it('skips escrows with UNKNOWN credited status rather than inviting an abort', async () => {
+    queryEvents.mockResolvedValueOnce({
+      data: [openedEvent('0xesc1', '1')],
+      hasNextPage: false,
+      nextCursor: null,
+    });
+    getDynamicFieldObject.mockResolvedValueOnce({ error: { code: 'somethingElse' } });
+    const uncounted = await findUncountedEscrows(
+      escrowClient,
+      'testnet',
+      '0xc1',
+      '0xtable',
+    );
+    expect(uncounted).toEqual([]);
+    expect(readEscrowState).not.toHaveBeenCalled();
+  });
+
+  it('survives a failing escrow state read and keeps the rest', async () => {
+    queryEvents.mockResolvedValueOnce({
+      data: [openedEvent('0xesc1', '1'), openedEvent('0xesc2', '2')],
+      hasNextPage: false,
+      nextCursor: null,
+    });
+    getDynamicFieldObject.mockResolvedValue({
+      error: { code: 'dynamicFieldNotFound' },
+    });
+    readEscrowState
+      .mockRejectedValueOnce(new Error('rpc down'))
+      .mockResolvedValueOnce({ claimed: true, cycleNo: 2 });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const uncounted = await findUncountedEscrows(
+        escrowClient,
+        'testnet',
+        '0xc1',
+        '0xtable',
+      );
+      expect(uncounted).toEqual([{ escrowId: '0xesc2', cycleNo: 2 }]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('returns [] without a credited table id (tracker state unknown)', async () => {
+    const uncounted = await findUncountedEscrows(
+      escrowClient,
+      'testnet',
+      '0xc1',
+      '',
+    );
+    expect(uncounted).toEqual([]);
+    expect(queryEvents).not.toHaveBeenCalled();
+  });
+});
+
+describe('isCircleMember', () => {
+  const getDynamicFieldObject = jest.fn();
+  const dfClient = { getDynamicFieldObject } as unknown as SuiClient;
+
+  beforeEach(() => getDynamicFieldObject.mockReset());
+
+  it('resolves membership via the members table dynamic field', async () => {
+    getDynamicFieldObject.mockResolvedValueOnce({ data: { objectId: '0xmember' } });
+    await expect(
+      isCircleMember('0xmembers', '0xb0b', 'testnet', dfClient),
+    ).resolves.toBe(true);
+    getDynamicFieldObject.mockResolvedValueOnce({
+      error: { code: 'dynamicFieldNotFound' },
+    });
+    await expect(
+      isCircleMember('0xmembers', '0xdead', 'testnet', dfClient),
+    ).resolves.toBe(false);
+  });
+
+  it('fails open (null) on missing inputs or RPC trouble', async () => {
+    await expect(isCircleMember(null, '0xb0b', 'testnet', dfClient)).resolves.toBeNull();
+    getDynamicFieldObject.mockRejectedValueOnce(new Error('rpc down'));
+    await expect(
+      isCircleMember('0xmembers', '0xb0b', 'testnet', dfClient),
+    ).resolves.toBeNull();
+  });
+});
+
+describe('readCircleGoalContext', () => {
+  const getDynamicFields = jest.fn();
+  const ctxClient = { getObject, getDynamicFields } as unknown as SuiClient;
+
+  const circleContent = (overrides: Record<string, unknown> = {}) => ({
+    data: {
+      content: {
+        dataType: 'moveObject',
+        fields: {
+          name: 'Village Savings',
+          admin: '0xA11CE',
+          current_cycle: '1',
+          current_position: '0',
+          paused_after_cycle: false,
+          is_active: true,
+          members: { fields: { id: { id: '0xmembers' } } },
+          ...overrides,
+        },
+      },
+    },
+  });
+
+  const configObject = (configFields: Record<string, unknown>) => ({
+    data: {
+      content: {
+        dataType: 'moveObject',
+        fields: {
+          name: { type: '...', value: 'circle_config' },
+          value: { type: '...CircleConfig', fields: configFields },
+        },
+      },
+    },
+  });
+
+  beforeEach(() => {
+    getDynamicFields.mockReset();
+    getDynamicFields.mockResolvedValue({
+      data: [
+        {
+          objectId: '0xcfg',
+          objectType: '0xorig::njangi_circle_config::CircleConfig',
+          name: { type: 'vector<u8>', value: 'circle_config' },
+        },
+      ],
+    });
+  });
+
+  it('reads a smart-goal circle with an amount goal', async () => {
+    getObject
+      .mockResolvedValueOnce(circleContent())
+      .mockResolvedValueOnce(
+        configObject({
+          goal_type: 0,
+          target_amount: '4000000000',
+          target_amount_local: '100000',
+          target_date: null,
+          verification_required: true,
+          auto_swap_enabled: false,
+        }),
+      );
+    const ctx = await readCircleGoalContext('0xc1', 'testnet', ctxClient);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.name).toBe('Village Savings');
+    expect(ctx!.admin).toBe('0xa11ce');
+    expect(ctx!.hasGoal).toBe(true);
+    expect(ctx!.goalKind).toBe('amount');
+    expect(ctx!.targetAmountMist).toBe('4000000000');
+    expect(ctx!.verificationRequired).toBe(true);
+    expect(ctx!.autoSwapEnabled).toBe(false);
+    expect(ctx!.membersTableId).toBe('0xmembers');
+    expect(ctx!.rotationStarted).toBe(false);
+  });
+
+  it('reports rotationStarted once the rotation has advanced (mirrors assert_rotation_not_started)', async () => {
+    getObject
+      .mockResolvedValueOnce(circleContent({ current_position: '1' }))
+      .mockResolvedValueOnce(configObject({ goal_type: 0 }));
+    const ctx = await readCircleGoalContext('0xc1', 'testnet', ctxClient);
+    expect(ctx!.rotationStarted).toBe(true);
+  });
+
+  it('treats a circle without goal_type as not smart-goal', async () => {
+    getObject
+      .mockResolvedValueOnce(circleContent())
+      .mockResolvedValueOnce(configObject({ goal_type: null }));
+    const ctx = await readCircleGoalContext('0xc1', 'testnet', ctxClient);
+    expect(ctx!.hasGoal).toBe(false);
+    expect(ctx!.goalKind).toBeNull();
+  });
+
+  it('returns null when the circle object is unreadable', async () => {
+    getObject.mockResolvedValueOnce({ data: { content: undefined } });
+    const ctx = await readCircleGoalContext('0xmissing', 'testnet', ctxClient);
+    expect(ctx).toBeNull();
   });
 });

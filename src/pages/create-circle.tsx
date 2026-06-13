@@ -20,10 +20,24 @@ import {
 import { getCurrentPackageId, getCurrentRpcUrl, getCurrentNetwork } from '../services/network-config';
 
 // Add batch optimization imports
-import { 
-  getSuiClientFromPool, 
+import {
+  getSuiClientFromPool,
   batchQueryEvents
 } from '../services/circle-service';
+
+// Smart-goal milestones (Premium): sketch editor + preflight gate.
+// hasFeaturePreflight comes from the CLIENT-SAFE mirror — value-importing
+// src/lib/entitlement-gate.ts from a page drags the Stripe SDK + pg pool
+// into the client bundle and breaks the webpack build (see
+// entitlement-preflight.ts and the matching note in BillingUpsellModal).
+import { hasFeaturePreflight } from '../components/milestones/entitlement-preflight';
+import BillingUpsellModal from '../components/BillingUpsellModal';
+import MilestonePlanEditor from '../components/milestones/MilestonePlanEditor';
+import {
+  savePendingMilestonePlan,
+  validatePlanSketch,
+  type MilestoneDraft,
+} from '../components/milestones/milestone-plan';
 
 // Get package ID dynamically based on current network
 const getPackageId = () => {
@@ -215,12 +229,19 @@ const validateFormData = (
     );
   }
 
-  if (formData.cycleType === 'smart-goal' && formData.smartGoal) {
-    if (formData.smartGoal.goalType === 'amount' && (!formData.smartGoal.targetAmount || formData.smartGoal.targetAmount <= 0)) {
-      errors.push('Target amount must be greater than 0');
-    }
-    if (formData.smartGoal.goalType === 'date' && !formData.smartGoal.targetDate) {
-      errors.push('Target date is required');
+  if (formData.cycleType === 'smart-goal') {
+    if (!formData.smartGoal) {
+      // Never let a smart-goal circle submit without a goal config —
+      // goal_type would be sent as `none`, and create_circle_milestones
+      // would abort with E_GOAL_NOT_CONFIGURED forever after.
+      errors.push('Choose a goal for your smart-goal circle: a savings target amount or a target date');
+    } else {
+      if (formData.smartGoal.goalType === 'amount' && (!formData.smartGoal.targetAmount || formData.smartGoal.targetAmount <= 0)) {
+        errors.push('Target amount must be greater than 0');
+      }
+      if (formData.smartGoal.goalType === 'date' && !formData.smartGoal.targetDate) {
+        errors.push('Target date is required');
+      }
     }
   }
   
@@ -355,6 +376,10 @@ export default function CreateCircle() {
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [createdCircleId, setCreatedCircleId] = useState<string | null>(null);
+  // Smart-goal milestone sketch (published on the goals page after creation)
+  const [milestonePlan, setMilestonePlan] = useState<MilestoneDraft[]>([]);
+  const [showSmartGoalUpsell, setShowSmartGoalUpsell] = useState(false);
+  const [checkingSmartGoalAccess, setCheckingSmartGoalAccess] = useState(false);
 
   useEffect(() => {
     const fetchPrice = async () => {
@@ -590,6 +615,11 @@ export default function CreateCircle() {
     
     // Validate form data
     const errors = validateFormData(formData);
+    // Validate the smart-goal milestone sketch with the same rules the
+    // contract enforces (strictly-increasing targets, future dates).
+    if (formData.cycleType === 'smart-goal' && milestonePlan.length > 0) {
+      errors.push(...validatePlanSketch(milestonePlan, { nowMs: Date.now() }));
+    }
     if (errors.length > 0) {
       setValidationErrors(errors);
       return;
@@ -669,7 +699,18 @@ export default function CreateCircle() {
       if (result.digest) {
         console.log('Circle creation transaction successful:', result.digest);
       }
-      
+
+      // Persist the milestone sketch so the goals page can pre-fill the
+      // on-chain milestone creator once the circle id is known.
+      if (formData.cycleType === 'smart-goal' && milestonePlan.length > 0 && userAddress) {
+        savePendingMilestonePlan({
+          adminAddress: userAddress,
+          circleName: formData.name,
+          savedAtMs: Date.now(),
+          entries: milestonePlan,
+        });
+      }
+
       // Move to invite step on success
       setCurrentStep(3); // Updated to step 3 for invite members
     } catch (err) {
@@ -870,7 +911,7 @@ The Njangi On-Chain Team`;
       label: 'Circle type',
       title: 'Choose the circle structure',
       description:
-        'Start with the operating model. Rotational circles are ready now, while smart-goal circles remain on the roadmap.',
+        'Start with the operating model. Rotational circles take turns receiving the pot; smart-goal circles (Premium) save toward shared milestones.',
     },
     {
       label: 'Currency',
@@ -989,7 +1030,7 @@ The Njangi On-Chain Team`;
               <div className="max-w-2xl">
                 <p className="text-sm leading-6 text-[#5f6674]">
                   Pick the structure before you move into currency and scheduling.
-                  Rotational circles are the live path today.
+                  Smart-goal circles add shared milestones and are part of Premium.
                 </p>
               </div>
               
@@ -997,7 +1038,9 @@ The Njangi On-Chain Team`;
                 {/* Rotational Circle Card */}
                 <button
                   onClick={() => {
-                    setFormData(prev => ({ ...prev, cycleType: 'rotational' }));
+                    // Drop any smart-goal config from a previous selection so a
+                    // rotational circle never ships a goal_type on chain.
+                    setFormData(prev => ({ ...prev, cycleType: 'rotational', smartGoal: undefined }));
                     setCurrentStep(1); // Go to currency selection step
                   }}
                   className="group rounded-[28px] border border-[#d7cec1] bg-[#fbfaf7] p-6 text-center transition-all duration-200 hover:-translate-y-0.5 hover:border-[#c9c0b2] hover:bg-white hover:shadow-[0_24px_70px_-58px_rgba(15,23,42,0.34)]"
@@ -1012,34 +1055,54 @@ The Njangi On-Chain Team`;
                   <p className="mt-3 text-sm leading-6 text-[#5f6674]">Members contribute regularly and take turns receiving the full pot in a predetermined order.</p>
                 </button>
 
-                {/* Smart Goal Circle Card */}
+                {/* Smart Goal Circle Card (Premium) */}
                 <button
                   onClick={() => {
-                    // Show toast notification instead of navigating
-                    toast.success("Smart Goal Circles are coming soon!", {
-                      icon: "🚧",
-                      duration: 3000
-                    });
+                    if (checkingSmartGoalAccess) return;
+                    setCheckingSmartGoalAccess(true);
+                    hasFeaturePreflight('smartGoals')
+                      .then((entitled) => {
+                        if (!entitled) {
+                          setShowSmartGoalUpsell(true);
+                          return;
+                        }
+                        setFormData(prev => ({
+                          ...prev,
+                          cycleType: 'smart-goal',
+                          // Initialize the goal config to match the visual
+                          // default of the Smart Goal Settings select
+                          // ('amount'). Without this, accepting the default
+                          // and submitting would send goal_type: none on
+                          // chain and permanently lock out milestones
+                          // (create_circle_milestones aborts with
+                          // E_GOAL_NOT_CONFIGURED).
+                          smartGoal: prev.smartGoal ?? {
+                            goalType: 'amount',
+                            verificationRequired: false,
+                          },
+                        }));
+                        setCurrentStep(1); // Go to currency selection step
+                      })
+                      .finally(() => setCheckingSmartGoalAccess(false));
                   }}
-                  className="group relative rounded-[28px] border border-[#e3dbcf] bg-[#f7f4ee] p-6 text-center transition-all duration-200 hover:border-[#d3cabd]"
+                  disabled={checkingSmartGoalAccess}
+                  className="group relative rounded-[28px] border border-[#d7cec1] bg-[#fbfaf7] p-6 text-center transition-all duration-200 hover:-translate-y-0.5 hover:border-[#c9c0b2] hover:bg-white hover:shadow-[0_24px_70px_-58px_rgba(15,23,42,0.34)] disabled:opacity-60"
                 >
-                  {/* Coming Soon Badge - move to top-right corner of the card instead of floating outside */}
+                  {/* Premium badge */}
                   <div className="absolute top-2 right-2">
-                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-800 shadow-sm">
-                      Coming Soon
+                    <span className="rounded-full border border-[#e2d3ae] bg-[#fdf6e7] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#a07b2f] shadow-sm">
+                      Premium
                     </span>
                   </div>
-                  
-                  <div className="absolute inset-0 rounded-[28px] bg-white/35" />
-                  
-                  <div className="relative mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#d7cec1] bg-white text-[#5f708a]">
+
+                  <div className="relative mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#d8e2f0] bg-white text-[#5f708a]">
                     <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                   </div>
-                  <p className={`${stepLabelClass} relative`}>Planned flow</p>
+                  <p className={`${stepLabelClass} relative`}>Available now</p>
                   <h3 className="relative mt-3 text-xl font-semibold tracking-[-0.03em] text-[#171923]">Smart Goal Circle</h3>
-                  <p className="relative mt-3 text-sm leading-6 text-[#5f6674]">Members contribute toward a shared savings goal with automatic distribution when the group completes it.</p>
+                  <p className="relative mt-3 text-sm leading-6 text-[#5f6674]">Members contribute toward a shared savings goal and celebrate milestones together along the way.</p>
                 </button>
               </div>
 
@@ -1940,6 +2003,21 @@ The Njangi On-Chain Team`;
                       <Switch.Thumb className="block w-5 h-5 bg-white rounded-full shadow-lg transition-transform duration-200 transform translate-x-0.5 data-[state=checked]:translate-x-[22px]" />
                     </Switch.Root>
                   </div>
+
+                  {/* Milestone plan — published on the goals page after creation */}
+                  <div className="space-y-2 border-t pt-6">
+                    <div className="flex items-center">
+                      <h4 className="text-base font-medium text-gray-900">
+                        Milestones along the way
+                      </h4>
+                      <InfoTooltip>
+                        <p>Optional ordered milestones the circle celebrates on the way to its goal</p>
+                        <p className="text-gray-300 text-xs mt-1">Savings milestones are cumulative totals and must increase</p>
+                        <p className="text-gray-300 text-xs mt-1">You publish them on the circle&apos;s goals page right after creation</p>
+                      </InfoTooltip>
+                    </div>
+                    <MilestonePlanEditor plan={milestonePlan} onChange={setMilestonePlan} />
+                  </div>
                 </div>
               )}
 
@@ -2382,6 +2460,27 @@ The Njangi On-Chain Team`;
                   </div>
                 )}
                 
+                {/* Smart-goal follow-up: publish milestones on the goals page */}
+                {createdCircleId && formData.cycleType === 'smart-goal' && (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                    <p className="text-sm font-medium text-emerald-900">
+                      Your smart-goal circle is live!
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-emerald-800">
+                      {milestonePlan.length > 0
+                        ? 'Your milestone sketch is saved — publish it on the goals page before the first round settles.'
+                        : 'Define the milestones your circle will celebrate on the goals page before the first round settles.'}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => router.push(`/circle/${createdCircleId}/goals`)}
+                      className="mt-2 inline-flex items-center rounded-full bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors"
+                    >
+                      Open the goals page
+                    </button>
+                  </div>
+                )}
+
                 {/* Invite Link Display - Only show after circle ID is fetched */}
                 {createdCircleId && (
                   <div className="space-y-3">
@@ -2521,6 +2620,13 @@ The Njangi On-Chain Team`;
         </div>
         </div>
       </main>
+
+      {/* Premium upsell when smart goals are not on the caller's plan */}
+      <BillingUpsellModal
+        open={showSmartGoalUpsell}
+        onClose={() => setShowSmartGoalUpsell(false)}
+        feature="smartGoals"
+      />
     </div>
   );
 }
