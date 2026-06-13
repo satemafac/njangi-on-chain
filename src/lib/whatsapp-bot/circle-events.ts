@@ -163,16 +163,6 @@ function memberDisplay(ctx: CircleEventMessageContext, memberAddress: string): s
 // member nudge (your-turn-notification.ts) is the locale-aware one.
 // ---------------------------------------------------------------------------
 
-function templateDate(): string {
-  // Mirrors the legacy bot's payout/deposit date formatting.
-  return new Date().toLocaleDateString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
-}
-
 function textParams(values: string[]): Array<{ type: 'text'; text: string }> {
   return values.map((text) => ({ type: 'text' as const, text }));
 }
