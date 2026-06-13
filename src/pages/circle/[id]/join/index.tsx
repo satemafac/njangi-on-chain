@@ -16,6 +16,7 @@ import { getCirclePackageId, getSuiClientFromPool } from '../../../../services/c
 import { getCurrentRpcUrl } from '../../../../services/network-config';
 import Head from 'next/head';
 import { LoginButton } from '@/components/LoginButton';
+import { useTranslation } from '@/hooks/useTranslation';
 
 // Define Circle type
 interface Circle {
@@ -82,10 +83,11 @@ interface TransactionInputData {
 export default function JoinCircle() {
   const router = useRouter();
   const { id } = router.query;
-  const { 
-    isAuthenticated, 
-    userAddress, 
-    account 
+  const { t } = useTranslation();
+  const {
+    isAuthenticated,
+    userAddress,
+    account
   } = useAuth();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
@@ -752,7 +754,7 @@ export default function JoinCircle() {
   }, [circle, pageTitle]);
 
   const backDestination = isAuthenticated ? '/dashboard' : '/';
-  const backLabel = isAuthenticated ? 'Back to dashboard' : 'Back to home';
+  const backLabel = isAuthenticated ? t('join.backToDashboard') : t('join.backToHome');
   const pageShellClass =
     'relative isolate min-h-screen overflow-hidden bg-[#f5f1e8] text-[#171923]';
   const shellCardClass =
@@ -933,21 +935,23 @@ export default function JoinCircle() {
                 <div className="grid gap-8 border-b border-[#ece4d7] px-6 py-8 sm:px-8 lg:grid-cols-[minmax(0,1.2fr)_340px]">
                   <div className="space-y-6">
                     <div className="space-y-4">
-                      <span className={eyebrowClass}>Join circle</span>
+                      <span className={eyebrowClass}>{t('join.eyebrow')}</span>
                       <div className="space-y-3">
                         <h1 className="text-3xl font-semibold tracking-[-0.05em] text-[#171923] sm:text-[3rem]">
                           {circle.name}
                         </h1>
                         <p className="max-w-2xl text-base leading-8 text-[#5f6b7f]">
-                          Review the contribution terms, send a join request, and wait
-                          for approval from the circle admin before you participate.
+                          {t('join.reviewTerms')}
                         </p>
                       </div>
                     </div>
 
                     <div className="flex flex-wrap gap-3">
                       <span className={badgeClass}>
-                        {circle.currentMembers} of {circle.maxMembers} members
+                        {t('join.members', {
+                          current: circle.currentMembers,
+                          max: circle.maxMembers,
+                        })}
                       </span>
                       <span className={badgeClass}>
                         {formatCycleInfo(circle.cycleLength, circle.cycleDay)}
@@ -956,7 +960,7 @@ export default function JoinCircle() {
                         {circle.currencyType || 'USD'} settlement
                       </span>
                       <span className={badgeClass}>
-                        {joinRequestsOpen ? 'Requests open' : 'Requests paused'}
+                        {joinRequestsOpen ? t('join.requestsOpen') : t('join.requestsPaused')}
                       </span>
                     </div>
                   </div>
@@ -966,7 +970,7 @@ export default function JoinCircle() {
                     <dl className="mt-6 space-y-4">
                       <div className="flex items-start justify-between gap-4 border-b border-[#ece4d7] pb-4">
                         <dt className="text-sm font-medium text-[#667085]">
-                          Contribution
+                          {t('join.contribution')}
                         </dt>
                         <dd>
                           <CurrencyDisplay
@@ -979,7 +983,7 @@ export default function JoinCircle() {
                       </div>
                       <div className="flex items-start justify-between gap-4 border-b border-[#ece4d7] pb-4">
                         <dt className="text-sm font-medium text-[#667085]">
-                          Security deposit
+                          {t('join.securityDeposit')}
                         </dt>
                         <dd>
                           <CurrencyDisplay
@@ -1000,7 +1004,7 @@ export default function JoinCircle() {
                       </div>
                       <div className="flex items-start justify-between gap-4">
                         <dt className="text-sm font-medium text-[#667085]">
-                          Circle admin
+                          {t('join.circleAdmin')}
                         </dt>
                         <dd className="text-sm font-semibold text-[#171923]">
                           {formatAddress(circle.admin)}
@@ -1182,11 +1186,10 @@ export default function JoinCircle() {
                           <div>
                             <span className={eyebrowClass}>Authentication</span>
                             <h3 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
-                              Sign in to request access
+                              {t('join.signInToRequest')}
                             </h3>
                             <p className="mt-4 text-sm leading-7 text-[#667085]">
-                              Use your preferred provider to continue. The app will
-                              return you to this circle after login.
+                              {t('join.signInBody')}
                             </p>
                           </div>
                         </div>
@@ -1249,10 +1252,10 @@ export default function JoinCircle() {
                           }`}
                         >
                           {isSubmitting
-                            ? 'Submitting request...'
+                            ? t('join.submitting')
                             : isMember
-                              ? 'Already a member'
-                              : 'Request to join circle'}
+                              ? t('join.alreadyMember')
+                              : t('join.requestToJoin')}
                         </button>
                       </section>
                     )}

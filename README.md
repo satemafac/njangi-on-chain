@@ -1,128 +1,197 @@
-<img width="1714" alt="image" src="https://github.com/user-attachments/assets/9e928b07-3395-4cc6-9e17-b7b2b7950742" />
+<img width="1714" alt="Njangi On-Chain" src="https://github.com/user-attachments/assets/9e928b07-3395-4cc6-9e17-b7b2b7950742" />
 
-# Njangi On-Chain Rotational Circle Smart Contract
-Try it out https://njangi-on-chain-1014e48e59ae.herokuapp.com/
+# Njangi On-Chain
 
-## Overview
-Njangi On-Chain is a decentralized implementation of the classic Rotational Savings and Credit Association (ROSCA).  
-Members contribute a fixed amount of stable-value tokens each cycle, and the pooled funds are paid out to one member per cycle following a predefined rotation order.  
-All logic is enforced on-chain by a Move smart contract deployed to the Sui blockchain.
+A **non-custodial rotational savings coordinator** for community savings circles
+(*njangi* / *tontine* / ROSCA), built on the [Sui](https://sui.io) blockchain.
+Members pool a fixed contribution each cycle and take turns receiving the pot.
+Njangi coordinates the rotation, the escrow, and the notifications — but it never
+takes custody of member funds and never moves money at an operator's discretion.
 
-## Why Rotational Circles?
-• Simple, time-tested community finance model.  
-• Guaranteed payout once per cycle for every member.  
-• Transparent treasury—every deposit, payout and penalty is publicly auditable on Sui.  
-• Automated enforcement removes the need for an off-chain treasurer.
+> Built for Cameroon and the wider CEMAC region. Sign in with a social account
+> (zkLogin), no seed phrase or wallet extension required.
 
-## Core Workflow
-1. **Create Circle** – The creator defines: contribution amount, total members, payout order and cycle duration.  
-2. **Join Circle** – Prospective members submit a security deposit plus their first contribution.  
-3. **Cycle Contributions** – During each cycle every member deposits the fixed amount before the deadline.  
-4. **Automated Payout** – At cycle close the contract automatically transfers the pooled balance to that cycle's designated recipient.  
-5. **Completion** – After the final cycle, security deposits are released (minus any penalties) and the circle is closed.
+## What Njangi is
 
+A *njangi* (also called a tontine or ROSCA — Rotating Savings and Credit
+Association) is a time-tested community finance model: a group agrees on a fixed
+contribution and a rotation order, everyone pays in each cycle, and one member
+collects the full pot per cycle until everyone has had a turn.
 
-<img width="1722" alt="image" src="https://github.com/user-attachments/assets/dbc5dcf2-6345-4a5e-9d3a-633f910c43bd" />
+Njangi On-Chain puts that model on Sui so the treasury is transparent and the
+rules are enforced by code instead of a treasurer:
 
-<img width="1722" alt="image" src="https://github.com/user-attachments/assets/055a9b24-3014-4cbb-9a4d-971e780d96c9" />
+- **Non-custodial.** Funds sit in a per-cycle escrow object. No operator key can
+  drain it; there is no admin "send funds to X" lever.
+- **Permissionless payout.** When a cycle's contributions are in, *anyone* can
+  trigger the payout, and the designated recipient pulls their own funds. The
+  protocol never pushes money to an address chosen by an operator.
+- **Member-initiated recovery.** Stuck or abandoned circles are recovered by
+  members through on-chain liveness flows — again, no operator discretion.
+- **Social login.** zkLogin (Google / Facebook / Apple) maps a social identity
+  to a deterministic Sui address. The server holds no persistent ephemeral key
+  material.
+- **WhatsApp coordination.** Opt-in "it's your turn" nudges via WhatsApp. Routing
+  data (phone number) is AES-256-GCM encrypted off-chain on Sui Walrus; only an
+  opaque blob pointer is anchored on chain — never plaintext PII.
 
-<img width="1720" alt="image" src="https://github.com/user-attachments/assets/9ef55a5a-bcac-4199-b452-ef8051d6f96a" />
+## How it works
 
-
-## Contract Interface (Move)
-```move
-public fun create_circle(
-    name: vector<u8>,
-    contribution_amount: u64,
-    cycle_duration: u64,          // seconds
-    payout_order: vector<address>,
-    ctx: &mut TxContext
-): (NjangiCircle, AdminCap);
-
-public fun join_circle(
-    circle: &mut NjangiCircle,
-    security_deposit: Coin<USDC>,
-    first_contribution: Coin<USDC>,
-    ctx: &mut TxContext
-);
-
-public fun make_contribution(
-    circle: &mut NjangiCircle,
-    payment: Coin<USDC>,
-    ctx: &mut TxContext
-);
-
-public fun claim_payout(
-    circle: &mut NjangiCircle,
-    ctx: &mut TxContext
-);
 ```
-*The actual contract contains additional helper functions and event emitters; see `/move/sources/` for full code.*
+Create circle → members join → each cycle: members contribute to escrow
+   → cycle fills → permissionless trigger → recipient claims (pull) → rotate
+   → final cycle → security deposits released via member recovery / refund paths
+```
 
-## 🚀 **Deployment**
+1. **Create a circle.** The creator sets the contribution amount, member count,
+   rotation order, and cycle duration.
+2. **Join.** Members join and post a security deposit held in a per-circle wallet
+   that no operator can drain.
+3. **Contribute.** Each cycle, members deposit the fixed amount into the cycle
+   escrow before the deadline.
+4. **Trigger + claim.** Once the cycle is funded, the payout is *permissionless* —
+   anyone can trigger it, and the cycle's recipient pulls (claims) the pot to
+   their own address. There is no automatic, operator-pushed transfer.
+5. **Rotate.** The circle advances to the next recipient.
+6. **Refund & recovery paths.** Security deposits and any unclaimed balances are
+   returned through member-initiated recovery and refund flows, not by admin
+   action.
 
-The Njangi contracts use a dynamic network configuration system for seamless deployment to both testnet and mainnet.
+Contract sources live in [`move/sources/`](move/sources/):
+`njangi_circles.move` (lifecycle/rotation), `njangi_cycle_escrow` (per-cycle
+escrow), `njangi_payments.move` (permissionless `trigger_payout` + recipient-pull
+`claim_payout`), `njangi_custody.move` (custody primitives, package-internal fund
+movement only), `njangi_price_validator.move` (exact-type asset registry),
+`njangi_compliance.move` (attestations), and `whatsapp_integration.move` (Walrus
+PII anchors).
 
-### **Quick Deployment**
+## Plans
+
+| Tier | Price | Highlights |
+| --- | --- | --- |
+| **Free** | $0 | Up to 1 circle, 3 members per circle, core escrow / contribute / claim / recovery flows. |
+| **Premium** | $9.99/mo | Unlimited circles & members, WhatsApp notification suite, smart-goals & milestones, priority coordination features. |
+
+Billing is a SaaS subscription on **coordination features only** — Njangi never
+charges a fee on fund flows. Contribute / claim / payout / recovery actions are
+never gated behind payment; gating one's access to their own escrowed funds would
+undermine the non-custodial posture.
+
+## Tech stack
+
+- **Smart contracts:** Move on Sui (per-cycle escrow, permissionless payouts,
+  member recovery, on-chain compliance attestations).
+- **Frontend:** Next.js (Pages Router) + TypeScript + Tailwind, deployed on
+  Vercel.
+- **Auth:** zkLogin via the Enoki service (server-side salt / zkProof /
+  signing boundary at `/api/zkLogin`).
+- **PII storage:** AES-256-GCM envelopes on Sui Walrus; only blob pointers
+  anchored on chain (`src/lib/walrus-pii.ts`).
+- **Database:** Sui is the source of truth for all financial state. Postgres
+  (Neon in production) holds only off-chain coordination data — join requests,
+  UI preferences, the WhatsApp routing index, and compliance references.
+- **Fiat ramps:** Partner-led hosted widgets (Coinbase Onramp, MoonPay, Transak).
+  Njangi never settles fiat directly; ramps run KYC/AML under their own licenses.
+- **Swaps:** Cetus is used only for non-custodial token swaps when a member needs
+  to convert an asset into the circle's contribution currency.
+
+## Quickstart
+
+Prerequisites: Node 18+, the [Sui CLI](https://docs.sui.io/references/cli)
+(v1.0+), Docker (for local zkLogin prover services), and a Postgres database
+(local or Neon).
 
 ```bash
-cd move
+# 1. Install dependencies
+npm install
 
-# Deploy to testnet
-./deploy.sh testnet
+# 2. Configure environment
+cp .env.example .env.local
+#    Fill in at minimum: NEXT_PUBLIC_SUI_NETWORK, NEXT_PUBLIC_*_PACKAGE_ID,
+#    DATABASE_URL, ZKLOGIN_SECRET, WALRUS_PII_MASTER_KEY, INTERNAL_NOTIFY_SECRET.
+#    See .env.example for the full annotated list. Generate the random secrets:
+npm run generate:secrets
 
-# Deploy to mainnet (requires funded wallet)
-./deploy.sh mainnet
+# 3. Create the application tables (idempotent; safe on fresh or existing DBs)
+npm run migrate:postgres
+
+# 4. (Optional) Start local zkLogin prover services
+docker-compose up -d
+
+# 5. Run the dev server
+npm run dev          # http://localhost:3000
 ```
 
-### **Mainnet Wallet Funding**
-
-**Send SUI tokens to this address for mainnet deployment:**
-```
-0xdde1086c98c6023db8e3d8267992e4c9aeba3d0271f6bac85dc2f6daa8301c77
-```
-**Recommended amount:** 5-10 SUI for gas fees
-
-### **Network Management**
+Useful checks:
 
 ```bash
-# Check current configuration
-./scripts/switch-network.sh status
-
-# Switch networks
-./scripts/switch-network.sh mainnet
-./scripts/switch-network.sh testnet
+npm run validate:env            # confirms required env for the active network
+npm run validate:move-network   # Move.toml matches the canonical network config
+npm run lint
+npm run build
 ```
 
-## 📚 **Documentation**
+Move contracts:
 
-- **📦 [Deployment Guide](docs/deployment-guide.md)** - Complete deployment documentation
-- **⚡ [Quick Reference](move/DEPLOYMENT.md)** - Essential commands for deployment
-- **🏗️ [Move Contracts](move/README.md)** - Smart contract documentation
-- **🔧 [Environment Configuration](docs/environment.md)** - Canonical root env workflow, validation, and Heroku sync
-- **💳 [Coinbase Onramp Setup and Operations](docs/coinbase-onramp-setup-operations.md)** - Env setup, API route reference, troubleshooting
-- **✅ [Coinbase Onramp Staging and Rollout Checklist](docs/coinbase-onramp-staging-rollout-checklist.md)** - UAT scenarios, production checklist, rollback runbook
-
-## Security Deposits
-Security deposits protect the circle against missed contributions and are held
-in a per-circle wallet that no operator can drain. Funds are released back to
-the depositor through member-initiated recovery flows, not by admin discretion.
-Yield-generating deposit features are out of scope for the non-custodial Phase 1
-release; if reintroduced in a later release they will ship as a separately
-licensed product.
-
-## Development Quick-Start
 ```bash
-# Compile smart contract
-cd move && sui move build --skip-fetch-latest-git-deps
-
-# Run Move unit tests
-sui move test -p .
+cd move && sui move build       # build
+cd move && sui move test        # unit tests
+cd move && ./build_and_test.sh  # build + publish + bootstrap (interactive)
 ```
-Front-end, API and automated scripts live under `web/` and `scripts/` directories.
 
-## Roadmap
-- 🔄 Yield-bearing security deposits (staking integration)  
-- 📱 zkLogin authentication for seamless Web3 onboarding  
-- 🌐 Multicurrency support & automatic stablecoin swaps  
-- 🛡️ Formal verification of critical contract invariants
+## Deploy (Vercel)
+
+The app deploys to **Vercel**; production Postgres is **Neon**.
+
+1. **Database.** Provision a Neon Postgres database and set `DATABASE_URL`
+   (Neon URLs include `?sslmode=require`). Run `npm run migrate:postgres`
+   against it before the first deploy.
+2. **Environment.** Set the env vars from `.env.example` in the Vercel project.
+   Server-only secrets (`ZKLOGIN_SECRET`, `WALRUS_PII_MASTER_KEY`,
+   `INTERNAL_NOTIFY_SECRET`, `CRON_SECRET`, `ENOKI_API_KEY_*`, ramp secrets)
+   must be set without the `NEXT_PUBLIC_` prefix so they stay off the client
+   bundle.
+3. **Cron jobs.** [`vercel.json`](vercel.json) registers the scheduled functions
+   Vercel runs on a timer. Each authenticates with `CRON_SECRET` via a
+   timing-safe bearer check:
+   - `/api/cron/cycle-finalized` — dispatches "it's your turn" WhatsApp nudges
+     as new cycles finalize.
+   - `/api/cron/whatsapp-circle-events` — relays circle lifecycle events to
+     WhatsApp.
+   - `/api/cron/walrus-renewal` — renews Walrus PII blobs before they expire
+     (daily; tune with `RENEWAL_THRESHOLD_EPOCHS`).
+4. **Build & ship.** Vercel runs `next build`. The active Sui network is set by
+   `NEXT_PUBLIC_SUI_NETWORK`.
+
+The full annotated publish runbook (Move publish, bootstrap, smoke tests) lives
+in [`CLAUDE.md`](CLAUDE.md).
+
+## Contract addresses
+
+The app defaults to **testnet**. Mainnet is not yet published from the current
+branch (the Phase 1 escrow + compliance + WhatsApp module set has only shipped to
+testnet); mainnet env vars are placeholders until a fresh mainnet publish.
+
+| Network | Package ID | Status |
+| --- | --- | --- |
+| Testnet | `0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02` | Active (current module set) |
+| Mainnet | — | Not yet published from this branch |
+
+Source of truth: [`move/Published.toml`](move/Published.toml). Object IDs minted
+at publish time (registries, AttestorCap, asset registry) are captured into
+`.env.local` by the bootstrap step.
+
+## Documentation
+
+- [Deployment guide](docs/deployment-guide.md)
+- [Environment configuration](docs/environment.md)
+- [WhatsApp integration setup](docs/whatsapp-integration-setup.md)
+- [Secure storage with Enoki / Walrus](docs/secure-storage-with-enoki.md)
+- [Coinbase Onramp setup & operations](docs/coinbase-onramp-setup-operations.md)
+- [Move contracts](move/README.md)
+- [GTM readiness review](docs/gtm-readiness-review-2026-06-12.md)
+
+## Support
+
+Questions or issues: see the support address in the app footer (configurable via
+`NEXT_PUBLIC_SUPPORT_EMAIL`), or open a GitHub issue.

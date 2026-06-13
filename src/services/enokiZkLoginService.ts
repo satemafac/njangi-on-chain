@@ -146,7 +146,7 @@ export class EnokiZkLoginService {
     console.log('🔧 EnokiZkLoginService initializing with network:', currentNetwork);
     console.log('🔑 Enoki config:', {
       network: enokiConfig.network,
-      apiKey: enokiConfig.apiKey ? enokiConfig.apiKey.slice(0, 20) + '...' : 'MISSING',
+      apiKey: enokiConfig.apiKey ? 'present' : 'MISSING',
       hasApiKey: !!enokiConfig.apiKey
     });
     
@@ -301,7 +301,7 @@ export class EnokiZkLoginService {
       const currentNetwork = getCurrentNetwork();
       
       console.log('🧂 Getting user salt for network:', currentNetwork);
-      console.log('🔑 Using Enoki API key:', enokiConfig.apiKey ? enokiConfig.apiKey.slice(0, 20) + '...' : 'MISSING');
+      console.log('🔑 Using Enoki API key:', enokiConfig.apiKey ? 'present' : 'MISSING');
       
       const response = await fetch(`${ENOKI_BASE_URL}/zklogin`, {
         method: 'GET',
@@ -344,7 +344,7 @@ export class EnokiZkLoginService {
       const enokiConfig = getEnokiConfig();
       
       console.log('🕰️ Getting zkProof for network:', enokiConfig.network);
-      console.log('🔑 Using Enoki API key:', enokiConfig.apiKey ? enokiConfig.apiKey.slice(0, 20) + '...' : 'MISSING');
+      console.log('🔑 Using Enoki API key:', enokiConfig.apiKey ? 'present' : 'MISSING');
       console.log('🌍 Network in proof request:', enokiConfig.network);
       
       const response = await fetch(`${ENOKI_BASE_URL}/zklogin/zkp`, {

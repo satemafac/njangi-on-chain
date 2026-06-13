@@ -37,7 +37,10 @@ const STORAGE_KEY = 'njangi.locale';
 
 type StringDict = Record<string, string>;
 
-const DICTIONARIES: Record<Locale, StringDict> = {
+// Exported for the key-parity test (src/lib/__tests__/i18n-key-parity.test.ts)
+// so it can assert every FR key has an EN counterpart and vice versa. Not
+// part of the public translation API — callers should use `t()` / `setLocale`.
+export const DICTIONARIES: Record<Locale, StringDict> = {
   en: {
     // Escrow panel
     'escrow.sectionTitle': "This round's pot",
@@ -93,6 +96,261 @@ const DICTIONARIES: Record<Locale, StringDict> = {
     'alerts.adminOpenRound.title': 'Ready to start the next round?',
     'alerts.adminOpenRound.body':
       'The previous round finished. Open round {cycle} in {circle} so members can start paying.',
+    // Shared navigation / chrome
+    'nav.learn': 'Learn',
+    'nav.faq': 'FAQ',
+    'nav.mainnetUpdates': 'Mainnet updates',
+    'nav.login': 'Log in',
+    'nav.openDashboard': 'Open dashboard',
+    'nav.testnet': 'Testnet',
+    'nav.mainnet': 'Mainnet',
+    'nav.viewing': 'Viewing {network}',
+    'nav.freePlan': 'Free plan',
+    'nav.premium': 'Premium',
+    'nav.signOut': 'Sign Out',
+    'nav.notifications': 'Notifications',
+    // Landing page
+    'landing.eyebrow': 'Community savings, rebuilt with restraint',
+    'landing.heroTitle':
+      'A more accountable home for the savings circle your community already trusts.',
+    'landing.heroSubtitle':
+      'Njangi On-Chain preserves the social logic of traditional circles while giving members clearer schedules, auditable contributions, and low-friction access through zkLogin on Sui.',
+    'landing.heroCardTitle': 'Start with a familiar identity',
+    'landing.heroCardBody':
+      'Sign in with a social account. Wallet creation happens in the background so members can start with less operational friction.',
+    'landing.noSeedPhrase': 'No seed phrase required to begin',
+    'landing.builtForCircles': 'Built for member-run circles, not generic accounts',
+    'landing.exploreHowItWorks': 'Explore how it works',
+    'landing.joinReleaseList': 'Join the mainnet release list',
+    'landing.proof.liveCircles': 'Live circles',
+    'landing.proof.supportedAssets': 'Supported assets',
+    'landing.proof.currentEnvironment': 'Current environment',
+    'landing.proof.syncing': 'Syncing',
+    'landing.signInTitle': 'Sign in with a familiar account',
+    'landing.signInBody':
+      'Use Google, Facebook, or Apple with zkLogin. Wallet creation happens in the background so you can enter the app without a separate crypto onboarding step.',
+    'landing.networkSwitchTitle': 'Switch to {network}?',
+    'landing.networkSwitchBody':
+      'Network environments use different wallet addresses. Switching clears the active zkLogin session so balances, circles, and history stay aligned to the environment you selected.',
+    'landing.networkSwitchStay': 'Stay here',
+    'landing.networkSwitchConfirm': 'Switch to {network}',
+    'landing.features.eyebrow': 'What becomes easier to trust',
+    'landing.features.title':
+      'The platform removes ambiguity without stripping out the community.',
+    'landing.features.body':
+      'The goal is not to make a savings circle feel like a trading product. The goal is to make it easier for members to know what is happening, when it is happening, and where funds are moving.',
+    'landing.feature.sharedVisibility.title': 'Shared visibility',
+    'landing.feature.sharedVisibility.body':
+      'Contributions, payout order, and status changes are visible to the people running the circle, not buried in personal messages.',
+    'landing.feature.selfCustody.title': 'Self-custodied settlement',
+    'landing.feature.selfCustody.body':
+      'Members contribute and receive payouts directly to their own wallet addresses with no platform-held balance.',
+    'landing.feature.borderless.title': 'Borderless participation',
+    'landing.feature.borderless.body':
+      'Diaspora groups and distributed communities can stay coordinated without relying on one geography or one banking rail.',
+    'landing.feature.culturalContinuity.title': 'Cultural continuity',
+    'landing.feature.culturalContinuity.body':
+      'The social rhythm of a savings circle stays intact while the operational friction becomes calmer and easier to trust.',
+    'landing.workflow.eyebrow': 'Operational flow',
+    'landing.workflow.title':
+      'A circle still feels familiar. The tooling just stops getting in the way.',
+    'landing.workflow.body':
+      'Njangi On-Chain is built for communities that already know how to save together. It adds clearer structure, not a new social model.',
+    'landing.workflow.step1.title': 'Sign in with a familiar account',
+    'landing.workflow.step1.body':
+      'Use Google, Facebook, or Apple with zkLogin. Members do not need a separate crypto onboarding flow to get started.',
+    'landing.workflow.step2.title': 'Set the circle structure once',
+    'landing.workflow.step2.body':
+      'Define members, contribution amounts, and payout order in one place so expectations stay clear for everyone involved.',
+    'landing.workflow.step3.title': 'Run contributions with less ambiguity',
+    'landing.workflow.step3.body':
+      'Track upcoming turns, completed contributions, and wallet activity without relying on spreadsheets or verbal follow-up.',
+    'landing.launch.eyebrow': 'Mainnet release',
+    'landing.launch.title': 'Follow the launch without following noise.',
+    'landing.launch.body':
+      'The product is live for testnet exploration today. Join the release list if you want the clearest signal on production readiness, rollout timing, and early access.',
+    'landing.launch.emailPlaceholder': 'Enter your email address',
+    'landing.launch.notifyButton': 'Notify me about mainnet',
+    'landing.launch.signingUp': 'Signing up...',
+    'landing.launch.disclaimer':
+      'Updates are limited to meaningful milestones. No weekly filler, no broadcast spam.',
+    'landing.faq.eyebrow': 'Common questions',
+    'landing.faq.title': 'A few things people ask first.',
+    'landing.faq.body':
+      'If you want the full context, the deeper guides live in the learning and FAQ sections. These cover the basics.',
+    'landing.faq.learnLink': 'Learn about savings circles',
+    'landing.faq.fullFaqLink': 'View the full FAQ',
+    'landing.tradition.eyebrow': 'A global tradition',
+    'landing.tradition.title': 'Known by many names, held by the same instinct.',
+    'landing.tradition.body':
+      'Communities across the world already understand rotating savings. Njangi On-Chain is designed to respect that history rather than flatten it into a generic fintech pattern.',
+    'landing.footer.tagline':
+      'Built on Sui with zkLogin for low-friction community access.',
+    'landing.footer.rights': '© {year} Njangi On-Chain. All rights reserved.',
+    // Auth page
+    'auth.title': 'Account Authentication',
+    'auth.whatsappTitle': 'WhatsApp Authentication',
+    'auth.checking': 'Checking authentication status...',
+    'auth.pleaseAuthenticate': 'Please authenticate your account',
+    'auth.pleaseAuthenticateWhatsapp':
+      'Please authenticate your account for WhatsApp ({phone})',
+    'auth.alreadyAuthenticated': 'You are already authenticated!',
+    'auth.successTitle': 'Authentication Successful!',
+    'auth.redirecting': 'Authentication successful! Redirecting...',
+    'auth.chooseMethod': 'Choose your preferred login method:',
+    'auth.goToDashboard': 'Go to Dashboard',
+    'auth.closePage': 'Close Page',
+    'auth.poweredByZkLogin': 'Secure authentication powered by zkLogin',
+    // Create circle
+    'create.eyebrow': 'Create circle',
+    'create.stepCounter': 'Step {current} of {total}',
+    'create.step.type.label': 'Circle type',
+    'create.step.type.title': 'Choose the circle structure',
+    'create.step.type.description':
+      'Start with the operating model. Rotational circles take turns receiving the pot; smart-goal circles (Premium) save toward shared milestones.',
+    'create.step.currency.label': 'Currency',
+    'create.step.currency.title': 'Choose the value anchor',
+    'create.step.currency.description':
+      'Set the currency your members understand and plan around. SUI remains the settlement rail underneath.',
+    'create.step.config.label': 'Configuration',
+    'create.step.config.title': 'Define how the circle runs',
+    'create.step.config.description':
+      'Set the name, contribution amount, cadence, deposit, and optional rules that will guide this group.',
+    'create.step.invites.label': 'Invites',
+    'create.step.invites.title': 'Invite members into the circle',
+    'create.step.invites.description':
+      'Share the link, prepare email invites, and hand the circle off to the people who will run it with you.',
+    'create.circleNameLabel': 'Group Name',
+    'create.circleNamePlaceholder': "Enter your circle's name",
+    'create.cancel': 'Cancel',
+    'create.nextInvite': 'Next: Invite Members',
+    'create.backToDashboard': 'Back to dashboard',
+    // Join / discovery
+    'join.eyebrow': 'Join circle',
+    'join.reviewTerms':
+      'Review the contribution terms, send a join request, and wait for approval from the circle admin before you participate.',
+    'join.members': '{current} of {max} members',
+    'join.requestsOpen': 'Requests open',
+    'join.requestsPaused': 'Requests paused',
+    'join.contribution': 'Contribution',
+    'join.securityDeposit': 'Security deposit',
+    'join.circleAdmin': 'Circle admin',
+    'join.requestToJoin': 'Request to join circle',
+    'join.submitting': 'Submitting request...',
+    'join.alreadyMember': 'Already a member',
+    'join.signInToRequest': 'Sign in to request access',
+    'join.signInBody':
+      'Use your preferred provider to continue. The app will return you to this circle after login.',
+    'join.backToDashboard': 'Back to dashboard',
+    'join.backToHome': 'Back to home',
+    // Contribute page chrome
+    'contribute.backToDashboard': 'Back to Dashboard',
+    'contribute.eyebrow': 'Circle Payment',
+    'contribute.title': 'Contribute',
+    'contribute.workspaceEyebrow': 'Contribution Workspace',
+    'contribute.headingWithCircle': 'Contribute to {circle}',
+    'contribute.heading': 'Contribute to Circle',
+    'contribute.blurb':
+      'Review wallet readiness, circle requirements, and the current cycle state before submitting your payment.',
+    // Dashboard chrome
+    'dashboard.eyebrow': 'Njangi Dashboard',
+    'dashboard.welcome': 'Welcome back{name}.',
+    'dashboard.blurb':
+      'Keep your circles, contributions, and cash movement organized in one quiet workspace.',
+    'dashboard.refreshCircles': 'Refresh circles',
+    'dashboard.joinCircle': 'Join circle',
+    'dashboard.newCircle': 'New circle',
+    'dashboard.emptyTitle': 'No circles yet',
+    'dashboard.emptyBody': 'Start by creating a circle or joining one with an invite link.',
+    'dashboard.emptyJoin': 'Join a circle',
+    'dashboard.emptyCreate': 'Create a circle',
+    'dashboard.loadMore': 'Load more circles',
+    'dashboard.loadingMore': 'Loading circles...',
+    'dashboard.roleAdmin': 'Admin',
+    'dashboard.roleMember': 'Member',
+    // Pricing page
+    'pricing.eyebrow': 'Pricing',
+    'pricing.title': 'Simple pricing that never touches your savings',
+    'pricing.subtitle':
+      'Run a circle for free, forever. Premium adds coordination conveniences for larger groups — your contributions, payouts, and recovery stay self-custodied and free on every plan.',
+    'pricing.comingSoonBanner': 'Premium is coming soon — everything is free today.',
+    'pricing.breadcrumbHome': 'Home',
+    'pricing.breadcrumbPricing': 'Pricing',
+    'pricing.free': 'Free',
+    'pricing.alwaysFreeBadge': 'Always free',
+    'pricing.forever': 'forever',
+    'pricing.freeBlurb':
+      'Everything a small circle needs to save together with on-chain clarity.',
+    'pricing.premium': 'Premium',
+    'pricing.comingSoon': 'Coming soon',
+    'pricing.yourPlan': 'Your plan',
+    'pricing.forOrganizers': 'For organizers',
+    'pricing.perMonth': 'per month',
+    'pricing.premiumBlurb':
+      'For admins coordinating bigger groups — more members, more circles, and updates where your members already chat.',
+    'pricing.billedMonthly':
+      'Billed monthly through Stripe. Cancel anytime — your circles and funds are unaffected when a subscription ends.',
+    'pricing.ctaComingSoon': 'Coming soon — free for now',
+    'pricing.ctaSignInToUpgrade': 'Sign in to upgrade',
+    'pricing.ctaManageSubscription': 'Manage subscription',
+    'pricing.ctaOpeningPortal': 'Opening portal…',
+    'pricing.ctaUpgrade': 'Upgrade to Premium',
+    'pricing.ctaStartingCheckout': 'Starting checkout…',
+    'pricing.ctaGoToDashboard': 'Go to your dashboard',
+    'pricing.ctaGetStarted': 'Get started free',
+    'pricing.cancelledNotice':
+      'Checkout was cancelled — nothing was charged. You can upgrade whenever you’re ready.',
+    'pricing.assuranceTitle': 'Your money is never behind a paywall',
+    'pricing.assuranceBody':
+      'Njangi On-Chain is non-custodial: contributions sit in per-circle escrow on Sui, payouts go straight to members’ own wallets, and recovery is member-initiated. Contributing, collecting a payout, recovering access, and withdrawing funds work the same on the Free and Premium plans — a subscription only adds coordination conveniences, never access to your savings.',
+    'pricing.faqTitle': 'Common questions',
+    'pricing.faq.whoPays.q': 'Who pays for Premium?',
+    'pricing.faq.whoPays.a':
+      'The circle admin. One subscription covers every circle they run — members never need to pay anything.',
+    'pricing.faq.cancel.q': 'What happens if I cancel?',
+    'pricing.faq.cancel.a':
+      'Your circles keep running and every member keeps full access to their funds. You simply return to the Free plan limits for new circles and features.',
+    'pricing.faq.fees.q': 'Are there other fees?',
+    'pricing.faq.fees.a':
+      'Only standard Sui network transaction fees (typically a few cents), paid to the blockchain — not to us.',
+    'pricing.footerDisclaimer':
+      'Premium covers coordination features only. It is not financial advice, custody, or a guarantee of returns. Cryptocurrency use carries risk — check the rules that apply in your country.',
+    'pricing.free.feature.circles': '{count} savings circle',
+    'pricing.free.feature.members': 'Up to {count} members per circle',
+    'pricing.free.feature.escrow': 'Core escrow rounds — contribute and collect on rotation',
+    'pricing.free.feature.recovery': 'Member-initiated recovery, always included',
+    'pricing.free.feature.zklogin': 'zkLogin sign-in with self-custodied wallets',
+    'pricing.premium.feature.members': 'Up to {count} members per circle',
+    'pricing.premium.feature.circles': 'Run up to {count} circles at once',
+    'pricing.premium.feature.whatsapp': 'WhatsApp linking + turn and payout notifications',
+    'pricing.premium.feature.goals': 'Smart savings goals for your circles',
+    'pricing.premium.feature.analytics': 'Circle analytics and contribution insights',
+    'pricing.premium.feature.everything': 'Everything in Free',
+    'pricing.alwaysFreeNoteLabel': 'Always free, on every plan:',
+    'pricing.alwaysFreeNoteBody':
+      'collecting your payout, member-initiated recovery, and withdrawing your funds never require a subscription.',
+    // Billing upsell modal
+    'billing.notNow': 'Not now',
+    'billing.seePlans': 'See plans',
+    'billing.alwaysFreeNote':
+      'Collecting payouts, recovery, and withdrawing your funds are always free — Premium only adds coordination conveniences.',
+    'billing.generic.title': 'This is a Premium feature',
+    'billing.generic.body': 'Upgrade to Premium to unlock it for your circles.',
+    'billing.whatsappSuite.title': 'WhatsApp updates are a Premium feature',
+    'billing.whatsappSuite.body':
+      'Link your circle to WhatsApp so members get turn reminders and payout alerts right where they already chat.',
+    'billing.maxMembers.title': 'Bigger circles are a Premium feature',
+    'billing.maxMembers.body':
+      'Free circles hold a few close members. Premium grows a circle to the full rotation the contract supports.',
+    'billing.maxCircles.title': 'More circles are a Premium feature',
+    'billing.maxCircles.body':
+      'The Free plan covers one circle. Premium lets you organize several circles side by side.',
+    'billing.smartGoals.title': 'Smart goals are a Premium feature',
+    'billing.smartGoals.body':
+      'Set savings targets and milestones for your circle and watch progress build every round.',
+    'billing.analytics.title': 'Analytics are a Premium feature',
+    'billing.analytics.body':
+      'See contribution history, on-time rates, and payout trends across your circles.',
   },
   fr: {
     // Escrow panel
@@ -152,6 +410,262 @@ const DICTIONARIES: Record<Locale, StringDict> = {
     'alerts.adminOpenRound.title': 'Prêt à lancer le prochain tour ?',
     'alerts.adminOpenRound.body':
       "Le tour précédent est terminé. Ouvrez le tour {cycle} dans {circle} pour que les membres puissent commencer à verser.",
+    // Navigation partagée / habillage
+    'nav.learn': 'Découvrir',
+    'nav.faq': 'FAQ',
+    'nav.mainnetUpdates': 'Actus mainnet',
+    'nav.login': 'Se connecter',
+    'nav.openDashboard': 'Ouvrir le tableau de bord',
+    'nav.testnet': 'Testnet',
+    'nav.mainnet': 'Mainnet',
+    'nav.viewing': 'Réseau affiché : {network}',
+    'nav.freePlan': 'Forfait gratuit',
+    'nav.premium': 'Premium',
+    'nav.signOut': 'Se déconnecter',
+    'nav.notifications': 'Notifications',
+    // Page d'accueil
+    'landing.eyebrow': "L'épargne communautaire, repensée avec sobriété",
+    'landing.heroTitle':
+      "Une maison plus fiable pour le cercle d'épargne auquel votre communauté fait déjà confiance.",
+    'landing.heroSubtitle':
+      "Njangi On-Chain préserve la logique sociale des cercles traditionnels tout en offrant aux membres des échéances plus claires, des versements vérifiables et un accès simplifié grâce à zkLogin sur Sui.",
+    'landing.heroCardTitle': 'Commencez avec une identité familière',
+    'landing.heroCardBody':
+      "Connectez-vous avec un compte social. La création du portefeuille se fait en arrière-plan, pour démarrer avec moins de friction.",
+    'landing.noSeedPhrase': 'Aucune phrase secrète requise pour commencer',
+    'landing.builtForCircles': 'Conçu pour des cercles gérés par leurs membres, pas des comptes génériques',
+    'landing.exploreHowItWorks': 'Découvrir le fonctionnement',
+    'landing.joinReleaseList': "Rejoindre la liste de lancement mainnet",
+    'landing.proof.liveCircles': 'Cercles actifs',
+    'landing.proof.supportedAssets': 'Actifs pris en charge',
+    'landing.proof.currentEnvironment': 'Environnement actuel',
+    'landing.proof.syncing': 'Synchronisation',
+    'landing.signInTitle': 'Connectez-vous avec un compte familier',
+    'landing.signInBody':
+      "Utilisez Google, Facebook ou Apple avec zkLogin. La création du portefeuille se fait en arrière-plan, sans étape d'intégration crypto séparée.",
+    'landing.networkSwitchTitle': 'Passer sur {network} ?',
+    'landing.networkSwitchBody':
+      "Les environnements réseau utilisent des adresses de portefeuille différentes. Le changement efface la session zkLogin active afin que vos soldes, cercles et historique restent alignés sur l'environnement choisi.",
+    'landing.networkSwitchStay': 'Rester ici',
+    'landing.networkSwitchConfirm': 'Passer sur {network}',
+    'landing.features.eyebrow': 'Ce qui devient plus simple à vérifier',
+    'landing.features.title':
+      "La plateforme lève l'ambiguïté sans dénaturer la communauté.",
+    'landing.features.body':
+      "L'objectif n'est pas de transformer un cercle d'épargne en produit de trading. L'objectif est d'aider les membres à savoir ce qui se passe, quand cela se passe et où circulent les fonds.",
+    'landing.feature.sharedVisibility.title': 'Visibilité partagée',
+    'landing.feature.sharedVisibility.body':
+      "Les versements, l'ordre des tours et les changements de statut sont visibles par les personnes qui gèrent le cercle, et non enfouis dans des messages privés.",
+    'landing.feature.selfCustody.title': 'Règlement en autodétention',
+    'landing.feature.selfCustody.body':
+      "Les membres versent et reçoivent leurs paiements directement sur leur propre adresse de portefeuille, sans solde détenu par la plateforme.",
+    'landing.feature.borderless.title': 'Participation sans frontières',
+    'landing.feature.borderless.body':
+      "Les groupes de la diaspora et les communautés dispersées restent coordonnés sans dépendre d'un seul pays ni d'un seul réseau bancaire.",
+    'landing.feature.culturalContinuity.title': 'Continuité culturelle',
+    'landing.feature.culturalContinuity.body':
+      "Le rythme social du cercle d'épargne reste intact, tandis que la friction opérationnelle devient plus apaisée et plus digne de confiance.",
+    'landing.workflow.eyebrow': 'Déroulé opérationnel',
+    'landing.workflow.title':
+      "Un cercle reste familier. L'outil cesse simplement de gêner.",
+    'landing.workflow.body':
+      "Njangi On-Chain est conçu pour les communautés qui savent déjà épargner ensemble. Il apporte une structure plus claire, pas un nouveau modèle social.",
+    'landing.workflow.step1.title': 'Connectez-vous avec un compte familier',
+    'landing.workflow.step1.body':
+      "Utilisez Google, Facebook ou Apple avec zkLogin. Les membres n'ont pas besoin d'un parcours d'intégration crypto séparé pour démarrer.",
+    'landing.workflow.step2.title': 'Définissez la structure du cercle une seule fois',
+    'landing.workflow.step2.body':
+      "Définissez les membres, les montants de versement et l'ordre des tours au même endroit, pour des attentes claires pour tout le monde.",
+    'landing.workflow.step3.title': 'Gérez les versements avec moins d\'ambiguïté',
+    'landing.workflow.step3.body':
+      "Suivez les tours à venir, les versements effectués et l'activité du portefeuille sans tableurs ni relances verbales.",
+    'landing.launch.eyebrow': 'Lancement mainnet',
+    'landing.launch.title': 'Suivez le lancement sans subir le bruit.',
+    'landing.launch.body':
+      "Le produit est disponible aujourd'hui pour l'exploration sur testnet. Rejoignez la liste de lancement pour recevoir le signal le plus clair sur la disponibilité en production, le calendrier de déploiement et l'accès anticipé.",
+    'landing.launch.emailPlaceholder': 'Saisissez votre adresse e-mail',
+    'landing.launch.notifyButton': 'Me prévenir du lancement mainnet',
+    'landing.launch.signingUp': 'Inscription en cours...',
+    'landing.launch.disclaimer':
+      "Les mises à jour se limitent aux étapes importantes. Pas de remplissage hebdomadaire, pas de spam de masse.",
+    'landing.faq.eyebrow': 'Questions fréquentes',
+    'landing.faq.title': 'Quelques questions que les gens posent en premier.',
+    'landing.faq.body':
+      "Pour le contexte complet, les guides détaillés se trouvent dans les sections Découvrir et FAQ. Ceci couvre l'essentiel.",
+    'landing.faq.learnLink': "En savoir plus sur les cercles d'épargne",
+    'landing.faq.fullFaqLink': 'Voir la FAQ complète',
+    'landing.tradition.eyebrow': 'Une tradition mondiale',
+    'landing.tradition.title': 'Connue sous bien des noms, portée par le même instinct.',
+    'landing.tradition.body':
+      "Partout dans le monde, les communautés connaissent déjà l'épargne tournante. Njangi On-Chain est conçu pour respecter cette histoire plutôt que de l'aplatir en un schéma fintech générique.",
+    'landing.footer.tagline':
+      "Bâti sur Sui avec zkLogin pour un accès communautaire sans friction.",
+    'landing.footer.rights': '© {year} Njangi On-Chain. Tous droits réservés.',
+    // Page d'authentification
+    'auth.title': 'Authentification du compte',
+    'auth.whatsappTitle': 'Authentification WhatsApp',
+    'auth.checking': "Vérification du statut d'authentification...",
+    'auth.pleaseAuthenticate': 'Veuillez authentifier votre compte',
+    'auth.pleaseAuthenticateWhatsapp':
+      'Veuillez authentifier votre compte pour WhatsApp ({phone})',
+    'auth.alreadyAuthenticated': 'Vous êtes déjà authentifié !',
+    'auth.successTitle': 'Authentification réussie !',
+    'auth.redirecting': 'Authentification réussie ! Redirection...',
+    'auth.chooseMethod': 'Choisissez votre méthode de connexion préférée :',
+    'auth.goToDashboard': 'Aller au tableau de bord',
+    'auth.closePage': 'Fermer la page',
+    'auth.poweredByZkLogin': 'Authentification sécurisée propulsée par zkLogin',
+    // Création de cercle
+    'create.eyebrow': 'Créer un cercle',
+    'create.stepCounter': 'Étape {current} sur {total}',
+    'create.step.type.label': 'Type de cercle',
+    'create.step.type.title': 'Choisissez la structure du cercle',
+    'create.step.type.description':
+      "Commencez par le modèle de fonctionnement. Les cercles rotatifs reçoivent la cagnotte à tour de rôle ; les cercles à objectif (Premium) épargnent vers des jalons partagés.",
+    'create.step.currency.label': 'Devise',
+    'create.step.currency.title': 'Choisissez la devise de référence',
+    'create.step.currency.description':
+      "Définissez la devise que vos membres comprennent et avec laquelle ils planifient. SUI reste le rail de règlement sous-jacent.",
+    'create.step.config.label': 'Configuration',
+    'create.step.config.title': 'Définissez le fonctionnement du cercle',
+    'create.step.config.description':
+      "Définissez le nom, le montant du versement, la fréquence, le dépôt et les règles optionnelles qui guideront ce groupe.",
+    'create.step.invites.label': 'Invitations',
+    'create.step.invites.title': 'Invitez des membres dans le cercle',
+    'create.step.invites.description':
+      "Partagez le lien, préparez les invitations par e-mail et confiez le cercle aux personnes qui le géreront avec vous.",
+    'create.circleNameLabel': 'Nom du cercle',
+    'create.circleNamePlaceholder': 'Saisissez le nom de votre cercle',
+    'create.cancel': 'Annuler',
+    'create.nextInvite': 'Suivant : inviter des membres',
+    'create.backToDashboard': 'Retour au tableau de bord',
+    // Adhésion / découverte
+    'join.eyebrow': 'Rejoindre le cercle',
+    'join.reviewTerms':
+      "Examinez les conditions de versement, envoyez une demande d'adhésion et attendez l'approbation de l'administrateur du cercle avant de participer.",
+    'join.members': '{current} membres sur {max}',
+    'join.requestsOpen': 'Demandes ouvertes',
+    'join.requestsPaused': 'Demandes en pause',
+    'join.contribution': 'Versement',
+    'join.securityDeposit': 'Dépôt de garantie',
+    'join.circleAdmin': 'Administrateur du cercle',
+    'join.requestToJoin': 'Demander à rejoindre le cercle',
+    'join.submitting': 'Envoi de la demande...',
+    'join.alreadyMember': 'Déjà membre',
+    'join.signInToRequest': "Connectez-vous pour demander l'accès",
+    'join.signInBody':
+      "Utilisez votre fournisseur préféré pour continuer. L'application vous ramènera à ce cercle après la connexion.",
+    'join.backToDashboard': 'Retour au tableau de bord',
+    'join.backToHome': "Retour à l'accueil",
+    // Habillage de la page de versement
+    'contribute.backToDashboard': 'Retour au tableau de bord',
+    'contribute.eyebrow': 'Paiement du cercle',
+    'contribute.title': 'Verser',
+    'contribute.workspaceEyebrow': 'Espace de versement',
+    'contribute.headingWithCircle': 'Verser à {circle}',
+    'contribute.heading': 'Verser au cercle',
+    'contribute.blurb':
+      "Vérifiez l'état du portefeuille, les exigences du cercle et l'état du tour en cours avant de soumettre votre paiement.",
+    // Habillage du tableau de bord
+    'dashboard.eyebrow': 'Tableau de bord Njangi',
+    'dashboard.welcome': 'Bon retour{name}.',
+    'dashboard.blurb':
+      "Gardez vos cercles, vos versements et vos mouvements d'argent organisés dans un espace de travail apaisé.",
+    'dashboard.refreshCircles': 'Actualiser les cercles',
+    'dashboard.joinCircle': 'Rejoindre un cercle',
+    'dashboard.newCircle': 'Nouveau cercle',
+    'dashboard.emptyTitle': 'Aucun cercle pour le moment',
+    'dashboard.emptyBody':
+      "Commencez par créer un cercle ou rejoignez-en un avec un lien d'invitation.",
+    'dashboard.emptyJoin': 'Rejoindre un cercle',
+    'dashboard.emptyCreate': 'Créer un cercle',
+    'dashboard.loadMore': 'Charger plus de cercles',
+    'dashboard.loadingMore': 'Chargement des cercles...',
+    'dashboard.roleAdmin': 'Administrateur',
+    'dashboard.roleMember': 'Membre',
+    // Page de tarifs
+    'pricing.eyebrow': 'Tarifs',
+    'pricing.title': "Une tarification simple qui ne touche jamais à votre épargne",
+    'pricing.subtitle':
+      "Gérez un cercle gratuitement, pour toujours. Premium ajoute des facilités de coordination pour les groupes plus importants — vos versements, vos paiements et la récupération restent en autodétention et gratuits sur tous les forfaits.",
+    'pricing.comingSoonBanner': "Premium arrive bientôt — tout est gratuit aujourd'hui.",
+    'pricing.breadcrumbHome': 'Accueil',
+    'pricing.breadcrumbPricing': 'Tarifs',
+    'pricing.free': 'Gratuit',
+    'pricing.alwaysFreeBadge': 'Toujours gratuit',
+    'pricing.forever': 'pour toujours',
+    'pricing.freeBlurb':
+      "Tout ce dont un petit cercle a besoin pour épargner ensemble avec la clarté de la blockchain.",
+    'pricing.premium': 'Premium',
+    'pricing.comingSoon': 'Bientôt disponible',
+    'pricing.yourPlan': 'Votre forfait',
+    'pricing.forOrganizers': 'Pour les organisateurs',
+    'pricing.perMonth': 'par mois',
+    'pricing.premiumBlurb':
+      "Pour les administrateurs qui coordonnent de plus grands groupes — plus de membres, plus de cercles, et des notifications là où vos membres discutent déjà.",
+    'pricing.billedMonthly':
+      "Facturé mensuellement via Stripe. Annulez à tout moment — vos cercles et vos fonds ne sont pas affectés à la fin d'un abonnement.",
+    'pricing.ctaComingSoon': "Bientôt disponible — gratuit pour l'instant",
+    'pricing.ctaSignInToUpgrade': 'Connectez-vous pour passer à Premium',
+    'pricing.ctaManageSubscription': "Gérer l'abonnement",
+    'pricing.ctaOpeningPortal': 'Ouverture du portail…',
+    'pricing.ctaUpgrade': 'Passer à Premium',
+    'pricing.ctaStartingCheckout': 'Démarrage du paiement…',
+    'pricing.ctaGoToDashboard': 'Aller à votre tableau de bord',
+    'pricing.ctaGetStarted': 'Commencer gratuitement',
+    'pricing.cancelledNotice':
+      "Le paiement a été annulé — rien n'a été débité. Vous pouvez passer à Premium quand vous le souhaitez.",
+    'pricing.assuranceTitle': "Votre argent n'est jamais derrière un péage",
+    'pricing.assuranceBody':
+      "Njangi On-Chain est non dépositaire : les versements sont conservés en séquestre par cercle sur Sui, les paiements vont directement vers les portefeuilles des membres, et la récupération est initiée par les membres. Verser, recevoir un paiement, récupérer l'accès et retirer des fonds fonctionnent de la même façon sur les forfaits Gratuit et Premium — un abonnement n'ajoute que des facilités de coordination, jamais l'accès à votre épargne.",
+    'pricing.faqTitle': 'Questions fréquentes',
+    'pricing.faq.whoPays.q': 'Qui paie Premium ?',
+    'pricing.faq.whoPays.a':
+      "L'administrateur du cercle. Un seul abonnement couvre tous les cercles qu'il gère — les membres n'ont jamais rien à payer.",
+    'pricing.faq.cancel.q': "Que se passe-t-il si j'annule ?",
+    'pricing.faq.cancel.a':
+      "Vos cercles continuent de fonctionner et chaque membre conserve un accès complet à ses fonds. Vous revenez simplement aux limites du forfait Gratuit pour les nouveaux cercles et fonctionnalités.",
+    'pricing.faq.fees.q': "Y a-t-il d'autres frais ?",
+    'pricing.faq.fees.a':
+      "Uniquement les frais de transaction standard du réseau Sui (généralement quelques centimes), versés à la blockchain — pas à nous.",
+    'pricing.footerDisclaimer':
+      "Premium couvre uniquement les fonctionnalités de coordination. Ce n'est pas un conseil financier, ni de la conservation, ni une garantie de rendement. L'usage de cryptomonnaies comporte des risques — vérifiez les règles applicables dans votre pays.",
+    'pricing.free.feature.circles': "{count} cercle d'épargne",
+    'pricing.free.feature.members': "Jusqu'à {count} membres par cercle",
+    'pricing.free.feature.escrow': 'Tours de séquestre essentiels — verser et recevoir à tour de rôle',
+    'pricing.free.feature.recovery': 'Récupération initiée par les membres, toujours incluse',
+    'pricing.free.feature.zklogin': 'Connexion zkLogin avec portefeuilles en autodétention',
+    'pricing.premium.feature.members': "Jusqu'à {count} membres par cercle",
+    'pricing.premium.feature.circles': "Gérez jusqu'à {count} cercles à la fois",
+    'pricing.premium.feature.whatsapp': 'Liaison WhatsApp + notifications de tour et de paiement',
+    'pricing.premium.feature.goals': "Objectifs d'épargne intelligents pour vos cercles",
+    'pricing.premium.feature.analytics': 'Analyses du cercle et aperçus des versements',
+    'pricing.premium.feature.everything': 'Tout ce qui est inclus dans Gratuit',
+    'pricing.alwaysFreeNoteLabel': 'Toujours gratuit, sur tous les forfaits :',
+    'pricing.alwaysFreeNoteBody':
+      "recevoir votre paiement, la récupération initiée par les membres et le retrait de vos fonds ne nécessitent jamais d'abonnement.",
+    // Fenêtre d'incitation à l'abonnement
+    'billing.notNow': 'Pas maintenant',
+    'billing.seePlans': 'Voir les forfaits',
+    'billing.alwaysFreeNote':
+      "Recevoir vos paiements, la récupération et le retrait de vos fonds sont toujours gratuits — Premium n'ajoute que des facilités de coordination.",
+    'billing.generic.title': 'Ceci est une fonctionnalité Premium',
+    'billing.generic.body': 'Passez à Premium pour la débloquer pour vos cercles.',
+    'billing.whatsappSuite.title': 'Les notifications WhatsApp sont une fonctionnalité Premium',
+    'billing.whatsappSuite.body':
+      "Reliez votre cercle à WhatsApp pour que les membres reçoivent les rappels de tour et les alertes de paiement là où ils discutent déjà.",
+    'billing.maxMembers.title': 'Les cercles plus grands sont une fonctionnalité Premium',
+    'billing.maxMembers.body':
+      "Les cercles gratuits réunissent quelques membres proches. Premium étend un cercle à la rotation complète prise en charge par le contrat.",
+    'billing.maxCircles.title': "Plus de cercles, c'est une fonctionnalité Premium",
+    'billing.maxCircles.body':
+      "Le forfait Gratuit couvre un cercle. Premium vous permet d'organiser plusieurs cercles en parallèle.",
+    'billing.smartGoals.title': 'Les objectifs intelligents sont une fonctionnalité Premium',
+    'billing.smartGoals.body':
+      "Fixez des objectifs d'épargne et des jalons pour votre cercle et suivez la progression à chaque tour.",
+    'billing.analytics.title': "L'analyse est une fonctionnalité Premium",
+    'billing.analytics.body':
+      "Consultez l'historique des versements, les taux de ponctualité et les tendances des paiements de vos cercles.",
   },
   pcm: {
     // Escrow panel — Nigerian / Cameroonian Pidgin

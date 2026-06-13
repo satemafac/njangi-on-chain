@@ -10,6 +10,10 @@
     {
       "path": "/api/cron/whatsapp-circle-events",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/walrus-renewal",
+      "schedule": "0 3 * * *"
     }
   ],
   "functions": {
@@ -17,6 +21,9 @@
       "maxDuration": 60
     },
     "src/pages/api/cron/whatsapp-circle-events.ts": {
+      "maxDuration": 60
+    },
+    "src/pages/api/cron/walrus-renewal.ts": {
       "maxDuration": 60
     },
     "src/pages/api/zkLogin.ts": {

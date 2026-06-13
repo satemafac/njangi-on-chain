@@ -282,7 +282,7 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
     // Encrypt the PII payload and upload to Walrus before touching chain so
     // a failed upload aborts the link before consuming gas.
     const payload = buildPayload(linkType, phoneOrGroup, groupName);
-    const { walrusBlobId, linkNonce } = await encryptAndStorePII(payload);
+    const { walrusBlobId, linkNonce, walrusEndEpoch } = await encryptAndStorePII(payload);
 
     if (!account || !account.zkProofs) {
       logAdminAction('LINK_CIRCLE_SUCCESS', adminAddr, {
@@ -344,6 +344,9 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
         circleId,
         walrusBlobId,
         linkType,
+        // Track expiry so /api/cron/walrus-renewal can re-store the blob
+        // before its storage lease lapses.
+        walrusEndEpoch,
       });
     } catch (indexError) {
       console.warn('[admin-link-circle] Failed to populate WhatsApp link index', indexError);

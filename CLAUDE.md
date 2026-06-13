@@ -64,7 +64,10 @@ Phase 1 ships three subsystems:
 - `whatsapp_integration.move`: On-chain anchors for Walrus-encrypted PII (no plaintext)
 
 **Frontend Services (src/services/)**:
-- `enokiZkLoginService.ts`: zkLogin auth + sponsored transaction execution
+- `enokiZkLoginService.ts`: zkLogin auth + zkProof-backed transaction signing
+  (no gas sponsorship today — the user's own zkLogin account pays gas; the
+  Enoki private key is used only server-side for salt/zkProof, behind
+  `/api/zkLogin`)
 - `coinbase-onramp-service.ts`, `moonpay-service.ts`, `transak-service.ts`: Fiat ramp adapters
 - `whatsapp-registry-service.ts`: Off-chain index for the on-chain Walrus pointers
 
@@ -128,8 +131,7 @@ Project-specific slash commands available in `.claude/skills/`:
 - `/check-env` - Validate environment configuration
 - `/deploy-testnet` - Full testnet deployment workflow
 
-(The legacy `/check-yield` skill was retired with the yield module in the
-Phase 1 compliance redesign.)
+(The yield module and its skill were retired in the Phase 1 compliance redesign.)
 
 ## Troubleshooting Guide
 
@@ -177,6 +179,32 @@ Phase 1 compliance redesign.)
 
 ### Operations
 
+**Vercel deploy (web app)**:
+The app is hosted on **Vercel**; production Postgres is **Neon**. The Move
+publish runbook below is separate (it ships contracts, not the web app).
+1. Provision a Neon Postgres database; set `DATABASE_URL` (Neon URLs include
+   `?sslmode=require`). Run `npm run migrate:postgres` against it before the
+   first deploy — idempotent; it also adds the `walrus_end_epoch` column to
+   `whatsapp_phone_index` and creates `walrus_renewal_audit`.
+2. Set env vars in the Vercel project (see `.env.example`). Server-only secrets
+   (`ZKLOGIN_SECRET`, `WALRUS_PII_MASTER_KEY`, `INTERNAL_NOTIFY_SECRET`,
+   `CRON_SECRET`, `ENOKI_API_KEY_TESTNET`/`ENOKI_API_KEY_MAINNET`, ramp secrets)
+   must NOT carry the `NEXT_PUBLIC_` prefix so Next.js keeps them off the client
+   bundle. `RENEWAL_THRESHOLD_EPOCHS` (default 2) is an optional knob for the
+   Walrus renewal cron.
+3. Cron jobs are declared in `vercel.json` and run on Vercel's scheduler; each
+   authenticates with `CRON_SECRET` via a timing-safe bearer check and uses the
+   fenced-lease machinery in `src/lib/cycle-finalized-cron.ts`:
+   - `/api/cron/cycle-finalized` (every minute) — your-turn WhatsApp nudges.
+   - `/api/cron/whatsapp-circle-events` (every minute) — circle lifecycle relays.
+   - `/api/cron/walrus-renewal` (daily, `0 3 * * *`) — renews Walrus PII blobs
+     before expiry (tracked via `walrus_end_epoch` in Postgres).
+4. Vercel runs `next build`; the active Sui network is `NEXT_PUBLIC_SUI_NETWORK`.
+
+On Vercel the cron functions replace the standalone Heroku worker dyno described
+under "Cycle-finalized WhatsApp notifier" below — that section is retained only
+for the legacy worker-process deployment.
+
 **Publish runbook (testnet)**:
 1. `npm run validate:move-network` — Move.toml byte-equal to canonical
    testnet config.
@@ -211,7 +239,8 @@ Phase 1 compliance redesign.)
 inits if the env file got out of sync. Skips inits for any registry env
 var that's already populated, so it's safe to re-run.
 
-**Cycle-finalized WhatsApp notifier**:
+**Cycle-finalized WhatsApp notifier** (legacy worker-dyno path; superseded by
+the Vercel `/api/cron/cycle-finalized` job on the Vercel deploy above):
 - Worker script: `scripts/cycle-finalized-notifier.mjs`. Launches via
   `npm run notifier:cycle-finalized` or the `notifier` process in
   `Procfile`. Polls `CycleFinalized` events every `POLL_INTERVAL_MS`

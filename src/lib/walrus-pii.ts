@@ -38,6 +38,9 @@ export type EncryptedEnvelope = {
 export type StoredPiiPointer = {
   walrusBlobId: string; // returned by Walrus publisher
   linkNonce: Uint8Array; // 32 random bytes anchored on chain
+  // Storage lease end epoch from the publisher (null when not reported).
+  // Tracked off chain so /api/cron/walrus-renewal knows when to re-store.
+  walrusEndEpoch: number | null;
 };
 
 const DEFAULT_TESTNET_PUBLISHER = 'https://publisher.walrus-testnet.walrus.space';
@@ -137,11 +140,24 @@ export async function computeLookupHash(value: string): Promise<string> {
 }
 
 /**
- * Uploads an encrypted envelope to Walrus and returns the blob ID. The
- * publisher rejects payloads larger than its configured size cap; PII
- * envelopes are tiny so this is a non-issue in practice.
+ * The publisher's PUT /v1/blobs response carries the storage end epoch in
+ * one of two shapes (a fresh upload vs. an already-certified blob). The
+ * renewal cron needs that end epoch to know when to renew next.
  */
-export async function storeEnvelopeInWalrus(envelope: EncryptedEnvelope): Promise<string> {
+export type WalrusStoreResult = {
+  blobId: string;
+  /** Storage end epoch, when the publisher reports it; null otherwise. */
+  endEpoch: number | null;
+};
+
+/**
+ * Uploads an encrypted envelope to Walrus and returns the blob ID plus the
+ * storage end epoch. The publisher rejects payloads larger than its
+ * configured size cap; PII envelopes are tiny so this is a non-issue.
+ */
+export async function storeEnvelopeInWalrusDetailed(
+  envelope: EncryptedEnvelope,
+): Promise<WalrusStoreResult> {
   const { publisher } = walrusEndpoints();
   const epochs = Number(process.env.WALRUS_STORAGE_EPOCHS || '5');
   const url = `${publisher}/v1/blobs?epochs=${encodeURIComponent(String(epochs))}`;
@@ -157,19 +173,38 @@ export async function storeEnvelopeInWalrus(envelope: EncryptedEnvelope): Promis
     throw new Error(`Walrus publisher rejected upload (${response.status}): ${body}`);
   }
 
-  const data = (await response.json()) as
-    | { newlyCreated?: { blobObject?: { blobId?: string } } }
-    | { alreadyCertified?: { blobId?: string } };
+  const data = (await response.json()) as {
+    newlyCreated?: { blobObject?: { blobId?: string; storage?: { endEpoch?: number } } };
+    alreadyCertified?: { blobId?: string; endEpoch?: number };
+  };
 
   const blobId =
-    ('newlyCreated' in data && data.newlyCreated?.blobObject?.blobId) ||
-    ('alreadyCertified' in data && data.alreadyCertified?.blobId) ||
+    data.newlyCreated?.blobObject?.blobId ||
+    data.alreadyCertified?.blobId ||
     null;
 
   if (!blobId) {
     throw new Error(`Walrus publisher returned an unexpected payload: ${JSON.stringify(data)}`);
   }
-  return blobId;
+
+  const endEpochRaw =
+    data.newlyCreated?.blobObject?.storage?.endEpoch ??
+    data.alreadyCertified?.endEpoch ??
+    null;
+  const endEpoch =
+    typeof endEpochRaw === 'number' && Number.isFinite(endEpochRaw) ? endEpochRaw : null;
+
+  return { blobId, endEpoch };
+}
+
+/**
+ * Uploads an encrypted envelope to Walrus and returns the blob ID. Thin
+ * wrapper over storeEnvelopeInWalrusDetailed for callers that only need the
+ * id (the linking flow). The end epoch is captured separately by callers
+ * that track expiry (the renewal cron).
+ */
+export async function storeEnvelopeInWalrus(envelope: EncryptedEnvelope): Promise<string> {
+  return (await storeEnvelopeInWalrusDetailed(envelope)).blobId;
 }
 
 /**
@@ -200,8 +235,8 @@ export async function encryptAndStorePII(
   payload: WhatsAppPiiPayload,
 ): Promise<StoredPiiPointer> {
   const envelope = encryptPiiPayload(payload);
-  const walrusBlobId = await storeEnvelopeInWalrus(envelope);
-  return { walrusBlobId, linkNonce: generateLinkNonce() };
+  const { blobId, endEpoch } = await storeEnvelopeInWalrusDetailed(envelope);
+  return { walrusBlobId: blobId, linkNonce: generateLinkNonce(), walrusEndEpoch: endEpoch };
 }
 
 /**
@@ -210,6 +245,27 @@ export async function encryptAndStorePII(
 export async function fetchAndDecryptPII(blobId: string): Promise<WhatsAppPiiPayload> {
   const envelope = await fetchEnvelopeFromWalrus(blobId);
   return decryptPiiPayload(envelope);
+}
+
+/**
+ * Re-stores an existing PII blob: fetch + decrypt with the CURRENT master
+ * key, re-encrypt (a fresh IV, and the active key — so this doubles as
+ * key-rotation-by-renewal), and upload a fresh copy. Returns the new blob
+ * id and storage end epoch. Used by /api/cron/walrus-renewal to keep blobs
+ * alive past their original storage lease before the on-chain anchors —
+ * which never expire — outlive them.
+ *
+ * The decrypt step also validates the blob is still readable and not
+ * corrupted before we commit a new lease for it.
+ */
+export async function restorePiiBlob(blobId: string): Promise<{
+  newBlobId: string;
+  newEndEpoch: number | null;
+}> {
+  const payload = await fetchAndDecryptPII(blobId);
+  const reEncrypted = encryptPiiPayload(payload);
+  const { blobId: newBlobId, endEpoch } = await storeEnvelopeInWalrusDetailed(reEncrypted);
+  return { newBlobId, newEndEpoch: endEpoch };
 }
 
 /**

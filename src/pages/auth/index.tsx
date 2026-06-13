@@ -2,10 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { LoginButton } from '../../components/LoginButton';
 import { useAuth } from '../../contexts/AuthContext';
+import { LocaleSwitcher } from '../../components/ui/LocaleSwitcher';
+import { useTranslation } from '../../hooks/useTranslation';
 
 export default function AuthPage() {
   const router = useRouter();
   const { isAuthenticated, account } = useAuth();
+  const { t } = useTranslation();
   const [whatsappPhone, setWhatsappPhone] = useState<string | null>(null);
   const [authState, setAuthState] = useState<{
     status: 'loading' | 'needLogin' | 'authenticated' | 'redirecting';
@@ -29,24 +32,24 @@ export default function AuthPage() {
     if (isAuthenticated && account) {
       setAuthState({
         status: 'authenticated',
-        message: 'You are already authenticated!',
+        message: t('auth.alreadyAuthenticated'),
       });
     } else {
       setAuthState({
         status: 'needLogin',
-        message: whatsapp_phone 
-          ? `Please authenticate your account for WhatsApp (${whatsapp_phone})`
-          : 'Please authenticate your account',
+        message: whatsapp_phone
+          ? t('auth.pleaseAuthenticateWhatsapp', { phone: String(whatsapp_phone) })
+          : t('auth.pleaseAuthenticate'),
       });
     }
-  }, [router.query, isAuthenticated, account]);
+  }, [router.query, isAuthenticated, account, t]);
 
   // Handle successful authentication
   useEffect(() => {
     if (isAuthenticated && account) {
       setAuthState({
         status: 'redirecting',
-        message: 'Authentication successful! Redirecting...',
+        message: t('auth.redirecting'),
       });
 
       // Just redirect to dashboard - callback page handles WhatsApp notifications
@@ -54,7 +57,7 @@ export default function AuthPage() {
         router.push('/dashboard');
       }, 2000);
     }
-  }, [isAuthenticated, account, router]);
+  }, [isAuthenticated, account, router, t]);
 
   if (authState.status === 'loading') {
     return (
@@ -77,7 +80,7 @@ export default function AuthPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <h1 className="text-2xl font-bold text-gray-900 mb-2">Authentication Successful!</h1>
+            <h1 className="text-2xl font-bold text-gray-900 mb-2">{t('auth.successTitle')}</h1>
             <p className="text-gray-600 mb-6">{authState.message}</p>
             
             {whatsappPhone && (
@@ -94,13 +97,13 @@ export default function AuthPage() {
                 onClick={() => router.push('/dashboard')}
                 className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors text-sm"
               >
-                Go to Dashboard
+                {t('auth.goToDashboard')}
               </button>
               <button
                 onClick={() => window.close()}
                 className="flex-1 bg-gray-200 text-gray-800 py-2 px-4 rounded-lg hover:bg-gray-300 transition-colors text-sm"
               >
-                Close Page
+                {t('auth.closePage')}
               </button>
             </div>
           </div>
@@ -112,6 +115,9 @@ export default function AuthPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
       <div className="max-w-md w-full">
+        <div className="mb-4 flex justify-end">
+          <LocaleSwitcher compact />
+        </div>
         <div className="bg-white rounded-2xl shadow-xl p-8">
           {/* Header */}
           <div className="text-center mb-8">
@@ -127,7 +133,7 @@ export default function AuthPage() {
               )}
             </div>
             <h1 className="text-2xl font-bold text-gray-900 mb-2">
-              {whatsappPhone ? 'WhatsApp Authentication' : 'Account Authentication'}
+              {whatsappPhone ? t('auth.whatsappTitle') : t('auth.title')}
             </h1>
             <p className="text-gray-600">{authState.message}</p>
           </div>
@@ -146,7 +152,7 @@ export default function AuthPage() {
             )}
             
             <div className="text-center">
-              <p className="text-gray-600 mb-4">Choose your preferred login method:</p>
+              <p className="text-gray-600 mb-4">{t('auth.chooseMethod')}</p>
               <LoginButton />
             </div>
           </div>
@@ -154,7 +160,7 @@ export default function AuthPage() {
           {/* Footer */}
           <div className="mt-8 pt-6 border-t border-gray-200 text-center">
             <p className="text-xs text-gray-500">
-              Secure authentication powered by zkLogin
+              {t('auth.poweredByZkLogin')}
             </p>
           </div>
         </div>

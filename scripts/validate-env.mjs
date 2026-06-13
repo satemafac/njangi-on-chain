@@ -84,8 +84,35 @@ const currentWhatsAppRegistryId =
         'SUI_WHATSAPP_LINKS_REGISTRY_ID',
       ]);
 
-canonicalOrLegacy('NEXT_PUBLIC_ENOKI_TESTNET', read('NEXT_PUBLIC_ENOKI_TESTNET'), ['NEXT_PUBLIC_ENOKI', 'ZKLOGIN_TESTNET_ENOKI_KEY']);
-canonicalOrLegacy('NEXT_PUBLIC_ENOKI_MAINNET', read('NEXT_PUBLIC_ENOKI_MAINNET'), ['NEXT_PUBLIC_ENOKI', 'ZKLOGIN_MAINNET_ENOKI_KEY']);
+// Enoki private key: server-only ENOKI_API_KEY_* is canonical; the bundled
+// NEXT_PUBLIC_ENOKI_* variants are deprecated (they inline the private key
+// into the client bundle + build logs). Resolve each network from the
+// server var first, then the deprecated public var.
+const testnetEnokiKey = canonicalOrLegacy('ENOKI_API_KEY_TESTNET', read('ENOKI_API_KEY_TESTNET'), [
+  'NEXT_PUBLIC_ENOKI_TESTNET',
+  'NEXT_PUBLIC_ENOKI',
+  'ZKLOGIN_TESTNET_ENOKI_KEY',
+]);
+const mainnetEnokiKey = canonicalOrLegacy('ENOKI_API_KEY_MAINNET', read('ENOKI_API_KEY_MAINNET'), [
+  'NEXT_PUBLIC_ENOKI_MAINNET',
+  'NEXT_PUBLIC_ENOKI',
+  'ZKLOGIN_MAINNET_ENOKI_KEY',
+]);
+
+// SECURITY: an enoki_private_* value in ANY NEXT_PUBLIC_ slot is bundled
+// into the browser JS and printed in build logs. Flag it as an error so a
+// publish never ships the private key client-side — it must be moved to the
+// server-only ENOKI_API_KEY_* var AND rotated (the old value is compromised
+// the moment it lands in a client bundle).
+for (const key of ['NEXT_PUBLIC_ENOKI_TESTNET', 'NEXT_PUBLIC_ENOKI_MAINNET', 'NEXT_PUBLIC_ENOKI']) {
+  if (/^enoki_private_/.test(read(key))) {
+    const serverKey = key.includes('MAINNET') ? 'ENOKI_API_KEY_MAINNET' : 'ENOKI_API_KEY_TESTNET';
+    errors.push(
+      `${key} holds an enoki_private_* key — this is inlined into the client bundle and build logs. ` +
+        `Move it to the server-only ${serverKey} and ROTATE the key in the Enoki dashboard (the old one is compromised).`,
+    );
+  }
+}
 
 requireValue('NEXT_PUBLIC_SUI_NETWORK', read('NEXT_PUBLIC_SUI_NETWORK'));
 requireValue('NEXT_PUBLIC_BASE_URL', read('NEXT_PUBLIC_BASE_URL'));
@@ -105,8 +132,13 @@ const attestorCapKey = `NEXT_PUBLIC_${networkUpper}_NJANGI_ATTESTOR_CAP_ID`;
 const assetRegistryKey = `NEXT_PUBLIC_${networkUpper}_NJANGI_ASSET_REGISTRY_ID`;
 requireValue(attestorCapKey, read(attestorCapKey));
 requireValue(assetRegistryKey, read(assetRegistryKey));
-requireValue('NEXT_PUBLIC_ENOKI_TESTNET', read('NEXT_PUBLIC_ENOKI_TESTNET'));
-requireValue('NEXT_PUBLIC_ENOKI_MAINNET', read('NEXT_PUBLIC_ENOKI_MAINNET'));
+// Require the Enoki key only for the ACTIVE network (resolved from the
+// server var or, transitionally, the deprecated public var). Testnet pilots
+// shouldn't have to populate a mainnet Enoki key before they need it.
+requireValue(
+  `current ${currentNetwork} Enoki API key (ENOKI_API_KEY_${networkUpper})`,
+  currentNetwork === 'mainnet' ? mainnetEnokiKey : testnetEnokiKey,
+);
 
 for (const key of [
   'WHATSAPP_PHONE_NUMBER_ID',
@@ -196,7 +228,7 @@ if (billingEnabled) {
 // /api/cron/cycle-finalized fails closed (500) and no nudges go out.
 if (!read('CRON_SECRET')) {
   warnings.push(
-    'CRON_SECRET is unset. /api/cron/cycle-finalized and /api/cron/whatsapp-circle-events reject every invocation without it; run `npm run generate:secrets` and mirror the value on the Vercel project.',
+    'CRON_SECRET is unset. /api/cron/cycle-finalized, /api/cron/whatsapp-circle-events and /api/cron/walrus-renewal reject every invocation without it; run `npm run generate:secrets` and mirror the value on the Vercel project.',
   );
 }
 

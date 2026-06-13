@@ -15,14 +15,17 @@
 // transitively imports the Stripe SDK and the pg pool, which must never
 // land in the client bundle; type-only imports are erased at compile time.
 //
-// i18n note: copy is hardcoded EN for now — pricing/upsell keys for
-// src/lib/i18n.ts (owned by another track this cycle) are a follow-up.
+// i18n: per-feature copy is resolved at render time from the shared
+// dictionary in src/lib/i18n.ts (billing.* keys, EN/FR). The server-sent
+// 402 `message`, when present, still takes precedence over the localized
+// body so back-end context isn't lost.
 
 import React from 'react';
 import Link from 'next/link';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Crown, ShieldCheck, X } from 'lucide-react';
 import type { EntitlementFeature } from '@/lib/entitlement-gate';
+import { useTranslation } from '@/hooks/useTranslation';
 
 // ---------------------------------------------------------------------------
 // 402 response detection
@@ -95,32 +98,37 @@ export async function extractUpgradeRequired(
 // Per-feature copy
 // ---------------------------------------------------------------------------
 
-const FEATURE_COPY: Record<EntitlementFeature, { title: string; body: string }> = {
+// Each feature maps to a pair of i18n keys (billing.<feature>.title/body)
+// resolved at render time so the upsell follows the active EN/FR locale.
+const FEATURE_COPY_KEYS: Record<
+  EntitlementFeature,
+  { titleKey: string; bodyKey: string }
+> = {
   whatsappSuite: {
-    title: 'WhatsApp updates are a Premium feature',
-    body: 'Link your circle to WhatsApp so members get turn reminders and payout alerts right where they already chat.',
+    titleKey: 'billing.whatsappSuite.title',
+    bodyKey: 'billing.whatsappSuite.body',
   },
   maxMembers: {
-    title: 'Bigger circles are a Premium feature',
-    body: 'Free circles hold a few close members. Premium grows a circle to the full rotation the contract supports.',
+    titleKey: 'billing.maxMembers.title',
+    bodyKey: 'billing.maxMembers.body',
   },
   maxCircles: {
-    title: 'More circles are a Premium feature',
-    body: 'The Free plan covers one circle. Premium lets you organize several circles side by side.',
+    titleKey: 'billing.maxCircles.title',
+    bodyKey: 'billing.maxCircles.body',
   },
   smartGoals: {
-    title: 'Smart goals are a Premium feature',
-    body: 'Set savings targets and milestones for your circle and watch progress build every round.',
+    titleKey: 'billing.smartGoals.title',
+    bodyKey: 'billing.smartGoals.body',
   },
   analytics: {
-    title: 'Analytics are a Premium feature',
-    body: 'See contribution history, on-time rates, and payout trends across your circles.',
+    titleKey: 'billing.analytics.title',
+    bodyKey: 'billing.analytics.body',
   },
 };
 
-const GENERIC_COPY = {
-  title: 'This is a Premium feature',
-  body: 'Upgrade to Premium to unlock it for your circles.',
+const GENERIC_COPY_KEYS = {
+  titleKey: 'billing.generic.title',
+  bodyKey: 'billing.generic.body',
 };
 
 // ---------------------------------------------------------------------------
@@ -142,7 +150,8 @@ export function BillingUpsellModal({
   feature,
   message,
 }: BillingUpsellModalProps) {
-  const copy = feature ? FEATURE_COPY[feature] : GENERIC_COPY;
+  const { t } = useTranslation();
+  const copyKeys = feature ? FEATURE_COPY_KEYS[feature] : GENERIC_COPY_KEYS;
 
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
@@ -154,17 +163,16 @@ export function BillingUpsellModal({
           </div>
 
           <Dialog.Title className="mt-4 pr-8 text-xl font-semibold tracking-[-0.03em] text-[#171923]">
-            {copy.title}
+            {t(copyKeys.titleKey)}
           </Dialog.Title>
           <Dialog.Description className="mt-2 text-sm leading-6 text-[#5d6674]">
-            {message || copy.body}
+            {message || t(copyKeys.bodyKey)}
           </Dialog.Description>
 
           <div className="mt-5 flex items-start gap-3 rounded-[18px] border border-[#e9e1d6] bg-white p-3.5">
             <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-[#3f7d54]" />
             <p className="text-xs leading-5 text-[#4b5565]">
-              Collecting payouts, recovery, and withdrawing your funds are
-              always free — Premium only adds coordination conveniences.
+              {t('billing.alwaysFreeNote')}
             </p>
           </div>
 
@@ -174,14 +182,14 @@ export function BillingUpsellModal({
               onClick={onClose}
               className="rounded-full border border-[#d5ccbf] bg-white px-5 py-2.5 text-sm font-semibold text-[#334155] transition-colors duration-200 hover:bg-[#f6f3ee]"
             >
-              Not now
+              {t('billing.notNow')}
             </button>
             <Link
               href="/pricing"
               onClick={onClose}
               className="inline-flex items-center justify-center gap-2 rounded-full bg-[#1d2533] px-5 py-2.5 text-sm font-semibold text-white transition-colors duration-200 hover:bg-[#101723]"
             >
-              See plans
+              {t('billing.seePlans')}
             </Link>
           </div>
 

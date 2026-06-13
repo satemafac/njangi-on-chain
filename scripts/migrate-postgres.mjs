@@ -9,6 +9,7 @@
 //   3. join_requests                  (src/services/database-service.ts)
 //   4. mainnet_signups                (src/services/mainnet-signup-database.ts)
 //   5. whatsapp_phone_index           (src/lib/whatsapp-link-index.ts)
+//   5b. walrus_renewal_audit          (src/lib/whatsapp-link-index.ts)
 //   6. compliance_attestation_queue   (src/lib/attestation-queue.ts)
 //   7. whatsapp_notifications         (src/lib/whatsapp-notifier.ts)
 //   8. cycle_finalized_cursor         (src/lib/cycle-finalized-cron.ts)
@@ -128,6 +129,11 @@ const STATEMENTS = [
           CREATE INDEX IF NOT EXISTS idx_mainnet_signups_user_address ON mainnet_signups(user_address);`,
   },
   {
+    // walrus_end_epoch: storage lease end epoch so /api/cron/walrus-renewal
+    // knows when to re-store a PII blob before it expires (the on-chain
+    // anchor referencing it never expires). The ALTER backfills tables
+    // created before the column existed; NULL means "expiry unknown" and the
+    // renewal cron renews once to learn the real value from the re-store.
     name: 'whatsapp_phone_index',
     sql: `CREATE TABLE IF NOT EXISTS whatsapp_phone_index (
             id SERIAL PRIMARY KEY,
@@ -136,10 +142,33 @@ const STATEMENTS = [
             walrus_blob_id TEXT NOT NULL,
             link_type SMALLINT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            walrus_end_epoch BIGINT,
             UNIQUE (phone_hmac, circle_id)
           );
+          ALTER TABLE whatsapp_phone_index
+            ADD COLUMN IF NOT EXISTS walrus_end_epoch BIGINT;
           CREATE INDEX IF NOT EXISTS whatsapp_phone_index_hmac_idx
             ON whatsapp_phone_index (phone_hmac);`,
+  },
+  {
+    // Append-only audit trail for the Walrus PII blob renewal cron
+    // (src/lib/whatsapp-link-index.ts applyWalrusRenewal). One row per
+    // blob actually re-stored: old/new blob id + old/new storage end epoch.
+    // The row is written in the same transaction as the index UPDATE, so
+    // the log never claims a renewal that did not land.
+    name: 'walrus_renewal_audit',
+    sql: `CREATE TABLE IF NOT EXISTS walrus_renewal_audit (
+            id BIGSERIAL PRIMARY KEY,
+            index_row_id INTEGER NOT NULL,
+            circle_id TEXT NOT NULL,
+            old_blob_id TEXT NOT NULL,
+            new_blob_id TEXT NOT NULL,
+            old_end_epoch BIGINT,
+            new_end_epoch BIGINT,
+            renewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+          CREATE INDEX IF NOT EXISTS walrus_renewal_audit_circle_idx
+            ON walrus_renewal_audit (circle_id, renewed_at DESC);`,
   },
   {
     name: 'compliance_attestation_queue',

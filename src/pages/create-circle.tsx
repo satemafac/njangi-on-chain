@@ -31,6 +31,7 @@ import {
 // into the client bundle and breaks the webpack build (see
 // entitlement-preflight.ts and the matching note in BillingUpsellModal).
 import { hasFeaturePreflight } from '../components/milestones/entitlement-preflight';
+import { useTranslation } from '../hooks/useTranslation';
 import BillingUpsellModal from '../components/BillingUpsellModal';
 import MilestonePlanEditor from '../components/milestones/MilestonePlanEditor';
 import {
@@ -343,6 +344,7 @@ interface InviteMember {
 export default function CreateCircle() {
   const router = useRouter();
   const { isAuthenticated, account, userAddress } = useAuth();
+  const { t } = useTranslation();
   const [currentStep, setCurrentStep] = useState(0); // Start at step 0 for circle type selection
   const [useCustomContribution, setUseCustomContribution] = useState(false);
   const [useCustomDeposit, setUseCustomDeposit] = useState(false);
@@ -908,28 +910,24 @@ The Njangi On-Chain Team`;
 
   const stepDefinitions = [
     {
-      label: 'Circle type',
-      title: 'Choose the circle structure',
-      description:
-        'Start with the operating model. Rotational circles take turns receiving the pot; smart-goal circles (Premium) save toward shared milestones.',
+      label: t('create.step.type.label'),
+      title: t('create.step.type.title'),
+      description: t('create.step.type.description'),
     },
     {
-      label: 'Currency',
-      title: 'Choose the value anchor',
-      description:
-        'Set the currency your members understand and plan around. SUI remains the settlement rail underneath.',
+      label: t('create.step.currency.label'),
+      title: t('create.step.currency.title'),
+      description: t('create.step.currency.description'),
     },
     {
-      label: 'Configuration',
-      title: 'Define how the circle runs',
-      description:
-        'Set the name, contribution amount, cadence, deposit, and optional rules that will guide this group.',
+      label: t('create.step.config.label'),
+      title: t('create.step.config.title'),
+      description: t('create.step.config.description'),
     },
     {
-      label: 'Invites',
-      title: 'Invite members into the circle',
-      description:
-        'Share the link, prepare email invites, and hand the circle off to the people who will run it with you.',
+      label: t('create.step.invites.label'),
+      title: t('create.step.invites.title'),
+      description: t('create.step.invites.description'),
     },
   ];
   const currentStepMeta = stepDefinitions[currentStep] ?? stepDefinitions[0];
@@ -969,17 +967,20 @@ The Njangi On-Chain Team`;
                 d="M15 19l-7-7 7-7"
               />
             </svg>
-            Back to dashboard
+            {t('create.backToDashboard')}
           </button>
           <span className="inline-flex items-center rounded-full border border-[#dfe5ef] bg-white px-3 py-2 text-sm font-medium text-[#51627b]">
-            Step {currentStep + 1} of {stepDefinitions.length}
+            {t('create.stepCounter', {
+              current: currentStep + 1,
+              total: stepDefinitions.length,
+            })}
           </span>
         </div>
 
         <div className={`${shellCardClass} overflow-hidden`}>
           <div className="border-b border-[#e7dfd4] bg-[linear-gradient(135deg,rgba(243,246,251,0.95),rgba(251,250,247,0.9))] px-5 py-6 sm:px-8 sm:py-8">
             <div className="max-w-3xl">
-              <p className={stepLabelClass}>Create circle</p>
+              <p className={stepLabelClass}>{t('create.eyebrow')}</p>
               <h1 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-[#171923] sm:text-[2.45rem]">
                 {currentStepMeta.title}
               </h1>
@@ -1354,7 +1355,7 @@ The Njangi On-Chain Team`;
               <div className="space-y-2">
                 <div className="flex items-center flex-wrap">
                   <label htmlFor="name" className="block text-sm font-medium text-gray-700">
-                    Group Name
+                    {t('create.circleNameLabel')}
                   </label>
                   <InfoTooltip>
                     <p>Choose a unique and memorable name for your Njangi circle</p>
@@ -1369,7 +1370,7 @@ The Njangi On-Chain Team`;
                   value={formData.name}
                   onChange={(e) => handleInputChange('name', e.target.value)}
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 bg-white"
-                  placeholder="Enter your circle's name"
+                  placeholder={t('create.circleNamePlaceholder')}
                 />
               </div>
 
@@ -2220,13 +2221,13 @@ The Njangi On-Chain Team`;
                   onClick={() => router.back()}
                   className={secondaryActionClass}
                 >
-                  Cancel
+                  {t('create.cancel')}
                 </button>
                 <button
                   type="submit"
                   className={primaryActionClass}
                 >
-                  Next: Invite Members
+                  {t('create.nextInvite')}
                 </button>
               </div>
             </form>

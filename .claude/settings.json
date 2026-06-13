@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '\n📦 njangi-on-chain Development Environment\n💡 Use /test-contracts, /build-deploy, /check-yield, /verify-circle\n🔑 Use /start-zklogin for auth services, /check-env for config\n' || true",
+            "command": "echo '\n📦 njangi-on-chain Development Environment\n💡 Use /test-contracts, /build-deploy, /verify-circle\n🔑 Use /start-zklogin for auth services, /check-env for config\n' || true",
             "timeout": 2
           }
         ]

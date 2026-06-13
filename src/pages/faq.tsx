@@ -1,6 +1,7 @@
 import Head from 'next/head';
 import Link from 'next/link';
 import { useState } from 'react';
+import { SUPPORT_MAILTO } from '../lib/constants';
 
 export default function FAQPage() {
   const [openFaqItems, setOpenFaqItems] = useState<{[key: string]: boolean}>({});
@@ -286,8 +287,8 @@ export default function FAQPage() {
               >
                 Educational Resources
               </Link>
-              <a 
-                href="mailto:njangionchain@gmail.com"
+              <a
+                href={SUPPORT_MAILTO}
                 className="border-2 border-blue-600 text-blue-600 px-8 py-3 rounded-lg font-semibold hover:bg-blue-600 hover:text-white transition-colors"
               >
                 Contact Support

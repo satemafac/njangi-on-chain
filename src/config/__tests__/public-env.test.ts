@@ -58,6 +58,77 @@ describe('public env resolution', () => {
     expect(warnSpy).toHaveBeenCalled();
   });
 
+  it('prefers the server-only ENOKI_API_KEY_* over the bundled NEXT_PUBLIC_ENOKI_*', () => {
+    const env = resolvePublicEnvFromRaw({
+      NEXT_PUBLIC_SUI_NETWORK: 'testnet',
+      NEXT_PUBLIC_TESTNET_PACKAGE_ID: '0xtestnet',
+      NEXT_PUBLIC_MAINNET_PACKAGE_ID: '0xmainnet',
+      NEXT_PUBLIC_TESTNET_WHATSAPP_PACKAGE_ID: '0xwa-testnet',
+      NEXT_PUBLIC_MAINNET_WHATSAPP_PACKAGE_ID: '0xwa-mainnet',
+      NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID: '0xregistry-testnet',
+      NEXT_PUBLIC_MAINNET_WHATSAPP_REGISTRY_ID: '0xregistry-mainnet',
+      // Server-only keys present, no NEXT_PUBLIC_ENOKI_* → nothing leaks.
+      ENOKI_API_KEY_TESTNET: 'enoki_private_server_testnet',
+      ENOKI_API_KEY_MAINNET: 'enoki_private_server_mainnet',
+    } as never);
+
+    expect(env.networks.testnet.enokiApiKey).toBe('enoki_private_server_testnet');
+    expect(env.networks.mainnet.enokiApiKey).toBe('enoki_private_server_mainnet');
+  });
+
+  it('resolves enoki to empty on the client when only the server key is set', () => {
+    // Simulates the browser bundle: ENOKI_API_KEY_* is stripped by Next
+    // (non-NEXT_PUBLIC), so raw has neither the server var nor a public one.
+    const env = resolvePublicEnvFromRaw({
+      NEXT_PUBLIC_SUI_NETWORK: 'testnet',
+      NEXT_PUBLIC_TESTNET_PACKAGE_ID: '0xtestnet',
+      NEXT_PUBLIC_MAINNET_PACKAGE_ID: '0xmainnet',
+      NEXT_PUBLIC_TESTNET_WHATSAPP_PACKAGE_ID: '0xwa-testnet',
+      NEXT_PUBLIC_MAINNET_WHATSAPP_PACKAGE_ID: '0xwa-mainnet',
+      NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID: '0xregistry-testnet',
+      NEXT_PUBLIC_MAINNET_WHATSAPP_REGISTRY_ID: '0xregistry-mainnet',
+    } as never);
+
+    expect(env.networks.testnet.enokiApiKey).toBe('');
+    expect(env.networks.mainnet.enokiApiKey).toBe('');
+  });
+
+  it('falls back to the deprecated NEXT_PUBLIC_ENOKI_* with a warning (transition)', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const env = resolvePublicEnvFromRaw({
+      NEXT_PUBLIC_SUI_NETWORK: 'testnet',
+      NEXT_PUBLIC_TESTNET_PACKAGE_ID: '0xtestnet',
+      NEXT_PUBLIC_MAINNET_PACKAGE_ID: '0xmainnet',
+      NEXT_PUBLIC_TESTNET_WHATSAPP_PACKAGE_ID: '0xwa-testnet',
+      NEXT_PUBLIC_MAINNET_WHATSAPP_PACKAGE_ID: '0xwa-mainnet',
+      NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID: '0xregistry-testnet',
+      NEXT_PUBLIC_MAINNET_WHATSAPP_REGISTRY_ID: '0xregistry-mainnet',
+      NEXT_PUBLIC_ENOKI_TESTNET: 'enoki_private_public_bundle',
+    } as never);
+
+    expect(env.networks.testnet.enokiApiKey).toBe('enoki_private_public_bundle');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('ENOKI_API_KEY_TESTNET'),
+    );
+  });
+
+  it('throws when the server enoki key conflicts with the bundled alias', () => {
+    expect(() =>
+      resolvePublicEnvFromRaw({
+        NEXT_PUBLIC_SUI_NETWORK: 'testnet',
+        NEXT_PUBLIC_TESTNET_PACKAGE_ID: '0xtestnet',
+        NEXT_PUBLIC_MAINNET_PACKAGE_ID: '0xmainnet',
+        NEXT_PUBLIC_TESTNET_WHATSAPP_PACKAGE_ID: '0xwa-testnet',
+        NEXT_PUBLIC_MAINNET_WHATSAPP_PACKAGE_ID: '0xwa-mainnet',
+        NEXT_PUBLIC_TESTNET_WHATSAPP_REGISTRY_ID: '0xregistry-testnet',
+        NEXT_PUBLIC_MAINNET_WHATSAPP_REGISTRY_ID: '0xregistry-mainnet',
+        ENOKI_API_KEY_TESTNET: 'enoki_private_server',
+        NEXT_PUBLIC_ENOKI_TESTNET: 'enoki_private_different',
+      } as never),
+    ).toThrow(/ENOKI_API_KEY_TESTNET/);
+  });
+
   it('throws when canonical and legacy values conflict', () => {
     expect(() =>
       resolvePublicEnvFromRaw({

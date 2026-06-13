@@ -23,6 +23,7 @@ import { getSuiRpcErrorMessage, isTransientSuiRpcError, logSuiReadError } from '
 import { readObject, invalidateObject } from '@/lib/sui-read';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 import { lookupMemberNames } from '@/lib/member-name-lookup';
+import { useTranslation } from '@/hooks/useTranslation';
 import {
   mapCurrencyCodeToIntent,
   normalizeOnrampProviderFlag,
@@ -398,6 +399,7 @@ export default function ContributeToCircle() {
   const router = useRouter();
   const { id } = router.query;
   const { isAuthenticated, isLoading: authLoading, userAddress, account } = useAuth();
+  const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
   // Phase 6: display-name map keyed by lowercase address so the
@@ -4072,11 +4074,11 @@ export default function ContributeToCircle() {
             className={secondaryActionClass}
           >
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Dashboard
+            {t('contribute.backToDashboard')}
           </button>
           <div className="text-right">
-            <p className={sectionEyebrowClass}>Circle Payment</p>
-            <h1 className="mt-1 text-lg font-semibold text-slate-950 sm:text-xl">Contribute</h1>
+            <p className={sectionEyebrowClass}>{t('contribute.eyebrow')}</p>
+            <h1 className="mt-1 text-lg font-semibold text-slate-950 sm:text-xl">{t('contribute.title')}</h1>
           </div>
         </div>
 
@@ -4085,12 +4087,14 @@ export default function ContributeToCircle() {
             <div className="flex flex-col gap-6">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div>
-                  <p className={sectionEyebrowClass}>Contribution Workspace</p>
+                  <p className={sectionEyebrowClass}>{t('contribute.workspaceEyebrow')}</p>
                   <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">
-                    {!loading && circle ? `Contribute to ${circle.name}` : 'Contribute to Circle'}
+                    {!loading && circle
+                      ? t('contribute.headingWithCircle', { circle: circle.name })
+                      : t('contribute.heading')}
                   </h2>
                   <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
-                    Review wallet readiness, circle requirements, and the current cycle state before submitting your payment.
+                    {t('contribute.blurb')}
                   </p>
                 </div>
                 {!loading && circle && (

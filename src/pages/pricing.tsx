@@ -43,6 +43,8 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/contexts/AuthContext';
+import { LocaleSwitcher } from '@/components/ui/LocaleSwitcher';
+import { useTranslation } from '@/hooks/useTranslation';
 import type { Entitlements } from '@/lib/entitlement-gate';
 
 const wordmarkFont = Instrument_Serif({
@@ -94,6 +96,7 @@ const secondaryButtonClass =
 
 export default function PricingPage({ freeTier, premiumTier }: PricingPageProps) {
   const { isAuthenticated, account } = useAuth();
+  const { t } = useTranslation();
   const router = useRouter();
   const [currentPlan, setCurrentPlan] = useState<'free' | 'premium' | null>(null);
   const [busyAction, setBusyAction] = useState<'checkout' | 'portal' | null>(null);
@@ -194,20 +197,20 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
   }, [router]);
 
   const freeFeatures = [
-    `${freeTier.maxCircles} savings circle`,
-    `Up to ${freeTier.maxMembers} members per circle`,
-    'Core escrow rounds — contribute and collect on rotation',
-    'Member-initiated recovery, always included',
-    'zkLogin sign-in with self-custodied wallets',
+    t('pricing.free.feature.circles', { count: freeTier.maxCircles }),
+    t('pricing.free.feature.members', { count: freeTier.maxMembers }),
+    t('pricing.free.feature.escrow'),
+    t('pricing.free.feature.recovery'),
+    t('pricing.free.feature.zklogin'),
   ];
 
   const premiumFeatures = [
-    `Up to ${premiumTier.maxMembers} members per circle`,
-    `Run up to ${premiumTier.maxCircles} circles at once`,
-    'WhatsApp linking + turn and payout notifications',
-    'Smart savings goals for your circles',
-    'Circle analytics and contribution insights',
-    'Everything in Free',
+    t('pricing.premium.feature.members', { count: premiumTier.maxMembers }),
+    t('pricing.premium.feature.circles', { count: premiumTier.maxCircles }),
+    t('pricing.premium.feature.whatsapp'),
+    t('pricing.premium.feature.goals'),
+    t('pricing.premium.feature.analytics'),
+    t('pricing.premium.feature.everything'),
   ];
 
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com';
@@ -217,7 +220,7 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
   if (!BILLING_ENABLED) {
     premiumCta = (
       <button type="button" disabled className={primaryButtonClass}>
-        Coming soon — free for now
+        {t('pricing.ctaComingSoon')}
       </button>
     );
   } else if (!isAuthenticated) {
@@ -226,7 +229,7 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
         href={`/?returnUrl=${encodeURIComponent('/pricing')}`}
         className={primaryButtonClass}
       >
-        Sign in to upgrade
+        {t('pricing.ctaSignInToUpgrade')}
         <ArrowRight className="h-4 w-4" />
       </Link>
     );
@@ -241,10 +244,10 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
         {busyAction === 'portal' ? (
           <>
             <Loader2 className="h-4 w-4 animate-spin" />
-            Opening portal…
+            {t('pricing.ctaOpeningPortal')}
           </>
         ) : (
-          'Manage subscription'
+          t('pricing.ctaManageSubscription')
         )}
       </button>
     );
@@ -259,11 +262,11 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
         {busyAction === 'checkout' ? (
           <>
             <Loader2 className="h-4 w-4 animate-spin" />
-            Starting checkout…
+            {t('pricing.ctaStartingCheckout')}
           </>
         ) : (
           <>
-            Upgrade to Premium
+            {t('pricing.ctaUpgrade')}
             <ArrowRight className="h-4 w-4" />
           </>
         )}
@@ -299,12 +302,15 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
         {/* Breadcrumb */}
         <nav className="relative border-b border-[#e9e1d6] bg-white/60 backdrop-blur">
           <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center space-x-2 py-3 text-sm text-[#596170]">
-              <Link href="/" className="transition-colors hover:text-[#171923]">
-                Home
-              </Link>
-              <span>/</span>
-              <span className="font-medium text-[#171923]">Pricing</span>
+            <div className="flex items-center justify-between gap-3 py-3 text-sm text-[#596170]">
+              <div className="flex items-center space-x-2">
+                <Link href="/" className="transition-colors hover:text-[#171923]">
+                  {t('pricing.breadcrumbHome')}
+                </Link>
+                <span>/</span>
+                <span className="font-medium text-[#171923]">{t('pricing.breadcrumbPricing')}</span>
+              </div>
+              <LocaleSwitcher compact />
             </div>
           </div>
         </nav>
@@ -312,21 +318,19 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
         {/* Hero */}
         <section className="relative">
           <div className="mx-auto max-w-4xl px-4 pb-12 pt-16 text-center sm:px-6 lg:px-8">
-            <p className={sectionEyebrowClass}>Pricing</p>
+            <p className={sectionEyebrowClass}>{t('pricing.eyebrow')}</p>
             <h1
               className={`${wordmarkFont.className} mt-4 text-4xl tracking-[-0.03em] text-[#171923] sm:text-5xl`}
             >
-              Simple pricing that never touches your savings
+              {t('pricing.title')}
             </h1>
             <p className="mx-auto mt-5 max-w-2xl text-base leading-7 text-[#596170] sm:text-lg">
-              Run a circle for free, forever. Premium adds coordination
-              conveniences for larger groups — your contributions, payouts, and
-              recovery stay self-custodied and free on every plan.
+              {t('pricing.subtitle')}
             </p>
             {!BILLING_ENABLED && (
               <div className="mt-6 inline-flex items-center gap-2 rounded-full border border-[#d8b66a]/60 bg-[#fdf6e7] px-4 py-2 text-sm font-medium text-[#8a5a21]">
                 <Sparkles className="h-4 w-4" />
-                Premium is coming soon — everything is free today.
+                {t('pricing.comingSoonBanner')}
               </div>
             )}
           </div>
@@ -335,10 +339,7 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
         {showCancelledNotice && (
           <div className="relative mx-auto max-w-4xl px-4 sm:px-6 lg:px-8">
             <div className="mb-8 flex items-start justify-between gap-4 rounded-[20px] border border-[#e0cfae] bg-[#fdf6e7] px-5 py-4 text-sm leading-6 text-[#8a5a21]">
-              <p>
-                Checkout was cancelled — nothing was charged. You can upgrade
-                whenever you&rsquo;re ready.
-              </p>
+              <p>{t('pricing.cancelledNotice')}</p>
               <button
                 type="button"
                 onClick={() => setShowCancelledNotice(false)}
@@ -358,21 +359,20 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
             <section className={`${shellCardClass} flex flex-col p-7 sm:p-8`}>
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-semibold tracking-[-0.02em] text-[#171923]">
-                  Free
+                  {t('pricing.free')}
                 </h2>
                 <span className="rounded-full border border-[#e9e1d6] bg-[#fbfaf7] px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-[#717784]">
-                  Always free
+                  {t('pricing.alwaysFreeBadge')}
                 </span>
               </div>
               <div className="mt-4 flex items-baseline gap-2">
                 <span className="text-4xl font-semibold tracking-[-0.04em] text-[#171923]">
                   $0
                 </span>
-                <span className="text-sm text-[#596170]">forever</span>
+                <span className="text-sm text-[#596170]">{t('pricing.forever')}</span>
               </div>
               <p className="mt-3 text-sm leading-6 text-[#596170]">
-                Everything a small circle needs to save together with on-chain
-                clarity.
+                {t('pricing.freeBlurb')}
               </p>
 
               <ul className="mt-6 flex-1 space-y-3">
@@ -388,21 +388,20 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
                 <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-[#3f7d54]" />
                 <p className="text-xs leading-5 text-[#4b5565]">
                   <span className="font-semibold text-[#171923]">
-                    Always free, on every plan:
+                    {t('pricing.alwaysFreeNoteLabel')}
                   </span>{' '}
-                  collecting your payout, member-initiated recovery, and
-                  withdrawing your funds never require a subscription.
+                  {t('pricing.alwaysFreeNoteBody')}
                 </p>
               </div>
 
               <div className="mt-6">
                 {isAuthenticated ? (
                   <Link href="/dashboard" className={secondaryButtonClass}>
-                    Go to your dashboard
+                    {t('pricing.ctaGoToDashboard')}
                   </Link>
                 ) : (
                   <Link href="/" className={secondaryButtonClass}>
-                    Get started free
+                    {t('pricing.ctaGetStarted')}
                   </Link>
                 )}
               </div>
@@ -415,19 +414,19 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
               <div className="flex items-center justify-between">
                 <h2 className="flex items-center gap-2 text-lg font-semibold tracking-[-0.02em] text-[#171923]">
                   <Crown className="h-4 w-4 text-[#a07b2f]" />
-                  Premium
+                  {t('pricing.premium')}
                 </h2>
                 {!BILLING_ENABLED ? (
                   <span className="rounded-full border border-[#d8b66a]/60 bg-[#fdf6e7] px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-[#8a5a21]">
-                    Coming soon
+                    {t('pricing.comingSoon')}
                   </span>
                 ) : currentPlan === 'premium' ? (
                   <span className="rounded-full border border-[#bcd6c4] bg-[#eef6f0] px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-[#3f7d54]">
-                    Your plan
+                    {t('pricing.yourPlan')}
                   </span>
                 ) : (
                   <span className="rounded-full border border-[#d8cdb8] bg-[#faf7f0] px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-[#7a6a45]">
-                    For organizers
+                    {t('pricing.forOrganizers')}
                   </span>
                 )}
               </div>
@@ -435,11 +434,10 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
                 <span className="text-4xl font-semibold tracking-[-0.04em] text-[#171923]">
                   {PREMIUM_PRICE_LABEL}
                 </span>
-                <span className="text-sm text-[#596170]">per month</span>
+                <span className="text-sm text-[#596170]">{t('pricing.perMonth')}</span>
               </div>
               <p className="mt-3 text-sm leading-6 text-[#596170]">
-                For admins coordinating bigger groups — more members, more
-                circles, and updates where your members already chat.
+                {t('pricing.premiumBlurb')}
               </p>
 
               <ul className="mt-6 flex-1 space-y-3">
@@ -452,8 +450,7 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
               </ul>
 
               <p className="mt-6 text-xs leading-5 text-[#717784]">
-                Billed monthly through Stripe. Cancel anytime — your circles
-                and funds are unaffected when a subscription ends.
+                {t('pricing.billedMonthly')}
               </p>
 
               <div className="mt-4">{premiumCta}</div>
@@ -468,16 +465,10 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
               </div>
               <div>
                 <h2 className="text-lg font-semibold tracking-[-0.02em] text-[#171923]">
-                  Your money is never behind a paywall
+                  {t('pricing.assuranceTitle')}
                 </h2>
                 <p className="mt-2 max-w-3xl text-sm leading-6 text-[#596170]">
-                  Njangi On-Chain is non-custodial: contributions sit in
-                  per-circle escrow on Sui, payouts go straight to members&rsquo;
-                  own wallets, and recovery is member-initiated. Contributing,
-                  collecting a payout, recovering access, and withdrawing funds
-                  work the same on the Free and Premium plans — a subscription
-                  only adds coordination conveniences, never access to your
-                  savings.
+                  {t('pricing.assuranceBody')}
                 </p>
               </div>
             </div>
@@ -486,35 +477,31 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
           {/* Mini FAQ */}
           <section className="mt-12">
             <h2 className="text-center text-2xl font-semibold tracking-[-0.03em] text-[#171923]">
-              Common questions
+              {t('pricing.faqTitle')}
             </h2>
             <div className="mt-6 grid gap-4 md:grid-cols-3">
               <div className={`${shellCardClass} p-5`}>
                 <h3 className="text-sm font-semibold text-[#171923]">
-                  Who pays for Premium?
+                  {t('pricing.faq.whoPays.q')}
                 </h3>
                 <p className="mt-2 text-sm leading-6 text-[#596170]">
-                  The circle admin. One subscription covers every circle they
-                  run — members never need to pay anything.
+                  {t('pricing.faq.whoPays.a')}
                 </p>
               </div>
               <div className={`${shellCardClass} p-5`}>
                 <h3 className="text-sm font-semibold text-[#171923]">
-                  What happens if I cancel?
+                  {t('pricing.faq.cancel.q')}
                 </h3>
                 <p className="mt-2 text-sm leading-6 text-[#596170]">
-                  Your circles keep running and every member keeps full access
-                  to their funds. You simply return to the Free plan limits for
-                  new circles and features.
+                  {t('pricing.faq.cancel.a')}
                 </p>
               </div>
               <div className={`${shellCardClass} p-5`}>
                 <h3 className="text-sm font-semibold text-[#171923]">
-                  Are there other fees?
+                  {t('pricing.faq.fees.q')}
                 </h3>
                 <p className="mt-2 text-sm leading-6 text-[#596170]">
-                  Only standard Sui network transaction fees (typically a few
-                  cents), paid to the blockchain — not to us.
+                  {t('pricing.faq.fees.a')}
                 </p>
               </div>
             </div>
@@ -525,9 +512,7 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
         <footer className="relative border-t border-[#e9e1d6] bg-white/60">
           <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
             <p className="text-center text-xs leading-5 text-[#717784]">
-              Premium covers coordination features only. It is not financial
-              advice, custody, or a guarantee of returns. Cryptocurrency use
-              carries risk — check the rules that apply in your country.
+              {t('pricing.footerDisclaimer')}
             </p>
           </div>
         </footer>

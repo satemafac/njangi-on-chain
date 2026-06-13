@@ -48,6 +48,12 @@ async function ensureTable(): Promise<void> {
       );
       CREATE INDEX IF NOT EXISTS whatsapp_phone_index_hmac_idx
         ON whatsapp_phone_index (phone_hmac);
+      -- walrus_end_epoch: storage lease end epoch tracked so
+      -- /api/cron/walrus-renewal knows when to re-store a blob before it
+      -- expires. NULL on rows written before this column existed → the
+      -- renewal cron treats them as "expiry unknown, renew once to learn".
+      ALTER TABLE whatsapp_phone_index
+        ADD COLUMN IF NOT EXISTS walrus_end_epoch BIGINT;
     `).then(() => undefined);
   }
   return setupPromise;
@@ -77,6 +83,8 @@ export async function indexWhatsAppLink(params: {
   circleId: string;
   walrusBlobId: string;
   linkType: 1 | 2;
+  /** Walrus storage end epoch, when the link flow captured it. */
+  walrusEndEpoch?: number | null;
 }): Promise<void> {
   const phoneHmac = await computeLookupHash(normalizePhone(params.phoneOrGroup));
   const row: WhatsAppPhoneIndexRow = {
@@ -95,14 +103,20 @@ export async function indexWhatsAppLink(params: {
     return;
   }
 
+  const endEpoch =
+    typeof params.walrusEndEpoch === 'number' && Number.isFinite(params.walrusEndEpoch)
+      ? params.walrusEndEpoch
+      : null;
+
   await ensureTable();
   await getPool().query(
-    `INSERT INTO whatsapp_phone_index (phone_hmac, circle_id, walrus_blob_id, link_type)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO whatsapp_phone_index (phone_hmac, circle_id, walrus_blob_id, link_type, walrus_end_epoch)
+     VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (phone_hmac, circle_id) DO UPDATE
        SET walrus_blob_id = EXCLUDED.walrus_blob_id,
-           link_type = EXCLUDED.link_type`,
-    [phoneHmac, params.circleId, params.walrusBlobId, params.linkType],
+           link_type = EXCLUDED.link_type,
+           walrus_end_epoch = EXCLUDED.walrus_end_epoch`,
+    [phoneHmac, params.circleId, params.walrusBlobId, params.linkType, endEpoch],
   );
 }
 
@@ -188,4 +202,166 @@ export async function lookupCirclesForPhone(
     walrusBlobId: row.walrus_blob_id,
     linkType: row.link_type === 2 ? 2 : 1,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// Walrus blob renewal support (/api/cron/walrus-renewal)
+// ---------------------------------------------------------------------------
+
+let renewalAuditTableReady: Promise<void> | null = null;
+
+/** One row the renewal cron may re-store. */
+export interface RenewableLinkRow {
+  id: number;
+  circleId: string;
+  walrusBlobId: string;
+  walrusEndEpoch: number | null;
+}
+
+function ensureRenewalAuditTable(): Promise<void> {
+  if (!renewalAuditTableReady) {
+    renewalAuditTableReady = getPool()
+      .query(`
+        CREATE TABLE IF NOT EXISTS walrus_renewal_audit (
+          id BIGSERIAL PRIMARY KEY,
+          index_row_id INTEGER NOT NULL,
+          circle_id TEXT NOT NULL,
+          old_blob_id TEXT NOT NULL,
+          new_blob_id TEXT NOT NULL,
+          old_end_epoch BIGINT,
+          new_end_epoch BIGINT,
+          renewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS walrus_renewal_audit_circle_idx
+          ON walrus_renewal_audit (circle_id, renewed_at DESC);
+      `)
+      .then(() => undefined)
+      .catch((err) => {
+        renewalAuditTableReady = null;
+        throw err;
+      });
+  }
+  return renewalAuditTableReady;
+}
+
+/**
+ * Every active link, for the renewal cron to evaluate. The phone HMAC is
+ * intentionally NOT returned — renewal re-stores by blob id and never needs
+ * the phone. Requires Postgres (the in-memory fallback has no expiry data
+ * and is dev-only); throws when unavailable so the cron fails closed rather
+ * than silently renewing nothing.
+ */
+export async function listActiveLinksForRenewal(): Promise<RenewableLinkRow[]> {
+  if (!isPostgresAvailable()) {
+    throw new Error(
+      'listActiveLinksForRenewal requires Postgres; the in-memory index has no expiry data.',
+    );
+  }
+  await ensureTable();
+  const result = await getPool().query<{
+    id: number;
+    circle_id: string;
+    walrus_blob_id: string;
+    walrus_end_epoch: string | number | null;
+  }>(
+    `SELECT id, circle_id, walrus_blob_id, walrus_end_epoch
+       FROM whatsapp_phone_index
+      ORDER BY id ASC`,
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    circleId: row.circle_id,
+    walrusBlobId: row.walrus_blob_id,
+    // BIGINT comes back as a string from node-pg; normalize to number|null.
+    walrusEndEpoch:
+      row.walrus_end_epoch === null || row.walrus_end_epoch === undefined
+        ? null
+        : Number(row.walrus_end_epoch),
+  }));
+}
+
+/**
+ * Compare-and-set: points index row `id` at the renewed blob + end epoch
+ * AND records an audit row, in ONE transaction, but only while the row
+ * still references `expectedBlobId`. Returns false when the row no longer
+ * matches (an overlapping renewal run already advanced it) so the caller
+ * counts it as a raced duplicate, never a double-renew. The audit row is
+ * only written when the UPDATE lands, so the audit log never claims a
+ * renewal that did not take effect.
+ */
+export async function applyWalrusRenewal(params: {
+  id: number;
+  expectedBlobId: string;
+  newBlobId: string;
+  newEndEpoch: number;
+}): Promise<boolean> {
+  if (!isPostgresAvailable()) {
+    throw new Error('applyWalrusRenewal requires Postgres.');
+  }
+  await ensureTable();
+  await ensureRenewalAuditTable();
+
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    // Capture the pre-update end epoch (and circle id, for the audit row)
+    // BEFORE the UPDATE overwrites it, gated on the same blob id so the
+    // SELECT and UPDATE see a consistent row inside the transaction.
+    const before = await client.query<{
+      circle_id: string;
+      walrus_end_epoch: string | number | null;
+    }>(
+      `SELECT circle_id, walrus_end_epoch
+         FROM whatsapp_phone_index
+        WHERE id = $1 AND walrus_blob_id = $2
+        FOR UPDATE`,
+      [params.id, params.expectedBlobId],
+    );
+
+    if ((before.rowCount ?? 0) === 0) {
+      // Row already renewed by an overlapping run (CAS missed). No audit row.
+      await client.query('ROLLBACK');
+      return false;
+    }
+
+    const beforeRow = before.rows[0];
+    const oldEndEpoch =
+      beforeRow.walrus_end_epoch === null || beforeRow.walrus_end_epoch === undefined
+        ? null
+        : Number(beforeRow.walrus_end_epoch);
+
+    await client.query(
+      `UPDATE whatsapp_phone_index
+          SET walrus_blob_id = $2, walrus_end_epoch = $3
+        WHERE id = $1`,
+      [params.id, params.newBlobId, params.newEndEpoch],
+    );
+
+    await client.query(
+      `INSERT INTO walrus_renewal_audit
+         (index_row_id, circle_id, old_blob_id, new_blob_id, old_end_epoch, new_end_epoch)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        params.id,
+        beforeRow.circle_id,
+        params.expectedBlobId,
+        params.newBlobId,
+        oldEndEpoch,
+        params.newEndEpoch,
+      ],
+    );
+    await client.query('COMMIT');
+    return true;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Test helper — resets the renewal-audit table-creation latch. */
+export function __resetWhatsAppLinkIndexForTests(): void {
+  setupPromise = null;
+  renewalAuditTableReady = null;
 }

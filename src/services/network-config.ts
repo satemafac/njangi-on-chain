@@ -186,7 +186,7 @@ export function getCurrentNetworkConfig(): NetworkConfig {
   const config = buildNetworkConfig(network);
   console.log('🌍 NetworkConfig: Getting config for network:', network, {
     packageId: config.packageId,
-    enokiApiKey: config.enoki.apiKey ? config.enoki.apiKey.slice(0, 20) + '...' : 'MISSING',
+    enokiApiKey: config.enoki.apiKey ? 'present' : 'MISSING',
     enokiNetwork: config.enoki.network
   });
   return config;

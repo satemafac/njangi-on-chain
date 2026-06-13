@@ -32,6 +32,7 @@ import {
 } from '../services/circle-service';
 // Use alias path for the modal import
 import ConfirmationModal from '@/components/ConfirmationModal';
+import { useTranslation } from '@/hooks/useTranslation';
 import { 
   getCurrentNetwork, 
   getCurrentNetworkConfig, 
@@ -1629,6 +1630,7 @@ export default function Dashboard() {
   console.log('🚨 DASHBOARD COMPONENT RENDERING');
   const router = useRouter();
   const { isAuthenticated, isLoading: isAuthLoading, userAddress, account, deleteCircle: authDeleteCircle, sendTokens } = useAuth();
+  const { t } = useTranslation();
   console.log('🚨 DASHBOARD userAddress:', userAddress, 'isAuthenticated:', isAuthenticated);
   
   // Suppress "Failed to fetch" errors from deleted packages in Next.js error overlay
@@ -1967,7 +1969,11 @@ export default function Dashboard() {
             usdcAddress: updatedConfig.coinTypes.USDC,
             networkName: savedNetwork,
             enoki: {
-              apiKey: updatedConfig.enoki.apiKey,
+              // The Enoki private key is server-only (used solely by
+              // /api/zkLogin). Never expose it on the client — all Enoki
+              // calls happen server-side, so the browser config carries an
+              // empty key.
+              apiKey: '',
               baseUrl: updatedConfig.enoki.network === 'mainnet' ? 'https://enoki.mystenlabs.com' : 'https://enoki.testnet.mystenlabs.com',
               graphqlUrl: updatedConfig.enoki.network === 'mainnet' ? 'https://enoki.mystenlabs.com/v1/graphql' : 'https://enoki.testnet.mystenlabs.com/v1/graphql'
             }
@@ -1994,7 +2000,8 @@ export default function Dashboard() {
             usdcAddress: currentConfig.coinTypes.USDC,
             networkName: getCurrentNetwork(),
             enoki: {
-              apiKey: currentConfig.enoki.apiKey,
+              // Server-only key — see the note above; never exposed client-side.
+              apiKey: '',
               baseUrl: currentConfig.enoki.network === 'mainnet' ? 'https://enoki.mystenlabs.com' : 'https://enoki.testnet.mystenlabs.com',
               graphqlUrl: currentConfig.enoki.network === 'mainnet' ? 'https://enoki.mystenlabs.com/v1/graphql' : 'https://enoki.testnet.mystenlabs.com/v1/graphql'
             }
@@ -6133,10 +6140,10 @@ export default function Dashboard() {
           {isLoadingMore ? (
             <>
               <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-              Loading circles...
+              {t('dashboard.loadingMore')}
             </>
           ) : (
-            'Load more circles'
+            t('dashboard.loadMore')
           )}
         </button>
         {!isLoadingMore && <p className="text-sm text-slate-500">{helperText}</p>}
@@ -6392,13 +6399,13 @@ export default function Dashboard() {
                   <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
                     <div className="max-w-2xl">
                       <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
-                        Njangi Dashboard
+                        {t('dashboard.eyebrow')}
                       </p>
                       <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950 sm:mt-4 sm:text-4xl">
-                        Welcome back{account.name ? `, ${account.name}` : ''}.
+                        {t('dashboard.welcome', { name: account.name ? `, ${account.name}` : '' })}
                       </h1>
                       <p className="mt-3 max-w-xl text-sm leading-7 text-slate-600 sm:mt-4 sm:text-base">
-                        Keep your circles, contributions, and cash movement organized in one quiet workspace.
+                        {t('dashboard.blurb')}
                       </p>
                     </div>
 
@@ -6578,7 +6585,7 @@ export default function Dashboard() {
                       className={secondaryActionClass}
                     >
                       <RefreshCw className={`mr-2 h-4 w-4 ${(loading || isBackgroundRefreshing) ? 'animate-spin' : ''}`} />
-                      Refresh circles
+                      {t('dashboard.refreshCircles')}
                     </button>
                     <button
                       type="button"
@@ -6586,7 +6593,7 @@ export default function Dashboard() {
                       className={secondaryActionClass}
                     >
                       <Users className="mr-2 h-4 w-4" />
-                      Join circle
+                      {t('dashboard.joinCircle')}
                     </button>
                     <button
                       type="button"
@@ -6609,7 +6616,7 @@ export default function Dashboard() {
                           d="M12 4v16m8-8H4"
                         />
                       </svg>
-                      New circle
+                      {t('dashboard.newCircle')}
                     </button>
                   </div>
 
@@ -7461,9 +7468,9 @@ export default function Dashboard() {
                         d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0z"
                       />
                     </svg>
-                    <h3 className="mt-4 text-base font-semibold text-slate-950">No circles yet</h3>
+                    <h3 className="mt-4 text-base font-semibold text-slate-950">{t('dashboard.emptyTitle')}</h3>
                     <p className="mt-2 text-sm text-slate-500">
-                      Start by creating a circle or joining one with an invite link.
+                      {t('dashboard.emptyBody')}
                     </p>
                     <div className="mt-6 flex flex-wrap justify-center gap-3">
                       <button
@@ -7472,7 +7479,7 @@ export default function Dashboard() {
                         className={secondaryActionClass}
                       >
                         <Users className="mr-2 h-4 w-4" />
-                        Join a circle
+                        {t('dashboard.emptyJoin')}
                       </button>
                       <button
                         type="button"
@@ -7495,7 +7502,7 @@ export default function Dashboard() {
                             d="M12 4v16m8-8H4"
                           />
                         </svg>
-                        Create a circle
+                        {t('dashboard.emptyCreate')}
                       </button>
                     </div>
                   </div>

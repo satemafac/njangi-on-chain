@@ -23,7 +23,10 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { LoginButton } from '../components/LoginButton';
 import { LegalFooter } from '../components/LegalFooter';
+import { LocaleSwitcher } from '../components/ui/LocaleSwitcher';
+import { useTranslation } from '../hooks/useTranslation';
 import { getNetworkConfig, setCurrentNetwork } from '../services/network-config';
+import { SUPPORT_EMAIL, SUPPORT_MAILTO } from '../lib/constants';
 
 declare global {
   interface Window {
@@ -80,55 +83,50 @@ const CULTURAL_NAMES = [
   'Tontine',
 ];
 
+// Feature cards and workflow steps reference i18n keys; the visible copy is
+// resolved at render time via the active locale (EN/FR funnel translation).
 const FEATURE_CARDS: Array<{
   icon: LucideIcon;
-  title: string;
-  description: string;
+  titleKey: string;
+  descriptionKey: string;
 }> = [
   {
     icon: Shield,
-    title: 'Shared visibility',
-    description:
-      'Contributions, payout order, and status changes are visible to the people running the circle, not buried in personal messages.',
+    titleKey: 'landing.feature.sharedVisibility.title',
+    descriptionKey: 'landing.feature.sharedVisibility.body',
   },
   {
     icon: Wallet,
-    title: 'Self-custodied settlement',
-    description:
-      'Members contribute and receive payouts directly to their own wallet addresses with no platform-held balance.',
+    titleKey: 'landing.feature.selfCustody.title',
+    descriptionKey: 'landing.feature.selfCustody.body',
   },
   {
     icon: Globe2,
-    title: 'Borderless participation',
-    description:
-      'Diaspora groups and distributed communities can stay coordinated without relying on one geography or one banking rail.',
+    titleKey: 'landing.feature.borderless.title',
+    descriptionKey: 'landing.feature.borderless.body',
   },
   {
     icon: Users,
-    title: 'Cultural continuity',
-    description:
-      'The social rhythm of a savings circle stays intact while the operational friction becomes calmer and easier to trust.',
+    titleKey: 'landing.feature.culturalContinuity.title',
+    descriptionKey: 'landing.feature.culturalContinuity.body',
   },
 ];
 
 const WORKFLOW_STEPS = [
   {
     number: '01',
-    title: 'Sign in with a familiar account',
-    description:
-      'Use Google, Facebook, or Apple with zkLogin. Members do not need a separate crypto onboarding flow to get started.',
+    titleKey: 'landing.workflow.step1.title',
+    descriptionKey: 'landing.workflow.step1.body',
   },
   {
     number: '02',
-    title: 'Set the circle structure once',
-    description:
-      'Define members, contribution amounts, and payout order in one place so expectations stay clear for everyone involved.',
+    titleKey: 'landing.workflow.step2.title',
+    descriptionKey: 'landing.workflow.step2.body',
   },
   {
     number: '03',
-    title: 'Run contributions with less ambiguity',
-    description:
-      'Track upcoming turns, completed contributions, and wallet activity without relying on spreadsheets or verbal follow-up.',
+    titleKey: 'landing.workflow.step3.title',
+    descriptionKey: 'landing.workflow.step3.body',
   },
 ];
 
@@ -237,6 +235,7 @@ const socialLinkClass =
 export default function Home() {
   const router = useRouter();
   const { account } = useAuth();
+  const { t } = useTranslation();
   const [isAuthDialogOpen, setIsAuthDialogOpen] = useState(false);
   const [openFaqItems, setOpenFaqItems] = useState<Record<string, boolean>>({
     'what-is-njangi': true,
@@ -259,7 +258,10 @@ export default function Home() {
         usdcAddress: testnet.coinTypes.USDC,
         networkName: 'Testnet',
         enoki: {
-          apiKey: testnet.enoki.apiKey,
+          // The Enoki private key is server-only (used solely by
+          // /api/zkLogin). The browser config carries an empty key so it is
+          // never inlined into the client bundle.
+          apiKey: '',
           baseUrl: 'https://api.enoki.mystenlabs.com/v1',
           graphqlUrl: testnet.graphqlUrl,
         },
@@ -270,7 +272,8 @@ export default function Home() {
         usdcAddress: mainnet.coinTypes.USDC,
         networkName: 'Mainnet',
         enoki: {
-          apiKey: mainnet.enoki.apiKey,
+          // Server-only key — see the testnet note; never exposed client-side.
+          apiKey: '',
           baseUrl: 'https://api.enoki.mystenlabs.com/v1',
           graphqlUrl: mainnet.graphqlUrl,
         },
@@ -453,15 +456,15 @@ export default function Home() {
 
   const proofItems = [
     {
-      label: 'Live circles',
-      value: circleCount !== null ? `${circleCount}+` : 'Syncing',
+      label: t('landing.proof.liveCircles'),
+      value: circleCount !== null ? `${circleCount}+` : t('landing.proof.syncing'),
     },
     {
-      label: 'Supported assets',
+      label: t('landing.proof.supportedAssets'),
       value: '6+',
     },
     {
-      label: 'Current environment',
+      label: t('landing.proof.currentEnvironment'),
       value: currentNetworkName,
     },
   ];
@@ -633,7 +636,7 @@ export default function Home() {
               ],
               contactPoint: {
                 '@type': 'ContactPoint',
-                email: 'njangionchain@gmail.com',
+                email: SUPPORT_EMAIL,
                 contactType: 'Customer Service',
               },
             }),
@@ -657,13 +660,14 @@ export default function Home() {
             >
               <div className="pr-10">
                 <Dialog.Title className="text-xl font-semibold tracking-[-0.03em] text-[#171923]">
-                  Switch to{' '}
-                  {pendingNetwork ? NETWORK_CONFIG[pendingNetwork].networkName : ''}?
+                  {t('landing.networkSwitchTitle', {
+                    network: pendingNetwork
+                      ? NETWORK_CONFIG[pendingNetwork].networkName
+                      : '',
+                  })}
                 </Dialog.Title>
                 <Dialog.Description className="mt-3 text-sm leading-6 text-[#5d6674]">
-                  Network environments use different wallet addresses. Switching
-                  clears the active zkLogin session so balances, circles, and
-                  history stay aligned to the environment you selected.
+                  {t('landing.networkSwitchBody')}
                 </Dialog.Description>
               </div>
 
@@ -688,15 +692,18 @@ export default function Home() {
                   onClick={cancelNetworkSwitch}
                   className="rounded-full border border-[#d5ccbf] bg-white px-5 py-3 text-sm font-semibold text-[#334155] transition-colors duration-200 hover:bg-[#f6f3ee]"
                 >
-                  Stay here
+                  {t('landing.networkSwitchStay')}
                 </button>
                 <button
                   type="button"
                   onClick={confirmNetworkSwitch}
                   className="rounded-full bg-[#1d2533] px-5 py-3 text-sm font-semibold text-white transition-colors duration-200 hover:bg-[#101723]"
                 >
-                  Switch to{' '}
-                  {pendingNetwork ? NETWORK_CONFIG[pendingNetwork].networkName : ''}
+                  {t('landing.networkSwitchConfirm', {
+                    network: pendingNetwork
+                      ? NETWORK_CONFIG[pendingNetwork].networkName
+                      : '',
+                  })}
                 </button>
               </div>
 
@@ -722,12 +729,10 @@ export default function Home() {
             >
               <div className="pr-10">
                 <Dialog.Title className="text-xl font-semibold tracking-[-0.03em] text-[#171923]">
-                  Sign in with a familiar account
+                  {t('landing.signInTitle')}
                 </Dialog.Title>
                 <Dialog.Description className="mt-3 text-sm leading-6 text-[#5d6674]">
-                  Use Google, Facebook, or Apple with zkLogin. Wallet creation
-                  happens in the background so you can enter the app without a
-                  separate crypto onboarding step.
+                  {t('landing.signInBody')}
                 </Dialog.Description>
               </div>
 
@@ -738,11 +743,11 @@ export default function Home() {
               <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-[#667085]">
                 <span className="inline-flex items-center gap-2">
                   <BadgeCheck className="h-4 w-4 text-[#71839a]" />
-                  No seed phrase required to begin
+                  {t('landing.noSeedPhrase')}
                 </span>
                 <span className="inline-flex items-center gap-2">
                   <BadgeCheck className="h-4 w-4 text-[#71839a]" />
-                  Built for member-run circles, not generic accounts
+                  {t('landing.builtForCircles')}
                 </span>
               </div>
 
@@ -789,14 +794,15 @@ export default function Home() {
               <div className="flex flex-col gap-3 sm:items-end">
                 <nav className="flex flex-wrap items-center gap-5 text-sm font-medium text-[#556070]">
                   <Link href="/learn" className={socialLinkClass}>
-                    Learn
+                    {t('nav.learn')}
                   </Link>
                   <Link href="/faq" className={socialLinkClass}>
-                    FAQ
+                    {t('nav.faq')}
                   </Link>
                   <Link href="#launch" className={socialLinkClass}>
-                    Mainnet updates
+                    {t('nav.mainnetUpdates')}
                   </Link>
+                  <LocaleSwitcher compact />
                 </nav>
 
                 <div className="flex flex-wrap items-center gap-3">
@@ -810,7 +816,7 @@ export default function Home() {
                           : 'text-[#5d6674] hover:text-[#171923]'
                       }`}
                     >
-                      Testnet
+                      {t('nav.testnet')}
                     </button>
                     <button
                       type="button"
@@ -821,18 +827,18 @@ export default function Home() {
                           : 'text-[#5d6674] hover:text-[#171923]'
                       }`}
                     >
-                      Mainnet
+                      {t('nav.mainnet')}
                     </button>
                   </div>
 
                   <div className="inline-flex items-center gap-2 rounded-full border border-[#e3dbcf] bg-[#f9f6f0] px-3 py-2 text-sm text-[#5b6572]">
                     <CircleDot className="h-4 w-4 text-[#6b7b92]" />
-                    Viewing {currentNetworkName}
+                    {t('nav.viewing', { network: currentNetworkName })}
                   </div>
 
                   {account ? (
                     <Link href="/dashboard" className={topNavPrimaryActionClass}>
-                      Open dashboard
+                      {t('nav.openDashboard')}
                       <ArrowRight className="h-4 w-4" />
                     </Link>
                   ) : (
@@ -841,7 +847,7 @@ export default function Home() {
                       onClick={() => setIsAuthDialogOpen(true)}
                       className={topNavPrimaryActionClass}
                     >
-                      Log in
+                      {t('nav.login')}
                       <ArrowRight className="h-4 w-4" />
                     </button>
                   )}
@@ -856,37 +862,31 @@ export default function Home() {
                 <div className="grid gap-12 lg:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)] lg:items-start">
                   <div className="max-w-2xl">
                     <span className={sectionEyebrowClass}>
-                      Community savings, rebuilt with restraint
+                      {t('landing.eyebrow')}
                     </span>
                     <h1 className="mt-5 text-[2.9rem] font-semibold leading-[0.94] tracking-[-0.055em] text-[#171923] sm:text-[4.1rem] md:text-[4.7rem]">
-                      A more accountable home for the savings circle your
-                      community already trusts.
+                      {t('landing.heroTitle')}
                     </h1>
                     <p className="mt-6 max-w-xl text-lg leading-8 text-[#56606f] sm:text-xl">
-                      Njangi On-Chain preserves the social logic of traditional
-                      circles while giving members clearer schedules, auditable
-                      contributions, and low-friction access through zkLogin on
-                      Sui.
+                      {t('landing.heroSubtitle')}
                     </p>
 
                     <div className={`${shellCardClass} mt-9 p-5 sm:p-6`}>
                       <p className="text-sm font-semibold uppercase tracking-[0.22em] text-[#6f7887]">
-                        Start with a familiar identity
+                        {t('landing.heroCardTitle')}
                       </p>
                       <p className="mt-3 max-w-2xl text-sm leading-6 text-[#5f6674] sm:text-base">
-                        Sign in with a social account. Wallet creation happens in
-                        the background so members can start with less operational
-                        friction.
+                        {t('landing.heroCardBody')}
                       </p>
                       <LoginButton variant="landing" className="mt-5" />
                       <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-[#667085]">
                         <span className="inline-flex items-center gap-2">
                           <BadgeCheck className="h-4 w-4 text-[#71839a]" />
-                          No seed phrase required to begin
+                          {t('landing.noSeedPhrase')}
                         </span>
                         <span className="inline-flex items-center gap-2">
                           <BadgeCheck className="h-4 w-4 text-[#71839a]" />
-                          Built for member-run circles, not generic accounts
+                          {t('landing.builtForCircles')}
                         </span>
                       </div>
                     </div>
@@ -896,14 +896,14 @@ export default function Home() {
                         href="/learn"
                         className="inline-flex items-center gap-2 rounded-full border border-[#d7cec1] bg-white px-5 py-3 text-sm font-semibold text-[#1f2937] shadow-[0_16px_40px_-32px_rgba(15,23,42,0.45)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#fbfaf7]"
                       >
-                        Explore how it works
+                        {t('landing.exploreHowItWorks')}
                         <ArrowRight className="h-4 w-4" />
                       </Link>
                       <Link
                         href="#launch"
                         className="inline-flex items-center gap-2 text-sm font-semibold text-[#556070] transition-colors duration-200 hover:text-[#171923]"
                       >
-                        Join the mainnet release list
+                        {t('landing.joinReleaseList')}
                         <ArrowRight className="h-4 w-4" />
                       </Link>
                     </div>
@@ -1011,31 +1011,27 @@ export default function Home() {
               <div className="mx-auto max-w-7xl">
                 <div className="max-w-2xl">
                   <span className={sectionEyebrowClass}>
-                    What becomes easier to trust
+                    {t('landing.features.eyebrow')}
                   </span>
                   <h2 className={sectionTitleClass}>
-                    The platform removes ambiguity without stripping out the
-                    community.
+                    {t('landing.features.title')}
                   </h2>
                   <p className={sectionBodyClass}>
-                    The goal is not to make a savings circle feel like a trading
-                    product. The goal is to make it easier for members to know
-                    what is happening, when it is happening, and where funds are
-                    moving.
+                    {t('landing.features.body')}
                   </p>
                 </div>
 
                 <div className="mt-12 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                  {FEATURE_CARDS.map(({ icon: Icon, title, description }) => (
-                    <div key={title} className={`${shellCardClass} p-6`}>
+                  {FEATURE_CARDS.map(({ icon: Icon, titleKey, descriptionKey }) => (
+                    <div key={titleKey} className={`${shellCardClass} p-6`}>
                       <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[#e4dbcf] bg-[#f8f5ef] text-[#66748b]">
                         <Icon className="h-5 w-5" />
                       </div>
                       <h3 className="mt-6 text-xl font-semibold tracking-[-0.03em] text-[#171923]">
-                        {title}
+                        {t(titleKey)}
                       </h3>
                       <p className="mt-3 text-sm leading-6 text-[#5f6674] sm:text-base">
-                        {description}
+                        {t(descriptionKey)}
                       </p>
                     </div>
                   ))}
@@ -1047,15 +1043,12 @@ export default function Home() {
               <div className="mx-auto max-w-7xl">
                 <div className="grid gap-10 lg:grid-cols-[0.92fr_1.08fr] lg:items-start">
                   <div>
-                    <span className={sectionEyebrowClass}>Operational flow</span>
+                    <span className={sectionEyebrowClass}>{t('landing.workflow.eyebrow')}</span>
                     <h2 className={sectionTitleClass}>
-                      A circle still feels familiar. The tooling just stops
-                      getting in the way.
+                      {t('landing.workflow.title')}
                     </h2>
                     <p className={sectionBodyClass}>
-                      Njangi On-Chain is built for communities that already know
-                      how to save together. It adds clearer structure, not a new
-                      social model.
+                      {t('landing.workflow.body')}
                     </p>
                   </div>
 
@@ -1066,10 +1059,10 @@ export default function Home() {
                           {step.number}
                         </p>
                         <h3 className="mt-5 text-lg font-semibold tracking-[-0.03em] text-[#171923]">
-                          {step.title}
+                          {t(step.titleKey)}
                         </h3>
                         <p className="mt-3 text-sm leading-6 text-[#5f6674]">
-                          {step.description}
+                          {t(step.descriptionKey)}
                         </p>
                       </div>
                     ))}
@@ -1160,14 +1153,12 @@ export default function Home() {
                 <div className={`${shellCardClass} p-7 sm:p-9 lg:p-10`}>
                   <div className="grid gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-start">
                     <div className="max-w-xl">
-                      <span className={sectionEyebrowClass}>Mainnet release</span>
+                      <span className={sectionEyebrowClass}>{t('landing.launch.eyebrow')}</span>
                       <h2 className={sectionTitleClass}>
-                        Follow the launch without following noise.
+                        {t('landing.launch.title')}
                       </h2>
                       <p className={sectionBodyClass}>
-                        The product is live for testnet exploration today. Join
-                        the release list if you want the clearest signal on
-                        production readiness, rollout timing, and early access.
+                        {t('landing.launch.body')}
                       </p>
 
                       <div className="mt-8 space-y-3">
@@ -1186,7 +1177,7 @@ export default function Home() {
                     <div className={`${mutedCardClass} p-6 sm:p-7`}>
                       <div className="inline-flex items-center gap-2 rounded-full border border-[#e4dbcf] bg-white px-3 py-2 text-sm font-medium text-[#556070]">
                         <Mail className="h-4 w-4 text-[#70819a]" />
-                        Launch updates
+                        {t('landing.launch.eyebrow')}
                       </div>
 
                       <form
@@ -1195,7 +1186,7 @@ export default function Home() {
                       >
                         <input
                           type="email"
-                          placeholder="Enter your email address"
+                          placeholder={t('landing.launch.emailPlaceholder')}
                           value={signupEmail}
                           onChange={(e) => setSignupEmail(e.target.value)}
                           required
@@ -1207,7 +1198,9 @@ export default function Home() {
                           disabled={isSignupLoading}
                           className="inline-flex items-center justify-center rounded-2xl bg-[#1d2533] px-5 py-4 text-sm font-semibold text-white transition-colors duration-200 hover:bg-[#101723] disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          {isSignupLoading ? 'Signing up...' : 'Notify me about mainnet'}
+                          {isSignupLoading
+                            ? t('landing.launch.signingUp')
+                            : t('landing.launch.notifyButton')}
                         </button>
                       </form>
 
@@ -1224,8 +1217,7 @@ export default function Home() {
                       )}
 
                       <p className="mt-4 text-sm leading-6 text-[#667085]">
-                        Updates are limited to meaningful milestones. No weekly
-                        filler, no broadcast spam.
+                        {t('landing.launch.disclaimer')}
                       </p>
                     </div>
                   </div>
@@ -1236,11 +1228,10 @@ export default function Home() {
             <section className="px-4 py-18 sm:px-6 lg:px-8 lg:py-24">
               <div className="mx-auto max-w-4xl">
                 <div className="text-center">
-                  <span className={sectionEyebrowClass}>Common questions</span>
-                  <h2 className={sectionTitleClass}>A few things people ask first.</h2>
+                  <span className={sectionEyebrowClass}>{t('landing.faq.eyebrow')}</span>
+                  <h2 className={sectionTitleClass}>{t('landing.faq.title')}</h2>
                   <p className={`${sectionBodyClass} mx-auto`}>
-                    If you want the full context, the deeper guides live in the
-                    learning and FAQ sections. These cover the basics.
+                    {t('landing.faq.body')}
                   </p>
                 </div>
 
@@ -1278,14 +1269,14 @@ export default function Home() {
                     href="/learn"
                     className="inline-flex items-center gap-2 text-[#556070] transition-colors duration-200 hover:text-[#171923]"
                   >
-                    Learn about savings circles
+                    {t('landing.faq.learnLink')}
                     <ArrowRight className="h-4 w-4" />
                   </Link>
                   <Link
                     href="/faq"
                     className="inline-flex items-center gap-2 text-[#556070] transition-colors duration-200 hover:text-[#171923]"
                   >
-                    View the full FAQ
+                    {t('landing.faq.fullFaqLink')}
                     <ArrowRight className="h-4 w-4" />
                   </Link>
                 </div>
@@ -1296,13 +1287,10 @@ export default function Home() {
               <div className="mx-auto max-w-7xl">
                 <div className={`${shellCardClass} p-7 sm:p-9`}>
                   <div className="max-w-3xl">
-                    <span className={sectionEyebrowClass}>A global tradition</span>
-                    <h2 className={sectionTitleClass}>Known by many names, held by the same instinct.</h2>
+                    <span className={sectionEyebrowClass}>{t('landing.tradition.eyebrow')}</span>
+                    <h2 className={sectionTitleClass}>{t('landing.tradition.title')}</h2>
                     <p className={sectionBodyClass}>
-                      Communities across the world already understand rotating
-                      savings. Njangi On-Chain is designed to respect that
-                      history rather than flatten it into a generic fintech
-                      pattern.
+                      {t('landing.tradition.body')}
                     </p>
                   </div>
 
@@ -1349,10 +1337,10 @@ export default function Home() {
 
                 <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
                   <Link href="/learn" className={socialLinkClass}>
-                    Learn
+                    {t('nav.learn')}
                   </Link>
                   <Link href="/faq" className={socialLinkClass}>
-                    FAQ
+                    {t('nav.faq')}
                   </Link>
                   <a
                     href="https://x.com/njangi_on_chain"
@@ -1370,16 +1358,16 @@ export default function Home() {
                   >
                     Instagram
                   </a>
-                  <a href="mailto:njangionchain@gmail.com" className={socialLinkClass}>
+                  <a href={SUPPORT_MAILTO} className={socialLinkClass}>
                     Email
                   </a>
                 </div>
               </div>
 
               <div className="mt-8 flex flex-col gap-2 border-t border-[#ddd5c9] pt-4 text-sm text-[#6b7280] sm:flex-row sm:items-center sm:justify-between">
-                <p>&copy; {new Date().getFullYear()} Njangi On-Chain. All rights reserved.</p>
+                <p>{t('landing.footer.rights', { year: new Date().getFullYear() })}</p>
                 <LegalFooter />
-                <p>Built on Sui with zkLogin for low-friction community access.</p>
+                <p>{t('landing.footer.tagline')}</p>
               </div>
             </div>
           </footer>

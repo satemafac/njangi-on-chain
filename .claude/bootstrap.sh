@@ -39,7 +39,7 @@ echo "📚 Setting up project skills..."
 
 # Remove old njangi-specific symlinks first
 if [[ -d "${HOME_CLAUDE_DIR}/skills" ]]; then
-  for skill in test-contracts build-deploy check-yield verify-circle start-zklogin check-env deploy-testnet; do
+  for skill in test-contracts build-deploy verify-circle start-zklogin check-env deploy-testnet; do
     skill_path="${HOME_CLAUDE_DIR}/skills/${skill}"
     if [[ -L "$skill_path" ]]; then
       target="$(readlink "$skill_path" || true)"
@@ -117,7 +117,6 @@ echo ""
 echo "📋 Available skills:"
 echo "   /test-contracts    - Run Move contract tests"
 echo "   /build-deploy      - Build and deploy contracts"
-echo "   /check-yield       - Verify yield integration"
 echo "   /verify-circle     - Check circle state on-chain"
 echo "   /start-zklogin     - Start zkLogin services"
 echo "   /check-env         - Validate environment"

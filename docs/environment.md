@@ -62,19 +62,22 @@ The app still tolerates these as one-release shims and warns when it uses them:
 
 If a canonical key and a legacy alias are both set with different values, startup fails.
 
-## Hosted environments
+## Hosted environment (Vercel)
 
-Heroku config vars remain app-scoped. The repo standardizes on one schema, not one physical hosted file.
+The app deploys on **Vercel**; production Postgres is **Neon**. There is no
+per-app config-sync script — set environment variables directly in the Vercel
+project dashboard (Project → Settings → Environment Variables).
 
-- single Heroku app with `web` + `bot` dynos: sync the full root env
-- separate frontend and bot apps: sync filtered subsets from the same root env
+- Server-only secrets (`ZKLOGIN_SECRET`, `WALRUS_PII_MASTER_KEY`,
+  `INTERNAL_NOTIFY_SECRET`, `CRON_SECRET`, ramp secrets, etc.) must **not**
+  carry the `NEXT_PUBLIC_` prefix, so Next.js keeps them off the client bundle.
+- `NEXT_PUBLIC_*` values must be present at build time, before `next build`.
+- Cron jobs (your-turn nudges, circle-event relays, Walrus renewal) are
+  declared in [`vercel.json`](/Volumes/Developing/njangi-on-chain/vercel.json)
+  and authenticate with `CRON_SECRET`.
 
-Use [`scripts/heroku/sync-config.sh`](/Volumes/Developing/njangi-on-chain/scripts/heroku/sync-config.sh):
+Validate the local env before deploying:
 
 ```bash
-# One Heroku app
-./scripts/heroku/sync-config.sh --app njangi-on-chain --dry-run
-
-# Separate frontend and bot apps
-./scripts/heroku/sync-config.sh --frontend-app njangi-web --bot-app njangi-bot --dry-run
+npm run validate:env
 ```
