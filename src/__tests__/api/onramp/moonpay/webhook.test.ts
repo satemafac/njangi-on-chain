@@ -150,4 +150,75 @@ describe('POST /api/onramp/moonpay/webhook', () => {
     expect(secondRes.statusCode).toBe(200);
     expect(mockedBridge).toHaveBeenCalledTimes(1);
   });
+
+  it('labels a completed transaction as purchase-completion evidence only', async () => {
+    const res = createMockResponse();
+    await handler(createMockRequest(approvedKycPayload('case-evidence-tx')), res);
+
+    expect(res.statusCode).toBe(200);
+    // Truthful attestation: a settled purchase implies MoonPay's KYC
+    // program ran — nothing more. The policy criteria must not upgrade it
+    // to a sanctions/jurisdiction screening claim.
+    expect(mockedBridge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'moonpay',
+        outcome: 'approved',
+        evidence: 'purchase_completed',
+        providerCaseId: 'case-evidence-tx',
+      }),
+      '0xissuer',
+    );
+  });
+
+  it('labels a dedicated identity-check event as a partner KYC decision', async () => {
+    const res = createMockResponse();
+    await handler(
+      createMockRequest({
+        type: 'identity_check_updated',
+        data: {
+          id: 'check-77',
+          status: 'completed',
+          walletAddress:
+            '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd',
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(mockedBridge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'moonpay',
+        outcome: 'approved',
+        evidence: 'partner_kyc_decision',
+        providerCaseId: 'check-77',
+      }),
+      '0xissuer',
+    );
+  });
+
+  it('classifies payloads exposing only a kycStatus as KYC decisions', async () => {
+    const res = createMockResponse();
+    await handler(
+      createMockRequest({
+        data: {
+          id: 'check-kycstatus',
+          kycStatus: 'approved',
+          walletAddress:
+            '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd',
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(mockedBridge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: 'approved',
+        evidence: 'partner_kyc_decision',
+        providerCaseId: 'check-kycstatus',
+      }),
+      '0xissuer',
+    );
+  });
 });

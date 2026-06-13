@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import crypto from 'crypto';
+import { Readable } from 'stream';
 import handler from '@/pages/api/onramp/coinbase/webhook';
 import { handleRampKycEvent } from '@/lib/ramp-kyc-bridge';
 import { __resetWebhookDedupeForTests } from '@/lib/webhook-dedupe';
@@ -17,16 +18,20 @@ type MockResponse = NextApiResponse & {
   body: unknown;
 };
 
+// The handler runs with `bodyParser: false` and reads the raw request
+// stream, so the mock request streams the body bytes exactly as Coinbase
+// would send them (production parity for signature verification).
 function createMockRequest(input: {
   method?: string;
-  body?: unknown;
+  body?: string;
   headers?: Record<string, string>;
 }): NextApiRequest {
-  return {
-    method: input.method ?? 'POST',
-    body: input.body ?? {},
-    headers: input.headers ?? {},
-  } as unknown as NextApiRequest;
+  const chunks =
+    input.body !== undefined ? [Buffer.from(input.body, 'utf8')] : [];
+  const req = Readable.from(chunks) as unknown as NextApiRequest;
+  (req as { method?: string }).method = input.method ?? 'POST';
+  (req as { headers: Record<string, string> }).headers = input.headers ?? {};
+  return req;
 }
 
 function createMockResponse(): MockResponse {
@@ -146,6 +151,74 @@ describe('POST /api/onramp/coinbase/webhook', () => {
     );
   });
 
+  it('verifies the signature over the exact raw bytes, including non-canonical whitespace and key order', async () => {
+    // A body that JSON.stringify(JSON.parse(body)) would NOT reproduce:
+    // re-serialization drops the whitespace and reorders nothing here but
+    // produces different bytes, so only true raw-byte verification passes.
+    const body =
+      '{\n  "type": "onramp.transaction.updated",\n  "id": "evt-raw-bytes",\n  "data": { "status": "pending" }\n}';
+    expect(JSON.stringify(JSON.parse(body))).not.toBe(body);
+
+    const req = createMockRequest({
+      body,
+      headers: {
+        'x-cc-webhook-signature': signBody(body, secret),
+      },
+    });
+    const res = createMockResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(201);
+    expect(res.body).toEqual(
+      expect.objectContaining({
+        ok: true,
+        eventId: 'evt-raw-bytes',
+        status: 'pending',
+      }),
+    );
+  });
+
+  it('rejects a signature computed over a re-serialized body instead of the raw bytes', async () => {
+    const body =
+      '{\n  "id": "evt-reserialized",\n  "type": "onramp.transaction.updated",\n  "data": { "status": "pending" }\n}';
+    // Simulate the old bug: HMAC over JSON.stringify(parsedBody) rather
+    // than the bytes actually sent on the wire.
+    const reserialized = JSON.stringify(JSON.parse(body));
+    const req = createMockRequest({
+      body,
+      headers: {
+        'x-cc-webhook-signature': signBody(reserialized, secret),
+      },
+    });
+    const res = createMockResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toEqual(
+      expect.objectContaining({ error: 'INVALID_SIGNATURE' }),
+    );
+  });
+
+  it('returns 400 for a signed but non-JSON payload', async () => {
+    const body = 'not-json';
+    const req = createMockRequest({
+      body,
+      headers: {
+        'x-cc-webhook-signature': signBody(body, secret),
+      },
+    });
+    const res = createMockResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toEqual(
+      expect.objectContaining({ error: 'INVALID_PAYLOAD' }),
+    );
+  });
+
   it('returns duplicate=true for already processed event', async () => {
     const body = JSON.stringify({
       id: 'evt-duplicate',
@@ -208,6 +281,29 @@ describe('POST /api/onramp/coinbase/webhook', () => {
     expect(mockedBridge).toHaveBeenCalledTimes(1);
     expect(bridgeFinished).toBe(true);
     expect(res.statusCode).toBe(201);
+  });
+
+  it('invokes the bridge with purchase-completion evidence — Coinbase sends no dedicated KYC event', async () => {
+    process.env.NEXT_PUBLIC_NJANGI_ATTESTATION_ISSUER = '0xissuer';
+
+    const res = createMockResponse();
+    await handler(signedKycRequest('evt-kyc-evidence'), res);
+
+    expect(res.statusCode).toBe(201);
+    expect(mockedBridge).toHaveBeenCalledTimes(1);
+    // Truthful attestation: a completed purchase only evidences that
+    // Coinbase's own KYC/AML program onboarded the buyer — the policy
+    // must never claim sanctions/jurisdiction screening Njangi did not
+    // perform.
+    expect(mockedBridge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'coinbase',
+        outcome: 'approved',
+        evidence: 'purchase_completed',
+        providerCaseId: 'tx-evt-kyc-evidence',
+      }),
+      '0xissuer',
+    );
   });
 
   it('releases the dedupe claim and returns 500 on bridge failure so the provider retry re-runs the side effect', async () => {

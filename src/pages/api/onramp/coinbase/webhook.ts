@@ -6,6 +6,18 @@ import { handleRampKycEvent, type RampKycOutcome } from '@/lib/ramp-kyc-bridge';
 import { registerWebhookEvent, unregisterWebhookEvent } from '@/lib/webhook-dedupe';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 
+// Signature verification MUST run over the exact bytes Coinbase signed.
+// Next.js' default bodyParser would parse the JSON into an object and a
+// JSON.stringify re-serialization will not byte-match the provider payload
+// (key order, whitespace, unicode escaping) — the 2026-06 GTM audit found
+// this rejected every legitimate webhook. Disable parsing and read the raw
+// stream, mirroring the MoonPay handler.
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
 interface WebhookSuccessResponse {
   provider: 'coinbase';
   ok: true;
@@ -92,28 +104,26 @@ function allowOrigin(req: NextApiRequest, res: NextApiResponse): boolean {
   return true;
 }
 
-function getRawBody(req: NextApiRequest): string {
-  if (typeof req.body === 'string') {
-    return req.body;
-  }
-  if (Buffer.isBuffer(req.body)) {
-    return req.body.toString('utf8');
-  }
-  return JSON.stringify(req.body ?? {});
+function readRawBody(req: NextApiRequest): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
 }
 
-function parsePayload(req: NextApiRequest): CoinbaseWebhookPayload | null {
-  if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
-    return req.body as CoinbaseWebhookPayload;
-  }
-
-  const rawBody = getRawBody(req);
+function parsePayload(rawBody: string): CoinbaseWebhookPayload | null {
   if (!rawBody) {
     return null;
   }
 
   try {
-    return JSON.parse(rawBody) as CoinbaseWebhookPayload;
+    const parsed = JSON.parse(rawBody) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as CoinbaseWebhookPayload;
   } catch {
     return null;
   }
@@ -204,6 +214,12 @@ function normalizeEvent(payload: CoinbaseWebhookPayload): {
   };
 }
 
+// Coinbase Onramp webhooks deliver transaction lifecycle events only — our
+// integration receives no dedicated identity-verification event. The most a
+// completed purchase evidences is that Coinbase's own KYC/AML program
+// onboarded the buyer, so the bridge is always invoked with
+// evidence:'purchase_completed' and the attestation policy claims exactly
+// that (never sanctions/jurisdiction screening Njangi did not perform).
 function coinbaseStatusToOutcome(status: string): RampKycOutcome | null {
   const lower = status.toLowerCase();
   if (lower.includes('success') || lower === 'completed' || lower === 'approved') {
@@ -280,7 +296,23 @@ export default async function handler(
     });
   }
 
-  const rawBody = getRawBody(req);
+  let rawBody: string;
+  try {
+    rawBody = await readRawBody(req);
+  } catch (err) {
+    logger.warn('webhook_body_read_failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return res.status(400).json({
+      provider: 'coinbase',
+      ok: false,
+      error: 'INVALID_PAYLOAD',
+      message: 'Unable to read the webhook request body.',
+    });
+  }
+
+  // HMAC over the exact raw bytes Coinbase signed — never a re-serialized
+  // copy of a parsed body.
   if (!verifySignature(rawBody, signature, webhookSecret)) {
     logger.warn('webhook_signature_invalid');
     return res.status(401).json({
@@ -291,7 +323,7 @@ export default async function handler(
     });
   }
 
-  const payload = parsePayload(req);
+  const payload = parsePayload(rawBody);
   if (!payload) {
     logger.warn('webhook_payload_invalid');
     return res.status(400).json({
@@ -338,6 +370,9 @@ export default async function handler(
           {
             provider: 'coinbase',
             outcome,
+            // Coinbase sends no dedicated KYC-status event; a completed
+            // purchase is the only (indirect) evidence of partner KYC.
+            evidence: 'purchase_completed',
             providerCaseId: normalized.transactionId ?? normalized.eventId,
             subjectAddress: normalized.walletAddress,
             network,

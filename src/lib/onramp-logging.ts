@@ -30,6 +30,28 @@ const REQUEST_ID_HEADER = 'x-request-id';
 const SENSITIVE_KEY_PATTERN =
   /(token|secret|signature|authorization|api[_-]?key|private[_-]?key|password|jwt|session[_-]?token)/i;
 
+// Customer PII carried by ramp webhook payloads (MoonPay/Transak embed
+// customer name, phone, date of birth, postal address, identity-document
+// references). These are dropped entirely at the persistence boundary —
+// reconciliation only needs ids, statuses, and amounts (2026-06 GTM audit).
+// Wallet-address keys are deliberately NOT matched here: they fall through
+// to the 0x-hex masking below so correlation stays possible.
+const PII_KEY_PATTERN = new RegExp(
+  [
+    '^(first|last|middle|given|family|legal|full)?[_-]?name$',
+    'surname',
+    'phone|mobile|msisdn|whatsapp',
+    '^dob$|date[_-]?of[_-]?birth|birth[_-]?(date|day)',
+    'passport|national[_-]?id|document[_-]?(number|id)|ssn|tax[_-]?id',
+    '^(address|street([_-]?(line|address)[0-9]*)?|sub[_-]?street|address[_-]?line[0-9]*|city|town|post[_-]?code|postal[_-]?code|zip([_-]?code)?)$',
+  ].join('|'),
+  'i',
+);
+
+const EMAIL_KEY_PATTERN = /email/i;
+
+const EMAIL_VALUE_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
 const MAX_UNMASKED_STRING_LENGTH = 80;
 
 function getHeaderValue(
@@ -70,16 +92,39 @@ export function hashForLogs(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 16);
 }
 
+/**
+ * Masks an email address to `e***@domain` so persisted logs never carry a
+ * customer's full address while support can still correlate the domain.
+ */
+export function maskEmailForLogs(email: string): string {
+  const atIndex = email.indexOf('@');
+  if (atIndex <= 0 || atIndex === email.length - 1) {
+    return '***';
+  }
+  return `${email[0]}***@${email.slice(atIndex + 1)}`;
+}
+
 export function redactSensitiveData(value: unknown, keyHint?: string): unknown {
   if (value === null || value === undefined) {
     return value;
   }
 
-  if (keyHint && SENSITIVE_KEY_PATTERN.test(keyHint)) {
-    return '***';
+  if (keyHint) {
+    if (SENSITIVE_KEY_PATTERN.test(keyHint)) {
+      return '***';
+    }
+    if (EMAIL_KEY_PATTERN.test(keyHint)) {
+      return typeof value === 'string' ? maskEmailForLogs(value) : '***';
+    }
+    if (PII_KEY_PATTERN.test(keyHint) && !/wallet/i.test(keyHint)) {
+      return '***';
+    }
   }
 
   if (typeof value === 'string') {
+    if (EMAIL_VALUE_PATTERN.test(value)) {
+      return maskEmailForLogs(value);
+    }
     if (/^0x[a-fA-F0-9]{16,}$/.test(value)) {
       return maskWalletAddressForLogs(value);
     }
@@ -183,8 +228,11 @@ export interface RampEvent {
 /**
  * Persists a ramp webhook event to the audit log. Phase 1 just writes to
  * the structured logger; Phase 2 hooks this into Postgres for daily
- * reconciliation against partner settlement reports. PII is redacted
- * before logging in line with the existing `redactSensitiveData` rules.
+ * reconciliation against partner settlement reports. PII is redacted at
+ * this persistence boundary: emails are masked to `e***@domain`, customer
+ * names/phones/DOB/postal addresses/document references are dropped, while
+ * correlation ids, statuses, amounts, and masked wallet addresses are kept
+ * for reconciliation.
  */
 export async function recordOnrampEvent(event: RampEvent): Promise<void> {
   const sanitized = redactSensitiveData(event.payload) as Record<string, unknown>;

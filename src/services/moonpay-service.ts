@@ -8,7 +8,7 @@
 // Phase 1 ships only the on-ramp launch flow. Webhook ingestion mirrors
 // the Coinbase webhook layout and lives in pages/api/onramp/moonpay/webhook.ts.
 
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 
 export type MoonPayBaseCurrency =
   | 'usd'
@@ -98,27 +98,59 @@ export function createMoonPaySession(input: CreateMoonPaySessionInput): MoonPayS
 }
 
 /**
- * Verifies a MoonPay webhook signature. MoonPay signs the raw request body
- * with HMAC-SHA256 and the configured webhook key, exposing the signature
- * in the `Moonpay-Signature-V2` header.
+ * Replay-protection window for webhook deliveries. MoonPay's docs suggest
+ * validating the header timestamp against the current time; we allow five
+ * minutes of skew in either direction and reject anything older — a
+ * captured (body, signature) pair therefore cannot be replayed later.
  */
-export function verifyMoonPayWebhookSignature(rawBody: string, signature: string | null): boolean {
+export const MOONPAY_WEBHOOK_REPLAY_TOLERANCE_MS = 5 * 60 * 1000;
+
+/**
+ * Verifies a MoonPay webhook signature (`Moonpay-Signature-V2` header).
+ *
+ * Scheme per MoonPay's request-signing reference
+ * (https://dev.moonpay.com/reference/reference-webhooks-signature):
+ * the header carries `t=<unix-seconds>,s=<hex hmac>` and the signed payload
+ * is the timestamp, a `.` separator, then the exact raw request body —
+ * HMAC-SHA256 with the webhook key, hex-encoded. The previous
+ * implementation HMAC'd the raw body alone (omitting the timestamp prefix),
+ * which does not match the documented scheme and provided no replay
+ * protection; the 2026-06 GTM audit flagged both.
+ */
+export function verifyMoonPayWebhookSignature(
+  rawBody: string,
+  signature: string | null,
+  nowMs: number = Date.now(),
+): boolean {
   if (!signature) return false;
   const webhookKey = process.env.MOONPAY_WEBHOOK_KEY;
   if (!webhookKey) throw new Error('MOONPAY_WEBHOOK_KEY is not set');
-  const expected = createHmac('sha256', webhookKey).update(rawBody).digest('hex');
-  // MoonPay sends signature as `t=<ts>,s=<hmac>`; split and compare in
-  // constant time for the s component.
+
   const parts = signature.split(',').reduce<Record<string, string>>((acc, part) => {
     const [k, v] = part.split('=');
     if (k && v) acc[k.trim()] = v.trim();
     return acc;
   }, {});
-  const provided = parts.s ?? signature;
-  if (provided.length !== expected.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < provided.length; i += 1) {
-    mismatch |= provided.charCodeAt(i) ^ expected.charCodeAt(i);
+  const timestamp = parts.t;
+  const provided = parts.s;
+  if (!timestamp || !provided) return false;
+
+  // Reject stale (or far-future) deliveries before any HMAC work. MoonPay
+  // documents seconds-since-epoch; tolerate milliseconds defensively.
+  const timestampNumber = Number(timestamp);
+  if (!Number.isFinite(timestampNumber) || timestampNumber <= 0) return false;
+  const timestampMs =
+    timestampNumber > 1e12 ? timestampNumber : timestampNumber * 1000;
+  if (Math.abs(nowMs - timestampMs) > MOONPAY_WEBHOOK_REPLAY_TOLERANCE_MS) {
+    return false;
   }
-  return mismatch === 0;
+
+  const expected = createHmac('sha256', webhookKey)
+    .update(`${timestamp}.${rawBody}`)
+    .digest('hex');
+  if (provided.length !== expected.length) return false;
+  return timingSafeEqual(
+    Buffer.from(provided, 'utf8'),
+    Buffer.from(expected, 'utf8'),
+  );
 }

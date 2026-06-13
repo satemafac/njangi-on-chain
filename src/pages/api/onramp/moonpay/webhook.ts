@@ -10,7 +10,11 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { verifyMoonPayWebhookSignature } from '../../../../services/moonpay-service';
 import { recordOnrampEvent } from '../../../../lib/onramp-logging';
-import { handleRampKycEvent, type RampKycOutcome } from '../../../../lib/ramp-kyc-bridge';
+import {
+  handleRampKycEvent,
+  type RampKycEvidence,
+  type RampKycOutcome,
+} from '../../../../lib/ramp-kyc-bridge';
 import { registerWebhookEvent, unregisterWebhookEvent } from '../../../../lib/webhook-dedupe';
 import type { NetworkType } from '../../../../services/whatsapp-registry-service';
 
@@ -75,11 +79,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // storms; the failure is captured in the application logger.
   }
 
-  // Phase 11: queue an attestation + send a WhatsApp confirmation when
-  // the customer just completed KYC. MoonPay sends `customer.kyc_completed`
-  // (or `transaction.completed` after a fresh KYC). We accept any payload
-  // shape that exposes a status string and a customer reference.
-  const outcome = moonpayOutcome(payload);
+  // Phase 11: queue an attestation + send a WhatsApp confirmation. MoonPay
+  // delivers two relevant event families and we record which one we saw so
+  // the attestation policy claims only what the event evidences
+  // (truthful-attestation rule, 2026-06 GTM audit):
+  //   * dedicated KYC-status events (`identity_check_updated`,
+  //     `customer.kyc_completed`, or any payload exposing `data.kycStatus`)
+  //     → evidence:'partner_kyc_decision' — preferred, an explicit partner
+  //     KYC decision;
+  //   * transaction events (`transaction_updated` etc. reaching
+  //     'completed') → evidence:'purchase_completed' — a settled purchase
+  //     implies MoonPay's KYC program ran, nothing more. Kept because the
+  //     wallet-address binding usually only exists on transaction
+  //     payloads.
+  const eventKind = moonpayEventKind(payload);
+  const outcome = moonpayOutcome(payload, eventKind);
+  const evidence: RampKycEvidence =
+    eventKind === 'kyc' ? 'partner_kyc_decision' : 'purchase_completed';
   const issuerAddress = process.env.NEXT_PUBLIC_NJANGI_ATTESTATION_ISSUER ?? '';
   const subjectAddress = moonpaySubject(payload);
   const providerCaseId = moonpayCaseId(payload);
@@ -99,6 +115,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           {
             provider: 'moonpay',
             outcome,
+            evidence,
             providerCaseId,
             subjectAddress,
             network,
@@ -131,10 +148,36 @@ function pickPath(payload: unknown, ...keys: string[]): unknown {
   return current;
 }
 
-function moonpayOutcome(payload: unknown): RampKycOutcome | null {
-  const status = asString(pickPath(payload, 'data', 'status'))
-    ?? asString(pickPath(payload, 'data', 'kycStatus'))
-    ?? asString(pickPath(payload, 'data', 'transactionStatus'));
+type MoonpayEventKind = 'kyc' | 'transaction';
+
+/**
+ * Classifies the webhook delivery. MoonPay's dedicated KYC events carry a
+ * `type` like `identity_check_updated` / `customer.kyc_completed`; some
+ * payload shapes only expose a `data.kycStatus` field instead. Everything
+ * else is treated as a transaction (purchase) event.
+ */
+function moonpayEventKind(payload: unknown): MoonpayEventKind {
+  const type = asString(pickPath(payload, 'type'))?.toLowerCase();
+  if (type) {
+    if (type.includes('identity_check') || type.includes('kyc')) return 'kyc';
+    return 'transaction';
+  }
+  // Untyped payloads: only a kycStatus field marks a KYC decision.
+  return asString(pickPath(payload, 'data', 'kycStatus'))
+    ? 'kyc'
+    : 'transaction';
+}
+
+function moonpayOutcome(
+  payload: unknown,
+  kind: MoonpayEventKind,
+): RampKycOutcome | null {
+  const status =
+    kind === 'kyc'
+      ? asString(pickPath(payload, 'data', 'kycStatus'))
+        ?? asString(pickPath(payload, 'data', 'status'))
+      : asString(pickPath(payload, 'data', 'status'))
+        ?? asString(pickPath(payload, 'data', 'transactionStatus'));
   if (!status) return null;
   const lower = status.toLowerCase();
   if (lower === 'completed' || lower === 'approved' || lower === 'success') return 'approved';

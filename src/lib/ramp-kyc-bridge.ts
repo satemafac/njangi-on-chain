@@ -11,9 +11,32 @@ import { appLogger } from '../utils/logger';
 
 export type RampKycOutcome = 'approved' | 'declined' | 'pending';
 
+/**
+ * What the partner's webhook event actually evidences. The attestation
+ * policy may claim ONLY this — never checks Njangi did not perform.
+ *
+ *  - 'partner_kyc_decision': the provider delivered a DEDICATED KYC-status
+ *    event (e.g. Transak `KYC_APPROVED`, MoonPay `identity_check_updated`).
+ *    Strongest signal we receive: the partner's own KYC program reached an
+ *    explicit decision on this case.
+ *  - 'purchase_completed': the provider completed a fiat purchase. A
+ *    regulated ramp will not settle without having run its own KYC/AML
+ *    program on the buyer, so completion implies partner KYC — but it is
+ *    NOT a documented sanctions-screening or jurisdiction-allow-listing
+ *    decision, and Njangi holds no artifact of one. The policy criteria
+ *    must therefore never assert those checks.
+ */
+export type RampKycEvidence = 'partner_kyc_decision' | 'purchase_completed';
+
 export interface RampKycEvent {
   provider: 'coinbase' | 'moonpay' | 'transak';
   outcome: RampKycOutcome;
+  /**
+   * What the webhook event actually attests. Each handler sets this from
+   * the concrete event type it received, and the value is embedded in the
+   * (hashed, on-chain-anchored) policy criteria — so it must be truthful.
+   */
+  evidence: RampKycEvidence;
   /** Provider's case identifier (orderId, sessionId, etc.). Required. */
   providerCaseId: string;
   /** Sui address of the member that just passed KYC. */
@@ -24,8 +47,6 @@ export interface RampKycEvent {
   phoneOverride?: string;
   /** Amount string for the WhatsApp confirmation copy. */
   amount?: string;
-  /** Free-form criteria summary stored in the off-chain audit log only. */
-  criteria?: string;
 }
 
 const DEFAULT_TTL_MS = 90 * 24 * 60 * 60 * 1000;
@@ -39,6 +60,52 @@ function policyName(provider: RampKycEvent['provider']): string {
     case 'transak':
       return 'Transak KYC';
   }
+}
+
+/**
+ * Builds the policy criteria string that gets SHA-256-anchored on chain.
+ *
+ * Truthful-attestation rule (2026-06 GTM audit, HIGH finding): the
+ * criteria claims ONLY what the partner event evidences. Njangi performs
+ * no sanctions screening and no jurisdiction allow-listing itself, so the
+ * policy must never assert them — it asserts reliance on the named
+ * partner's own KYC/AML program, with the evidence type recorded.
+ *
+ * Fields:
+ *  - partner_kyc:<provider>      — the regulated partner whose program we
+ *                                  rely on.
+ *  - evidence:<RampKycEvidence>  — the concrete webhook signal received
+ *                                  (dedicated KYC decision vs completed
+ *                                  purchase).
+ *  - evidence_ref:provider_case_id — the partner case artifact backing the
+ *                                  claim; the raw id is retained in the
+ *                                  attestation queue entry and its HMAC is
+ *                                  anchored on chain as external_ref_hash,
+ *                                  so the claim stays auditable without
+ *                                  leaking the id.
+ *  - binding:ramp_destination_address — KNOWN LIMITATION: the attestation
+ *                                  subject is the destination wallet
+ *                                  address taken from the partner's
+ *                                  webhook payload. Nothing proves the
+ *                                  KYC'd person controls that address (a
+ *                                  buyer who passes partner KYC can route
+ *                                  a purchase to an arbitrary address).
+ *                                  Downstream consumers must treat this
+ *                                  binding as weak. Stronger binding — a
+ *                                  signed challenge from the subject
+ *                                  address captured at ramp-session
+ *                                  creation — is planned for Phase 2.
+ */
+function buildPolicyCriteria(
+  provider: RampKycEvent['provider'],
+  evidence: RampKycEvidence,
+): string {
+  return [
+    `partner_kyc:${provider}`,
+    `evidence:${evidence}`,
+    'evidence_ref:provider_case_id',
+    'binding:ramp_destination_address',
+  ].join(', ');
 }
 
 function approvalMessage(
@@ -89,14 +156,16 @@ export async function handleRampKycEvent(
     return;
   }
 
+  // Policy v2.0.0: criteria rewritten to the truthful form — it records
+  // partner-KYC reliance plus the concrete evidence type, instead of the
+  // v1 blanket "sanctions screened, jurisdiction allow-listed" claim that
+  // asserted checks Njangi never performed (2026-06 GTM audit, HIGH).
   const policy: PolicyDocument = {
     name: policyName(event.provider),
-    version: '1.0.0',
+    version: '2.0.0',
     issuer: issuerAddress,
     provider: event.provider,
-    criteria:
-      event.criteria ??
-      'Identity verified, sanctions screened, jurisdiction allow-listed by ramp partner.',
+    criteria: buildPolicyCriteria(event.provider, event.evidence),
   };
 
   let enqueueError: unknown = null;

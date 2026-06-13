@@ -10,28 +10,21 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
 import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink, ArrowRightLeft, ChevronDown, ChevronUp } from 'lucide-react';
-import MoonPayWrapper from '@/components/MoonPayWrapper';
-import TransakLauncher from '@/components/TransakLauncher';
-import CoinbaseOnrampLauncher from '@/components/CoinbaseOnrampLauncher';
+import RampPicker from '@/components/RampPicker';
 import NjangiRoundAlerts from '@/components/NjangiRoundAlerts';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 import {
   mapCurrencyCodeToIntent,
-  mapIntentToMoonPayCurrency,
   normalizeOnrampProviderFlag,
-  shouldUseCoinbaseProvider,
 } from '@/lib/onramp-provider';
+import { RAMP_PROVIDER_LABELS, type RampProviderId } from '@/lib/ramp-geo';
 import { resolveCircleLifecycleState } from '@/lib/circle-chain';
 import { discoverMemberCircleIds } from '@/lib/membership-discovery';
 import { readObjects } from '@/lib/sui-read';
 import { cetusService } from '@/lib/cetus-service';
 import { getCircleConfigFieldsByObjectId, getCircleConfigObjectId } from '@/lib/circle-config';
 import { clearWalletBalanceCache, refreshWalletBalances } from '@/lib/wallet';
-import type { CoinbaseSessionClientError } from '@/hooks/useCoinbaseSession';
-import type {
-  CoinbaseApiErrorPayload,
-  CoinbaseAssetIntent,
-} from '@/types/coinbase-onramp';
+import type { CoinbaseAssetIntent } from '@/types/coinbase-onramp';
 import {
   getPackageId,
   getPackageLookupIdsForCurrentNetwork,
@@ -1606,18 +1599,6 @@ function stripOnrampQueryParams(
 const onrampProviderFlag = normalizeOnrampProviderFlag(
   process.env.NEXT_PUBLIC_ONRAMP_PROVIDER,
 );
-const isCoinbaseOnrampEnabled =
-  (process.env.NEXT_PUBLIC_COINBASE_ONRAMP_ENABLED ?? 'false').toLowerCase() ===
-  'true';
-const isMoonPayEnabled =
-  (process.env.NEXT_PUBLIC_MOONPAY_ENABLED ?? 'false').toLowerCase() ===
-  'true';
-const isTransakEnabled =
-  (process.env.NEXT_PUBLIC_TRANSAK_ENABLED ?? 'false').toLowerCase() ===
-  'true';
-const shouldAutoOpenMoonPayFallback =
-  (process.env.NEXT_PUBLIC_ONRAMP_AUTO_MOONPAY_FALLBACK ?? 'false').toLowerCase() ===
-  'true';
 
 type SwapDirection = 'SUI_TO_USDC' | 'USDC_TO_SUI';
 
@@ -1778,14 +1759,10 @@ export default function Dashboard() {
   const lastValidationToastRef = useRef<number>(0);
   const TOAST_DEBOUNCE_MS = 10000; // Only show validation toast once every 10 seconds
 
-  // Add MoonPay state for the React widget
-  const [isMoonPayVisible, setIsMoonPayVisible] = useState(false);
-  const [moonPayCurrency, setMoonPayCurrency] = useState('usdc');
+  // Geo-aware onramp dialog state (RampPicker handles provider selection)
   const [isCoinbaseLauncherOpen, setIsCoinbaseLauncherOpen] = useState(false);
   const [coinbaseAssetIntent, setCoinbaseAssetIntent] =
     useState<CoinbaseAssetIntent>('USDC_ON_SUI');
-  const [coinbaseFallbackCurrency, setCoinbaseFallbackCurrency] =
-    useState<'sui' | 'usdc'>('usdc');
   const [onrampResultStatus, setOnrampResultStatus] =
     useState<DashboardOnrampStatus>('idle');
   const [onrampResultMessage, setOnrampResultMessage] = useState<string | null>(
@@ -1910,143 +1887,38 @@ export default function Dashboard() {
     }
   }, [convertedBalances]);
 
-  // MoonPay React components handle SDK loading automatically
-
-  // Open MoonPay widget using React components
-  const openMoonPayWidget = (currencyCode: 'sui' | 'usdc' = 'usdc') => {
-    if (!isMoonPayEnabled) {
-      toast('MoonPay integration is coming soon.');
-      return;
-    }
-
-    console.log("Buy button clicked", { currencyCode });
-    setMoonPayCurrency(currencyCode);
-    setIsMoonPayVisible(true);
-    toast.success('Opening MoonPay widget...');
-  };
-
-  // Close MoonPay widget
-  const closeMoonPayWidget = () => {
-    setIsMoonPayVisible(false);
-  };
-
   const closeCoinbaseLauncher = () => {
     setIsCoinbaseLauncherOpen(false);
   };
 
-  const getCoinbaseErrorDetails = (
-    rawError: CoinbaseSessionClientError | CoinbaseApiErrorPayload | Error,
-  ): {
-    code: string;
-    message: string;
-    fallbackProvider: 'moonpay' | null;
-  } => {
-    const code =
-      'code' in rawError && typeof rawError.code === 'string'
-        ? rawError.code
-        : 'error' in rawError && typeof rawError.error === 'string'
-          ? rawError.error
-          : 'COINBASE_UNAVAILABLE';
-
-    const message =
-      'message' in rawError && typeof rawError.message === 'string'
-        ? rawError.message
-        : 'Coinbase checkout is temporarily unavailable.';
-
-    const fallbackProvider =
-      'fallbackProvider' in rawError &&
-      (rawError.fallbackProvider === 'moonpay' ||
-        rawError.fallbackProvider === null)
-        ? rawError.fallbackProvider
-        : 'moonpay';
-
-    return {
-      code,
-      message,
-      fallbackProvider,
-    };
-  };
-
+  // Opens the geo-aware onramp dialog. The RampPicker inside selects and
+  // orders providers for the user's region (2026-06 GTM audit: no more
+  // hardcoded Coinbase + country="US").
   const openBuyFlow = (currencyCode: string = 'usdc') => {
     const assetIntent = mapCurrencyCodeToIntent(currencyCode);
-    const fallbackCurrency = mapIntentToMoonPayCurrency(assetIntent);
-    const useCoinbase = shouldUseCoinbaseProvider(
-      onrampProviderFlag,
-      isCoinbaseOnrampEnabled,
-    );
-
-    if (!useCoinbase) {
-      if (isMoonPayEnabled) {
-        openMoonPayWidget(fallbackCurrency);
-      } else {
-        toast.error(
-          'Coinbase onramp is currently unavailable. MoonPay integration is coming soon.',
-        );
-      }
-      return;
-    }
 
     if (!userAddress) {
       toast.error('Wallet address is unavailable. Please sign in and retry.');
       return;
     }
 
-    // Ensure stale fallback overlays are closed before launching Coinbase.
-    closeMoonPayWidget();
-    console.log('Buy button clicked', {
-      currencyCode,
-      provider: 'coinbase',
-      assetIntent,
-    });
+    console.log('Buy button clicked', { currencyCode, assetIntent });
     setCoinbaseAssetIntent(assetIntent);
-    setCoinbaseFallbackCurrency(fallbackCurrency);
     setIsCoinbaseLauncherOpen(true);
   };
 
-  const handleCoinbaseLaunchSuccess = () => {
-    closeMoonPayWidget();
-    toast.success('Opening Coinbase checkout...');
+  const handleRampLaunched = (provider: RampProviderId) => {
+    toast.success(`Opening ${RAMP_PROVIDER_LABELS[provider]} checkout...`);
     closeCoinbaseLauncher();
   };
 
-  const handleCoinbaseLaunchError = (
-    rawError: CoinbaseSessionClientError | CoinbaseApiErrorPayload | Error,
-  ) => {
-    const details = getCoinbaseErrorDetails(rawError);
-    console.warn('[onramp][coinbase][dashboard] launch failed', details);
-
-    if (details.fallbackProvider === 'moonpay') {
-      if (shouldAutoOpenMoonPayFallback && isMoonPayEnabled) {
-        toast.error(`${details.message} Switching to MoonPay.`);
-        closeCoinbaseLauncher();
-        openMoonPayWidget(coinbaseFallbackCurrency);
-        return;
-      }
-
-      if (isMoonPayEnabled) {
-        toast.error(
-          `${details.message} You can switch using "Use MoonPay Instead".`,
-        );
-      } else {
-        toast.error(`${details.message} MoonPay fallback is coming soon.`);
-      }
-      return;
-    }
-
-    toast.error(details.message);
+  const handleRampProviderError = (provider: RampProviderId, error: Error) => {
+    // The picker promotes the next provider itself; this is observability.
+    console.warn('[onramp][dashboard] provider unavailable', provider, error.message);
   };
 
   const handleCoinbaseCancel = () => {
     closeCoinbaseLauncher();
-  };
-
-  const handleMoonPayFallbackClick = () => {
-    if (!isMoonPayEnabled) {
-      toast('MoonPay integration is coming soon.');
-      return;
-    }
-    closeCoinbaseLauncher();
-    openMoonPayWidget(coinbaseFallbackCurrency);
   };
 
   useEffect(() => {
@@ -8761,14 +8633,14 @@ export default function Dashboard() {
                     Buy {onrampAssetLabel}
                   </Dialog.Title>
                   <Dialog.Description className="mt-3 max-w-lg text-sm leading-6 text-[#5f6674]">
-                    Secure checkout through Coinbase with a clean handoff back
-                    to your wallet. When the flow completes, the dashboard can
-                    refresh balances and onramp status.
+                    Secure checkout through a regulated partner with a clean
+                    handoff back to your wallet. When the flow completes, the
+                    dashboard can refresh balances and onramp status.
                   </Dialog.Description>
 
                   <div className="mt-5 flex flex-wrap gap-2 sm:gap-3">
                     <span className="inline-flex items-center gap-2 rounded-full border border-[#dde5ef] bg-white px-3 py-1.5 text-xs font-medium text-[#51627b] sm:py-2 sm:text-sm">
-                      USD purchase flow
+                      Local currency supported
                     </span>
                     <span className="inline-flex items-center gap-2 rounded-full border border-[#dde5ef] bg-white px-3 py-1.5 text-xs font-medium text-[#51627b] sm:py-2 sm:text-sm">
                       Opens in secure browser tab
@@ -8790,98 +8662,28 @@ export default function Dashboard() {
             <div className="min-h-0 overflow-y-auto overscroll-contain space-y-3 bg-[#f6f3ee]/65 px-5 py-5 sm:space-y-4 sm:px-7 sm:py-6">
               <div className="rounded-[22px] border border-[#e7dfd4] bg-white p-4 shadow-[0_24px_70px_-58px_rgba(15,23,42,0.3)] sm:rounded-[24px] sm:p-5">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[#717784]">
-                  Preferred Provider
+                  Choose a provider
                 </p>
-                <h3 className="mt-3 text-lg font-semibold tracking-[-0.03em] text-[#171923] sm:text-xl">
-                  Coinbase checkout
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-[#5f6674]">
-                  Start with Coinbase for the fastest path back into this
-                  wallet. If the provider is unavailable, you can move to the
-                  fallback path below.
-                </p>
-
-                <CoinbaseOnrampLauncher
-                  className="mt-4"
+                <RampPicker
+                  className="mt-3"
                   walletAddress={userAddress || ''}
                   preferredAssetIntent={coinbaseAssetIntent}
-                  amount={50}
-                  fiatCurrency="USD"
-                  country="US"
-                  providerFlag={onrampProviderFlag}
-                  disabled={!userAddress}
-                  buttonLabel="Continue with Coinbase"
-                  uiVariant="refined"
-                  onSuccess={handleCoinbaseLaunchSuccess}
-                  onError={handleCoinbaseLaunchError}
-                  onCancel={handleCoinbaseCancel}
+                  amountUsd={50}
+                  coinbase={{
+                    providerFlag: onrampProviderFlag,
+                    disabled: !userAddress,
+                    buttonLabel: 'Continue with Coinbase',
+                    uiVariant: 'refined',
+                    onCancel: handleCoinbaseCancel,
+                  }}
+                  onLaunched={handleRampLaunched}
+                  onProviderError={handleRampProviderError}
                 />
-              </div>
-
-              <div className="rounded-[22px] border border-[#e7dfd4] bg-[#fbfaf7] p-4 sm:rounded-[24px] sm:p-5">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[#717784]">
-                  Fallback
-                </p>
-                <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="max-w-md">
-                    <h3 className="text-base font-semibold text-[#171923]">
-                      {isMoonPayEnabled ? 'MoonPay alternative' : 'MoonPay coming soon'}
-                    </h3>
-                    <p className="mt-1 text-sm leading-6 text-[#5f6674]">
-                      {isMoonPayEnabled
-                        ? 'Use a secondary provider if Coinbase is unavailable for your session.'
-                        : 'A secondary provider will be added here for cases where Coinbase is not the right fit.'}
-                    </p>
-                  </div>
-
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                    {isMoonPayEnabled ? (
-                      <button
-                        type="button"
-                        onClick={handleMoonPayFallbackClick}
-                        className={secondaryActionClass}
-                      >
-                        Use MoonPay instead
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={handleMoonPayFallbackClick}
-                        className="inline-flex items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-800 transition hover:bg-amber-100"
-                      >
-                        MoonPay coming soon
-                      </button>
-                    )}
-                    {isTransakEnabled ? (
-                      <TransakLauncher
-                        className="inline-flex"
-                        walletAddress={userAddress || ''}
-                        preferredAssetIntent={coinbaseAssetIntent === 'SUI' ? 'SUI' : 'USDC_ON_SUI'}
-                        fiatAmount={50}
-                        fiatCurrency="USD"
-                        buttonLabel="Use Transak"
-                      />
-                    ) : null}
-                  </div>
-                </div>
               </div>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
-
-      {/* MoonPay Buy Widget */}
-      {isMoonPayEnabled && (
-        <MoonPayWrapper
-          variant="overlay"
-          baseCurrencyCode="usd"
-          baseCurrencyAmount="50"
-          defaultCurrencyCode={moonPayCurrency}
-          walletAddress={userAddress || undefined}
-          visible={isMoonPayVisible}
-          onClose={async () => closeMoonPayWidget()}
-        />
-      )}
     </div>
   );
-} 
+}
