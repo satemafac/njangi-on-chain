@@ -45,7 +45,9 @@ tasks
 # --- tracked, but irrelevant to the Next.js build ---
 move
 whatsapp-bot-backend
-docs
+# docs/ is excluded EXCEPT legal-drafts, which /legal/[doc] SSG-reads at build time
+docs/*
+!docs/legal-drafts
 web
 .github
 zklogin-docker
