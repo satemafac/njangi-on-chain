@@ -20,6 +20,10 @@
 //   * CRON_SECRET                  — bearer secret Vercel attaches to cron
 //                                    invocations (/api/cron/*). Must match
 //                                    the env var set on the Vercel project.
+//   * LEGAL_ACCEPT_IP_SALT         — HMAC salt for hashing client IPs on
+//                                    legal-acceptance / data-deletion rows
+//                                    (raw IPs are never stored; see
+//                                    docs/legal-drafts/ACCEPTANCE-GATE-SPEC.md).
 //
 // Usage:
 //   node scripts/generate-secrets.mjs           # patches .env.local
@@ -43,6 +47,7 @@ const SECRET_KEYS = [
   'COMPLIANCE_ISSUANCE_SECRET',
   'ZKLOGIN_SESSION_ENC_KEY',
   'CRON_SECRET',
+  'LEGAL_ACCEPT_IP_SALT',
 ];
 
 function defaultEnvPath() {

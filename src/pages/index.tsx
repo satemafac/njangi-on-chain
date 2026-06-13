@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { LoginButton } from '../components/LoginButton';
+import { LegalFooter } from '../components/LegalFooter';
 import { getNetworkConfig, setCurrentNetwork } from '../services/network-config';
 
 declare global {
@@ -1377,6 +1378,7 @@ export default function Home() {
 
               <div className="mt-8 flex flex-col gap-2 border-t border-[#ddd5c9] pt-4 text-sm text-[#6b7280] sm:flex-row sm:items-center sm:justify-between">
                 <p>&copy; {new Date().getFullYear()} Njangi On-Chain. All rights reserved.</p>
+                <LegalFooter />
                 <p>Built on Sui with zkLogin for low-friction community access.</p>
               </div>
             </div>

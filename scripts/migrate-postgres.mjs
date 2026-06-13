@@ -262,6 +262,58 @@ const STATEMENTS = [
           CREATE INDEX IF NOT EXISTS subscriptions_status_idx
             ON subscriptions (status);`,
   },
+  {
+    // Data-deletion requests (June 2026 legal surface). Written by
+    // src/pages/api/legal/data-deletion-request.ts; processed manually by
+    // ops per the Privacy Policy Section 9. ip_hash is HMAC-SHA256 of the
+    // client IP keyed with LEGAL_ACCEPT_IP_SALT — never the raw IP. The
+    // partial unique index keeps duplicate POSTs to one pending row per
+    // email while preserving history of completed/rejected requests.
+    name: 'deletion_requests',
+    sql: `CREATE TABLE IF NOT EXISTS deletion_requests (
+            id BIGSERIAL PRIMARY KEY,
+            email TEXT NOT NULL,
+            user_address TEXT,
+            details TEXT,
+            locale TEXT NOT NULL DEFAULT 'en' CHECK (locale IN ('en','fr')),
+            status TEXT NOT NULL DEFAULT 'pending'
+              CHECK (status IN ('pending','processing','completed','rejected')),
+            ip_hash TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS deletion_requests_pending_email_idx
+            ON deletion_requests (email) WHERE status = 'pending';
+          CREATE INDEX IF NOT EXISTS deletion_requests_status_idx
+            ON deletion_requests (status, created_at);`,
+  },
+  {
+    // Legal acceptance gate (June 2026 legal surface; spec:
+    // docs/legal-drafts/ACCEPTANCE-GATE-SPEC.md "Storage"). Append-only
+    // consent records written by src/pages/api/legal/accept.ts via
+    // src/lib/legal-acceptance-server.ts. Keyed on (sub, aud) — the same
+    // durable identity as the `salts` table; user_address is audit-only.
+    // Versions are server-resolved from CURRENT_LEGAL_VERSIONS; a version
+    // bump inserts a new row (never UPDATE/DELETE — rows are retained as
+    // consent/defense-of-claims records even on PII-deletion requests).
+    // ip_hash is HMAC-SHA256(ip, LEGAL_ACCEPT_IP_SALT), never the raw IP.
+    name: 'legal_acceptances',
+    sql: `CREATE TABLE IF NOT EXISTS legal_acceptances (
+            id            BIGSERIAL PRIMARY KEY,
+            sub           TEXT NOT NULL,
+            aud           TEXT NOT NULL,
+            user_address  TEXT NOT NULL,
+            doc           TEXT NOT NULL CHECK (doc IN ('terms','privacy','risk')),
+            version       TEXT NOT NULL,
+            locale        TEXT NOT NULL DEFAULT 'en' CHECK (locale IN ('en','fr')),
+            accepted_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            ip_hash       TEXT
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS legal_acceptances_unique
+            ON legal_acceptances (sub, aud, doc, version);
+          CREATE INDEX IF NOT EXISTS legal_acceptances_address_idx
+            ON legal_acceptances (user_address);`,
+  },
 ];
 
 async function main() {

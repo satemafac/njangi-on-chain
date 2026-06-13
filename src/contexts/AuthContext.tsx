@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { AccountData, OAuthProvider } from '@/services/zkLoginService';
 import { ZkLoginClient } from '@/services/zkLoginClient';
+import { LegalAcceptanceGate } from '@/components/LegalAcceptanceModal';
 import { useIdleTimer } from '@/hooks/useIdleTimer';
 import { getCurrentNetwork } from '@/services/network-config';
 import { refreshAdminHeartbeatsAfterAuth } from '@/lib/admin-heartbeat-refresh';
@@ -590,6 +591,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       sendTokens
     }}>
       {children}
+      {/* Legal acceptance gate (docs/legal-drafts/ACCEPTANCE-GATE-SPEC.md):
+          runs after fresh logins AND localStorage session restores — both
+          paths flow through this provider, unlike /auth/callback. The gate
+          itself exempts recovery/claim routes; see LegalAcceptanceModal. */}
+      <LegalAcceptanceGate active={isAuthenticated && !isLoading} />
     </AuthContext.Provider>
   );
 }
