@@ -10,17 +10,23 @@
 // stays pure (no I/O) so parsing and message copy are unit-testable.
 //
 // Differences from the legacy bot, on purpose:
-//   * Plain-text bodies instead of Meta template sends. The legacy bot's
-//     template names live in Meta Business Manager and cannot be verified
-//     from the repo; every template send already carried a text fallback,
-//     and the app's flagship "your turn" nudge (your-turn-notification.ts)
-//     ships as text through the same dispatcher. The bodies below are the
-//     legacy fallback texts.
+//   * Each stream exposes BOTH shapes: a plain-text body (the legacy text
+//     fallback, sent while WHATSAPP_TEMPLATES_ENABLED=false) and, where the
+//     cron context can fill every approved placeholder, a Meta template
+//     payload under the legacy template name (sent when the flag is on —
+//     Meta rejects business-initiated freeform text outside the 24h
+//     service window; see the approval workflow block in
+//     src/lib/whatsapp-notifier.ts). Streams whose legacy templates need
+//     aggregates the serverless cron does not compute (paid counts, member
+//     totals, schedules) return null from buildTemplate and keep the text
+//     fallback until a leaner template is approved.
 //   * Phone resolution uses the current on-chain registry schema
 //     (walrus_blob_id + Walrus decrypt). The bot read a plaintext
 //     `admin_phone_number` field that no longer exists on chain.
 //   * Dedupe/cursor state lives in Postgres (whatsapp_notifications +
 //     cycle_finalized_cursor tables), not process memory.
+
+import type { WhatsAppTemplatePayload } from '../whatsapp-notifier';
 
 // ---------------------------------------------------------------------------
 // Amount formatting (ported from the bot's formatTokenAmount helpers)
@@ -102,6 +108,14 @@ export interface ParsedCircleEvent {
   includeDisabledLink?: boolean;
   /** Builds the final WhatsApp text body once enrichment is resolved. */
   buildBody(ctx: CircleEventMessageContext): string;
+  /**
+   * Builds the Meta-approved template payload for this event (legacy
+   * template names — circle_link, member_joins, payout_processed, …).
+   * Returns null when the cron context cannot faithfully fill the
+   * approved placeholder layout; the dispatcher then falls back to
+   * `buildBody` text even when WHATSAPP_TEMPLATES_ENABLED=true.
+   */
+  buildTemplate?(ctx: CircleEventMessageContext): WhatsAppTemplatePayload | null;
 }
 
 export interface CircleEventStream {
@@ -140,6 +154,59 @@ function memberDisplay(ctx: CircleEventMessageContext, memberAddress: string): s
   return ctx.memberName ? `${ctx.memberName} (${short})` : short;
 }
 
+// ---------------------------------------------------------------------------
+// Template payload helpers (legacy Meta template shapes)
+//
+// Circle-event notifications go to the circle's linked admin phone, for
+// which no locale preference exists, so templates send the 'en' variant —
+// exactly what the legacy bot's approved templates used. The "your turn"
+// member nudge (your-turn-notification.ts) is the locale-aware one.
+// ---------------------------------------------------------------------------
+
+function templateDate(): string {
+  // Mirrors the legacy bot's payout/deposit date formatting.
+  return new Date().toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+function textParams(values: string[]): Array<{ type: 'text'; text: string }> {
+  return values.map((text) => ({ type: 'text' as const, text }));
+}
+
+/**
+ * Legacy template component layout: one body component with positional
+ * text parameters, plus (optionally) a dynamic-URL button whose suffix
+ * deep-links into the app (the approved button URL is
+ * `https://<app>/circle/{{1}}`).
+ */
+function legacyTemplate(
+  name: string,
+  bodyParams: string[],
+  urlButtonParam?: string,
+): WhatsAppTemplatePayload {
+  return {
+    name,
+    language: 'en',
+    components: [
+      { type: 'body', parameters: textParams(bodyParams) },
+      ...(urlButtonParam
+        ? [
+            {
+              type: 'button' as const,
+              sub_type: 'url' as const,
+              index: '0',
+              parameters: textParams([urlButtonParam]),
+            },
+          ]
+        : []),
+    ],
+  };
+}
+
 export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
   {
     name: 'circle_linked',
@@ -156,6 +223,7 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
           `${ctx.circleName} is now linked to this WhatsApp number. ` +
           `You will receive contribution, payout and membership updates here.\n` +
           `Open circle: ${circleLink(ctx, circleId)}`,
+        buildTemplate: (ctx) => legacyTemplate('circle_link', [ctx.circleName], circleId),
       };
     },
   },

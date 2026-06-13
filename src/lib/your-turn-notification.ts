@@ -10,7 +10,10 @@
 // dedupe all stay inside `sendMemberNotification`.
 
 import { sendMemberNotification } from './whatsapp-notifier';
-import type { SendMemberNotificationResult } from './whatsapp-notifier';
+import type {
+  SendMemberNotificationResult,
+  WhatsAppTemplatePayload,
+} from './whatsapp-notifier';
 import type { NetworkType } from '../services/whatsapp-registry-service';
 
 export type SupportedLocale = 'en' | 'fr' | 'pcm' | 'sw' | 'am' | 'ar' | 'fa';
@@ -66,6 +69,67 @@ export function buildYourTurnMessage(
   return fn({ circleShort: circleId.slice(0, 8), cycleNo, amount });
 }
 
+/**
+ * Meta template language per app locale. Only languages with an APPROVED
+ * variant of `payout_processed` in Meta Business Manager may appear here —
+ * Meta does not fall back across languages (error 132001 for a missing
+ * variant). 'en' + 'fr' cover the Cameroon/CEMAC launch; the remaining app
+ * locales send the 'en' variant until their translations are approved.
+ */
+const META_TEMPLATE_LANGUAGE_BY_LOCALE: Partial<Record<SupportedLocale, string>> = {
+  en: 'en',
+  fr: 'fr',
+};
+
+/**
+ * Business-initiated template payload for the "your turn" nudge, used when
+ * WHATSAPP_TEMPLATES_ENABLED=true (Meta rejects the freeform fallback
+ * outside the 24h service window — see the approval workflow block in
+ * whatsapp-notifier.ts). Reuses the legacy bot's approved
+ * `payout_processed` template; its body placeholders are
+ * {{1}} circle, {{2}} cycle, {{3}} recipient, {{4}} amount, {{5}} date,
+ * plus a dynamic-URL button whose suffix is the circle id.
+ */
+export function buildYourTurnTemplate(
+  locale: SupportedLocale,
+  circleId: string,
+  cycleNo: number,
+  amount: string,
+  recipient: string,
+): WhatsAppTemplatePayload {
+  const language = META_TEMPLATE_LANGUAGE_BY_LOCALE[locale] ?? 'en';
+  const shortRecipient =
+    recipient.length > 10 ? `${recipient.slice(0, 6)}...${recipient.slice(-4)}` : recipient;
+  const payoutDate = new Date().toLocaleDateString(language === 'fr' ? 'fr-FR' : 'en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+  return {
+    name: 'payout_processed',
+    language,
+    components: [
+      {
+        type: 'body',
+        parameters: [
+          { type: 'text', text: `${circleId.slice(0, 8)}…` },
+          { type: 'text', text: String(cycleNo) },
+          { type: 'text', text: shortRecipient },
+          { type: 'text', text: amount },
+          { type: 'text', text: payoutDate },
+        ],
+      },
+      {
+        type: 'button',
+        sub_type: 'url',
+        index: '0',
+        parameters: [{ type: 'text', text: circleId }],
+      },
+    ],
+  };
+}
+
 export interface YourTurnNotificationInput {
   circleId: string;
   cycleNo: number;
@@ -113,6 +177,16 @@ export async function sendYourTurnNotification(
       input.circleId,
       input.cycleNo,
       input.amount,
+    ),
+    // Sent INSTEAD of the body when WHATSAPP_TEMPLATES_ENABLED=true —
+    // business-initiated freeform texts are rejected by Meta outside the
+    // 24h service window, so production nudges must be template sends.
+    template: buildYourTurnTemplate(
+      input.locale ?? 'en',
+      input.circleId,
+      input.cycleNo,
+      input.amount,
+      input.recipient,
     ),
     kind: 'cycle_finalized',
     network: input.network,

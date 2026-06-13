@@ -31,11 +31,92 @@ export type NotificationKind =
   | 'circle_event'
   | 'custom';
 
+// ---------------------------------------------------------------------------
+// Meta-approved message templates (June 2026 GTM audit, HIGH severity)
+//
+// Every notification this dispatcher sends is BUSINESS-INITIATED: the user
+// did not message us first, so there is no open 24-hour customer-service
+// window. Meta's policy rejects freeform `type: 'text'` sends outside that
+// window with error 131047 — meaning plain-text "your turn" nudges and
+// circle-event notifications silently never deliver in production. The fix
+// is template sends (`type: 'template'`), which are allowed to open a
+// conversation because Meta pre-approves their copy.
+//
+// Approval workflow (Meta Business Manager → WhatsApp Manager → Message
+// templates):
+//   1. Create each template under the business's WhatsApp account
+//      (WHATSAPP_BUSINESS_ACCOUNT_ID), category "Utility". The legacy bot's
+//      template names are reused so already-approved templates keep working:
+//      payout_processed, circle_link, circle_unlink, member_joins,
+//      member_removed, deposit_returned, order_changed (see
+//      src/lib/whatsapp-bot/circle-events.ts and
+//      whatsapp-bot-backend/DEPRECATED.md for the historical inventory).
+//   2. Add a language variant for EVERY language code the app will send
+//      with. Meta does not fall back across languages — sending
+//      language 'fr' when only 'en' is approved fails with error 132001.
+//      For the Cameroon/CEMAC launch approve at least 'en' and 'fr'.
+//   3. Wait for each variant to reach APPROVED status (usually < 24h).
+//   4. Flip WHATSAPP_TEMPLATES_ENABLED=true. Until then the dispatcher
+//      keeps sending the freeform fallback bodies (deliverable inside an
+//      open service window — fine for replies and testing, rejected for
+//      cold business-initiated sends).
+//
+// Template parameter LAYOUTS are part of the approval: the arrays built by
+// buildYourTurnTemplate / each stream's buildTemplate must match the
+// approved body placeholder count ({{1}}, {{2}}, …) exactly or Meta
+// rejects the send with error 132000.
+// ---------------------------------------------------------------------------
+
+export interface WhatsAppTemplateParameter {
+  type: 'text';
+  text: string;
+}
+
+export interface WhatsAppTemplateComponent {
+  type: 'body' | 'header' | 'button';
+  /** Button components only (e.g. dynamic URL suffixes). */
+  sub_type?: 'url' | 'quick_reply';
+  /** Button components only — Graph API expects a stringified index. */
+  index?: string;
+  parameters: WhatsAppTemplateParameter[];
+}
+
+/** A Meta-approved template send, mirroring the Graph API payload shape. */
+export interface WhatsAppTemplatePayload {
+  /** Template name as approved in Meta Business Manager. */
+  name: string;
+  /** Approved language code for this send, e.g. 'en' or 'fr'. */
+  language: string;
+  components?: WhatsAppTemplateComponent[];
+}
+
+/** Discriminated union the Graph API client accepts. */
+export type WhatsAppOutboundMessage =
+  | { type: 'text'; body: string }
+  | ({ type: 'template' } & WhatsAppTemplatePayload);
+
+/**
+ * Templates stay OFF until the operator confirms approval in Meta
+ * Business Manager (see the workflow block above). Default false so a
+ * fresh deploy never sends references to unapproved template names.
+ */
+export function areWhatsAppTemplatesEnabled(): boolean {
+  return (process.env.WHATSAPP_TEMPLATES_ENABLED || 'false').toLowerCase() === 'true';
+}
+
 export interface SendMemberNotificationInput {
   /** Sui address of the member; used for lookup and audit log keys. */
   memberAddress: string;
   /** Pre-localized WhatsApp message body. Caller is responsible for i18n. */
   body: string;
+  /**
+   * Optional Meta-approved template payload. Preferred over `body` when
+   * WHATSAPP_TEMPLATES_ENABLED=true (business-initiated sends outside the
+   * 24h service window are rejected by Meta unless they use an approved
+   * template). When the flag is off — the default until templates are
+   * approved in Meta Business Manager — `body` is sent as freeform text.
+   */
+  template?: WhatsAppTemplatePayload;
   /** Kind tag drives audit log + dedupe scope. */
   kind: NotificationKind;
   /** Network the lookup is scoped to. */
@@ -258,12 +339,33 @@ async function resolveMemberPhone(
   return null;
 }
 
-async function sendWhatsAppMessage(phone: string, body: string): Promise<void> {
+async function sendWhatsAppMessage(
+  phone: string,
+  message: WhatsAppOutboundMessage,
+): Promise<void> {
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
   const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
   if (!phoneNumberId || !accessToken) {
     throw new Error('WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN not set');
   }
+  const payload =
+    message.type === 'template'
+      ? {
+          messaging_product: 'whatsapp',
+          to: phone,
+          type: 'template',
+          template: {
+            name: message.name,
+            language: { code: message.language },
+            ...(message.components ? { components: message.components } : {}),
+          },
+        }
+      : {
+          messaging_product: 'whatsapp',
+          to: phone,
+          type: 'text',
+          text: { body: message.body },
+        };
   const response = await fetch(
     `https://graph.facebook.com/v23.0/${phoneNumberId}/messages`,
     {
@@ -272,17 +374,14 @@ async function sendWhatsAppMessage(phone: string, body: string): Promise<void> {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to: phone,
-        type: 'text',
-        text: { body },
-      }),
+      body: JSON.stringify(payload),
     },
   );
   if (!response.ok) {
     const errBody = await response.text().catch(() => '<no body>');
-    throw new Error(`WhatsApp send failed (${response.status}): ${errBody}`);
+    const detail =
+      message.type === 'template' ? ` [template ${message.name}/${message.language}]` : '';
+    throw new Error(`WhatsApp send failed (${response.status})${detail}: ${errBody}`);
   }
 }
 
@@ -355,8 +454,15 @@ export async function sendMemberNotification(
     return { sent: false, reason: 'no_link' };
   }
 
+  // Template payloads win only when the operator confirmed Meta approval
+  // via the env flag; otherwise the freeform body remains the send shape.
+  const message: WhatsAppOutboundMessage =
+    input.template && areWhatsAppTemplatesEnabled()
+      ? { type: 'template', ...input.template }
+      : { type: 'text', body: input.body };
+
   try {
-    await sendWhatsAppMessage(phone, input.body);
+    await sendWhatsAppMessage(phone, message);
     await recordNotification(input.kind, target, dedupeKey, true);
     return { sent: true, phoneE164: phone };
   } catch (err) {
