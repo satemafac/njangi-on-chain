@@ -59,3 +59,12 @@ jobs:
           NEXT_PUBLIC_SUI_NETWORK: testnet
           NEXT_PUBLIC_TESTNET_PACKAGE_ID: '0x0'
           NEXT_PUBLIC_MAINNET_PACKAGE_ID: '0x0'
+
+      # Gate merges on the Jest suite too (the GTM review flagged that CI ran
+      # build/tsc/lint but never the 620-test suite). ~2s, no network needed.
+      - name: Run tests
+        run: npm test
+        env:
+          NEXT_PUBLIC_SUI_NETWORK: testnet
+          NEXT_PUBLIC_TESTNET_PACKAGE_ID: '0x0'
+          NEXT_PUBLIC_MAINNET_PACKAGE_ID: '0x0'

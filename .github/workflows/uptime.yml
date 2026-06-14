@@ -1,0 +1,82 @@
+name: uptime
+
+# Self-owned external uptime + health monitor for the production deployment.
+# Runs on GitHub's scheduler (every 5 min, the cron floor) from outside Vercel,
+# so it catches an outage the in-app crons never could (a down app can't report
+# itself). On failure the run goes red — GitHub emails the repo admins by
+# default — and, if UPTIME_ALERT_WEBHOOK is set, posts to Slack/Discord too.
+#
+# This is the always-on baseline. For sub-minute checks, phone/SMS escalation,
+# and a public status page, layer a SaaS monitor (UptimeRobot/BetterStack) on
+# the same URL — see docs/deployment-guide.md.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: # allow a manual "is prod up?" run
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uptime
+  cancel-in-progress: true
+
+jobs:
+  healthcheck:
+    name: Probe /api/health
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # Override by setting an Actions *variable* named HEALTHCHECK_URL.
+      HEALTHCHECK_URL: ${{ vars.HEALTHCHECK_URL || 'https://njangi-on-chain.vercel.app/api/health' }}
+    steps:
+      - name: Probe health endpoint
+        id: probe
+        run: |
+          set -euo pipefail
+          echo "Probing $HEALTHCHECK_URL"
+          # Retry transient blips (cold start / network) before declaring DOWN:
+          # 3 attempts, 10s apart. Only a sustained failure trips the alert.
+          attempt=0
+          max=3
+          while :; do
+            attempt=$((attempt+1))
+            code=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 20 "$HEALTHCHECK_URL" || echo "000")
+            body=$(cat /tmp/health.json 2>/dev/null || echo '')
+            echo "attempt $attempt → HTTP $code | $body"
+            # Pass requires HTTP 200, status:"ok", and db.ok:true.
+            if [ "$code" = "200" ] \
+               && printf '%s' "$body" | grep -q '"status":"ok"' \
+               && printf '%s' "$body" | grep -q '"db":{"ok":true'; then
+              echo "healthy=true" >> "$GITHUB_OUTPUT"
+              echo "✅ healthy"
+              exit 0
+            fi
+            if [ "$attempt" -ge "$max" ]; then
+              {
+                echo "healthy=false"
+                echo "code=$code"
+                echo "body=$body"
+              } >> "$GITHUB_OUTPUT"
+              echo "::error::Health check FAILED after $max attempts (last HTTP $code)"
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Alert webhook (optional)
+        if: failure()
+        env:
+          WEBHOOK: ${{ secrets.UPTIME_ALERT_WEBHOOK }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WEBHOOK:-}" ]; then
+            echo "UPTIME_ALERT_WEBHOOK not set — relying on GitHub's failed-run email."
+            exit 0
+          fi
+          # Slack- and Discord-compatible {"text"|"content"} payload.
+          msg="🔴 njangi-on-chain DOWN — $HEALTHCHECK_URL failed health check (run ${{ github.run_id }})"
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data "{\"text\":\"$msg\",\"content\":\"$msg\"}" \
+            "$WEBHOOK" || echo "webhook post failed (non-fatal)"

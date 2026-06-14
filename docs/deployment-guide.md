@@ -444,3 +444,25 @@ For deployment issues:
 2. Verify network configuration with `./scripts/switch-network.sh status`
 3. Review deployment logs for error messages
 4. Test with `--build-only` flag first 
+
+## 📈 **Uptime monitoring**
+
+Production health lives at `GET /api/health` — returns `200 {status:"ok", db:{ok:true}}`
+when the app and Neon Postgres are reachable, `503` otherwise. It is public (no
+deployment protection) so external probes can hit it directly.
+
+**Baseline (self-owned, always on):** `.github/workflows/uptime.yml` probes the
+production URL every 5 minutes from GitHub's scheduler — external to Vercel, so it
+catches outages the in-app crons cannot. A sustained failure (3 retries) turns the
+run red and GitHub emails the repo admins. Optional richer alerting: set the repo
+secret `UPTIME_ALERT_WEBHOOK` to a Slack/Discord incoming-webhook URL. Override the
+target with the Actions variable `HEALTHCHECK_URL`.
+
+**Recommended add-on (2 min, SaaS):** layer UptimeRobot (free) or BetterStack on the
+same URL for sub-minute checks, SMS/phone escalation, and a public status page:
+- Monitor type: HTTPS · URL: `https://njangi-on-chain.vercel.app/api/health`
+- Interval: 1 min · Expect: HTTP 200 containing `"status":"ok"`
+- Alert contacts: ops email + phone
+
+The GitHub Actions check is the version-controlled floor; the SaaS monitor is the
+fast pager. Keep both.
