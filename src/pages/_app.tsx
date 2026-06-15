@@ -9,6 +9,7 @@ import { Navbar } from '@/components/ui/Navbar';
 import LocaleDirSync from '@/components/LocaleDirSync';
 import { Toaster } from 'react-hot-toast';
 import dynamic from 'next/dynamic';
+import { Analytics } from '@vercel/analytics/next';
 
 // Dynamically import MoonPayProvider to avoid SSR issues
 const MoonPayProvider = dynamic(
@@ -46,6 +47,7 @@ function AppContent({ Component, pageProps }: AppProps) {
           }
         }}
       />
+      <Analytics />
     </ActivityDetector>
   );
 }
