@@ -60,6 +60,17 @@ const contentSecurityPolicyReportOnly = [
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Bundle the legal markdown into the serverless lambdas. /api/legal/doc reads
+  // docs/legal-drafts/*.md from process.cwd() at RUNTIME (doc.ts:48) to render
+  // the acceptance-modal content; without this, @vercel/nft never traces the
+  // files into the function bundle and the route 500s (ENOENT) in production,
+  // which leaves the scroll-gated risk checkbox permanently locked and blocks
+  // every new user at the legal gate. (.vercelignore only un-ignores the dir
+  // for the build-time SSG read of /legal/[doc], not the runtime API.)
+  outputFileTracingIncludes: {
+    '/api/legal/doc': ['./docs/legal-drafts/*.md'],
+    '/legal/[doc]': ['./docs/legal-drafts/*.md'],
+  },
   // Disable ESLint during build to prevent build failures
   eslint: {
     ignoreDuringBuilds: true,

@@ -79,11 +79,20 @@ export default async function handler(
   res: NextApiResponse<ResponseData>
 ) {
   if (req.method !== 'GET') {
-    return res.status(405).json({ 
-      success: false, 
-      message: 'Method not allowed' 
+    return res.status(405).json({
+      success: false,
+      message: 'Method not allowed'
     });
   }
+
+  // Edge-cache the homepage stat: every landing-page mount hits this, and the
+  // count changes slowly. Without this each view fires a fresh suix_queryEvents
+  // at the free public fullnode, which can trip RPC rate-limit cooldowns under
+  // a traffic spike. 60s shared cache + 5min stale-while-revalidate.
+  res.setHeader(
+    'Cache-Control',
+    'public, s-maxage=60, stale-while-revalidate=300',
+  );
 
   try {
     let circleCount = 0;

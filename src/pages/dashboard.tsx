@@ -2148,6 +2148,33 @@ export default function Dashboard() {
     }
   };
 
+  // In-app testnet gas drip. zkLogin users pay their own gas, so a 0-balance
+  // new account stalls on every action; this drips test SUI to the session's
+  // own address (server-verified, rate-limited; testnet-only — 404s on mainnet)
+  // so onboarding can proceed without the captcha-gated external faucet.
+  const [isDrippingFaucet, setIsDrippingFaucet] = useState(false);
+  const requestTestSui = async () => {
+    if (isDrippingFaucet) return;
+    setIsDrippingFaucet(true);
+    const pending = toast.loading('Requesting test SUI…');
+    try {
+      const res = await fetch('/api/faucet/drip', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        toast.success('Test SUI sent — refreshing your balance…', { id: pending });
+        if (userAddress) clearWalletBalanceCache(userAddress);
+        // Faucet settlement isn't instant; refresh shortly after.
+        setTimeout(() => { void fetchBalance(false); }, 4000);
+      } else {
+        toast.error(data.error || 'Faucet request failed. Try faucet.sui.io directly.', { id: pending });
+      }
+    } catch {
+      toast.error('Could not reach the faucet. Try faucet.sui.io directly.', { id: pending });
+    } finally {
+      setIsDrippingFaucet(false);
+    }
+  };
+
   useEffect(() => {
     void fetchBalance(false);
   }, [userAddress, network, fetchBalance]);
@@ -6356,6 +6383,13 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <button
+                onClick={requestTestSui}
+                disabled={isDrippingFaucet}
+                className="inline-flex items-center rounded-full border border-amber-400 bg-amber-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-600 disabled:opacity-60"
+              >
+                {isDrippingFaucet ? 'Sending…' : 'Get test SUI'}
+              </button>
               <a
                 href={`https://faucet.sui.io/?address=${userAddress || ''}`}
                 target="_blank"
