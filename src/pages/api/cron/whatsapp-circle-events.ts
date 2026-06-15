@@ -48,6 +48,7 @@ import {
   circleEventCursorKey,
   circleEventDedupeKey,
   type CircleEventStream,
+  type CircleEventMessageContext,
 } from '../../../lib/whatsapp-bot/circle-events';
 import {
   resolveCircleName,
@@ -359,12 +360,20 @@ async function notifyCircleEvent(
     resolvedCoinType = await resolveDepositCoinType(ctx, event, parsed.circleId);
   }
 
-  const body = parsed.buildBody({
+  const messageCtx: CircleEventMessageContext = {
     circleName,
     memberName,
     resolvedCoinType,
     appBaseUrl: ctx.appBaseUrl,
-  });
+  };
+  const body = parsed.buildBody(messageCtx);
+  // Meta rejects business-initiated freeform text outside the 24h service
+  // window (error 131047), so the dispatcher sends the approved template
+  // INSTEAD of `body` when WHATSAPP_TEMPLATES_ENABLED=true. Streams whose
+  // approved template needs aggregates the cron can't compute return null
+  // here and keep the text fallback. `?? undefined` keeps the optional
+  // `template` field unset rather than passing null.
+  const template = parsed.buildTemplate?.(messageCtx) ?? undefined;
 
   const sendResult = await sendMemberNotification({
     // Audit/dedupe target: the circle the notification is about. The
@@ -372,6 +381,7 @@ async function notifyCircleEvent(
     memberAddress: parsed.circleId,
     phoneOverride: phone,
     body,
+    template,
     kind: 'circle_event',
     network: ctx.network,
     dedupeKey: circleEventDedupeKey(stream.name, event.id.txDigest, event.id.eventSeq),

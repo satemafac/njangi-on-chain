@@ -16,6 +16,7 @@ import {
   type CircleEventMessageContext,
   type CircleEventStream,
 } from '../whatsapp-bot/circle-events';
+import type { WhatsAppTemplatePayload } from '../whatsapp-notifier';
 
 const CIRCLE = '0x' + 'c1'.repeat(32);
 const MEMBER = '0x' + 'ab'.repeat(32);
@@ -262,6 +263,141 @@ describe('deposit_returned / rotation_changed / circle_activated / payout_proces
     const body = parsed!.buildBody(ctx({ memberName: 'Aminata' }));
     expect(body).toContain('Cycle 4:');
     expect(body).toContain('received 3.0000 SUI');
+  });
+});
+
+describe('buildTemplate (Meta-approved business-initiated sends)', () => {
+  function bodyParams(t: WhatsAppTemplatePayload): string[] {
+    const body = t.components?.find((c) => c.type === 'body');
+    return (body?.parameters ?? []).map((p) => p.text);
+  }
+  function buttonParam(t: WhatsAppTemplatePayload): string | undefined {
+    const btn = t.components?.find((c) => c.type === 'button');
+    return btn?.parameters?.[0]?.text;
+  }
+  function template(
+    name: string,
+    parsedJson: unknown,
+    overrides: Partial<CircleEventMessageContext> = {},
+  ): WhatsAppTemplatePayload | null {
+    const parsed = stream(name).parse(parsedJson);
+    if (!parsed) throw new Error(`stream ${name} rejected its fixture payload`);
+    if (!parsed.buildTemplate) return null;
+    return parsed.buildTemplate(ctx(overrides));
+  }
+
+  it('circle_linked → circle_link with the circle name + deep-link button', () => {
+    const t = template('circle_linked', { circle_id: CIRCLE })!;
+    expect(t.name).toBe('circle_link');
+    expect(t.language).toBe('en');
+    expect(bodyParams(t)).toEqual(['Bamenda Savers']);
+    expect(buttonParam(t)).toBe(CIRCLE);
+  });
+
+  it('circle_unlinked → circle_unlink whose button deep-links to /manage', () => {
+    const t = template('circle_unlinked', { circle_id: CIRCLE })!;
+    expect(t.name).toBe('circle_unlink');
+    expect(bodyParams(t)).toEqual(['Bamenda Savers']);
+    expect(buttonParam(t)).toBe(`${CIRCLE}/manage`);
+  });
+
+  it('member_joined → member_joins with circle, name, short address', () => {
+    const t = template('member_joined', { circle_id: CIRCLE, member: MEMBER }, {
+      memberName: 'Aminata',
+    })!;
+    expect(t.name).toBe('member_joins');
+    expect(bodyParams(t)).toEqual(['Bamenda Savers', 'Aminata', shortAddress(MEMBER)]);
+    expect(buttonParam(t)).toBe(CIRCLE);
+  });
+
+  it('member_joined falls back to "New Member" without a resolved name', () => {
+    const t = template('member_joined', { circle_id: CIRCLE, member: MEMBER })!;
+    expect(bodyParams(t)[1]).toBe('New Member');
+  });
+
+  it('member_removed → member_removed with name, address, circle, date', () => {
+    const t = template('member_removed', {
+      circle_id: CIRCLE,
+      member: MEMBER,
+      deposit_returned: true,
+    })!;
+    expect(t.name).toBe('member_removed');
+    const params = bodyParams(t);
+    expect(params).toHaveLength(4);
+    expect(params[0]).toBe('Member'); // no memberName override
+    expect(params[1]).toBe(shortAddress(MEMBER));
+    expect(params[2]).toBe('Bamenda Savers');
+    expect(params[3]).not.toHaveLength(0); // send-time date
+    expect(buttonParam(t)).toBe(CIRCLE);
+  });
+
+  it('deposit_returned → deposit_returned only when the amount parsed', () => {
+    const t = template('deposit_returned', {
+      circle_id: CIRCLE,
+      member: MEMBER,
+      amount: '1000000000',
+      coin_type: '0x2::sui::SUI',
+    })!;
+    expect(t.name).toBe('deposit_returned');
+    const params = bodyParams(t);
+    expect(params[0]).toBe('Bamenda Savers');
+    expect(params[1]).toBe('1.0000 SUI');
+    expect(params).toHaveLength(3);
+    expect(buttonParam(t)).toBe(CIRCLE);
+
+    // Unparseable amount → no template (keep the freeform fallback).
+    expect(
+      template('deposit_returned', { circle_id: CIRCLE, member: MEMBER, amount: 'x' }),
+    ).toBeNull();
+  });
+
+  it('rotation_changed → order_changed only when the member count is present', () => {
+    const t = template('rotation_changed', { circle_id: CIRCLE, member_count: '7' })!;
+    expect(t.name).toBe('order_changed');
+    expect(bodyParams(t)[0]).toBe('Bamenda Savers');
+    expect(bodyParams(t)[1]).toBe('7');
+    expect(bodyParams(t)).toHaveLength(3);
+    expect(buttonParam(t)).toBe(CIRCLE);
+
+    // No member_count on the event → keep the freeform fallback.
+    expect(template('rotation_changed', { circle_id: CIRCLE })).toBeNull();
+  });
+
+  it('payout_processed → payout_processed (same template buildYourTurnTemplate reuses)', () => {
+    const t = template(
+      'payout_processed',
+      { circle_id: CIRCLE, recipient: MEMBER, amount: '3000000000', cycle: 4 },
+      { memberName: 'Aminata' },
+    )!;
+    expect(t.name).toBe('payout_processed');
+    const params = bodyParams(t);
+    expect(params).toHaveLength(5);
+    expect(params[0]).toBe('Bamenda Savers');
+    expect(params[1]).toBe('4');
+    expect(params[2]).toBe('Aminata');
+    expect(params[3]).toBe('3.0000 SUI');
+    expect(params[4]).not.toHaveLength(0); // send-time date with weekday
+    expect(buttonParam(t)).toBe(CIRCLE);
+  });
+
+  it('keeps aggregate-heavy streams on the freeform text fallback (no template)', () => {
+    // deposit_received / recieve_contribution / live_circle need paid counts,
+    // member totals, beneficiary or schedules the serverless cron does not
+    // compute — these streams must NOT define buildTemplate.
+    const textOnly: Array<[string, unknown]> = [
+      ['security_deposit', { circle_id: CIRCLE, member: MEMBER, amount: '5', operation_type: 3 }],
+      ['contribution', { circle_id: CIRCLE, member: MEMBER, amount: '1500000000', cycle: '2' }],
+      [
+        'contribution_stablecoin',
+        { circle_id: CIRCLE, member: MEMBER, amount: '2500000', cycle: 1, coin_type: '0xd::usdc::USDC' },
+      ],
+      ['circle_activated', { circle_id: CIRCLE }],
+    ];
+    for (const [name, payload] of textOnly) {
+      const parsed = stream(name).parse(payload);
+      expect(parsed).not.toBeNull();
+      expect(parsed!.buildTemplate).toBeUndefined();
+    }
   });
 });
 

@@ -197,6 +197,25 @@ function legacyTemplate(
   };
 }
 
+/**
+ * Send-time date label for the templates whose approved layout ends with a
+ * date placeholder (deposit_returned, member_removed, order_changed,
+ * payout_processed all carry one). Mirrors the legacy bot's
+ * `new Date().toLocaleDateString('en-US', …)` calls and
+ * buildYourTurnTemplate in your-turn-notification.ts. The value is "now" by
+ * design, so it is the one intentionally non-deterministic input to an
+ * otherwise pure module — every other parameter comes from the event or the
+ * resolved context.
+ */
+function sendDateLabel(includeWeekday = false): string {
+  return new Date().toLocaleDateString('en-US', {
+    ...(includeWeekday ? { weekday: 'short' as const } : {}),
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
 export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
   {
     name: 'circle_linked',
@@ -232,6 +251,10 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
           `Circle disconnected.\n` +
           `${ctx.circleName} is no longer linked to this WhatsApp number.\n` +
           `Reconnect here: ${circleLink(ctx, circleId, '/manage')}`,
+        // Approved button URL is `https://<app>/circle/{{1}}`, so the suffix
+        // `<circleId>/manage` deep-links to the manage page like the legacy bot.
+        buildTemplate: (ctx) =>
+          legacyTemplate('circle_unlink', [ctx.circleName], `${circleId}/manage`),
       };
     },
   },
@@ -251,6 +274,14 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
           `New member in ${ctx.circleName}.\n` +
           `${memberDisplay(ctx, member)} just joined the circle.\n` +
           `View members: ${circleLink(ctx, circleId)}`,
+        // member_joins body params: {{1}} circle, {{2}} member name,
+        // {{3}} short address; URL button suffix is the circle id.
+        buildTemplate: (ctx) =>
+          legacyTemplate(
+            'member_joins',
+            [ctx.circleName, ctx.memberName || 'New Member', shortAddress(member)],
+            circleId,
+          ),
       };
     },
   },
@@ -272,6 +303,12 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
       return {
         circleId,
         memberAddress: member,
+        // No buildTemplate: the legacy `deposit_received` template body needs
+        // a running deposit count and member total ({{5}}/{{6}}) that the
+        // serverless cron does not compute. Keep the freeform fallback until a
+        // leaner template without those aggregates is approved (see the module
+        // doc block and whatsapp-notifier.ts — deposit_received is absent from
+        // its curated reuse list for exactly this reason).
         buildBody: (ctx) => {
           // CustodyDeposited carries no coin type; the cron resolves it
           // from the CoinDeposited event in the same transaction. Without
@@ -309,6 +346,13 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
           `Security deposit returned in ${ctx.circleName}.\n` +
           `${memberDisplay(ctx, member)} received ${amount ?? 'their deposit'} back.\n` +
           `View circle: ${circleLink(ctx, circleId)}`,
+        // deposit_returned body params: {{1}} circle, {{2}} amount,
+        // {{3}} date. Only send the template when the amount parsed — an
+        // approved positional layout cannot carry an empty {{2}}.
+        buildTemplate: (ctx) =>
+          amount
+            ? legacyTemplate('deposit_returned', [ctx.circleName, amount, sendDateLabel()], circleId)
+            : null,
       };
     },
   },
@@ -342,6 +386,14 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
           `${memberDisplay(ctx, member)} is no longer part of the circle.` +
           (depositReturned ? ` Their security deposit was returned.` : '') +
           `\nView members: ${circleLink(ctx, circleId)}`,
+        // member_removed body params: {{1}} member name, {{2}} short address,
+        // {{3}} circle, {{4}} date; URL button suffix is the circle id.
+        buildTemplate: (ctx) =>
+          legacyTemplate(
+            'member_removed',
+            [ctx.memberName || 'Member', shortAddress(member), ctx.circleName, sendDateLabel()],
+            circleId,
+          ),
       };
     },
   },
@@ -360,6 +412,17 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
           `Payout order updated in ${ctx.circleName}.` +
           (memberCount ? ` ${memberCount} members are in the new rotation.` : '') +
           `\nReview the order: ${circleLink(ctx, circleId)}`,
+        // order_changed body params: {{1}} circle, {{2}} member count,
+        // {{3}} date. The count rides on the event; without it an approved
+        // positional layout cannot carry an empty {{2}}, so fall back to text.
+        buildTemplate: (ctx) =>
+          memberCount !== null
+            ? legacyTemplate(
+                'order_changed',
+                [ctx.circleName, String(memberCount), sendDateLabel()],
+                circleId,
+              )
+            : null,
       };
     },
   },
@@ -373,6 +436,11 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
       if (!circleId) return null;
       return {
         circleId,
+        // No buildTemplate: the legacy `live_circle` template body needs the
+        // member count, per-cycle contribution amount and first payout date
+        // ({{2}}–{{4}}) — none of which the serverless cron computes. Keep the
+        // freeform fallback until a leaner template is approved (live_circle is
+        // intentionally absent from whatsapp-notifier.ts's reuse list).
         buildBody: (ctx) =>
           `${ctx.circleName} is now live!\n` +
           `The rotation has started and contributions for the first cycle are open.\n` +
@@ -400,6 +468,23 @@ export const CIRCLE_EVENT_STREAMS: CircleEventStream[] = [
           `${cycle !== null ? `Cycle ${cycle}: ` : ''}` +
           `${memberDisplay(ctx, recipient)} received ${amount ?? 'their payout'}.\n` +
           `View circle: ${circleLink(ctx, circleId)}`,
+        // payout_processed body params: {{1}} circle, {{2}} cycle,
+        // {{3}} recipient, {{4}} amount, {{5}} date (same approved template
+        // buildYourTurnTemplate reuses). Send only when amount + cycle parsed.
+        buildTemplate: (ctx) =>
+          amount && cycle !== null
+            ? legacyTemplate(
+                'payout_processed',
+                [
+                  ctx.circleName,
+                  String(cycle),
+                  ctx.memberName || shortAddress(recipient),
+                  amount,
+                  sendDateLabel(true),
+                ],
+                circleId,
+              )
+            : null,
       };
     },
   },
@@ -422,6 +507,11 @@ function parseContribution(
   return {
     circleId,
     memberAddress: member,
+    // No buildTemplate: the legacy `recieve_contribution` template body needs
+    // paid count, member total, remaining count and the current beneficiary
+    // ({{5}}–{{8}}) — aggregates the serverless cron does not compute. Keep the
+    // freeform fallback until a leaner template is approved (recieve_contribution
+    // is intentionally absent from whatsapp-notifier.ts's reuse list).
     buildBody: (ctx) =>
       `Contribution received in ${ctx.circleName}.\n` +
       `${cycle !== null ? `Cycle ${cycle}: ` : ''}` +

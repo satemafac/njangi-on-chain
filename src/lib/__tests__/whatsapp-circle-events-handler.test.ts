@@ -207,6 +207,9 @@ describe('ported event dispatch (smoke)', () => {
     expect(call.body).toContain('Aminata');
     expect(call.body).toContain('Cycle 2:');
     expect(call.body).toContain('paid 1.5000 SUI');
+    // contribution maps to the aggregate-heavy `recieve_contribution`
+    // template the cron can't fill, so it stays on the freeform fallback.
+    expect(call.template).toBeUndefined();
 
     const body = res.body as { sent: number; halted: boolean; streams: unknown[] };
     expect(body.sent).toBe(1);
@@ -216,6 +219,39 @@ describe('ported event dispatch (smoke)', () => {
     // One lease per stream, all released.
     expect(acquireMock).toHaveBeenCalledTimes(CIRCLE_EVENT_STREAMS.length);
     expect(releaseMock).toHaveBeenCalledTimes(CIRCLE_EVENT_STREAMS.length);
+  });
+
+  it('forwards the approved template alongside the body for template-backed streams', async () => {
+    const MEMBER_JOINED_TYPE = '0xcore::njangi_circles::MemberJoined';
+    const client = makeClient();
+    client.queryEvents.mockImplementation(async ({ query }) => {
+      if (query.MoveEventType === MEMBER_JOINED_TYPE) {
+        return {
+          data: [
+            {
+              id: { txDigest: 'tx-join', eventSeq: '0' },
+              parsedJson: { circle_id: CIRCLE, member: MEMBER },
+              timestampMs: String(Date.now()),
+            },
+          ],
+          nextCursor: null,
+          hasNextPage: false,
+        };
+      }
+      return { data: [], nextCursor: null, hasNextPage: false };
+    });
+    clientMock.mockReturnValue(client);
+
+    const res = await run();
+    expect(res.statusCode).toBe(200);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const call = sendMock.mock.calls[0][0];
+    // The dispatcher gets BOTH: the template (used when templates are on) and
+    // the freeform body (the fallback). This is the wiring the cron was missing.
+    expect(call.template).toBeDefined();
+    expect(call.template.name).toBe('member_joins');
+    expect(call.template.language).toBe('en');
+    expect(call.body).toContain('just joined');
   });
 
   it('skips unlinked circles without sending', async () => {
