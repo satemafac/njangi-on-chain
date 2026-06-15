@@ -303,7 +303,7 @@ export const Navbar: React.FC = () => {
                 <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-stone-200 bg-white shadow-[0_12px_30px_-22px_rgba(15,23,42,0.42)] sm:h-10 sm:w-10">
                   <Image
                     src="/njangi-on-chain-logo.png"
-                    alt="Njangi on-chain"
+                    alt="Njangi On-Chain"
                     width={80}
                     height={80}
                     className="h-full w-full scale-[2.2] object-contain transition-transform duration-300 group-hover:scale-[2.28]"

@@ -126,8 +126,8 @@ export default function AuthCallback() {
 
   const tone = isError ? 'error' : progress >= 100 ? 'success' : 'processing';
   const pageTitle = isError
-    ? 'Sign-in failed - Njangi on-chain'
-    : 'Completing sign in - Njangi on-chain';
+    ? 'Sign-in failed - Njangi On-Chain'
+    : 'Completing sign in - Njangi On-Chain';
   const lead = isError
     ? 'We could not complete the secure sign-in handoff. The app will return you to the sign-in entry point so you can try again.'
     : 'We’re validating the provider response, generating your zero-knowledge proof, and restoring the right destination before returning you to the app.';

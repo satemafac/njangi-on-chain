@@ -1,5 +1,5 @@
 ---
-title: "Njangi on Chain — Privacy Policy"
+title: "Njangi On-Chain — Privacy Policy"
 version: 1.0.0
 effective_date: "{{EFFECTIVE_DATE}}"
 language: en
@@ -14,7 +14,7 @@ language: en
 
 **Version 1.0.0 — Effective {{EFFECTIVE_DATE}}**
 
-This Privacy Policy explains how {{COMPANY_LEGAL_NAME}}, {{COMPANY_ADDRESS}} ("Njangi", "we", "us") processes personal data when you use Njangi on Chain (the "Service"). The Service is built to keep personal data to a minimum: we hold no private keys, we never see your card details, and the only personally identifying routing data we store off your device is encrypted so that we can destroy access to it on request.
+This Privacy Policy explains how {{COMPANY_LEGAL_NAME}}, {{COMPANY_ADDRESS}} ("Njangi On-Chain", "we", "us") processes personal data when you use Njangi On-Chain (the "Service"). The Service is built to keep personal data to a minimum: we hold no private keys, we never see your card details, and the only personally identifying routing data we store off your device is encrypted so that we can destroy access to it on request.
 
 **Data controller:** {{COMPANY_LEGAL_NAME}}. **Privacy contact:** {{PRIVACY_CONTACT}}.
 
@@ -74,7 +74,7 @@ Processors act under contracts requiring confidentiality and security. Ramp part
 
 ## 5. Fiat Purchases (Ramp Partners)
 
-When you buy crypto with fiat, you do so on the partner's platform. The partner — not Njangi — collects your KYC information (ID documents, selfies, payment details) under its own license and privacy policy. We never receive those documents. We receive only the purchase status and the destination address, which we use to update the app and, where applicable, record an opaque compliance hash on-chain.
+When you buy crypto with fiat, you do so on the partner's platform. The partner — not Njangi On-Chain — collects your KYC information (ID documents, selfies, payment details) under its own license and privacy policy. We never receive those documents. We receive only the purchase status and the destination address, which we use to update the app and, where applicable, record an opaque compliance hash on-chain.
 
 ## 6. Stripe Subscription Data Flow
 

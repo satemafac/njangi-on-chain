@@ -88,7 +88,7 @@ export function CallbackStatusShell({
                 What happens here
               </p>
               <p className="mt-4 text-sm leading-7 text-[#667085]">
-                Njangi validates the OAuth response, prepares your zero-knowledge
+                Njangi On-Chain validates the OAuth response, prepares your zero-knowledge
                 proof, and restores the correct wallet session before sending you
                 back into the app.
               </p>
@@ -182,7 +182,7 @@ export function CallbackStatusShell({
             )}
 
             <div className="mt-8 rounded-[20px] border border-[#e8dfd2] bg-white p-4 text-sm leading-7 text-[#455468]">
-              Njangi on-chain completes sign-in with zkLogin on Sui and restores
+              Njangi On-Chain completes sign-in with zkLogin on Sui and restores
               your wallet state before redirecting away from this screen.
             </div>
           </section>

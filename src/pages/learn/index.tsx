@@ -74,21 +74,21 @@ export default function LearnIndexPage() {
   return (
     <>
       <Head>
-        <title>Learn About Blockchain Savings Circles | Njangi Platform Education Center</title>
+        <title>Learn About Blockchain Savings Circles | Njangi On-Chain Education Center</title>
         <meta name="description" content="Learn about traditional savings circles from around the world and how blockchain technology revolutionizes community finance. Educational resources on Njangi, ROSCA, Tontine, and Sou Sou systems." />
         <meta name="keywords" content="learn njangi, blockchain rosca education, tontine tutorial, sou sou guide, community savings education, cryptocurrency savings circles" />
         <link rel="canonical" href="https://njangionchain.com/learn" />
         
         {/* Open Graph / Facebook */}
         <meta property="og:type" content="website" />
-        <meta property="og:title" content="Learn About Blockchain Savings Circles | Njangi Platform" />
+        <meta property="og:title" content="Learn About Blockchain Savings Circles | Njangi On-Chain" />
         <meta property="og:description" content="Educational resources on traditional savings circles and blockchain technology." />
         <meta property="og:url" content="https://njangionchain.com/learn" />
         <meta property="og:image" content="https://njangionchain.com/images/learn-hero.jpg" />
 
         {/* Twitter */}
         <meta property="twitter:card" content="summary_large_image" />
-        <meta property="twitter:title" content="Learn About Blockchain Savings Circles | Njangi Platform" />
+        <meta property="twitter:title" content="Learn About Blockchain Savings Circles | Njangi On-Chain" />
         <meta property="twitter:description" content="Educational resources on traditional savings circles and blockchain technology." />
         <meta property="twitter:image" content="https://njangionchain.com/images/learn-hero.jpg" />
       </Head>

@@ -154,7 +154,7 @@ export default function AuthCallback() {
                 token: whatsappToken, 
                 phone: formattedPhone, 
                 success: true,
-                message: 'Authentication completed successfully! You can now use all Njangi commands.' 
+                message: 'Authentication completed successfully! You can now use all Njangi On-Chain commands.'
               }),
             });
             
@@ -236,12 +236,12 @@ export default function AuthCallback() {
   const tone = isError ? 'error' : progress >= 100 ? 'success' : 'processing';
   const isWhatsAppReady = !isError && status.includes('return to WhatsApp');
   const pageTitle = isError
-    ? 'Sign-in failed - Njangi on-chain'
-    : 'Completing sign in - Njangi on-chain';
+    ? 'Sign-in failed - Njangi On-Chain'
+    : 'Completing sign in - Njangi On-Chain';
   const lead = isError
     ? 'We could not complete the secure sign-in handoff. The app is keeping the session clean and will send you back to the starting point shortly.'
     : isWhatsAppReady
-      ? 'Your wallet session is ready. Return to WhatsApp and continue using Njangi commands there.'
+      ? 'Your wallet session is ready. Return to WhatsApp and continue using Njangi On-Chain commands there.'
       : 'We’re validating the provider response, generating your zero-knowledge proof, and restoring the correct destination before returning you to the app.';
   const helperText = isError
     ? 'Redirecting you back to the sign-in entry point.'

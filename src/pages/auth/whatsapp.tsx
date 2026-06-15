@@ -40,7 +40,7 @@ export default function WhatsAppAuth() {
             phone: formattedPhone, 
             success: true,
             userAddress: accountData.userAddr,
-            message: 'Authentication completed successfully! You can now use all Njangi commands.' 
+            message: 'Authentication completed successfully! You can now use all Njangi On-Chain commands.'
           }),
         });
 
@@ -146,7 +146,7 @@ export default function WhatsAppAuth() {
               </svg>
             </div>
             <h1 className="text-2xl font-bold text-gray-900 mb-2">WhatsApp Authentication</h1>
-            <p className="text-gray-600">Complete your Njangi account setup</p>
+            <p className="text-gray-600">Complete your Njangi On-Chain account setup</p>
           </div>
 
           {/* Status Content */}
@@ -169,7 +169,7 @@ export default function WhatsAppAuth() {
                 
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
                   <p className="text-sm text-blue-800">
-                    Choose your preferred login method to complete your Njangi authentication for WhatsApp.
+                    Choose your preferred login method to complete your Njangi On-Chain authentication for WhatsApp.
                   </p>
                 </div>
 

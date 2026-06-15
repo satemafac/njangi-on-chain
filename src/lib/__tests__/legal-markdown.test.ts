@@ -25,7 +25,7 @@ describe('parseFrontmatter', () => {
   it('extracts quoted and unquoted values and strips the block from the body', () => {
     const raw = [
       '---',
-      'title: "Njangi on Chain — Terms of Service"',
+      'title: "Njangi On-Chain — Terms of Service"',
       'version: 1.0.0',
       'effective_date: "{{EFFECTIVE_DATE}}"',
       'language: en',
@@ -35,7 +35,7 @@ describe('parseFrontmatter', () => {
     ].join('\n');
 
     const { meta, body } = parseFrontmatter(raw);
-    expect(meta.title).toBe('Njangi on Chain — Terms of Service');
+    expect(meta.title).toBe('Njangi On-Chain — Terms of Service');
     expect(meta.version).toBe('1.0.0');
     expect(meta.effective_date).toBe('{{EFFECTIVE_DATE}}');
     expect(meta.language).toBe('en');
@@ -119,7 +119,7 @@ describe('real legal drafts', () => {
 
     expect(render.version).toBe(CURRENT_LEGAL_VERSIONS[doc]);
     expect(render.language).toBe(locale);
-    expect(render.title).toContain('Njangi on Chain');
+    expect(render.title).toContain('Njangi On-Chain');
     // The DRAFT banner blockquote must survive rendering until counsel signs off.
     expect(render.html).toContain('<blockquote>');
     expect(render.html).toContain('DRAFT');

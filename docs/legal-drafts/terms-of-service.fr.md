@@ -1,5 +1,5 @@
 ---
-title: "Njangi on Chain — Conditions Générales d'Utilisation"
+title: "Njangi On-Chain — Conditions Générales d'Utilisation"
 version: 1.0.0
 effective_date: "{{EFFECTIVE_DATE}}"
 language: fr
@@ -15,20 +15,20 @@ language: fr
 
 **Version 1.0.0 — Date d'entrée en vigueur : {{EFFECTIVE_DATE}}**
 
-Les présentes Conditions Générales d'Utilisation (les « Conditions ») constituent un contrat entre vous et {{COMPANY_LEGAL_NAME}}, {{COMPANY_ADDRESS}} (« Njangi », « nous »), exploitant du site, des applications et des services associés Njangi on Chain (ensemble, le « Service »). En créant un compte, en acceptant les présentes Conditions dans l'application ou en utilisant le Service, vous acceptez d'être lié par celles-ci. Si vous ne les acceptez pas, n'utilisez pas le Service.
+Les présentes Conditions Générales d'Utilisation (les « Conditions ») constituent un contrat entre vous et {{COMPANY_LEGAL_NAME}}, {{COMPANY_ADDRESS}} (« Njangi On-Chain », « nous »), exploitant du site, des applications et des services associés Njangi On-Chain (ensemble, le « Service »). En créant un compte, en acceptant les présentes Conditions dans l'application ou en utilisant le Service, vous acceptez d'être lié par celles-ci. Si vous ne les acceptez pas, n'utilisez pas le Service.
 
 Les présentes Conditions sont disponibles en français et en anglais. Les deux versions vous sont fournies ; en cas de divergence, la version en {{CONTROLLING_LANGUAGE}} prévaut dans la mesure permise par le droit applicable.
 
 ## 1. Ce que le Service est — et ce qu'il n'est pas
 
-Njangi on Chain est un **logiciel de coordination** destiné aux groupes d'épargne rotative auto-organisés (connus sous les noms de tontines, njangis ou AREC/ROSCA). Le Service fournit une interface vers des contrats intelligents (« smart contracts ») déployés sur la blockchain Sui, permettant à un groupe de personnes que vous choisissez de :
+Njangi On-Chain est un **logiciel de coordination** destiné aux groupes d'épargne rotative auto-organisés (connus sous les noms de tontines, njangis ou AREC/ROSCA). Le Service fournit une interface vers des contrats intelligents (« smart contracts ») déployés sur la blockchain Sui, permettant à un groupe de personnes que vous choisissez de :
 
 - créer un cercle d'épargne avec des montants de cotisation convenus et un ordre de rotation ;
 - verser des crypto-actifs (stablecoins ou SUI) dans un **séquestre par cycle** détenu par le contrat intelligent ;
 - permettre au bénéficiaire désigné de chaque cycle de réclamer la cagnotte du cycle ;
 - utiliser des fonctionnalités de coordination telles que les notifications WhatsApp, les objectifs et les statistiques.
 
-**Njangi n'est ni une banque, ni un établissement de crédit, ni un établissement de microfinance, ni un établissement collecteur de dépôts, ni un transmetteur de fonds, ni un prestataire de services de paiement, ni un émetteur de monnaie électronique, ni un courtier, ni une plateforme d'échange, ni un conseiller en investissement.** Nous ne sommes agréés ni supervisés en qualité d'établissement financier dans aucune juridiction, y compris par la BEAC ou la COBAC dans la zone CEMAC. Nous ne recevons pas de dépôts, ne détenons pas de fonds de clients, n'octroyons pas de crédit, ne versons pas d'intérêts et n'offrons aucun rendement ou produit d'investissement. **Le Service ne comporte aucun produit de rendement ou d'intérêt, de quelque nature que ce soit.**
+**Njangi On-Chain n'est ni une banque, ni un établissement de crédit, ni un établissement de microfinance, ni un établissement collecteur de dépôts, ni un transmetteur de fonds, ni un prestataire de services de paiement, ni un émetteur de monnaie électronique, ni un courtier, ni une plateforme d'échange, ni un conseiller en investissement.** Nous ne sommes agréés ni supervisés en qualité d'établissement financier dans aucune juridiction, y compris par la BEAC ou la COBAC dans la zone CEMAC. Nous ne recevons pas de dépôts, ne détenons pas de fonds de clients, n'octroyons pas de crédit, ne versons pas d'intérêts et n'offrons aucun rendement ou produit d'investissement. **Le Service ne comporte aucun produit de rendement ou d'intérêt, de quelque nature que ce soit.**
 
 Nous ne fournissons aucun conseil financier, d'investissement, fiscal ou juridique. Rien dans le Service ne constitue une recommandation de rejoindre un cercle ou d'acheter, conserver ou vendre un crypto-actif.
 
@@ -56,27 +56,27 @@ Vous reconnaissez et acceptez que :
 
 ## 4. Architecture non dépositaire ; absence de contrôle sur les fonds
 
-Le Service est **non dépositaire** (« non-custodial »). Les fonds versés à un cercle sont détenus par des contrats intelligents sur la blockchain Sui, sous séquestre pour le cycle en cours, selon des règles fixées dans le code publié du contrat. Njangi :
+Le Service est **non dépositaire** (« non-custodial »). Les fonds versés à un cercle sont détenus par des contrats intelligents sur la blockchain Sui, sous séquestre pour le cycle en cours, selon des règles fixées dans le code publié du contrat. Njangi On-Chain :
 
 - **ne peut pas déplacer, geler, saisir, réorienter ni récupérer les fonds des utilisateurs de manière discrétionnaire.** Les contrats ne comportent aucune fonction administrative le permettant ;
 - ne prend à aucun moment possession des cotisations ou des paiements ;
 - ne peut ni annuler, ni inverser, ni modifier une transaction blockchain confirmée ;
 - ne peut pas vous indemniser des fonds perdus sur la chaîne.
 
-Les paiements sont **sans permission et à l'initiative des membres** : le bénéficiaire désigné réclame la cagnotte du cycle directement auprès du contrat. Un mécanisme de récupération à l'initiative des membres existe dans les contrats pour certains scénarios de défaillance ; son fonctionnement est régi exclusivement par le code du contrat, et Njangi ne peut ni le déclencher, ni l'accélérer, ni s'y substituer pour votre compte.
+Les paiements sont **sans permission et à l'initiative des membres** : le bénéficiaire désigné réclame la cagnotte du cycle directement auprès du contrat. Un mécanisme de récupération à l'initiative des membres existe dans les contrats pour certains scénarios de défaillance ; son fonctionnement est régi exclusivement par le code du contrat, et Njangi On-Chain ne peut ni le déclencher, ni l'accélérer, ni s'y substituer pour votre compte.
 
-**Il n'existe aucune assurance des dépôts.** Les fonds des cercles ne sont protégés par aucun système public de garantie des dépôts, et personne — y compris Njangi — n'en garantit la restitution.
+**Il n'existe aucune assurance des dépôts.** Les fonds des cercles ne sont protégés par aucun système public de garantie des dépôts, et personne — y compris Njangi On-Chain — n'en garantit la restitution.
 
-La suspension ou la résiliation de votre accès à l'interface du Service (article 12) est sans effet sur les contrats intelligents, qui demeurent accessibles sur le réseau public Sui indépendamment de Njangi.
+La suspension ou la résiliation de votre accès à l'interface du Service (article 12) est sans effet sur les contrats intelligents, qui demeurent accessibles sur le réseau public Sui indépendamment de Njangi On-Chain.
 
 ## 5. Cercles d'épargne ; litiges entre membres
 
 Les cercles d'épargne sont des arrangements privés **entre leurs membres**. Vous choisissez les personnes avec lesquelles vous formez un cercle. Vous reconnaissez que :
 
-- **Njangi ne vérifie, ne cautionne et ne garantit aucun membre d'un cercle**, n'assume aucun risque de contrepartie et n'est partie à aucun cercle ;
+- **Njangi On-Chain ne vérifie, ne cautionne et ne garantit aucun membre d'un cercle**, n'assume aucun risque de contrepartie et n'est partie à aucun cercle ;
 - un cercle ne s'achève que si ses membres continuent de cotiser ; un membre qui cesse de cotiser peut retarder ou empêcher les paiements, y compris le vôtre ;
 - les dépôts de garantie et autres paramètres du cercle sont appliqués exclusivement tels qu'encodés dans les contrats intelligents ;
-- tout litige entre membres d'un cercle (y compris le défaut de paiement, l'ordre des paiements ou l'exclusion d'un membre) relève des seuls membres concernés. Njangi n'a ni l'obligation ni, dans un système non dépositaire, la capacité technique de trancher ou de réparer de tels litiges en déplaçant des fonds.
+- tout litige entre membres d'un cercle (y compris le défaut de paiement, l'ordre des paiements ou l'exclusion d'un membre) relève des seuls membres concernés. Njangi On-Chain n'a ni l'obligation ni, dans un système non dépositaire, la capacité technique de trancher ou de réparer de tels litiges en déplaçant des fonds.
 
 Vous vous engagez à agir de bonne foi envers les membres de votre cercle et à n'utiliser les cercles qu'avec des personnes avec lesquelles vous avez un véritable accord d'épargne.
 
@@ -88,17 +88,17 @@ Les fonctionnalités identifiées comme fonctionnant sur le **testnet** utilisen
 
 ## 7. Achats en monnaie fiduciaire via des partenaires
 
-Si vous achetez des crypto-actifs en monnaie fiduciaire par l'intermédiaire du Service, l'achat est exécuté **sur la plateforme d'un partenaire indépendant** (tel que Coinbase, MoonPay ou Transak), selon les conditions, frais et agréments propres à ce partenaire. C'est le partenaire — et non Njangi — qui procède à la vérification d'identité (KYC) et aux contrôles de lutte contre le blanchiment. **Njangi ne reçoit, ne détient ni ne règle jamais vos fonds fiduciaires.** Nous ne sommes pas responsables des actes, omissions, frais, retards, refus ou de la disponibilité d'un partenaire dans votre pays. Une confirmation indiquant qu'un partenaire a achevé ses contrôles peut être enregistrée sur la chaîne, exclusivement sous la forme d'une empreinte cryptographique opaque ne contenant aucune donnée personnelle.
+Si vous achetez des crypto-actifs en monnaie fiduciaire par l'intermédiaire du Service, l'achat est exécuté **sur la plateforme d'un partenaire indépendant** (tel que Coinbase, MoonPay ou Transak), selon les conditions, frais et agréments propres à ce partenaire. C'est le partenaire — et non Njangi On-Chain — qui procède à la vérification d'identité (KYC) et aux contrôles de lutte contre le blanchiment. **Njangi On-Chain ne reçoit, ne détient ni ne règle jamais vos fonds fiduciaires.** Nous ne sommes pas responsables des actes, omissions, frais, retards, refus ou de la disponibilité d'un partenaire dans votre pays. Une confirmation indiquant qu'un partenaire a achevé ses contrôles peut être enregistrée sur la chaîne, exclusivement sous la forme d'une empreinte cryptographique opaque ne contenant aucune donnée personnelle.
 
 ## 8. Abonnements et facturation
 
 L'essentiel du Service est disponible dans une **offre Gratuite** (actuellement : un cercle comptant jusqu'à trois membres). Un **abonnement Premium** (actuellement **9,99 USD par mois**) débloque des fonctionnalités de coordination telles que des cercles plus grands et plus nombreux, les notifications WhatsApp, les objectifs intelligents et les statistiques.
 
-- **Facturation.** Les abonnements sont facturés via **Stripe**, notre prestataire de paiement. Vos données de carte et de paiement sont collectées et traitées par Stripe selon ses propres conditions et sa propre politique de confidentialité ; Njangi ne reçoit jamais vos données de carte complètes.
+- **Facturation.** Les abonnements sont facturés via **Stripe**, notre prestataire de paiement. Vos données de carte et de paiement sont collectées et traitées par Stripe selon ses propres conditions et sa propre politique de confidentialité ; Njangi On-Chain ne reçoit jamais vos données de carte complètes.
 - **Renouvellement et résiliation.** Les abonnements se renouvellent automatiquement à chaque période de facturation. Vous pouvez **résilier à tout moment** ; la résiliation prend effet à la **fin de la période de facturation en cours**, et vous conservez les fonctionnalités Premium jusqu'à cette date. Sauf disposition légale contraire, les sommes déjà versées ne sont pas remboursées au prorata.
 - **Évolution des prix.** Toute modification de prix vous sera notifiée au moins 30 jours à l'avance ; elle s'applique à compter de la période de facturation suivant la notification.
-- **Ce qui n'est jamais payant.** L'accès à vos fonds n'est jamais conditionné à un paiement. **La réclamation d'un paiement, le retrait ou la récupération de fonds, ainsi que le mécanisme de récupération à l'initiative des membres, sont disponibles dans toutes les offres, sans frais de la part de Njangi, à tout moment.** En cas d'expiration de votre abonnement, vous ne perdez que les fonctionnalités de coordination Premium.
-- Les frais de réseau (« gas ») et les frais des partenaires (article 7) sont indépendants de tout abonnement Njangi.
+- **Ce qui n'est jamais payant.** L'accès à vos fonds n'est jamais conditionné à un paiement. **La réclamation d'un paiement, le retrait ou la récupération de fonds, ainsi que le mécanisme de récupération à l'initiative des membres, sont disponibles dans toutes les offres, sans frais de la part de Njangi On-Chain, à tout moment.** En cas d'expiration de votre abonnement, vous ne perdez que les fonctionnalités de coordination Premium.
+- Les frais de réseau (« gas ») et les frais des partenaires (article 7) sont indépendants de tout abonnement Njangi On-Chain.
 
 ## 9. Utilisations interdites
 
@@ -116,7 +116,7 @@ Nous pouvons suspendre ou résilier l'accès à l'interface en cas de manquement
 
 ## 10. Propriété intellectuelle
 
-Le logiciel, la marque et les contenus du Service appartiennent à Njangi ou à ses concédants. Les composants open source, y compris le code publié des contrats intelligents, demeurent régis par leurs licences respectives. Nous vous concédons une licence limitée, révocable, non exclusive et non cessible d'utilisation du Service conformément à sa destination. Vous conservez vos droits sur les contenus que vous soumettez et nous concédez une licence pour les traiter dans la mesure nécessaire au fonctionnement du Service.
+Le logiciel, la marque et les contenus du Service appartiennent à Njangi On-Chain ou à ses concédants. Les composants open source, y compris le code publié des contrats intelligents, demeurent régis par leurs licences respectives. Nous vous concédons une licence limitée, révocable, non exclusive et non cessible d'utilisation du Service conformément à sa destination. Vous conservez vos droits sur les contenus que vous soumettez et nous concédez une licence pour les traiter dans la mesure nécessaire au fonctionnement du Service.
 
 ## 11. Services de tiers
 
@@ -134,15 +134,15 @@ LE SERVICE, Y COMPRIS LES CONTRATS INTELLIGENTS ET TOUTE INFORMATION AFFICHÉE (
 
 Dans toute la mesure permise par le droit applicable :
 
-- Njangi, ses dirigeants, salariés et mandataires ne sont **pas responsables des dommages indirects, accessoires, spéciaux, consécutifs ou punitifs**, ni des pertes de profits, de données, de clientèle ou de crypto-actifs, découlant du Service ou s'y rapportant ;
-- Njangi n'est **pas responsable** : des pertes causées par le comportement des membres d'un cercle (y compris le défaut de cotisation ou la fraude) ; des défaillances du réseau blockchain ou de ses validateurs ; des défauts ou exploitations des contrats intelligents ; des erreurs d'oracles ou de flux de prix ; de la perte d'accès à votre connexion sociale ou à vos codes de récupération ; des actes ou omissions des services de tiers (article 11) ; ou des événements échappant à notre contrôle raisonnable ;
-- **la responsabilité cumulée de Njangi** au titre de l'ensemble des réclamations liées au Service est limitée au **plus élevé des deux montants suivants : (a) les frais d'abonnement que vous avez versés à Njangi au cours des douze (12) mois précédant le fait générateur, et (b) cent (100) dollars US**.
+- Njangi On-Chain, ses dirigeants, salariés et mandataires ne sont **pas responsables des dommages indirects, accessoires, spéciaux, consécutifs ou punitifs**, ni des pertes de profits, de données, de clientèle ou de crypto-actifs, découlant du Service ou s'y rapportant ;
+- Njangi On-Chain n'est **pas responsable** : des pertes causées par le comportement des membres d'un cercle (y compris le défaut de cotisation ou la fraude) ; des défaillances du réseau blockchain ou de ses validateurs ; des défauts ou exploitations des contrats intelligents ; des erreurs d'oracles ou de flux de prix ; de la perte d'accès à votre connexion sociale ou à vos codes de récupération ; des actes ou omissions des services de tiers (article 11) ; ou des événements échappant à notre contrôle raisonnable ;
+- **la responsabilité cumulée de Njangi On-Chain** au titre de l'ensemble des réclamations liées au Service est limitée au **plus élevé des deux montants suivants : (a) les frais d'abonnement que vous avez versés à Njangi On-Chain au cours des douze (12) mois précédant le fait générateur, et (b) cent (100) dollars US**.
 
 Aucune stipulation des présentes Conditions n'exclut ni ne limite une responsabilité qui ne peut être exclue ou limitée en vertu du droit applicable, notamment la responsabilité pour dol, faute intentionnelle ou faute lourde lorsque cette limitation n'est pas permise.
 
 ## 15. Garantie d'indemnisation
 
-Vous vous engagez à indemniser et à garantir Njangi ainsi que ses dirigeants, salariés et mandataires contre toute réclamation, tout dommage et tous frais raisonnables (y compris les honoraires d'avocat) résultant de votre violation des présentes Conditions, de votre violation du droit applicable ou de vos litiges avec des membres de cercles ou d'autres tiers, sauf dans la mesure où ils résultent de notre propre manquement ou de notre propre faute.
+Vous vous engagez à indemniser et à garantir Njangi On-Chain ainsi que ses dirigeants, salariés et mandataires contre toute réclamation, tout dommage et tous frais raisonnables (y compris les honoraires d'avocat) résultant de votre violation des présentes Conditions, de votre violation du droit applicable ou de vos litiges avec des membres de cercles ou d'autres tiers, sauf dans la mesure où ils résultent de notre propre manquement ou de notre propre faute.
 
 ## 16. Droit applicable et litiges
 
@@ -157,7 +157,7 @@ Nous pouvons modifier les présentes Conditions. Chaque version porte un numéro
 - **Fiscalité.** Vous êtes seul responsable des impôts et taxes résultant de votre participation à un cercle ou de vos opérations sur crypto-actifs.
 - **Divisibilité.** Si une stipulation est jugée nulle, les autres demeurent applicables.
 - **Cession.** Vous ne pouvez pas céder les présentes Conditions ; nous pouvons les céder dans le cadre d'une réorganisation ou d'un transfert du Service, moyennant notification.
-- **Intégralité de l'accord.** Les présentes Conditions, la Politique de Confidentialité et la Déclaration des Risques constituent l'intégralité de l'accord entre vous et Njangi relatif au Service.
+- **Intégralité de l'accord.** Les présentes Conditions, la Politique de Confidentialité et la Déclaration des Risques constituent l'intégralité de l'accord entre vous et Njangi On-Chain relatif au Service.
 - **Non-renonciation.** Le défaut d'exercice d'un droit ne vaut pas renonciation à celui-ci.
 
 ## 19. Contact

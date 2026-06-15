@@ -77,7 +77,7 @@ function errorCode(error: unknown): string | null {
  * Surfaces the available regulated on/off-ramp providers in the order most
  * appropriate for the user's geography (2026-06 GTM audit: CEMAC users get
  * the XAF-capable Transak first; Coinbase only leads in the US). Providers
- * are independently KYC-gated and licensed by their operator; Njangi is a
+ * are independently KYC-gated and licensed by their operator; Njangi On-Chain is a
  * non-custodial coordinator and never settles fiat directly.
  *
  * Failover: when a provider errors during session creation it is marked
@@ -302,7 +302,7 @@ export const RampPicker: React.FC<RampPickerProps> = ({
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-gray-600">
           Choose a regulated partner to convert local currency into the asset
-          for your circle. Njangi is a non-custodial coordinator and does not
+          for your circle. Njangi On-Chain is a non-custodial coordinator and does not
           settle fiat directly.
         </p>
         {regionSelect}

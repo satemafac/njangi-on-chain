@@ -87,7 +87,7 @@ export default function AuthPage() {
               <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
                 <p className="text-sm text-green-800">
                   A confirmation message has been sent to your WhatsApp ({whatsappPhone}).
-                  You can now close this page and return to WhatsApp to use all Njangi commands.
+                  You can now close this page and return to WhatsApp to use all Njangi On-Chain commands.
                 </p>
               </div>
             )}

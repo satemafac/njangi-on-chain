@@ -1,5 +1,5 @@
 ---
-title: "Njangi on Chain — Risk Disclosure"
+title: "Njangi On-Chain — Risk Disclosure"
 version: 1.0.0
 effective_date: "{{EFFECTIVE_DATE}}"
 language: en
@@ -10,7 +10,7 @@ language: en
 
 # Know the Risks Before You Join
 
-Please read this carefully. You will be asked to confirm that you have read and understood it. Njangi on Chain is software that helps your savings group (njangi/tontine) run itself. **It is not a bank, and your money is not guaranteed by anyone.**
+Please read this carefully. You will be asked to confirm that you have read and understood it. Njangi On-Chain is software that helps your savings group (njangi/tontine) run itself. **It is not a bank, and your money is not guaranteed by anyone.**
 
 ## Your money is crypto, and crypto can lose value
 
@@ -21,14 +21,14 @@ Please read this carefully. You will be asked to confirm that you have read and 
 ## Payments cannot be undone
 
 - Blockchain transactions are **final**. There is no "cancel" button and no chargeback.
-- If you send funds to the wrong place, or someone tricks you into sending funds, **no one can reverse it** — not Njangi, not anyone.
+- If you send funds to the wrong place, or someone tricks you into sending funds, **no one can reverse it** — not Njangi On-Chain, not anyone.
 
-## Njangi is not a bank — and there is no insurance
+## Njangi On-Chain is not a bank — and there is no insurance
 
-- Your funds are held by a **smart contract** (a computer program on the Sui blockchain), not by Njangi and not by a bank.
+- Your funds are held by a **smart contract** (a computer program on the Sui blockchain), not by Njangi On-Chain and not by a bank.
 - **There is no deposit insurance.** No government or company will pay you back if something goes wrong.
-- Njangi **cannot move, freeze, or recover your funds**. This protects you from us — but it also means we cannot "fix" a loss for you.
-- Njangi pays **no interest and no yield**. This is a savings rotation, not an investment.
+- Njangi On-Chain **cannot move, freeze, or recover your funds**. This protects you from us — but it also means we cannot "fix" a loss for you.
+- Njangi On-Chain pays **no interest and no yield**. This is a savings rotation, not an investment.
 
 ## Software can have bugs
 
@@ -38,9 +38,9 @@ Please read this carefully. You will be asked to confirm that you have read and 
 
 ## Your circle members are your risk
 
-- **You choose your circle members. Njangi does not check them and does not guarantee them.**
+- **You choose your circle members. Njangi On-Chain does not check them and does not guarantee them.**
 - If a member stops contributing, your payout may be late, smaller, or may not happen.
-- A dispute with a member is between you and that member. Njangi cannot take funds from anyone to make you whole.
+- A dispute with a member is between you and that member. Njangi On-Chain cannot take funds from anyone to make you whole.
 - Only join circles with people you genuinely trust.
 
 ## Losing your login can mean losing your wallet
@@ -60,7 +60,7 @@ Please read this carefully. You will be asked to confirm that you have read and 
 By ticking the box, you confirm that you:
 
 - understand the risks above and accept them;
-- know that Njangi cannot reverse transactions, recover funds, or guarantee circle members;
+- know that Njangi On-Chain cannot reverse transactions, recover funds, or guarantee circle members;
 - know there is no deposit insurance and no interest;
 - will keep your recovery codes and social account safe;
 - are at least 18 years old.

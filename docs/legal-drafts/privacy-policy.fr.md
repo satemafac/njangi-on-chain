@@ -1,5 +1,5 @@
 ---
-title: "Njangi on Chain — Politique de Confidentialité"
+title: "Njangi On-Chain — Politique de Confidentialité"
 version: 1.0.0
 effective_date: "{{EFFECTIVE_DATE}}"
 language: fr
@@ -15,7 +15,7 @@ language: fr
 
 **Version 1.0.0 — Date d'entrée en vigueur : {{EFFECTIVE_DATE}}**
 
-La présente Politique de Confidentialité décrit la manière dont {{COMPANY_LEGAL_NAME}}, {{COMPANY_ADDRESS}} (« Njangi », « nous ») traite vos données à caractère personnel lorsque vous utilisez Njangi on Chain (le « Service »). Le Service est conçu pour réduire les données personnelles au strict minimum : nous ne détenons aucune clé privée, nous ne voyons jamais vos données de carte bancaire, et les seules données d'acheminement identifiantes que nous conservons hors de votre appareil sont chiffrées de sorte que nous puissions en détruire l'accès sur demande.
+La présente Politique de Confidentialité décrit la manière dont {{COMPANY_LEGAL_NAME}}, {{COMPANY_ADDRESS}} (« Njangi On-Chain », « nous ») traite vos données à caractère personnel lorsque vous utilisez Njangi On-Chain (le « Service »). Le Service est conçu pour réduire les données personnelles au strict minimum : nous ne détenons aucune clé privée, nous ne voyons jamais vos données de carte bancaire, et les seules données d'acheminement identifiantes que nous conservons hors de votre appareil sont chiffrées de sorte que nous puissions en détruire l'accès sur demande.
 
 **Responsable du traitement :** {{COMPANY_LEGAL_NAME}}. **Contact confidentialité :** {{PRIVACY_CONTACT}}.
 
@@ -75,7 +75,7 @@ Les sous-traitants agissent en vertu de contrats imposant confidentialité et s�
 
 ## 5. Achats en monnaie fiduciaire (partenaires)
 
-Lorsque vous achetez des crypto-actifs en monnaie fiduciaire, l'opération s'effectue sur la plateforme du partenaire. C'est le partenaire — et non Njangi — qui collecte vos informations KYC (documents d'identité, selfies, données de paiement) en vertu de son propre agrément et de sa propre politique de confidentialité. Nous ne recevons jamais ces documents. Nous ne recevons que le statut de l'achat et l'adresse de destination, que nous utilisons pour mettre l'application à jour et, le cas échéant, ancrer une empreinte de conformité opaque sur la chaîne.
+Lorsque vous achetez des crypto-actifs en monnaie fiduciaire, l'opération s'effectue sur la plateforme du partenaire. C'est le partenaire — et non Njangi On-Chain — qui collecte vos informations KYC (documents d'identité, selfies, données de paiement) en vertu de son propre agrément et de sa propre politique de confidentialité. Nous ne recevons jamais ces documents. Nous ne recevons que le statut de l'achat et l'adresse de destination, que nous utilisons pour mettre l'application à jour et, le cas échéant, ancrer une empreinte de conformité opaque sur la chaîne.
 
 ## 6. Flux de données d'abonnement Stripe
 

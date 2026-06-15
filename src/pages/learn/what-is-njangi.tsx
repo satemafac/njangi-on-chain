@@ -8,7 +8,7 @@ export default function WhatIsNjangiPage() {
   return (
     <>
       <Head>
-        <title>What is Njangi? - Cameroon&#39;s Traditional Savings Circle Goes Blockchain | Njangi Platform</title>
+        <title>What is Njangi? - Cameroon&#39;s Traditional Savings Circle Goes Blockchain | Njangi On-Chain</title>
         <meta name="description" content="Discover how Njangi works and how blockchain technology revolutionizes traditional Cameroon savings circles. Join secure, transparent Njangi on the Sui blockchain platform." />
         <meta name="keywords" content="njangi, what is njangi, njangi meaning, cameroon savings, blockchain rosca, digital njangi, rotating savings cameroon" />
         <link rel="canonical" href="https://njangionchain.com/learn/what-is-njangi" />
@@ -28,7 +28,7 @@ export default function WhatIsNjangiPage() {
 
         {/* Article specific */}
         <meta property="article:published_time" content="2025-06-05T00:00:00.000Z" />
-        <meta property="article:author" content="Njangi Platform Team" />
+        <meta property="article:author" content="Njangi On-Chain Team" />
         <meta property="article:section" content="Education" />
         <meta property="article:tag" content="njangi" />
         <meta property="article:tag" content="blockchain" />
@@ -297,7 +297,7 @@ export default function WhatIsNjangiPage() {
                       <div className="border border-gray-200 rounded-lg p-4">
                         <h4 className="font-semibold text-green-600 mb-2">1. Account Creation</h4>
                         <p className="text-gray-600 text-sm">
-                          Download the Njangi Platform mobile app, complete identity verification, 
+                          Download the Njangi On-Chain mobile app, complete identity verification,
                           and set up secure authentication.
                         </p>
                       </div>

@@ -63,7 +63,7 @@ export default function AutomationDashboard() {
             <Activity className="mr-3 h-8 w-8 text-blue-600" />
             Automation Dashboard
           </h1>
-          <p className="text-gray-600">Monitor Njangi automation system status</p>
+          <p className="text-gray-600">Monitor Njangi On-Chain automation system status</p>
         </div>
       </div>
 

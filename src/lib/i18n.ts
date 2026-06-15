@@ -253,7 +253,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'contribute.blurb':
       'Review wallet readiness, circle requirements, and the current cycle state before submitting your payment.',
     // Dashboard chrome
-    'dashboard.eyebrow': 'Njangi Dashboard',
+    'dashboard.eyebrow': 'Njangi On-Chain Dashboard',
     'dashboard.welcome': 'Welcome back{name}.',
     'dashboard.blurb':
       'Keep your circles, contributions, and cash movement organized in one quiet workspace.',
@@ -567,7 +567,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'contribute.blurb':
       "Vérifiez l'état du portefeuille, les exigences du cercle et l'état du tour en cours avant de soumettre votre paiement.",
     // Habillage du tableau de bord
-    'dashboard.eyebrow': 'Tableau de bord Njangi',
+    'dashboard.eyebrow': 'Tableau de bord Njangi On-Chain',
     'dashboard.welcome': 'Bon retour{name}.',
     'dashboard.blurb':
       "Gardez vos cercles, vos versements et vos mouvements d'argent organisés dans un espace de travail apaisé.",
