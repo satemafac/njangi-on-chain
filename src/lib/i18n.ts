@@ -273,7 +273,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'pricing.title': 'Simple pricing that never touches your savings',
     'pricing.subtitle':
       'Run a circle for free, forever. Premium adds coordination conveniences for larger groups — your contributions, payouts, and recovery stay self-custodied and free on every plan.',
-    'pricing.comingSoonBanner': 'Premium is coming soon — everything is free today.',
+    'pricing.comingSoonBanner': 'Pilot is live — every Premium feature, including smart goals, is free for now.',
     'pricing.breadcrumbHome': 'Home',
     'pricing.breadcrumbPricing': 'Pricing',
     'pricing.free': 'Free',
@@ -282,7 +282,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'pricing.freeBlurb':
       'Everything a small circle needs to save together with on-chain clarity.',
     'pricing.premium': 'Premium',
-    'pricing.comingSoon': 'Coming soon',
+    'pricing.comingSoon': 'Free in pilot',
     'pricing.yourPlan': 'Your plan',
     'pricing.forOrganizers': 'For organizers',
     'pricing.perMonth': 'per month',
@@ -290,7 +290,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'For admins coordinating bigger groups — more members, more circles, and updates where your members already chat.',
     'pricing.billedMonthly':
       'Billed monthly through Stripe. Cancel anytime — your circles and funds are unaffected when a subscription ends.',
-    'pricing.ctaComingSoon': 'Coming soon — free for now',
+    'pricing.ctaComingSoon': 'Included free in the pilot',
     'pricing.ctaSignInToUpgrade': 'Sign in to upgrade',
     'pricing.ctaManageSubscription': 'Manage subscription',
     'pricing.ctaOpeningPortal': 'Opening portal…',
@@ -588,7 +588,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'pricing.title': "Une tarification simple qui ne touche jamais à votre épargne",
     'pricing.subtitle':
       "Gérez un cercle gratuitement, pour toujours. Premium ajoute des facilités de coordination pour les groupes plus importants — vos versements, vos paiements et la récupération restent en autodétention et gratuits sur tous les forfaits.",
-    'pricing.comingSoonBanner': "Premium arrive bientôt — tout est gratuit aujourd'hui.",
+    'pricing.comingSoonBanner': "Le pilote est lancé — toutes les fonctionnalités Premium, y compris les objectifs intelligents, sont gratuites pour l'instant.",
     'pricing.breadcrumbHome': 'Accueil',
     'pricing.breadcrumbPricing': 'Tarifs',
     'pricing.free': 'Gratuit',
@@ -597,7 +597,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'pricing.freeBlurb':
       "Tout ce dont un petit cercle a besoin pour épargner ensemble avec la clarté de la blockchain.",
     'pricing.premium': 'Premium',
-    'pricing.comingSoon': 'Bientôt disponible',
+    'pricing.comingSoon': 'Gratuit (pilote)',
     'pricing.yourPlan': 'Votre forfait',
     'pricing.forOrganizers': 'Pour les organisateurs',
     'pricing.perMonth': 'par mois',
@@ -605,7 +605,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "Pour les administrateurs qui coordonnent de plus grands groupes — plus de membres, plus de cercles, et des notifications là où vos membres discutent déjà.",
     'pricing.billedMonthly':
       "Facturé mensuellement via Stripe. Annulez à tout moment — vos cercles et vos fonds ne sont pas affectés à la fin d'un abonnement.",
-    'pricing.ctaComingSoon': "Bientôt disponible — gratuit pour l'instant",
+    'pricing.ctaComingSoon': 'Inclus gratuitement dans le pilote',
     'pricing.ctaSignInToUpgrade': 'Connectez-vous pour passer à Premium',
     'pricing.ctaManageSubscription': "Gérer l'abonnement",
     'pricing.ctaOpeningPortal': 'Ouverture du portail…',
