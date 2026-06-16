@@ -11,8 +11,16 @@ import { NextApiRequest, NextApiResponse } from 'next';
 // run — in-app webviews (WhatsApp/Mail/IG), strict CSP, JS disabled (see
 // docs/in-app-browser-oauth.md). So we provide THREE escalating mechanisms:
 //   1. inline script (fastest, normal browsers),
-//   2. <meta http-equiv="refresh"> (no-JS fallback),
+//   2. <meta http-equiv="refresh"> as a DELAYED fallback,
 //   3. a visible manual "Continue" link (bulletproof last resort).
+//
+// The meta-refresh is delayed (not "0") on purpose: a 0s refresh races the
+// inline script's replace() and, in normal browsers, BOTH navigate — loading
+// the client callback twice, which fires handleCallback twice. The server
+// consumes the one-time ephemeral setup data on the first call, so the second
+// throws and surfaces a spurious "authentication failed" even though sign-in
+// succeeded. The delay lets the script win in JS browsers (it navigates away
+// long before the timer), so the meta only ever fires when the script didn't.
 
 function escapeHtmlAttr(value: string): string {
   return value
@@ -72,7 +80,7 @@ function sendBridge(res: NextApiResponse, redirectUrl: string) {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="refresh" content="0; url=${attrTarget}" />
+    <meta http-equiv="refresh" content="3; url=${attrTarget}" />
     <title>Completing sign in…</title>
     <script>
       // Primary path: replace() so this bridge isn't left in history.

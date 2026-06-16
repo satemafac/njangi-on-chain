@@ -190,6 +190,32 @@ export default function AuthCallback() {
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Authentication failed';
         console.warn('Auth callback error:', errorMessage);
+
+        // Don't cry wolf: if a session actually got established (e.g. the
+        // callback was loaded twice and the FIRST run already signed in and
+        // consumed the one-time setup data, making THIS run throw), the user
+        // is authenticated — treat it as success instead of flashing a scary
+        // error and bouncing them to the landing page.
+        if (
+          typeof window !== 'undefined' &&
+          window.localStorage.getItem('isAuthenticated') === 'true' &&
+          window.localStorage.getItem('account')
+        ) {
+          console.log('Auth callback: session already established; treating as success');
+          setProgress(100);
+          setStatus('Authentication successful! Redirecting...');
+          redirectTimeoutRef.current = setTimeout(() => {
+            const stored = localStorage.getItem('redirectAfterLogin');
+            if (stored) {
+              localStorage.removeItem('redirectAfterLogin');
+              window.location.href = stored;
+            } else {
+              router.replace('/dashboard');
+            }
+          }, 800);
+          return;
+        }
+
         setIsError(true);
         setStatus('Authentication failed');
         setError(errorMessage);
