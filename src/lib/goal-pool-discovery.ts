@@ -60,8 +60,21 @@ function packageIdFor(network: NetworkType): string {
   return id;
 }
 
-// Event types anchor to the ORIGINAL package id and survive upgrades.
+// A Move type's identity (used in MoveEventType filters) is anchored to the
+// package id of the version that FIRST INTRODUCED its module — and that id is
+// immutable forever after. The njangi_goal_pool module did NOT exist in the
+// original testnet package (0x89cddf v1); it was added in the v2 upgrade, so
+// GoalPool event types are `0x5065df...::njangi_goal_pool::*`. Querying with the
+// lineage original id returns zero rows (the classic "added-in-upgrade module"
+// trap). Pin the module's introduction id per network.
+const GOAL_POOL_TYPE_ORIGIN: Partial<Record<NetworkType, string>> = {
+  testnet: '0x5065df51281b3c64fec11fa36a4d2c7522e290ea60212aae6688613df0b64b0a',
+};
+
 function eventTypePackageIdFor(network: NetworkType): string {
+  const origin = GOAL_POOL_TYPE_ORIGIN[network];
+  if (origin && origin.trim() !== '') return origin;
+  // Fallback for a future fresh lineage where goal_pool ships in the original publish.
   const { originalId } = getPublishedPackageMetadata(network);
   if (originalId && originalId.trim() !== '') return originalId;
   return packageIdFor(network);
