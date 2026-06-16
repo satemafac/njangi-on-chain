@@ -23,8 +23,12 @@ const NATIVE_SUI_TYPE =
 
 function normalizeCoinType(type: string): string {
   // Sui `0x2::sui::SUI` and the fully-padded form refer to the same type.
+  // Use `0*` (not `0+`): the short form `0x2::` has NO leading zeros, and if it
+  // isn't expanded the native-SUI check below fails — sending SUI contributions
+  // down the generic path, which pulls every SUI coin in as a tx input and
+  // leaves none for gas ("No valid gas coins found").
   return type.replace(
-    /^0x0+2::/,
+    /^0x0*2::/,
     '0x0000000000000000000000000000000000000000000000000000000000000002::',
   );
 }
