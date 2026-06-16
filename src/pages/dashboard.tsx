@@ -12,6 +12,7 @@ import { toast } from 'react-hot-toast';
 import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink, ArrowRightLeft, ChevronDown, ChevronUp } from 'lucide-react';
 import RampPicker from '@/components/RampPicker';
 import NjangiRoundAlerts from '@/components/NjangiRoundAlerts';
+import GoalPoolsSection from '@/components/goals/GoalPoolsSection';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 import {
   mapCurrencyCodeToIntent,
@@ -7544,6 +7545,9 @@ export default function Dashboard() {
               </div>
             </div>
           </section>
+
+          {/* Goal Pools Section (additive — non-rotating Smart Goal pools) */}
+          <GoalPoolsSection userAddress={userAddress} network={network} />
         </div>
       </main>
 

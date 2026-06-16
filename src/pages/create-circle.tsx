@@ -33,12 +33,22 @@ import {
 import { hasFeaturePreflight } from '../components/milestones/entitlement-preflight';
 import { useTranslation } from '../hooks/useTranslation';
 import BillingUpsellModal from '../components/BillingUpsellModal';
-import MilestonePlanEditor from '../components/milestones/MilestonePlanEditor';
+import GoalPotProgress from '../components/goals/GoalPotProgress';
+import { goalDisplayFont } from '../lib/fonts';
+import { useZkLoginSigner } from '../hooks/useZkLoginSigner';
 import {
-  savePendingMilestonePlan,
-  validatePlanSketch,
-  type MilestoneDraft,
-} from '../components/milestones/milestone-plan';
+  buildOpenGoalPoolTx,
+  GOAL_KIND_AMOUNT,
+  GOAL_KIND_DATE,
+  GOAL_KIND_AMOUNT_BY_DATE,
+} from '../services/goal-pool-service';
+import { isValidSuiAddress } from '@mysten/sui/utils';
+import type { NetworkType } from '../services/whatsapp-registry-service';
+
+// Curated emoji set for giving a Smart Goal pot a bit of personality. The
+// chosen emoji is prepended to the on-chain circle name so it travels with the
+// goal everywhere it is displayed.
+const GOAL_EMOJIS = ['🎯', '🎉', '🏠', '✈️', '🎓', '💍', '🚗', '🍼', '🏥', '🎁', '🌴', '💰', '📱', '🎄', '⚽', '🐐'];
 
 // Get package ID dynamically based on current network
 const getPackageId = () => {
@@ -148,8 +158,12 @@ interface CircleFormData {
     targetAmountUSD?: number; // NEW: USD amount (deprecated)
     targetAmountLocal?: number; // NEW: Amount in selected currency
     targetDate?: string;
+    byDate?: string; // amount goals: optional "reach it by this date"
+    byDateBehavior?: 'release' | 'refund'; // what happens at byDate if target unmet
     verificationRequired: boolean;
   };
+  goalEmoji?: string; // Frontend-only: prepended to name for smart-goal circles
+  goalBeneficiary?: string; // Frontend-only: smart-goal pool beneficiary (blank = creator)
 }
 
 // Contract-specific constants
@@ -190,23 +204,58 @@ const validateFormData = (
   formData: CircleFormData,
 ): string[] => {
   const errors: string[] = [];
-  
+  const isSmartGoal = formData.cycleType === 'smart-goal';
+
   if (!formData.name) {
-    errors.push('Circle name is required');
+    errors.push(isSmartGoal ? 'Goal description is required' : 'Circle name is required');
   }
-  
+
+  if (isSmartGoal) {
+    // Smart-goal pools accept flexible contributions toward a shared target —
+    // no per-member contribution, no member count, no security deposit. They
+    // only need a goal configured and (optionally) a valid beneficiary.
+    if (!formData.smartGoal) {
+      errors.push('Choose a goal: a target amount or a target date');
+    } else {
+      if (formData.smartGoal.goalType === 'amount' && (!formData.smartGoal.targetAmount || formData.smartGoal.targetAmount <= 0)) {
+        errors.push('Set a target amount greater than 0');
+      }
+      if (formData.smartGoal.goalType === 'date' && !formData.smartGoal.targetDate) {
+        errors.push('Pick a target date');
+      }
+      // Optional "reach it by a date" on amount goals.
+      if (formData.smartGoal.goalType === 'amount' && formData.smartGoal.byDate !== undefined) {
+        if (!formData.smartGoal.byDate) {
+          errors.push('Pick the date to reach your goal by (or untick "Reach it by a date")');
+        } else if (new Date(formData.smartGoal.byDate).getTime() <= Date.now()) {
+          errors.push('The "reach it by" date must be in the future');
+        }
+      }
+    }
+    const ben = (formData.goalBeneficiary || '').trim();
+    if (ben && !isValidSuiAddress(ben)) {
+      errors.push('Beneficiary must be a valid Sui address (or leave it blank to receive the pot yourself)');
+    }
+    return errors;
+  }
+
   if (formData.contributionAmount <= 0) {
     errors.push('Contribution amount must be greater than 0');
+  } else if (Math.floor(formData.contributionAmountUSD * 100) <= 0) {
+    // The contract asserts contribution_amount_usd > 0 (cents). A sub-cent
+    // contribution passes the SUI check above but would abort on-chain.
+    errors.push('Contribution amount is too small');
   }
-  
-  if (formData.securityDeposit < formData.contributionAmount / 2) {
-    errors.push('Security deposit must be at least 50% of contribution amount');
-  }
-  
+
   if (formData.numberOfMembers < MIN_MEMBERS || formData.numberOfMembers > MAX_MEMBERS) {
     errors.push(`Number of members must be between ${MIN_MEMBERS} and ${MAX_MEMBERS}`);
   }
-  
+
+  // --- Rotational-only validation (cadence + security deposit + recovery) ---
+  if (formData.securityDeposit < formData.contributionAmount / 2) {
+    errors.push('Security deposit must be at least 50% of contribution amount');
+  }
+
   // Validate cycle day selection
   if (formData.cycleLength === 'weekly' || formData.cycleLength === 'bi-weekly') {
     // For weekly cycles, cycleDay should be a weekday string
@@ -230,35 +279,25 @@ const validateFormData = (
     );
   }
 
-  if (formData.cycleType === 'smart-goal') {
-    if (!formData.smartGoal) {
-      // Never let a smart-goal circle submit without a goal config —
-      // goal_type would be sent as `none`, and create_circle_milestones
-      // would abort with E_GOAL_NOT_CONFIGURED forever after.
-      errors.push('Choose a goal for your smart-goal circle: a savings target amount or a target date');
-    } else {
-      if (formData.smartGoal.goalType === 'amount' && (!formData.smartGoal.targetAmount || formData.smartGoal.targetAmount <= 0)) {
-        errors.push('Target amount must be greater than 0');
-      }
-      if (formData.smartGoal.goalType === 'date' && !formData.smartGoal.targetDate) {
-        errors.push('Target date is required');
-      }
-    }
-  }
-  
   return errors;
 };
 
 // Function to prepare form data for contract
 const prepareCircleCreationData = (formData: CircleFormData) => {
-  // Convert cycle length to contract format
-  const cycle_length = CYCLE_LENGTH_MAP[formData.cycleLength];
-  
+  const isSmartGoal = formData.cycleType === 'smart-goal';
+
+  // Convert cycle length to contract format. Smart-goal pools have no
+  // member-facing cadence, but the contract still requires a valid schedule, so
+  // we anchor them to a silent monthly cadence (drives the "your turn" nudges).
+  const cycle_length = isSmartGoal ? CYCLE_LENGTH_MAP['monthly'] : CYCLE_LENGTH_MAP[formData.cycleLength];
+
   // Convert cycle day to contract format
-  const cycle_day = typeof formData.cycleDay === 'string' 
-    ? WEEKDAY_MAP[formData.cycleDay as WeekDay]
-    : formData.cycleDay;
-  
+  const cycle_day = isSmartGoal
+    ? 1
+    : typeof formData.cycleDay === 'string'
+      ? WEEKDAY_MAP[formData.cycleDay as WeekDay]
+      : formData.cycleDay;
+
   // Convert circle type to contract format
   const circle_type = CYCLE_TYPE_MAP[formData.cycleType];
   
@@ -276,17 +315,25 @@ const prepareCircleCreationData = (formData: CircleFormData) => {
   // IMPORTANT: The contract expects local currency values in cents (2 decimal places)
   // For example, $0.20 = 20 cents, ₦100.50 = 10050 kobo cents
   const contribution_amount_local = Math.floor(formData.contributionAmountLocal * 100);
-  const security_deposit_local = Math.floor(formData.securityDepositLocal * 100);
-  const target_amount_local = formData.smartGoal?.targetAmountLocal 
-    ? Math.floor(formData.smartGoal.targetAmountLocal * 100) 
+  // Goal pools still rotate on-chain (the milestone layer is observational), so
+  // the contract requires the standard 50% refundable commitment deposit. We
+  // auto-derive it from the contribution instead of asking the organizer to set
+  // it, rather than sending 0 (which the contract rejects).
+  const security_deposit_local = isSmartGoal
+    ? Math.ceil(contribution_amount_local / 2)
+    : Math.floor(formData.securityDepositLocal * 100);
+  const target_amount_local = formData.smartGoal?.goalType === 'amount' && formData.smartGoal?.targetAmountLocal
+    ? Math.floor(formData.smartGoal.targetAmountLocal * 100)
     : 0;
     
   // IMPORTANT: Also include USD equivalent values for contract validation
   // The contract uses these USD values for internal calculations and validation
   const contribution_amount_usd = Math.floor(formData.contributionAmountUSD * 100);
-  const security_deposit_usd = Math.floor(formData.securityDepositUSD * 100);
-  const target_amount_usd = formData.smartGoal?.targetAmountUSD 
-    ? Math.floor(formData.smartGoal.targetAmountUSD * 100) 
+  const security_deposit_usd = isSmartGoal
+    ? Math.max(1, Math.ceil(contribution_amount_usd / 2))
+    : Math.floor(formData.securityDepositUSD * 100);
+  const target_amount_usd = formData.smartGoal?.goalType === 'amount' && formData.smartGoal?.targetAmountUSD
+    ? Math.floor(formData.smartGoal.targetAmountUSD * 100)
     : 0;
     
   // Convert target date to Option<u64> (Unix timestamp in seconds)
@@ -298,18 +345,31 @@ const prepareCircleCreationData = (formData: CircleFormData) => {
   // IMPORTANT: These values are proper SUI amounts with 9 decimals (MIST)
   // Use the already-converted SUI amounts from formData which were calculated via proper currency conversion
   const contribution_amount = BigInt(Math.round(formData.contributionAmount * 1e9));
-  
-  // Calculate security deposit similarly
-  const security_deposit = BigInt(Math.round(formData.securityDeposit * 1e9));
 
-  // Convert penalty rules to array of booleans
-  const penalty_rules = [
-    formData.penaltyRules.latePayment,
-    formData.penaltyRules.missedMeeting
-  ];
+  // Calculate security deposit. Goal pools auto-derive the 50% commitment
+  // deposit from the contribution (must be > 0 on-chain).
+  const sgDepositMist = contribution_amount / BigInt(2);
+  const security_deposit = isSmartGoal
+    ? (sgDepositMist > BigInt(0) ? sgDepositMist : BigInt(1))
+    : BigInt(Math.round(formData.securityDeposit * 1e9));
+
+  // Convert penalty rules to array of booleans (none for smart-goal pools)
+  const penalty_rules = isSmartGoal
+    ? [false, false]
+    : [
+        formData.penaltyRules.latePayment,
+        formData.penaltyRules.missedMeeting
+      ];
+
+  // Prepend the chosen emoji so it travels with the goal name everywhere. Falls
+  // back to the same 🎯 default the picker shows, so the persisted name always
+  // matches the preview the organizer saw.
+  const display_name = isSmartGoal
+    ? `${formData.goalEmoji || '🎯'} ${formData.name}`.trim()
+    : formData.name;
 
   return {
-    name: formData.name,
+    name: display_name,
     contribution_amount,
     currency_type: formData.selectedCurrency,
     contribution_amount_local,
@@ -321,16 +381,16 @@ const prepareCircleCreationData = (formData: CircleFormData) => {
     cycle_day,
     circle_type,
     max_members: formData.numberOfMembers,
-    rotation_style: formData.rotationStyle === 'auction-based' ? 1 : 0,
+    rotation_style: isSmartGoal ? 0 : (formData.rotationStyle === 'auction-based' ? 1 : 0),
     penalty_rules,
     goal_type,
     target_amount,
     target_amount_local,
     target_amount_usd,
     target_date,
-    verification_required: formData.smartGoal?.verificationRequired || false,
-    auto_release_enabled: formData.autoReleaseEnabled,
-    auto_release_delay_ms: formData.autoReleaseDelayMs,
+    verification_required: isSmartGoal ? false : (formData.smartGoal?.verificationRequired || false),
+    auto_release_enabled: isSmartGoal ? false : formData.autoReleaseEnabled,
+    auto_release_delay_ms: isSmartGoal ? 0 : formData.autoReleaseDelayMs,
     next_in_command: null,
   };
 };
@@ -344,6 +404,7 @@ interface InviteMember {
 export default function CreateCircle() {
   const router = useRouter();
   const { isAuthenticated, account, userAddress } = useAuth();
+  const { isReady: signerReady, signAndExecute: signGoalPool } = useZkLoginSigner();
   const { t } = useTranslation();
   const [currentStep, setCurrentStep] = useState(0); // Start at step 0 for circle type selection
   const [useCustomContribution, setUseCustomContribution] = useState(false);
@@ -378,10 +439,9 @@ export default function CreateCircle() {
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [createdCircleId, setCreatedCircleId] = useState<string | null>(null);
-  // Smart-goal milestone sketch (published on the goals page after creation)
-  const [milestonePlan, setMilestonePlan] = useState<MilestoneDraft[]>([]);
   const [showSmartGoalUpsell, setShowSmartGoalUpsell] = useState(false);
   const [checkingSmartGoalAccess, setCheckingSmartGoalAccess] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
 
   useEffect(() => {
     const fetchPrice = async () => {
@@ -585,6 +645,14 @@ export default function CreateCircle() {
     },
   ];
 
+  // --- Smart-goal pot preview (derived from current form values) ---
+  const sgCurrencySymbol = SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || formData.selectedCurrency;
+  const sgGoalType = formData.smartGoal?.goalType || 'amount';
+  const sgTargetLocal = formData.smartGoal?.targetAmountLocal || 0;
+  const sgTargetDateObj = formData.smartGoal?.targetDate ? new Date(formData.smartGoal.targetDate) : null;
+  const sgDaysToDate = sgTargetDateObj ? Math.max(0, Math.ceil((sgTargetDateObj.getTime() - Date.now()) / (24 * 3600 * 1000))) : null;
+  const formatLocalAmount = (n: number) => `${sgCurrencySymbol}${Math.round(n).toLocaleString()}`;
+
   const handleAutoReleaseToggle = (checked: boolean) => {
     setFormData((prev) => ({
       ...prev,
@@ -608,25 +676,105 @@ export default function CreateCircle() {
     }));
   };
 
+  // Smart-goal creation now mints a non-rotating GoalPool (no deposit, no
+  // rotation, flexible contributions). Settled in SUI for v1.
+  const handleCreateGoalPool = async () => {
+    const SUI_COIN_TYPE = '0x2::sui::SUI';
+    if (!signerReady || !userAddress) {
+      setError('Please sign in again to create your goal pool.');
+      return;
+    }
+    const sg = formData.smartGoal;
+    if (!sg) {
+      setValidationErrors(['Choose a goal: a target amount or a target date']);
+      return;
+    }
+    const isAmount = sg.goalType === 'amount';
+    if (isAmount && !isPriceAvailable) {
+      setValidationErrors(['SUI price is currently unavailable. Please try again later.']);
+      return;
+    }
+
+    // Encode the goal into the four supported on-chain shapes:
+    //   pure amount          -> AMOUNT
+    //   amount by date (keep)-> AMOUNT_BY_DATE + target_date (releases at the date)
+    //   amount by date (a/n) -> AMOUNT + deadline_ms (refund if not met by the date)
+    //   pure date            -> DATE + target_date
+    let goalKind = GOAL_KIND_AMOUNT;
+    let targetAmountMist = BigInt(0);
+    let targetDateMs = BigInt(0);
+    let deadlineMs = BigInt(0);
+    if (isAmount) {
+      targetAmountMist = sg.targetAmount ? BigInt(Math.round(sg.targetAmount * 1e9)) : BigInt(0);
+      const byMs = sg.byDate ? BigInt(new Date(sg.byDate).getTime()) : BigInt(0);
+      if (byMs > BigInt(0)) {
+        if (sg.byDateBehavior === 'refund') {
+          goalKind = GOAL_KIND_AMOUNT; // refund if target not met by the deadline
+          deadlineMs = byMs;
+        } else {
+          goalKind = GOAL_KIND_AMOUNT_BY_DATE; // release what's pooled at the date
+          targetDateMs = byMs;
+        }
+      }
+    } else {
+      goalKind = GOAL_KIND_DATE;
+      targetDateMs = sg.targetDate ? BigInt(new Date(sg.targetDate).getTime()) : BigInt(0);
+    }
+
+    const beneficiary = (formData.goalBeneficiary || '').trim() || userAddress;
+    const name = formData.goalEmoji ? `${formData.goalEmoji} ${formData.name}`.trim() : formData.name;
+    const network = getCurrentNetwork() as NetworkType;
+
+    try {
+      const build = buildOpenGoalPoolTx({
+        network,
+        coinType: SUI_COIN_TYPE,
+        name,
+        beneficiary,
+        goalKind,
+        targetAmount: targetAmountMist,
+        targetDateMs,
+        deadlineMs,
+      });
+      const result = await signGoalPool({ build, gasBudget: 100_000_000 });
+      const events = (result?.events ?? []) as Array<{ type?: string; parsedJson?: { pool_id?: string } }>;
+      let poolId: string | null = null;
+      for (const ev of events) {
+        if (ev.type && ev.type.includes('::njangi_goal_pool::GoalPoolOpened')) {
+          if (typeof ev.parsedJson?.pool_id === 'string') {
+            poolId = ev.parsedJson.pool_id;
+            break;
+          }
+        }
+      }
+      router.push(poolId ? `/pool/${poolId}` : '/dashboard');
+    } catch (err) {
+      console.error('Error creating goal pool:', err);
+      setError(err instanceof Error ? err.message : 'Failed to create goal pool. Please try again.');
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     // Clear previous errors
     setValidationErrors([]);
     setError(null);
     
     // Validate form data
     const errors = validateFormData(formData);
-    // Validate the smart-goal milestone sketch with the same rules the
-    // contract enforces (strictly-increasing targets, future dates).
-    if (formData.cycleType === 'smart-goal' && milestonePlan.length > 0) {
-      errors.push(...validatePlanSketch(milestonePlan, { nowMs: Date.now() }));
-    }
     if (errors.length > 0) {
       setValidationErrors(errors);
       return;
     }
-    
+
+    // Smart-goal circles are now non-rotating GoalPools (no deposit, no
+    // rotation). They take a completely different creation path.
+    if (formData.cycleType === 'smart-goal') {
+      await handleCreateGoalPool();
+      return;
+    }
+
     // Check if SUI price is available
     if (!isPriceAvailable) {
       setValidationErrors(["SUI price is currently unavailable. Please try again later."]);
@@ -700,17 +848,6 @@ export default function CreateCircle() {
       // Store the transaction digest for reference
       if (result.digest) {
         console.log('Circle creation transaction successful:', result.digest);
-      }
-
-      // Persist the milestone sketch so the goals page can pre-fill the
-      // on-chain milestone creator once the circle id is known.
-      if (formData.cycleType === 'smart-goal' && milestonePlan.length > 0 && userAddress) {
-        savePendingMilestonePlan({
-          adminAddress: userAddress,
-          circleName: formData.name,
-          savedAtMs: Date.now(),
-          entries: milestonePlan,
-        });
       }
 
       // Move to invite step on success
@@ -1351,6 +1488,300 @@ The Njangi On-Chain Team`;
                 </div>
               )}
 
+              {formData.cycleType === 'smart-goal' ? (
+              <div className="space-y-8">
+                {/* Intro banner */}
+                <div className="rounded-[24px] border border-emerald-200/70 bg-gradient-to-br from-emerald-50 to-[#fbfaf7] p-5">
+                  <div className="flex items-start gap-3">
+                    <span className="text-3xl leading-none">🫙</span>
+                    <div>
+                      <h3 className={`${goalDisplayFont.className} text-xl font-semibold text-[#0f5132]`}>
+                        Pool money with friends &mdash; and watch the pot grow
+                      </h3>
+                      <p className="mt-1 text-sm leading-6 text-[#3f6b54]">
+                        Everyone chips in toward one shared goal. Track every contribution as your pot
+                        fills up, round after round, and celebrate together the moment you hit it.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Goal description + emoji */}
+                <div className="space-y-2">
+                  <div className="flex items-center flex-wrap">
+                    <label htmlFor="goal-name" className="block text-sm font-medium text-gray-700">
+                      Goal Description
+                    </label>
+                    <InfoTooltip>
+                      <p>What are you all saving for?</p>
+                      <p className="text-gray-300 text-xs mt-1">Example: Family Reunion 2026</p>
+                    </InfoTooltip>
+                  </div>
+                  <div className="flex items-stretch gap-2">
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setShowEmojiPicker((v) => !v)}
+                        className="flex h-full min-w-[3rem] items-center justify-center rounded-md border border-gray-300 bg-white px-3 text-2xl shadow-sm transition duration-100 hover:bg-gray-50 hover:scale-105 active:scale-95"
+                        aria-label="Pick a goal emoji"
+                      >
+                        {formData.goalEmoji || '🎯'}
+                      </button>
+                      {showEmojiPicker && (
+                        <div className="absolute z-20 mt-2 grid w-56 grid-cols-6 gap-1 rounded-xl border border-gray-200 bg-white p-2 shadow-lg">
+                          {GOAL_EMOJIS.map((emoji) => (
+                            <button
+                              key={emoji}
+                              type="button"
+                              onClick={() => {
+                                setFormData((prev) => ({ ...prev, goalEmoji: emoji }));
+                                setShowEmojiPicker(false);
+                              }}
+                              className={`flex h-8 w-8 items-center justify-center rounded-md text-xl transition duration-100 hover:bg-emerald-50 hover:scale-110 active:scale-95 ${formData.goalEmoji === emoji ? 'bg-emerald-100' : ''}`}
+                            >
+                              {emoji}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <input
+                      type="text"
+                      name="name"
+                      id="goal-name"
+                      required
+                      value={formData.name}
+                      onChange={(e) => handleInputChange('name', e.target.value)}
+                      className="block w-full flex-1 rounded-md border-gray-300 bg-white shadow-sm focus:border-emerald-500 focus:ring-emerald-500"
+                      placeholder="e.g. Family Reunion 2026"
+                    />
+                  </div>
+                </div>
+
+                {/* The shared goal — amount or date — with a live growing-pot preview */}
+                <div className="rounded-[24px] border border-[#e6dccd] bg-[#fcfaf6] p-5">
+                  <div className="flex items-center flex-wrap">
+                    <h4 className="text-sm font-semibold text-gray-800">Set your shared goal</h4>
+                    <InfoTooltip>
+                      <p>Choose how the goal is defined</p>
+                      <p className="text-gray-300 text-xs mt-1">Reach an amount: pool toward a target total</p>
+                      <p className="text-gray-300 text-xs mt-1">Reach a date: keep chipping in until a deadline</p>
+                    </InfoTooltip>
+                  </div>
+
+                  {/* Segmented amount / date toggle */}
+                  <div className="mt-3 inline-flex w-full max-w-sm rounded-full border border-[#dfe5ef] bg-white p-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          smartGoal: { ...(prev.smartGoal ?? { verificationRequired: false }), goalType: 'amount', verificationRequired: prev.smartGoal?.verificationRequired ?? false },
+                        }))
+                      }
+                      className={`flex-1 rounded-full px-4 py-2 text-sm font-medium transition duration-100 active:scale-[0.97] ${sgGoalType === 'amount' ? 'bg-slate-900 text-white shadow' : 'text-slate-600 hover:text-slate-900'}`}
+                    >
+                      💰 Reach an amount
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          smartGoal: { ...(prev.smartGoal ?? { verificationRequired: false }), goalType: 'date', verificationRequired: prev.smartGoal?.verificationRequired ?? false },
+                        }))
+                      }
+                      className={`flex-1 rounded-full px-4 py-2 text-sm font-medium transition duration-100 active:scale-[0.97] ${sgGoalType === 'date' ? 'bg-slate-900 text-white shadow' : 'text-slate-600 hover:text-slate-900'}`}
+                    >
+                      📅 Reach a date
+                    </button>
+                  </div>
+
+                  <div className="mt-4 grid items-center gap-6 lg:grid-cols-[minmax(0,1fr)_200px]">
+                    <div className="space-y-3">
+                      {sgGoalType === 'amount' ? (
+                        <div className="space-y-2">
+                          <label className="block text-sm font-medium text-gray-700">Target amount</label>
+                          <div className="flex items-center space-x-2">
+                            <span className="text-gray-500">{sgCurrencySymbol}</span>
+                            <input
+                              type="number"
+                              value={formData.smartGoal?.targetAmountLocal || ''}
+                              onChange={async (e) => {
+                                const localAmount = parseFloat(e.target.value);
+                                if (!isNaN(localAmount)) {
+                                  let usdAmount = localAmount;
+                                  if (formData.selectedCurrency !== 'USD') {
+                                    try {
+                                      usdAmount = await priceService.convertToUSD(localAmount, formData.selectedCurrency);
+                                    } catch (error) {
+                                      console.error('Error converting to USD:', error);
+                                      usdAmount = localAmount;
+                                    }
+                                  }
+                                  const suiAmount = await convertLocalToSUI(localAmount);
+                                  setFormData((prev) => ({
+                                    ...prev,
+                                    smartGoal: { ...prev.smartGoal!, targetAmountLocal: localAmount, targetAmountUSD: usdAmount, targetAmount: suiAmount },
+                                  }));
+                                }
+                              }}
+                              placeholder={`How much do you want to pool in ${formData.selectedCurrency}?`}
+                              className="block w-full rounded-md border-gray-300 shadow-sm focus:border-emerald-500 focus:ring-emerald-500"
+                              min="0"
+                              step="100"
+                            />
+                            <span className="text-gray-500">{formData.selectedCurrency}</span>
+                          </div>
+                          <p className="text-xs text-gray-500">≈ {formData.smartGoal?.targetAmount?.toFixed(2) || '0'} SUI at current price · pegged to {formData.selectedCurrency}</p>
+
+                          {/* Optional: reach the amount by a date */}
+                          <div className="space-y-2 rounded-[14px] border border-[#e6dccd] bg-white/60 p-3">
+                            <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                              <input
+                                type="checkbox"
+                                checked={formData.smartGoal?.byDate !== undefined}
+                                onChange={(e) =>
+                                  setFormData((prev) => ({
+                                    ...prev,
+                                    smartGoal: {
+                                      ...prev.smartGoal!,
+                                      byDate: e.target.checked ? (prev.smartGoal?.byDate || '') : undefined,
+                                      byDateBehavior: prev.smartGoal?.byDateBehavior || 'release',
+                                    },
+                                  }))
+                                }
+                                className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                              />
+                              ⏳ Reach it by a date (optional)
+                            </label>
+                            {formData.smartGoal?.byDate !== undefined && (
+                              <div className="space-y-3 pl-6">
+                                <input
+                                  type="date"
+                                  value={formData.smartGoal?.byDate || ''}
+                                  onChange={(e) =>
+                                    setFormData((prev) => ({ ...prev, smartGoal: { ...prev.smartGoal!, byDate: e.target.value } }))
+                                  }
+                                  min={new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split('T')[0]}
+                                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-emerald-500 focus:ring-emerald-500"
+                                />
+                                <div className="space-y-2">
+                                  <p className="text-xs font-medium text-gray-600">If the date arrives before the goal:</p>
+                                  <label className="flex items-start gap-2 text-sm text-gray-700">
+                                    <input
+                                      type="radio"
+                                      name="byDateBehavior"
+                                      checked={(formData.smartGoal?.byDateBehavior || 'release') === 'release'}
+                                      onChange={() =>
+                                        setFormData((prev) => ({ ...prev, smartGoal: { ...prev.smartGoal!, byDateBehavior: 'release' } }))
+                                      }
+                                      className="mt-1 border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                                    />
+                                    <span><strong>Release what&apos;s pooled</strong> to the beneficiary (keep what you raise)</span>
+                                  </label>
+                                  <label className="flex items-start gap-2 text-sm text-gray-700">
+                                    <input
+                                      type="radio"
+                                      name="byDateBehavior"
+                                      checked={formData.smartGoal?.byDateBehavior === 'refund'}
+                                      onChange={() =>
+                                        setFormData((prev) => ({ ...prev, smartGoal: { ...prev.smartGoal!, byDateBehavior: 'refund' } }))
+                                      }
+                                      className="mt-1 border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                                    />
+                                    <span><strong>Refund everyone</strong> (all-or-nothing)</span>
+                                  </label>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <label className="block text-sm font-medium text-gray-700">Target date</label>
+                          <input
+                            type="date"
+                            value={formData.smartGoal?.targetDate || ''}
+                            onChange={(e) => {
+                              setFormData((prev) => ({ ...prev, smartGoal: { ...prev.smartGoal!, targetDate: e.target.value } }));
+                            }}
+                            min={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}
+                            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-emerald-500 focus:ring-emerald-500"
+                          />
+                          {sgDaysToDate != null && (
+                            <p className="text-xs text-gray-500">{sgDaysToDate} days to go · keep the pot growing until then</p>
+                          )}
+                        </div>
+                      )}
+
+                      {/* How it works */}
+                      <div className="rounded-[16px] border border-[#dbe2ec] bg-[#f3f6fb] p-3 text-sm leading-6 text-[#51627b]">
+                        {sgGoalType === 'amount' ? (
+                          sgTargetLocal > 0 ? (
+                            <span>
+                              Friends chip in <strong>any amount</strong> toward <strong>{formatLocalAmount(sgTargetLocal)}</strong>. Watch the pot fill up — the moment it hits the goal, the whole pot is released to the beneficiary.
+                            </span>
+                          ) : (
+                            <span>Set a target amount above. Friends can then chip in any amount toward it.</span>
+                          )
+                        ) : sgTargetDateObj ? (
+                          <span>
+                            Friends chip in <strong>any amount</strong> until <strong>{sgTargetDateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</strong>, then the pot is released to the beneficiary.
+                          </span>
+                        ) : (
+                          <span>Pick a target date above. Friends can then chip in any amount until then.</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Live growing-pot preview */}
+                    <GoalPotProgress
+                      percent={8}
+                      size={150}
+                      goalKind={sgGoalType}
+                      title={(formData.goalEmoji ? formData.goalEmoji + ' ' : '') + (formData.name || 'Your goal')}
+                      primaryLabel={
+                        sgGoalType === 'amount'
+                          ? (sgTargetLocal > 0 ? `Goal: ${formatLocalAmount(sgTargetLocal)}` : 'Set a target')
+                          : (sgTargetDateObj ? sgTargetDateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'Pick a date')
+                      }
+                      secondaryLabel="Friends chip in any amount"
+                    />
+                  </div>
+                </div>
+
+                {/* Who receives the pot */}
+                <div className="space-y-2">
+                  <div className="flex items-center flex-wrap">
+                    <label htmlFor="goal-beneficiary" className="block text-sm font-medium text-gray-700">Who receives the pot?</label>
+                    <InfoTooltip>
+                      <p>The wallet that receives the whole pot once the goal is reached.</p>
+                      <p className="text-gray-300 text-xs mt-1">Defaults to you. Paste a friend&apos;s Sui address to collect on their behalf.</p>
+                    </InfoTooltip>
+                  </div>
+                  <input
+                    type="text"
+                    id="goal-beneficiary"
+                    value={formData.goalBeneficiary || ''}
+                    onChange={(e) => handleInputChange('goalBeneficiary', e.target.value)}
+                    placeholder={userAddress ? `You (${userAddress.slice(0, 6)}…${userAddress.slice(-4)})` : 'Your wallet (default)'}
+                    className="block w-full rounded-md border-gray-300 bg-white font-mono text-sm shadow-sm focus:border-emerald-500 focus:ring-emerald-500"
+                  />
+                  <p className="text-xs text-gray-500">Leave blank to receive the pot yourself.</p>
+                </div>
+
+                {/* Open-pool explainer */}
+                <div className="flex items-start gap-2 rounded-[16px] border border-emerald-200/70 bg-emerald-50/60 px-3 py-2.5 text-xs leading-5 text-[#3f6b54]">
+                  <span className="text-base leading-none">✨</span>
+                  <span>
+                    <strong>No security deposit, no fixed rounds.</strong> Anyone with the link chips in any amount and watches the pot grow.
+                    When the goal is reached, the whole pot is released to the beneficiary; if it falls through, contributors are refunded.
+                  </span>
+                </div>
+              </div>
+              ) : (
+              <>
               {/* Group Name */}
               <div className="space-y-2">
                 <div className="flex items-center flex-wrap">
@@ -1819,208 +2250,6 @@ The Njangi On-Chain Team`;
                 )}
               </div>
 
-              {/* Add Smart Goal Fields when cycleType is smart-goal */}
-              {formData.cycleType === 'smart-goal' && (
-                <div className="space-y-6 border-t pt-6">
-                  <h3 className="text-lg font-medium text-gray-900">Smart Goal Settings</h3>
-                  
-                  {/* Goal Type Selection */}
-                  <div className="space-y-2">
-                    <div className="flex items-center">
-                      <label className="block text-sm font-medium text-gray-700">
-                        Goal Type
-                      </label>
-                      <InfoTooltip>
-                        <p>Choose how you want to define your group&apos;s goal</p>
-                        <p className="text-gray-300 text-xs mt-1">Amount-based: Set a specific savings target</p>
-                        <p className="text-gray-300 text-xs mt-1">Date-based: Set a target completion date</p>
-                      </InfoTooltip>
-                    </div>
-                    <Select.Root
-                      value={formData.smartGoal?.goalType || 'amount'}
-                      onValueChange={(value: 'amount' | 'date') => {
-                        setFormData(prev => ({
-                          ...prev,
-                          smartGoal: {
-                            ...prev.smartGoal,
-                            goalType: value,
-                            targetAmount: value === 'amount' ? 0 : undefined,
-                            targetDate: value === 'date' ? undefined : undefined,
-                            verificationRequired: prev.smartGoal?.verificationRequired || false
-                          }
-                        }));
-                      }}
-                    >
-                      <Select.Trigger
-                        className="inline-flex items-center justify-between w-full px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        aria-label="Goal type"
-                      >
-                        <Select.Value />
-                        <Select.Icon className="ml-2">
-                          <ChevronDownIcon />
-                        </Select.Icon>
-                      </Select.Trigger>
-                      <Select.Portal>
-                        <Select.Content className="overflow-hidden bg-white rounded-md shadow-lg">
-                          <Select.Viewport className="p-1">
-                            <Select.Item
-                              value="amount"
-                              className="relative flex items-center px-8 py-2 text-sm text-gray-700 rounded-md hover:bg-blue-50 hover:text-blue-700 focus:bg-blue-50 focus:text-blue-700 outline-none cursor-pointer"
-                            >
-                              <Select.ItemText>Amount-based Goal</Select.ItemText>
-                              <Select.ItemIndicator className="absolute left-2 inline-flex items-center">
-                                <CheckIcon />
-                              </Select.ItemIndicator>
-                            </Select.Item>
-                            <Select.Item
-                              value="date"
-                              className="relative flex items-center px-8 py-2 text-sm text-gray-700 rounded-md hover:bg-blue-50 hover:text-blue-700 focus:bg-blue-50 focus:text-blue-700 outline-none cursor-pointer"
-                            >
-                              <Select.ItemText>Date-based Goal</Select.ItemText>
-                              <Select.ItemIndicator className="absolute left-2 inline-flex items-center">
-                                <CheckIcon />
-                              </Select.ItemIndicator>
-                            </Select.Item>
-                          </Select.Viewport>
-                        </Select.Content>
-                      </Select.Portal>
-                    </Select.Root>
-                  </div>
-
-                  {/* Target Amount Field - Show when goalType is 'amount' */}
-                  {formData.smartGoal?.goalType === 'amount' && (
-                    <div className="space-y-2">
-                      <div className="flex items-center">
-                        <label className="block text-sm font-medium text-gray-700">
-                          Target Amount
-                        </label>
-                        <InfoTooltip>
-                          <p>The total {formData.selectedCurrency} amount your group aims to save</p>
-                          <p className="text-gray-300 text-xs mt-1">Fixed in {formData.selectedCurrency} value, not affected by SUI price</p>
-                          <p className="text-gray-300 text-xs mt-1">Must be greater than individual contribution amount</p>
-                        </InfoTooltip>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <span className="text-gray-500">{SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || '$'}</span>
-                        <input
-                          type="number"
-                          value={formData.smartGoal?.targetAmountLocal || ''}
-                          onChange={async (e) => {
-                            const localAmount = parseFloat(e.target.value);
-                            if (!isNaN(localAmount)) {
-                              // Convert to USD for contract storage
-                              let usdAmount = localAmount;
-                              if (formData.selectedCurrency !== 'USD') {
-                                try {
-                                  usdAmount = await priceService.convertToUSD(localAmount, formData.selectedCurrency);
-                                } catch (error) {
-                                  console.error('Error converting to USD:', error);
-                                  // Fallback: use local value if conversion fails
-                                  usdAmount = localAmount;
-                                }
-                              }
-                              
-                              // Convert to SUI
-                              const suiAmount = await convertLocalToSUI(localAmount);
-                              
-                              setFormData(prev => ({
-                                ...prev,
-                                smartGoal: {
-                                  ...prev.smartGoal!,
-                                  targetAmountLocal: localAmount,
-                                  targetAmountUSD: usdAmount,
-                                  targetAmount: suiAmount
-                                }
-                              }));
-                            }
-                          }}
-                          placeholder={`Enter target amount in ${formData.selectedCurrency}`}
-                          className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                          min={formData.securityDepositLocal}
-                          step="100"
-                        />
-                        <span className="text-gray-500">{formData.selectedCurrency}</span>
-                      </div>
-                      <p className="text-sm text-gray-500 mt-1">
-                        ≈ {formData.smartGoal?.targetAmount?.toFixed(2) || '0'} SUI at current price
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Target Date Field - Show when goalType is 'date' */}
-                  {formData.smartGoal?.goalType === 'date' && (
-                    <div className="space-y-2">
-                      <div className="flex items-center">
-                        <label className="block text-sm font-medium text-gray-700">
-                          Target Date
-                        </label>
-                        <InfoTooltip>
-                          <p>When you want to achieve your savings goal</p>
-                          <p className="text-gray-300 text-xs mt-1">Must be at least one month in the future</p>
-                        </InfoTooltip>
-                      </div>
-                      <input
-                        type="date"
-                        value={formData.smartGoal?.targetDate || ''}
-                        onChange={(e) => {
-                          setFormData(prev => ({
-                            ...prev,
-                            smartGoal: {
-                              ...prev.smartGoal!,
-                              targetDate: e.target.value
-                            }
-                          }));
-                        }}
-                        min={new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}
-                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                      />
-                    </div>
-                  )}
-
-                  {/* Verification Required Toggle */}
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center">
-                      <label className="text-sm text-gray-700">
-                        Require Goal Verification
-                      </label>
-                      <InfoTooltip>
-                        <p>Enable if goal completion needs admin verification</p>
-                        <p className="text-gray-300 text-xs mt-1">Useful for goals tied to specific achievements</p>
-                      </InfoTooltip>
-                    </div>
-                    <Switch.Root
-                      checked={formData.smartGoal?.verificationRequired || false}
-                      onCheckedChange={(checked) => {
-                        setFormData(prev => ({
-                          ...prev,
-                          smartGoal: {
-                            ...prev.smartGoal!,
-                            verificationRequired: checked
-                          }
-                        }));
-                      }}
-                      className="w-11 h-6 bg-gray-200 rounded-full relative data-[state=checked]:bg-blue-500 transition-colors duration-200"
-                    >
-                      <Switch.Thumb className="block w-5 h-5 bg-white rounded-full shadow-lg transition-transform duration-200 transform translate-x-0.5 data-[state=checked]:translate-x-[22px]" />
-                    </Switch.Root>
-                  </div>
-
-                  {/* Milestone plan — published on the goals page after creation */}
-                  <div className="space-y-2 border-t pt-6">
-                    <div className="flex items-center">
-                      <h4 className="text-base font-medium text-gray-900">
-                        Milestones along the way
-                      </h4>
-                      <InfoTooltip>
-                        <p>Optional ordered milestones the circle celebrates on the way to its goal</p>
-                        <p className="text-gray-300 text-xs mt-1">Savings milestones are cumulative totals and must increase</p>
-                        <p className="text-gray-300 text-xs mt-1">You publish them on the circle&apos;s goals page right after creation</p>
-                      </InfoTooltip>
-                    </div>
-                    <MilestonePlanEditor plan={milestonePlan} onChange={setMilestonePlan} />
-                  </div>
-                </div>
-              )}
 
               {/* Penalty Rules */}
               <div className="space-y-4">
@@ -2214,6 +2443,8 @@ The Njangi On-Chain Team`;
                   <p className="mt-2 text-xs">Current SUI price: {suiPrice ? formatCurrency(suiPrice, formData.selectedCurrency) : "Loading..."}</p>
                 </div>
               </div>
+              </>
+              )}
 
               <div className="flex justify-end space-x-3 pt-6">
                 <button
@@ -2227,7 +2458,7 @@ The Njangi On-Chain Team`;
                   type="submit"
                   className={primaryActionClass}
                 >
-                  {t('create.nextInvite')}
+                  {formData.cycleType === 'smart-goal' ? 'Create goal pool' : t('create.nextInvite')}
                 </button>
               </div>
             </form>
@@ -2461,27 +2692,6 @@ The Njangi On-Chain Team`;
                   </div>
                 )}
                 
-                {/* Smart-goal follow-up: publish milestones on the goals page */}
-                {createdCircleId && formData.cycleType === 'smart-goal' && (
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
-                    <p className="text-sm font-medium text-emerald-900">
-                      Your smart-goal circle is live!
-                    </p>
-                    <p className="mt-1 text-xs leading-5 text-emerald-800">
-                      {milestonePlan.length > 0
-                        ? 'Your milestone sketch is saved — publish it on the goals page before the first round settles.'
-                        : 'Define the milestones your circle will celebrate on the goals page before the first round settles.'}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => router.push(`/circle/${createdCircleId}/goals`)}
-                      className="mt-2 inline-flex items-center rounded-full bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors"
-                    >
-                      Open the goals page
-                    </button>
-                  </div>
-                )}
-
                 {/* Invite Link Display - Only show after circle ID is fetched */}
                 {createdCircleId && (
                   <div className="space-y-3">

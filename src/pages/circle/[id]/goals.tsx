@@ -18,6 +18,8 @@ import MilestoneTimeline, {
 } from '@/components/milestones/MilestoneTimeline';
 import MilestoneCreator from '@/components/milestones/MilestoneCreator';
 import GoalCelebration from '@/components/milestones/GoalCelebration';
+import GoalPotProgress from '@/components/goals/GoalPotProgress';
+import { goalDisplayFont } from '@/lib/fonts';
 import BillingUpsellModal from '@/components/BillingUpsellModal';
 import {
   clearPendingMilestonePlan,
@@ -378,7 +380,7 @@ export default function CircleGoalsPage() {
         <div className={`${pageSurfaceClass} p-5 sm:p-8`}>
           <div className="mb-6">
             <p className={eyebrowClass}>Community Goal</p>
-            <h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-[#171923] sm:text-3xl">
+            <h1 className={`${goalDisplayFont.className} mt-2 text-2xl font-semibold tracking-[-0.02em] text-[#171923] sm:text-3xl`}>
               {goalContext?.name ? `${goalContext.name} — Smart Goals` : 'Smart Goals'}
             </h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-[#5f6674]">
@@ -387,16 +389,14 @@ export default function CircleGoalsPage() {
               funds.
             </p>
             {state && state.milestones.length > 0 && !goalAchieved ? (
-              <div className="mt-4 max-w-md">
-                <div className="h-2.5 w-full overflow-hidden rounded-full bg-stone-200">
-                  <div
-                    className="h-full rounded-full bg-emerald-500 transition-all duration-500"
-                    style={{ width: `${Math.max(2, overallPercent)}%` }}
-                  />
-                </div>
-                <p className="mt-1.5 text-xs text-stone-500">
-                  {overallPercent}% of the way to the goal
-                </p>
+              <div className="mt-4">
+                <GoalPotProgress
+                  percent={overallPercent}
+                  size={150}
+                  goalKind={goalContext?.goalKind === 'date' ? 'date' : 'amount'}
+                  primaryLabel={`Saved: ${(Number(BigInt(state.cumulativeContributed)) / 10 ** settlement.coinDecimals).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${settlement.coinSymbol}`}
+                  secondaryLabel={`${overallPercent}% of the way to the goal`}
+                />
               </div>
             ) : null}
           </div>

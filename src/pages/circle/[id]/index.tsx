@@ -33,6 +33,11 @@ import {
 } from '@/lib/recovery-execution';
 import { getRecoveryProposalUiState } from '@/lib/recovery-ui';
 import { resolveStablecoinMetadata } from '@/lib/stablecoin-metadata';
+import GoalPotProgress from '@/components/goals/GoalPotProgress';
+import { goalDisplayFont } from '@/lib/fonts';
+import { useMilestones } from '@/hooks/useMilestones';
+import { readCircleGoalContext, type CircleGoalContext } from '@/lib/milestone-discovery';
+import type { NetworkType } from '@/services/whatsapp-registry-service';
 import { priceService } from '../../../services/price-service';
 import { getCirclePackageId, getSuiClientFromPool } from '../../../services/circle-service';
 import { readObject, queryEventsCached, invalidateObject, invalidateSuiRead } from '@/lib/sui-read';
@@ -140,6 +145,35 @@ export default function CircleDetails() {
   const [loading, setLoading] = useState(true);
   const [circle, setCircle] = useState<Circle | null>(null);
   const [membersTableId, setMembersTableId] = useState<string | null>(null);
+  // Smart-goal pot: detect whether this circle has a shared goal, then track its
+  // collective progress so members can watch the pot grow on the overview page.
+  const goalNetwork = getCurrentNetwork() as NetworkType;
+  const goalCircleId = typeof id === 'string' ? id : '';
+  const [goalCtx, setGoalCtx] = useState<CircleGoalContext | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!goalCircleId) {
+      setGoalCtx(null);
+      return;
+    }
+    readCircleGoalContext(goalCircleId, goalNetwork)
+      .then((ctx) => {
+        if (!cancelled) setGoalCtx(ctx);
+      })
+      .catch(() => {
+        if (!cancelled) setGoalCtx(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [goalCircleId, goalNetwork]);
+  const isGoalCircle = !!goalCtx?.hasGoal;
+  const {
+    state: goalMilestonesState,
+    overallPercent: goalOverallPercent,
+    goalAchieved: goalIsAchieved,
+  } = useMilestones({ circleId: goalCircleId, network: goalNetwork, enabled: isGoalCircle });
+  const goalHasMilestones = !!goalMilestonesState && goalMilestonesState.milestones.length > 0;
   const [circlePackageId, setCirclePackageId] = useState<string | null>(null);
   const [recoveryStatus, setRecoveryStatus] = useState<RecoveryStatusSnapshot | null>(null);
   const [loadingRecoveryStatus, setLoadingRecoveryStatus] = useState(false);
@@ -1432,6 +1466,75 @@ export default function CircleDetails() {
                   </div>
                 </div>
               </div>
+
+              {isGoalCircle && (
+                <div className={`${pageSurfaceClass} p-6 sm:p-8`}>
+                  <div className="flex flex-col items-center gap-8 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="max-w-xl text-center sm:text-left">
+                      <span className={detailLabelClass}>Shared goal</span>
+                      <h2 className={`${goalDisplayFont.className} mt-3 text-2xl font-semibold tracking-[-0.02em] text-[#171923]`}>
+                        {goalIsAchieved ? 'Goal reached together 🎉' : 'Watch the pot grow'}
+                      </h2>
+                      <p className="mt-3 text-sm leading-7 text-[#5f6674]">
+                        Everyone chips in toward one shared goal. Progress is read straight from
+                        settled rounds on chain — nothing here moves funds.
+                      </p>
+                      <div className="mt-5 flex flex-wrap justify-center gap-3 sm:justify-start">
+                        <span className={`${pillBaseClass} border-[#dde5ef] bg-white text-[#51627b]`}>
+                          {goalCtx?.goalKind === 'date' ? (
+                            <>
+                              <CalendarDays className="h-4 w-4" />
+                              {goalCtx?.targetDateRaw
+                                ? `By ${new Date(Number(goalCtx.targetDateRaw) * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
+                                : 'Target date'}
+                            </>
+                          ) : (
+                            <>
+                              <Wallet className="h-4 w-4" />
+                              {goalCtx?.targetAmountLocalCents
+                                ? `Goal ${(Number(goalCtx.targetAmountLocalCents) / 100).toLocaleString()} ${circle.currencyType || 'USD'}`
+                                : 'Shared savings goal'}
+                            </>
+                          )}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => router.push(`/circle/${goalCircleId}/goals`)}
+                          className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                        >
+                          View goal &amp; milestones
+                        </button>
+                      </div>
+                    </div>
+
+                    <GoalPotProgress
+                      percent={goalOverallPercent}
+                      size={170}
+                      achieved={goalIsAchieved}
+                      goalKind={goalCtx?.goalKind === 'date' ? 'date' : 'amount'}
+                      title={circle.name}
+                      primaryLabel={
+                        goalCtx?.goalKind === 'date'
+                          ? (goalCtx?.targetDateRaw
+                              ? new Date(Number(goalCtx.targetDateRaw) * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+                              : 'Target date')
+                          : (goalCtx?.targetAmountLocalCents
+                              ? `Goal: ${(Number(goalCtx.targetAmountLocalCents) / 100).toLocaleString()} ${circle.currencyType || 'USD'}`
+                              : 'Shared savings goal')
+                      }
+                      secondaryLabel={
+                        goalIsAchieved
+                          ? 'Goal reached!'
+                          : !goalHasMilestones
+                            ? 'Set milestones to track the pot'
+                            : goalOverallPercent > 0
+                              ? `${goalOverallPercent}% pooled so far`
+                              : 'Just getting started'
+                      }
+                    />
+                  </div>
+                </div>
+              )}
 
               {shouldShowRecoverySection && (
                 <div className={`${pageSurfaceClass} p-6 sm:p-8`}>
