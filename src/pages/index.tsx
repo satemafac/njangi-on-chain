@@ -561,11 +561,11 @@ export default function Home() {
         <meta property="og:url" content={`${baseUrl}/`} />
         <meta
           property="og:title"
-          content="Njangi On-Chain | Secure Community Savings Circles"
+          content="Njangi On-Chain — savings circles for the global diaspora"
         />
         <meta
           property="og:description"
-          content="A calmer, more accountable way to run community savings circles with zkLogin onboarding and transparent on-chain coordination."
+          content="The rotating savings circle your community already trusts — njangi, esusu, tontine — now self-custodied, scheduled, and verifiable on-chain. No treasurer. No seed phrase."
         />
         <meta property="og:image" content={`${baseUrl}/og.png?v=2`} />
         <meta property="og:image:width" content="1200" />
@@ -581,11 +581,11 @@ export default function Home() {
         <meta property="twitter:url" content={`${baseUrl}/`} />
         <meta
           property="twitter:title"
-          content="Njangi On-Chain | Secure Community Savings Circles"
+          content="Njangi On-Chain — savings circles for the global diaspora"
         />
         <meta
           property="twitter:description"
-          content="Run savings circles with transparent structure, cultural continuity, and low-friction social sign-in on Sui."
+          content="Njangi, esusu, tontine — the savings circle your community already trusts, now self-custodied and verifiable on-chain. No treasurer, no seed phrase."
         />
         <meta property="twitter:image" content={`${baseUrl}/og.png?v=2`} />
         <meta property="twitter:site" content="@njangi_on_chain" />

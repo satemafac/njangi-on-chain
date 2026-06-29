@@ -13,30 +13,11 @@ export default function Document() {
         <link rel="icon" type="image/png" sizes="512x512" href="/icons/android-chrome-512x512.png" />
         <link rel="manifest" href="/site.webmanifest" />
         
-        {/* Primary Meta Tags */}
-        <meta name="title" content="Njangi On-Chain" />
-        <meta name="description" content="Join secure, transparent savings circles powered by SUI blockchain. Create and manage your community savings with automated payouts and full transparency." />
-        <meta name="keywords" content="njangi, savings circle, sui blockchain, community savings, blockchain" />
-        
-        {/* Open Graph / Facebook */}
-        <meta property="og:type" content="website" />
-        <meta property="og:url" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`} />
-        <meta property="og:title" content="Njangi On-Chain - Community Savings Circles" />
-        <meta property="og:description" content="Join secure, transparent savings circles on the Sui blockchain. Bringing traditional community savings to Web3." />
-        <meta property="og:image" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/og-image.png`} />
-        <meta property="og:image:width" content="1200" />
-        <meta property="og:image:height" content="630" />
-        <meta property="og:image:alt" content="Njangi On-Chain logo with the text 'Community Savings Circles on SUI Blockchain'" />
-        <meta property="og:site_name" content="Njangi On-Chain" />
-        
-        {/* Twitter */}
-        <meta property="twitter:card" content="summary_large_image" />
-        <meta property="twitter:url" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/`} />
-        <meta property="twitter:title" content="Njangi On-Chain - Community Savings Circles" />
-        <meta property="twitter:description" content="Join secure, transparent savings circles on the Sui blockchain. Bringing traditional community savings to Web3." />
-        <meta property="twitter:image" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/og-image.png`} />
-        <meta name="twitter:image:alt" content="Njangi On-Chain logo with the text 'Community Savings Circles on SUI Blockchain'" />
-        
+        {/* SEO + Open Graph + Twitter are defined PER PAGE via next/head (the
+            landing emits the dark globe og.png + on-brand copy). A stale global
+            set here was duplicating every page's tags, so scrapers showed two
+            images and the wrong description. Keep _document global-only. */}
+
         {/* Web App capabilities */}
         {/* theme-color is set per-page via next/head (the landing uses #0a0a0c);
             no global default here so it can't conflict / force a tint on light pages. */}
