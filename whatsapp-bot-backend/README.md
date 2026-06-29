@@ -1,3 +1,10 @@
+> ⚠️ **DEPRECATED — this standalone backend is retired (June 2026).** Njangi now
+> runs on **Vercel**; this service's functionality was folded into the Next.js app
+> as Vercel cron jobs (see [`vercel.json`](../vercel.json)). The Heroku deployment
+> instructions below are **historical** and no longer used — `scripts/heroku-deploy.sh`
+> and `scripts/heroku/sync-config.sh` have been removed. See [`DEPRECATED.md`](./DEPRECATED.md)
+> for where each piece went and the current deploy story in the root `README.md` / `CLAUDE.md`.
+
 # 🤖 WhatsApp Bot Backend
 
 A production-ready Node.js backend for WhatsApp Bot integration with Sui blockchain, featuring zkLogin authentication, Docker containerization, and Heroku deployment.

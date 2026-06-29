@@ -1,3 +1,9 @@
+⚠️  LEGACY / SUPERSEDED — Njangi deploys on Vercel, not Heroku (migration June 2026).
+    This Heroku runbook is kept for historical reference only. The web app runs on
+    Vercel; env vars are set in the Vercel dashboard and cron jobs run via vercel.json.
+    For the current deploy story see README.md and CLAUDE.md ("Vercel deploy").
+    The scripts/heroku-deploy.sh helper referenced below has been REMOVED.
+
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                  HEROKU WHATSAPP WEBHOOK SETUP - SUMMARY                    ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -6,7 +12,7 @@
   1. HEROKU_WHATSAPP_WEBHOOK_SETUP.md     - Complete architecture guide
   2. ENV_SETUP_HEROKU.md                  - Environment variables guide
   3. HEROKU_DEPLOYMENT_CHECKLIST.md       - Step-by-step deployment checklist
-  4. scripts/heroku-deploy.sh             - Automated deployment script
+  4. scripts/heroku-deploy.sh             - REMOVED (Vercel migration; see README.md)
   5. HEROKU_SETUP_SUMMARY.txt             - This file
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -204,9 +210,9 @@ Both processes failing?
    → Follow step-by-step instructions
    → Check off boxes as you complete
 
-3. Run: scripts/heroku-deploy.sh
-   → Automated deployment helper
-   → Handles git, deployment, verification
+3. Deploy via Vercel (scripts/heroku-deploy.sh has been REMOVED)
+   → Push to the connected branch; Vercel builds and deploys
+   → See README.md / CLAUDE.md for the Vercel runbook
 
 4. Monitor: heroku logs -a njangi-on-chain --tail
    → Watch both processes start

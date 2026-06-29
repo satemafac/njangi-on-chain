@@ -20,6 +20,7 @@ import {
   Waypoints,
   X,
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import { useAuth } from '../contexts/AuthContext';
 import { LoginButton } from '../components/LoginButton';
 import { LegalFooter } from '../components/LegalFooter';
@@ -27,6 +28,22 @@ import { LocaleSwitcher } from '../components/ui/LocaleSwitcher';
 import { useTranslation } from '../hooks/useTranslation';
 import { getNetworkConfig, setCurrentNetwork } from '../services/network-config';
 import { SUPPORT_EMAIL, SUPPORT_MAILTO } from '../lib/constants';
+import { Reveal, RevealItem } from '../components/landing/Reveal';
+import TiltCard from '../components/landing/TiltCard';
+import KineticNames from '../components/landing/KineticNames';
+import { useSmoothScroll } from '../components/landing/useSmoothScroll';
+
+// WebGL scenes are browser-only and lazy: keep them out of SSR + the critical
+// path so first paint (and the CSS gradient fallback) never blocks on them, and
+// the lazy chunk never collapses hero height (min-h reserved on the section).
+const DiasporaMeridian = dynamic(
+  () => import('../components/landing/DiasporaMeridian'),
+  { ssr: false, loading: () => null }
+);
+const AmbientField = dynamic(
+  () => import('../components/landing/AmbientField'),
+  { ssr: false, loading: () => null }
+);
 
 declare global {
   interface Window {
@@ -52,6 +69,7 @@ const wordmarkFont = Instrument_Serif({
 
 const bodyFont = Manrope({
   subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
   display: 'swap',
 });
 
@@ -69,18 +87,18 @@ const CULTURAL_NAMES = [
   'Hagbad',
   'Hui',
   'Idir',
-  'Iqub',
   'Kikoba',
   'Mujin',
   'Njangi',
   'Paluwagan',
   'Pandero',
-  'ROSCA',
+  'Gameya',
   'Samity',
   'Sou-sou',
   'Stokvel',
   'Tanda',
   'Tontine',
+  'Xitique',
 ];
 
 // Feature cards and workflow steps reference i18n keys; the visible copy is
@@ -172,7 +190,7 @@ const COMPARISON_ROWS = [
 const COMPARISON_CARDS = [
   {
     title: 'Traditional circle',
-    tone: 'border-[#d8d1c5] bg-white text-[#4b5565]',
+    highlight: false,
     items: [
       'Relationship-based coordination',
       'Cash or manual transfer collection',
@@ -182,7 +200,7 @@ const COMPARISON_CARDS = [
   },
   {
     title: 'Njangi On-Chain',
-    tone: 'border-[#cfd7e3] bg-[#f3f6fb] text-[#334155]',
+    highlight: true,
     items: [
       'Shared visibility for turns, contributions, and approvals',
       'Direct wallet settlement with self-custody',
@@ -192,7 +210,7 @@ const COMPARISON_CARDS = [
   },
   {
     title: 'Banks and fintech apps',
-    tone: 'border-[#d8d1c5] bg-white text-[#4b5565]',
+    highlight: false,
     items: [
       'Built around individual accounts',
       'Provider-controlled custody and rules',
@@ -202,40 +220,25 @@ const COMPARISON_CARDS = [
   },
 ];
 
+// FAQ copy is resolved via i18n (EN/FR) at render time; ids drive accordion state.
 const FAQ_ITEMS = [
-  {
-    id: 'what-is-njangi',
-    question: 'What is a Njangi?',
-    answer:
-      'A Njangi is a rotating community savings structure where members contribute on a shared schedule and each member receives the pooled amount in turn. Similar systems exist globally under many different names.',
-  },
-  {
-    id: 'why-onchain',
-    question: 'Why put a savings circle on-chain?',
-    answer:
-      'The point is not novelty. The point is clarity. On-chain records make contributions, payout order, and settlement easier to verify, especially when members are distributed across cities or countries.',
-  },
-  {
-    id: 'do-i-need-crypto',
-    question: 'Do members need deep crypto experience?',
-    answer:
-      'No. zkLogin lowers the onboarding burden by letting members start with a familiar social account while still receiving a wallet tied to the selected network.',
-  },
-  {
-    id: 'network-switching',
-    question: 'What happens when I switch between testnet and mainnet?',
-    answer:
-      'Your wallet address changes because each network has its own state. The app clears the current session so the selected environment stays clean and consistent.',
-  },
+  { id: 'what-is-njangi', questionKey: 'landing.faq.q1', answerKey: 'landing.faq.a1' },
+  { id: 'why-onchain', questionKey: 'landing.faq.q2', answerKey: 'landing.faq.a2' },
+  { id: 'do-i-need-crypto', questionKey: 'landing.faq.q3', answerKey: 'landing.faq.a3' },
+  { id: 'network-switching', questionKey: 'landing.faq.q4', answerKey: 'landing.faq.a4' },
 ];
 
 const socialLinkClass =
-  'text-sm font-medium text-[#556070] transition-colors duration-200 hover:text-[#171923]';
+  'inline-flex items-center py-2.5 text-sm font-medium text-[#cfc8ba] transition-colors duration-200 hover:text-[#f6d99a] focus-visible:outline-none focus-visible:underline focus-visible:underline-offset-4';
 
 export default function Home() {
   const router = useRouter();
   const { account } = useAuth();
   const { t } = useTranslation();
+
+  // Lenis smooth scroll (skips itself under prefers-reduced-motion).
+  useSmoothScroll();
+
   const [isAuthDialogOpen, setIsAuthDialogOpen] = useState(false);
   const [openFaqItems, setOpenFaqItems] = useState<Record<string, boolean>>({
     'what-is-njangi': true,
@@ -343,11 +346,13 @@ export default function Home() {
         if (data.success && data.data?.circleCount !== undefined) {
           setCircleCount(data.data.circleCount);
         } else {
-          setCircleCount(3);
+          // Honest fallback: leave null so the stat shows "Syncing", never a
+          // fabricated count.
+          setCircleCount(null);
         }
       } catch (error) {
         console.error('Error fetching circle count:', error);
-        setCircleCount(3);
+        setCircleCount(null);
       }
     };
 
@@ -464,8 +469,8 @@ export default function Home() {
       value: '6+',
     },
     {
-      label: t('landing.proof.currentEnvironment'),
-      value: currentNetworkName,
+      label: t('landing.proof.custodyLabel'),
+      value: t('landing.proof.custodyValue'),
     },
   ];
 
@@ -498,17 +503,38 @@ export default function Home() {
     'You will only hear from us when there is something materially useful to share.',
   ];
 
+  const cycleSnapshot = [
+    {
+      icon: Coins,
+      title: 'Contribution due',
+      body: 'Members see the amount, deadline, and payment path without waiting for a reminder thread.',
+    },
+    {
+      icon: Waypoints,
+      title: 'Payout order',
+      body: 'Rotation rules stay visible, reducing ambiguity around who is next and when the handoff happens.',
+    },
+    {
+      icon: Shield,
+      title: 'Audit trail',
+      body: 'Approvals, contributions, and state changes stay visible to the circle instead of one organizer’s notes.',
+    },
+  ];
+
   const sectionEyebrowClass =
-    'text-[11px] font-semibold uppercase tracking-[0.28em] text-[#717784]';
-  const sectionTitleClass =
-    'mt-4 text-3xl font-semibold tracking-[-0.04em] text-[#171923] sm:text-4xl md:text-[2.75rem] md:leading-[1.05]';
+    'text-[11px] font-semibold uppercase tracking-[0.32em] text-[#E8B04B]';
+  const sectionTitleClass = `${wordmarkFont.className} mt-4 text-[clamp(2rem,3.8vw,2.9rem)] font-normal leading-[1.08] tracking-[-0.01em] text-[#f5f1e8]`;
   const sectionBodyClass =
-    'mt-4 max-w-2xl text-base leading-7 text-[#596170] sm:text-lg';
-  const shellCardClass =
-    'rounded-[30px] border border-[#ddd5c9] bg-white/88 shadow-[0_30px_90px_-62px_rgba(15,23,42,0.42)] backdrop-blur';
-  const mutedCardClass = 'rounded-[24px] border border-[#e9e1d6] bg-[#fbfaf7]';
-  const topNavPrimaryActionClass =
-    'inline-flex items-center gap-2 rounded-full bg-[#1d2533] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_18px_44px_-34px_rgba(15,23,42,0.45)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#101723]';
+    'mt-4 max-w-2xl text-base leading-7 text-[#a8a294] sm:text-lg';
+  const glassCardClass =
+    'rounded-3xl border border-[#2a2620] bg-[#13121a]/85 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] backdrop-blur-sm';
+  const mutedCardClass = 'rounded-2xl border border-[#221f29] bg-[#13121a]/60';
+  const goldButtonClass =
+    'inline-flex items-center justify-center gap-2 rounded-full bg-gradient-to-r from-[#f6d99a] via-[#E8B04B] to-[#C8902F] px-6 py-3 text-sm font-semibold text-[#1a1304] shadow-[0_14px_44px_-14px_rgba(232,176,75,0.6)] transition-transform duration-200 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f6d99a] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c]';
+  const ghostButtonClass =
+    'inline-flex items-center justify-center gap-2 rounded-full border border-[#C8902F]/55 bg-white/[0.03] px-6 py-3 text-sm font-semibold text-[#f6d99a] backdrop-blur transition-colors duration-200 hover:border-[#E8B04B] hover:bg-[#E8B04B]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f6d99a] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0c]';
+  const chipClass =
+    'inline-flex items-center gap-2 rounded-full border border-[#2a2620] bg-[#13121a]/70 px-4 py-2 text-sm font-medium text-[#cfc8ba]';
 
   return (
     <>
@@ -541,9 +567,13 @@ export default function Home() {
           property="og:description"
           content="A calmer, more accountable way to run community savings circles with zkLogin onboarding and transparent on-chain coordination."
         />
-        <meta property="og:image" content={`${baseUrl}/njangi-on-chain-logo.png`} />
+        <meta property="og:image" content={`${baseUrl}/og.png?v=2`} />
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
+        <meta
+          property="og:image:alt"
+          content="Njangi On-Chain — a 3D globe of diaspora savings circles linked across the world"
+        />
         <meta property="og:site_name" content="Njangi On-Chain" />
         <meta property="og:locale" content="en_US" />
 
@@ -557,13 +587,13 @@ export default function Home() {
           property="twitter:description"
           content="Run savings circles with transparent structure, cultural continuity, and low-friction social sign-in on Sui."
         />
-        <meta property="twitter:image" content={`${baseUrl}/njangi-on-chain-logo.png`} />
+        <meta property="twitter:image" content={`${baseUrl}/og.png?v=2`} />
         <meta property="twitter:site" content="@njangi_on_chain" />
         <meta property="twitter:creator" content="@njangi_on_chain" />
 
-        <meta name="theme-color" content="#f6f3ee" />
+        <meta name="theme-color" content="#0a0a0c" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
-        <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="apple-mobile-web-app-title" content="Njangi On-Chain" />
 
         <link rel="canonical" href={`${baseUrl}/`} />
@@ -645,39 +675,59 @@ export default function Home() {
       </Head>
 
       <div
-        className={`${bodyFont.className} relative min-h-screen overflow-hidden bg-[#f6f3ee] text-[#171923]`}
+        className={`${bodyFont.className} relative min-h-screen overflow-x-clip bg-[#0a0a0c] text-[#f3efe6]`}
       >
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-[680px] bg-[radial-gradient(circle_at_top_left,_rgba(108,122,147,0.18),_transparent_36%),radial-gradient(circle_at_85%_10%,_rgba(218,204,178,0.34),_transparent_26%),linear-gradient(180deg,_rgba(255,255,255,0.58)_0%,_rgba(246,243,238,0)_72%)]" />
+        {/* Skip link — first focusable element for keyboard users */}
+        <a
+          href="#main"
+          className="sr-only rounded-full focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:bg-[#E8B04B] focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-[#1a1304]"
+        >
+          Skip to content
+        </a>
+
+        {/* Ambient depth field (desktop only) + base glow, behind all content */}
+        <div
+          aria-hidden
+          className="pointer-events-none fixed inset-0"
+          style={{
+            zIndex: 0,
+            background:
+              'radial-gradient(1100px circle at 82% -8%, rgba(232,176,75,0.10), transparent 55%), radial-gradient(900px circle at 0% 100%, rgba(77,162,255,0.06), transparent 55%)',
+          }}
+        />
+        <AmbientField />
 
         <Dialog.Root
           open={isNetworkSwitchModalOpen}
           onOpenChange={setIsNetworkSwitchModalOpen}
         >
           <Dialog.Portal>
-            <Dialog.Overlay className="fixed inset-0 z-50 bg-[#14161c]/45 backdrop-blur-sm" />
+            <Dialog.Overlay className="fixed inset-0 z-50 bg-[#05050a]/70 backdrop-blur-sm" />
             <Dialog.Content
-              className={`fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 -translate-y-1/2 rounded-[28px] border border-[#dfd6ca] bg-[#fbfaf7] p-6 shadow-[0_28px_80px_-40px_rgba(15,23,42,0.45)] sm:p-7 ${bodyFont.className}`}
+              className={`fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 -translate-y-1/2 rounded-3xl border border-[#2a2620] bg-[#13121a] p-6 shadow-[0_40px_120px_-40px_rgba(0,0,0,0.9)] sm:p-7 ${bodyFont.className}`}
             >
               <div className="pr-10">
-                <Dialog.Title className="text-xl font-semibold tracking-[-0.03em] text-[#171923]">
+                <Dialog.Title
+                  className={`${wordmarkFont.className} text-2xl tracking-[-0.02em] text-[#f5f1e8]`}
+                >
                   {t('landing.networkSwitchTitle', {
                     network: pendingNetwork
                       ? NETWORK_CONFIG[pendingNetwork].networkName
                       : '',
                   })}
                 </Dialog.Title>
-                <Dialog.Description className="mt-3 text-sm leading-6 text-[#5d6674]">
+                <Dialog.Description className="mt-3 text-sm leading-6 text-[#a8a294]">
                   {t('landing.networkSwitchBody')}
                 </Dialog.Description>
               </div>
 
               <div className={`${mutedCardClass} mt-6 p-4`}>
-                <ul className="space-y-2 text-sm leading-6 text-[#4b5565]">
+                <ul className="space-y-2 text-sm leading-6 text-[#cfc8ba]">
                   <li>Generate a different wallet address for the same account.</li>
                   <li>Require a fresh sign-in before continuing.</li>
                   <li>Show circles and balances from the selected network only.</li>
                 </ul>
-                <p className="mt-4 text-sm font-medium text-[#8a5a21]">
+                <p className="mt-4 text-sm font-medium text-[#E8B04B]">
                   The wallet you use on{' '}
                   {pendingNetwork
                     ? NETWORK_CONFIG[pendingNetwork].networkName.toLowerCase()
@@ -690,14 +740,14 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={cancelNetworkSwitch}
-                  className="rounded-full border border-[#d5ccbf] bg-white px-5 py-3 text-sm font-semibold text-[#334155] transition-colors duration-200 hover:bg-[#f6f3ee]"
+                  className="rounded-full border border-[#2a2620] bg-white/[0.03] px-5 py-3 text-sm font-semibold text-[#f3efe6] transition-colors duration-200 hover:bg-white/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f6d99a] focus-visible:ring-offset-2 focus-visible:ring-offset-[#13121a]"
                 >
                   {t('landing.networkSwitchStay')}
                 </button>
                 <button
                   type="button"
                   onClick={confirmNetworkSwitch}
-                  className="rounded-full bg-[#1d2533] px-5 py-3 text-sm font-semibold text-white transition-colors duration-200 hover:bg-[#101723]"
+                  className={goldButtonClass}
                 >
                   {t('landing.networkSwitchConfirm', {
                     network: pendingNetwork
@@ -711,7 +761,7 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={cancelNetworkSwitch}
-                  className="absolute right-5 top-5 rounded-full border border-[#e5ddd2] bg-white p-2 text-[#667085] transition-colors duration-200 hover:text-[#171923]"
+                  className="absolute right-5 top-5 rounded-full border border-[#2a2620] bg-white/[0.03] p-3 text-[#a8a294] transition-colors duration-200 hover:text-[#f5f1e8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f6d99a]"
                 >
                   <X className="h-4 w-4" />
                   <span className="sr-only">Close</span>
@@ -723,15 +773,17 @@ export default function Home() {
 
         <Dialog.Root open={isAuthDialogOpen} onOpenChange={setIsAuthDialogOpen}>
           <Dialog.Portal>
-            <Dialog.Overlay className="fixed inset-0 z-50 bg-[#14161c]/45 backdrop-blur-sm" />
+            <Dialog.Overlay className="fixed inset-0 z-50 bg-[#05050a]/70 backdrop-blur-sm" />
             <Dialog.Content
-              className={`fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 -translate-y-1/2 rounded-[28px] border border-[#dfd6ca] bg-[#fbfaf7] p-5 shadow-[0_28px_80px_-40px_rgba(15,23,42,0.45)] sm:p-7 ${bodyFont.className}`}
+              className={`fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 -translate-y-1/2 rounded-3xl border border-[#2a2620] bg-[#13121a] p-5 shadow-[0_40px_120px_-40px_rgba(0,0,0,0.9)] sm:p-7 ${bodyFont.className}`}
             >
               <div className="pr-10">
-                <Dialog.Title className="text-xl font-semibold tracking-[-0.03em] text-[#171923]">
+                <Dialog.Title
+                  className={`${wordmarkFont.className} text-2xl tracking-[-0.02em] text-[#f5f1e8]`}
+                >
                   {t('landing.signInTitle')}
                 </Dialog.Title>
-                <Dialog.Description className="mt-3 text-sm leading-6 text-[#5d6674]">
+                <Dialog.Description className="mt-3 text-sm leading-6 text-[#a8a294]">
                   {t('landing.signInBody')}
                 </Dialog.Description>
               </div>
@@ -740,13 +792,13 @@ export default function Home() {
                 <LoginButton variant="landing" />
               </div>
 
-              <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-[#667085]">
+              <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-[#a8a294]">
                 <span className="inline-flex items-center gap-2">
-                  <BadgeCheck className="h-4 w-4 text-[#71839a]" />
+                  <BadgeCheck className="h-4 w-4 text-[#E8B04B]" />
                   {t('landing.noSeedPhrase')}
                 </span>
                 <span className="inline-flex items-center gap-2">
-                  <BadgeCheck className="h-4 w-4 text-[#71839a]" />
+                  <BadgeCheck className="h-4 w-4 text-[#E8B04B]" />
                   {t('landing.builtForCircles')}
                 </span>
               </div>
@@ -754,7 +806,7 @@ export default function Home() {
               <Dialog.Close asChild>
                 <button
                   type="button"
-                  className="absolute right-5 top-5 rounded-full border border-[#e5ddd2] bg-white p-2 text-[#667085] transition-colors duration-200 hover:text-[#171923]"
+                  className="absolute right-5 top-5 rounded-full border border-[#2a2620] bg-white/[0.03] p-3 text-[#a8a294] transition-colors duration-200 hover:text-[#f5f1e8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f6d99a]"
                 >
                   <X className="h-4 w-4" />
                   <span className="sr-only">Close sign-in options</span>
@@ -764,11 +816,11 @@ export default function Home() {
           </Dialog.Portal>
         </Dialog.Root>
 
-        <div className="relative">
-          <header className="border-b border-[#e6ddd1]/90">
-            <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
-              <Link href="/" className="flex min-w-0 items-center gap-4">
-                <span className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[#dfd7cb] bg-white shadow-[0_18px_40px_-34px_rgba(15,23,42,0.4)]">
+        <div className="relative z-10">
+          <header className="sticky top-0 z-30 border-b border-[#2a2620]/80 bg-[#0a0a0c]/70 backdrop-blur-md">
+            <div className="mx-auto flex max-w-6xl flex-col gap-4 px-5 py-4 sm:px-8 lg:flex-row lg:items-center lg:justify-between">
+              <Link href="/" className="flex min-w-0 items-center gap-3">
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/[0.04]">
                   <Image
                     src="/njangi-on-chain-logo.png"
                     alt="Njangi On-Chain"
@@ -781,18 +833,18 @@ export default function Home() {
                 </span>
                 <span className="min-w-0">
                   <span
-                    className={`${wordmarkFont.className} block truncate text-[2rem] leading-none tracking-[-0.05em] text-[#111827] sm:text-[2.25rem]`}
+                    className={`${wordmarkFont.className} block truncate text-[1.9rem] leading-none tracking-[-0.04em] text-[#f5f1e8]`}
                   >
                     Njangi
                   </span>
-                  <span className="mt-1 block truncate pl-1 text-[0.72rem] font-semibold uppercase tracking-[0.42em] text-[#65748b]">
+                  <span className="mt-1 block truncate pl-0.5 text-[0.62rem] font-semibold uppercase tracking-[0.42em] text-[#E8B04B]">
                     On-chain
                   </span>
                 </span>
               </Link>
 
               <div className="flex flex-col gap-3 sm:items-end">
-                <nav className="flex flex-wrap items-center gap-5 text-sm font-medium text-[#556070]">
+                <nav className="flex flex-wrap items-center gap-5 text-sm font-medium">
                   <Link href="/learn" className={socialLinkClass}>
                     {t('nav.learn')}
                   </Link>
@@ -802,42 +854,46 @@ export default function Home() {
                   <Link href="#launch" className={socialLinkClass}>
                     {t('nav.mainnetUpdates')}
                   </Link>
-                  <LocaleSwitcher compact />
+                  <LocaleSwitcher compact variant="dark" />
                 </nav>
 
                 <div className="flex flex-wrap items-center gap-3">
-                  <div className="inline-flex items-center rounded-full border border-[#d7cec1] bg-white/85 p-1 shadow-[0_16px_36px_-30px_rgba(15,23,42,0.4)]">
+                  <div className="inline-flex items-center rounded-full border border-[#2a2620] bg-[#13121a]/70 p-1">
                     <button
                       type="button"
+                      aria-pressed={network === 'testnet'}
                       onClick={() => switchNetwork('testnet')}
-                      className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors duration-200 ${
+                      className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f6d99a] ${
                         network === 'testnet'
-                          ? 'bg-[#1d2533] text-white'
-                          : 'text-[#5d6674] hover:text-[#171923]'
+                          ? 'bg-[#E8B04B] text-[#1a1304]'
+                          : 'text-[#a8a294] hover:text-[#f5f1e8]'
                       }`}
                     >
+                      {network === 'testnet' && <BadgeCheck className="h-3.5 w-3.5" />}
                       {t('nav.testnet')}
                     </button>
                     <button
                       type="button"
+                      aria-pressed={network === 'mainnet'}
                       onClick={() => switchNetwork('mainnet')}
-                      className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors duration-200 ${
+                      className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f6d99a] ${
                         network === 'mainnet'
-                          ? 'bg-[#1d2533] text-white'
-                          : 'text-[#5d6674] hover:text-[#171923]'
+                          ? 'bg-[#E8B04B] text-[#1a1304]'
+                          : 'text-[#a8a294] hover:text-[#f5f1e8]'
                       }`}
                     >
+                      {network === 'mainnet' && <BadgeCheck className="h-3.5 w-3.5" />}
                       {t('nav.mainnet')}
                     </button>
                   </div>
 
-                  <div className="inline-flex items-center gap-2 rounded-full border border-[#e3dbcf] bg-[#f9f6f0] px-3 py-2 text-sm text-[#5b6572]">
-                    <CircleDot className="h-4 w-4 text-[#6b7b92]" />
+                  <div className="hidden items-center gap-2 rounded-full border border-[#2a2620] bg-[#13121a]/60 px-3 py-2 text-sm text-[#a8a294] sm:inline-flex">
+                    <CircleDot className="h-4 w-4 text-[#4DA2FF]" />
                     {t('nav.viewing', { network: currentNetworkName })}
                   </div>
 
                   {account ? (
-                    <Link href="/dashboard" className={topNavPrimaryActionClass}>
+                    <Link href="/dashboard" className={goldButtonClass}>
                       {t('nav.openDashboard')}
                       <ArrowRight className="h-4 w-4" />
                     </Link>
@@ -845,7 +901,7 @@ export default function Home() {
                     <button
                       type="button"
                       onClick={() => setIsAuthDialogOpen(true)}
-                      className={topNavPrimaryActionClass}
+                      className={goldButtonClass}
                     >
                       {t('nav.login')}
                       <ArrowRight className="h-4 w-4" />
@@ -857,247 +913,320 @@ export default function Home() {
           </header>
 
           <main>
-            <section className="px-4 pb-18 pt-14 sm:px-6 sm:pt-18 lg:px-8 lg:pb-24 lg:pt-20">
-              <div className="mx-auto max-w-7xl">
-                <div className="grid gap-12 lg:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)] lg:items-start">
-                  <div className="max-w-2xl">
-                    <span className={sectionEyebrowClass}>
-                      {t('landing.eyebrow')}
-                    </span>
-                    <h1 className="mt-5 text-[2.9rem] font-semibold leading-[0.94] tracking-[-0.055em] text-[#171923] sm:text-[4.1rem] md:text-[4.7rem]">
-                      {t('landing.heroTitle')}
-                    </h1>
-                    <p className="mt-6 max-w-xl text-lg leading-8 text-[#56606f] sm:text-xl">
-                      {t('landing.heroSubtitle')}
-                    </p>
+            {/* ===================== HERO ===================== */}
+            <section
+              id="main"
+              className="relative flex min-h-[100svh] items-center overflow-hidden"
+            >
+              {/* genuine 3D scene + CSS fallback behind it */}
+              <div className="absolute inset-0">
+                <div
+                  aria-hidden
+                  className="absolute inset-0"
+                  style={{
+                    background:
+                      'radial-gradient(820px circle at 72% 44%, rgba(232,176,75,0.18), transparent 62%), #0a0a0c',
+                  }}
+                />
+                <DiasporaMeridian />
+              </div>
 
-                    <div className={`${shellCardClass} mt-9 p-5 sm:p-6`}>
-                      <p className="text-sm font-semibold uppercase tracking-[0.22em] text-[#6f7887]">
-                        {t('landing.heroCardTitle')}
+              {/* legibility scrim — darkened on BOTH sides so copy reads in LTR + RTL */}
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-0"
+                style={{
+                  background:
+                    'linear-gradient(90deg, rgba(10,10,12,0.92) 0%, rgba(10,10,12,0.55) 34%, rgba(10,10,12,0.22) 50%, rgba(10,10,12,0.5) 66%, rgba(10,10,12,0.9) 100%)',
+                }}
+              />
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-0"
+                style={{
+                  background:
+                    'linear-gradient(180deg, rgba(10,10,12,0.5) 0%, transparent 22%, transparent 62%, rgba(10,10,12,0.95) 100%)',
+                }}
+              />
+
+              <div className="relative z-20 mx-auto w-full max-w-6xl px-5 py-24 sm:px-8">
+                <div className="max-w-2xl">
+                  <Reveal>
+                    <RevealItem>
+                      <p className={sectionEyebrowClass}>{t('landing.eyebrow')}</p>
+                    </RevealItem>
+                    <RevealItem>
+                      <p
+                        className={`${wordmarkFont.className} mt-5 flex flex-wrap items-baseline gap-x-3 text-2xl text-[#EDE4D3] sm:text-[1.75rem]`}
+                      >
+                        <span className="sr-only">{t('landing.heritageAlso')}</span>
+                        <KineticNames
+                          names={CULTURAL_NAMES}
+                          className="text-gold-gradient"
+                          interval={1900}
+                        />
+                        <span className="text-base font-normal tracking-[0.04em] text-[#8b8578] sm:text-lg">
+                          one tradition, many names
+                        </span>
                       </p>
-                      <p className="mt-3 max-w-2xl text-sm leading-6 text-[#5f6674] sm:text-base">
-                        {t('landing.heroCardBody')}
+                    </RevealItem>
+                    <RevealItem>
+                      <h1
+                        className={`${wordmarkFont.className} mt-4 text-[clamp(2.5rem,6vw,4.6rem)] font-normal leading-[1.02] tracking-[-0.01em] text-[#f8f4ec]`}
+                      >
+                        {t('landing.heroTitle')}
+                      </h1>
+                    </RevealItem>
+                    <RevealItem>
+                      <p className="mt-6 max-w-xl text-lg leading-8 text-[#cfc8ba] sm:text-xl">
+                        {t('landing.heroSubtitle')}
                       </p>
-                      <LoginButton variant="landing" className="mt-5" />
-                      <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-[#667085]">
-                        <span className="inline-flex items-center gap-2">
-                          <BadgeCheck className="h-4 w-4 text-[#71839a]" />
+                    </RevealItem>
+                    <RevealItem>
+                      <div className="mt-9 flex flex-wrap items-center gap-3">
+                        {account ? (
+                          <Link href="/dashboard" className={goldButtonClass}>
+                            {t('nav.openDashboard')}
+                            <ArrowRight className="h-4 w-4" />
+                          </Link>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setIsAuthDialogOpen(true)}
+                            className={goldButtonClass}
+                          >
+                            {t('landing.heroPrimaryCta')}
+                            <ArrowRight className="h-4 w-4" />
+                          </button>
+                        )}
+                        <Link href="#how" className={ghostButtonClass}>
+                          {t('landing.exploreHowItWorks')}
+                        </Link>
+                      </div>
+                      <p className="mt-3 text-sm leading-6 text-[#8b8578]">
+                        {t('landing.heroCtaReassure')}
+                      </p>
+                    </RevealItem>
+                    <RevealItem>
+                      <div className="mt-7 flex flex-wrap gap-3">
+                        <span className={chipClass}>
+                          <BadgeCheck className="h-4 w-4 text-[#E8B04B]" />
                           {t('landing.noSeedPhrase')}
                         </span>
-                        <span className="inline-flex items-center gap-2">
-                          <BadgeCheck className="h-4 w-4 text-[#71839a]" />
+                        <span className={chipClass}>
+                          <BadgeCheck className="h-4 w-4 text-[#E8B04B]" />
                           {t('landing.builtForCircles')}
                         </span>
                       </div>
-                    </div>
+                    </RevealItem>
+                    <RevealItem>
+                      <p className="mt-6 max-w-md text-sm leading-6 text-[#f6d99a]">
+                        {t('landing.testnetNote')}
+                      </p>
+                    </RevealItem>
+                    <RevealItem>
+                      <dl className="mt-10 grid max-w-lg grid-cols-3 gap-3">
+                        {proofItems.map((item) => (
+                          <div key={item.label} className={`${mutedCardClass} p-4`}>
+                            <dt className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b8578]">
+                              {item.label}
+                            </dt>
+                            <dd className="mt-2 text-xl font-semibold tracking-[-0.02em] text-[#f5f1e8]">
+                              {item.value}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </RevealItem>
+                  </Reveal>
+                </div>
+              </div>
 
-                    <div className="mt-7 flex flex-wrap items-center gap-4">
-                      <Link
-                        href="/learn"
-                        className="inline-flex items-center gap-2 rounded-full border border-[#d7cec1] bg-white px-5 py-3 text-sm font-semibold text-[#1f2937] shadow-[0_16px_40px_-32px_rgba(15,23,42,0.45)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#fbfaf7]"
-                      >
-                        {t('landing.exploreHowItWorks')}
-                        <ArrowRight className="h-4 w-4" />
-                      </Link>
-                      <Link
-                        href="#launch"
-                        className="inline-flex items-center gap-2 text-sm font-semibold text-[#556070] transition-colors duration-200 hover:text-[#171923]"
-                      >
-                        {t('landing.joinReleaseList')}
-                        <ArrowRight className="h-4 w-4" />
-                      </Link>
-                    </div>
+              <div
+                aria-hidden
+                className="pointer-events-none absolute bottom-6 left-1/2 z-20 -translate-x-1/2 text-[#8b8578]"
+              >
+                <ChevronDown className="h-6 w-6 animate-bounce" />
+              </div>
+            </section>
 
-                    <div className="mt-10 grid gap-4 sm:grid-cols-3">
-                      {proofItems.map((item) => (
-                        <div key={item.label} className={`${mutedCardClass} p-4`}>
-                          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[#7a818e]">
-                            {item.label}
-                          </p>
-                          <p className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
-                            {item.value}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className={`${shellCardClass} p-6 sm:p-7`}>
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[#717784]">
-                          Circle operations
-                        </p>
-                        <h2 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#171923]">
-                          Less noise. More clarity for members.
-                        </h2>
-                      </div>
-                      <div className="rounded-full border border-[#d6dde8] bg-[#f3f6fb] px-3 py-2 text-sm font-medium text-[#51627b]">
-                        Live on {currentNetworkName}
-                      </div>
-                    </div>
-
-                    <div className="mt-6 grid gap-3 sm:grid-cols-2">
+            {/* ============== INSIDE A LIVE CIRCLE ============== */}
+            <section className="relative px-5 py-20 sm:px-8 md:py-28">
+              <div className="mx-auto max-w-6xl">
+                <Reveal className="grid gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
+                  <RevealItem className="min-w-0">
+                    <p className={sectionEyebrowClass}>Circle operations</p>
+                    <h2 className={sectionTitleClass}>
+                      Less noise. More clarity for members.
+                    </h2>
+                    <p className={sectionBodyClass}>
+                      Every contribution, turn, and approval lives in one shared
+                      view — so the circle runs on the same facts instead of one
+                      organizer&apos;s memory.
+                    </p>
+                    <p className="mt-8 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8b8578]">
+                      Illustrative example
+                    </p>
+                    <div className="mt-3 grid grid-cols-2 gap-3">
                       {previewStats.map((stat) => (
                         <div key={stat.label} className={`${mutedCardClass} p-4`}>
-                          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[#7a818e]">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b8578]">
                             {stat.label}
                           </p>
-                          <p className="mt-3 text-xl font-semibold tracking-[-0.04em] text-[#171923]">
+                          <p className="mt-2 text-lg font-semibold tracking-[-0.02em] text-[#f5f1e8]">
                             {stat.value}
                           </p>
-                          <p className="mt-2 text-sm leading-6 text-[#626b78]">
+                          <p className="mt-2 text-sm leading-6 text-[#a8a294]">
                             {stat.caption}
                           </p>
                         </div>
                       ))}
                     </div>
+                  </RevealItem>
 
-                    <div className={`${mutedCardClass} mt-4 p-5`}>
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-semibold text-[#1f2937]">
-                          A typical cycle snapshot
-                        </p>
-                        <span className="text-xs font-medium uppercase tracking-[0.2em] text-[#768090]">
-                          Synced
-                        </span>
-                      </div>
-                      <div className="mt-4 space-y-3">
-                        <div className="flex items-start gap-3 rounded-2xl border border-[#ebe3d7] bg-white px-4 py-3">
-                          <Coins className="mt-0.5 h-4 w-4 text-[#7385a0]" />
-                          <div>
-                            <p className="text-sm font-semibold text-[#1f2937]">
-                              Contribution due
-                            </p>
-                            <p className="mt-1 text-sm leading-6 text-[#5d6674]">
-                              Members see the amount, deadline, and payment path
-                              without waiting for a reminder thread.
-                            </p>
-                          </div>
+                  <RevealItem className="min-w-0">
+                    <TiltCard>
+                      <div className={`${glassCardClass} bg-weave relative overflow-hidden p-6 md:p-8`}>
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-sm font-semibold text-[#f5f1e8]">
+                            What a cycle looks like
+                          </p>
+                          <span className="inline-flex items-center gap-2 rounded-full border border-[#2a2620] px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] text-[#8b8578]">
+                            Example cycle
+                          </span>
                         </div>
-                        <div className="flex items-start gap-3 rounded-2xl border border-[#ebe3d7] bg-white px-4 py-3">
-                          <Waypoints className="mt-0.5 h-4 w-4 text-[#7385a0]" />
-                          <div>
-                            <p className="text-sm font-semibold text-[#1f2937]">
-                              Payout order
-                            </p>
-                            <p className="mt-1 text-sm leading-6 text-[#5d6674]">
-                              Rotation rules stay visible, reducing ambiguity
-                              around who is next and when the handoff happens.
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-start gap-3 rounded-2xl border border-[#ebe3d7] bg-white px-4 py-3">
-                          <Shield className="mt-0.5 h-4 w-4 text-[#7385a0]" />
-                          <div>
-                            <p className="text-sm font-semibold text-[#1f2937]">
-                              Audit trail
-                            </p>
-                            <p className="mt-1 text-sm leading-6 text-[#5d6674]">
-                              Approvals, contributions, and state changes stay
-                              visible to the circle instead of living in one
-                              organizer&apos;s notes.
-                            </p>
-                          </div>
+                        <div className="mt-5 space-y-3">
+                          {cycleSnapshot.map((row) => (
+                            <div
+                              key={row.title}
+                              className="flex items-start gap-3 rounded-2xl border border-[#221f29] bg-[#0d0c12]/70 px-4 py-3"
+                            >
+                              <row.icon className="mt-0.5 h-4 w-4 shrink-0 text-[#E8B04B]" />
+                              <div>
+                                <p className="text-sm font-semibold text-[#f5f1e8]">
+                                  {row.title}
+                                </p>
+                                <p className="mt-1 text-sm leading-6 text-[#a8a294]">
+                                  {row.body}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
-                    </div>
-                  </div>
-                </div>
+                    </TiltCard>
+                  </RevealItem>
+                </Reveal>
               </div>
             </section>
 
-            <section className="px-4 py-18 sm:px-6 lg:px-8 lg:py-24">
-              <div className="mx-auto max-w-7xl">
-                <div className="max-w-2xl">
-                  <span className={sectionEyebrowClass}>
-                    {t('landing.features.eyebrow')}
-                  </span>
-                  <h2 className={sectionTitleClass}>
-                    {t('landing.features.title')}
-                  </h2>
-                  <p className={sectionBodyClass}>
-                    {t('landing.features.body')}
-                  </p>
-                </div>
+            {/* ================= HOW IT WORKS ================= */}
+            <section id="how" className="relative px-5 py-20 sm:px-8 md:py-28">
+              <div className="mx-auto max-w-6xl">
+                <Reveal className="max-w-2xl">
+                  <RevealItem>
+                    <p className={sectionEyebrowClass}>{t('landing.workflow.eyebrow')}</p>
+                  </RevealItem>
+                  <RevealItem>
+                    <h2 className={sectionTitleClass}>{t('landing.workflow.title')}</h2>
+                  </RevealItem>
+                  <RevealItem>
+                    <p className={sectionBodyClass}>{t('landing.workflow.body')}</p>
+                  </RevealItem>
+                </Reveal>
 
-                <div className="mt-12 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                  {FEATURE_CARDS.map(({ icon: Icon, titleKey, descriptionKey }) => (
-                    <div key={titleKey} className={`${shellCardClass} p-6`}>
-                      <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[#e4dbcf] bg-[#f8f5ef] text-[#66748b]">
-                        <Icon className="h-5 w-5" />
-                      </div>
-                      <h3 className="mt-6 text-xl font-semibold tracking-[-0.03em] text-[#171923]">
-                        {t(titleKey)}
-                      </h3>
-                      <p className="mt-3 text-sm leading-6 text-[#5f6674] sm:text-base">
-                        {t(descriptionKey)}
-                      </p>
-                    </div>
+                <Reveal className="mt-12 grid gap-4 md:grid-cols-3">
+                  {WORKFLOW_STEPS.map((step) => (
+                    <RevealItem key={step.number} className="h-full">
+                      <TiltCard className="h-full">
+                        <div className={`${glassCardClass} bg-weave relative h-full overflow-hidden p-6 md:p-7`}>
+                          <p className="text-sm font-semibold tracking-[0.24em] text-[#E8B04B]">
+                            {step.number}
+                          </p>
+                          <h3 className="mt-5 text-lg font-semibold tracking-[-0.02em] text-[#f5f1e8]">
+                            {t(step.titleKey)}
+                          </h3>
+                          <p className="mt-3 text-sm leading-6 text-[#a8a294]">
+                            {t(step.descriptionKey)}
+                          </p>
+                        </div>
+                      </TiltCard>
+                    </RevealItem>
                   ))}
-                </div>
+                </Reveal>
               </div>
             </section>
 
-            <section className="px-4 py-18 sm:px-6 lg:px-8 lg:py-24">
-              <div className="mx-auto max-w-7xl">
-                <div className="grid gap-10 lg:grid-cols-[0.92fr_1.08fr] lg:items-start">
-                  <div>
-                    <span className={sectionEyebrowClass}>{t('landing.workflow.eyebrow')}</span>
+            {/* =================== FEATURES =================== */}
+            <section className="relative px-5 py-20 sm:px-8 md:py-28">
+              <div className="mx-auto max-w-6xl">
+                <Reveal className="max-w-2xl">
+                  <RevealItem>
+                    <p className={sectionEyebrowClass}>{t('landing.features.eyebrow')}</p>
+                  </RevealItem>
+                  <RevealItem>
+                    <h2 className={sectionTitleClass}>{t('landing.features.title')}</h2>
+                  </RevealItem>
+                  <RevealItem>
+                    <p className={sectionBodyClass}>{t('landing.features.body')}</p>
+                  </RevealItem>
+                </Reveal>
+
+                <Reveal className="mt-12 grid gap-4 sm:grid-cols-2">
+                  {FEATURE_CARDS.map(({ icon: Icon, titleKey, descriptionKey }) => (
+                    <RevealItem key={titleKey} className="h-full">
+                      <TiltCard className="h-full">
+                        <div className={`${glassCardClass} bg-weave relative h-full overflow-hidden p-6 md:p-7`}>
+                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[#2a2620] bg-[#E8B04B]/10 text-[#E8B04B]">
+                            <Icon className="h-5 w-5" />
+                          </div>
+                          <h3 className="mt-6 text-xl font-semibold tracking-[-0.02em] text-[#f5f1e8]">
+                            {t(titleKey)}
+                          </h3>
+                          <p className="mt-3 text-sm leading-6 text-[#a8a294] sm:text-base">
+                            {t(descriptionKey)}
+                          </p>
+                        </div>
+                      </TiltCard>
+                    </RevealItem>
+                  ))}
+                </Reveal>
+              </div>
+            </section>
+
+            {/* ================== COMPARISON ================== */}
+            <section className="relative px-5 py-20 sm:px-8 md:py-28">
+              <div className="mx-auto max-w-6xl">
+                <Reveal className="max-w-3xl">
+                  <RevealItem>
+                    <p className={sectionEyebrowClass}>Why this shape matters</p>
+                  </RevealItem>
+                  <RevealItem>
                     <h2 className={sectionTitleClass}>
-                      {t('landing.workflow.title')}
+                      Positioned between informal coordination and generic fintech.
                     </h2>
+                  </RevealItem>
+                  <RevealItem>
                     <p className={sectionBodyClass}>
-                      {t('landing.workflow.body')}
+                      Traditional circles carry social strength. Modern financial
+                      apps carry infrastructure. Njangi On-Chain keeps the first
+                      while borrowing only the useful parts of the second.
                     </p>
-                  </div>
+                  </RevealItem>
+                </Reveal>
 
-                  <div className="grid gap-4 md:grid-cols-3">
-                    {WORKFLOW_STEPS.map((step) => (
-                      <div key={step.number} className={`${shellCardClass} p-6`}>
-                        <p className="text-sm font-semibold uppercase tracking-[0.24em] text-[#7a818e]">
-                          {step.number}
-                        </p>
-                        <h3 className="mt-5 text-lg font-semibold tracking-[-0.03em] text-[#171923]">
-                          {t(step.titleKey)}
-                        </h3>
-                        <p className="mt-3 text-sm leading-6 text-[#5f6674]">
-                          {t(step.descriptionKey)}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section className="px-4 py-18 sm:px-6 lg:px-8 lg:py-24">
-              <div className="mx-auto max-w-7xl">
-                <div className="max-w-3xl">
-                  <span className={sectionEyebrowClass}>Why this shape matters</span>
-                  <h2 className={sectionTitleClass}>
-                    Positioned between informal coordination and generic fintech.
-                  </h2>
-                  <p className={sectionBodyClass}>
-                    Traditional circles carry social strength. Modern financial
-                    apps carry infrastructure. Njangi On-Chain is designed to
-                    keep the first while borrowing only the useful parts of the
-                    second.
-                  </p>
-                </div>
-
-                <div className={`${shellCardClass} mt-12 hidden overflow-hidden lg:block`}>
-                  <div className="grid grid-cols-[0.9fr_1fr_1.05fr_1fr] border-b border-[#ece4d8] bg-[#fbfaf7]">
-                    <div className="px-6 py-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#7a818e]">
+                <div className={`${glassCardClass} mt-12 hidden overflow-hidden lg:block`}>
+                  <div className="grid grid-cols-[0.9fr_1fr_1.05fr_1fr] border-b border-[#2a2620] bg-[#0d0c12]/70">
+                    <div className="px-6 py-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#8b8578]">
                       Operating lens
                     </div>
-                    <div className="px-6 py-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#7a818e]">
+                    <div className="px-6 py-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#8b8578]">
                       Traditional circle
                     </div>
-                    <div className="bg-[#f3f6fb] px-6 py-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#51627b]">
+                    <div className="border-t-2 border-[#C8902F] bg-[#E8B04B]/[0.06] px-6 py-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#E8B04B]">
                       Njangi On-Chain
                     </div>
-                    <div className="px-6 py-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#7a818e]">
+                    <div className="px-6 py-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#8b8578]">
                       Banks and fintech
                     </div>
                   </div>
@@ -1106,19 +1235,19 @@ export default function Home() {
                     <div
                       key={row.label}
                       className={`grid grid-cols-[0.9fr_1fr_1.05fr_1fr] ${
-                        index !== 0 ? 'border-t border-[#ece4d8]' : ''
+                        index !== 0 ? 'border-t border-[#221f29]' : ''
                       }`}
                     >
-                      <div className="px-6 py-5 text-sm font-semibold text-[#1f2937]">
+                      <div className="px-6 py-5 text-sm font-semibold text-[#f5f1e8]">
                         {row.label}
                       </div>
-                      <div className="px-6 py-5 text-sm leading-6 text-[#596170]">
+                      <div className="px-6 py-5 text-sm leading-6 text-[#a8a294]">
                         {row.traditional}
                       </div>
-                      <div className="bg-[#f3f6fb] px-6 py-5 text-sm font-medium leading-6 text-[#334155]">
+                      <div className="bg-[#E8B04B]/[0.06] px-6 py-5 text-sm font-medium leading-6 text-[#f3efe6]">
                         {row.onchain}
                       </div>
-                      <div className="px-6 py-5 text-sm leading-6 text-[#596170]">
+                      <div className="px-6 py-5 text-sm leading-6 text-[#a8a294]">
                         {row.fintech}
                       </div>
                     </div>
@@ -1129,15 +1258,23 @@ export default function Home() {
                   {COMPARISON_CARDS.map((card) => (
                     <div
                       key={card.title}
-                      className={`rounded-[28px] border p-6 shadow-[0_24px_70px_-58px_rgba(15,23,42,0.42)] ${card.tone}`}
+                      className={`rounded-3xl border p-6 ${
+                        card.highlight
+                          ? 'border-[#C8902F]/60 bg-[#E8B04B]/[0.06] text-[#f3efe6]'
+                          : 'border-[#2a2620] bg-[#13121a]/70 text-[#a8a294]'
+                      }`}
                     >
-                      <h3 className="text-xl font-semibold tracking-[-0.03em]">
+                      <h3
+                        className={`text-xl font-semibold tracking-[-0.02em] ${
+                          card.highlight ? 'text-[#E8B04B]' : 'text-[#f5f1e8]'
+                        }`}
+                      >
                         {card.title}
                       </h3>
                       <ul className="mt-5 space-y-3 text-sm leading-6">
                         {card.items.map((item) => (
                           <li key={item} className="flex items-start gap-3">
-                            <span className="mt-2 h-1.5 w-1.5 rounded-full bg-current" />
+                            <span className="mt-2 h-1.5 w-1.5 rounded-full bg-[#E8B04B]" />
                             <span>{item}</span>
                           </li>
                         ))}
@@ -1148,35 +1285,87 @@ export default function Home() {
               </div>
             </section>
 
-            <section id="launch" className="px-4 py-18 sm:px-6 lg:px-8 lg:py-24">
-              <div className="mx-auto max-w-7xl">
-                <div className={`${shellCardClass} p-7 sm:p-9 lg:p-10`}>
-                  <div className="grid gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-start">
-                    <div className="max-w-xl">
-                      <span className={sectionEyebrowClass}>{t('landing.launch.eyebrow')}</span>
-                      <h2 className={sectionTitleClass}>
-                        {t('landing.launch.title')}
-                      </h2>
-                      <p className={sectionBodyClass}>
-                        {t('landing.launch.body')}
-                      </p>
+            {/* =================== TRADITION =================== */}
+            <section className="relative overflow-hidden px-5 py-20 sm:px-8 md:py-28">
+              <div
+                aria-hidden
+                className="bg-rings pointer-events-none absolute inset-0"
+              />
+              <div className="relative mx-auto max-w-4xl text-center">
+                <Reveal>
+                  <RevealItem>
+                    <p className={sectionEyebrowClass}>{t('landing.tradition.eyebrow')}</p>
+                  </RevealItem>
+                  <RevealItem>
+                    <h2
+                      className={`${wordmarkFont.className} mt-4 text-[clamp(2rem,4vw,3rem)] font-normal leading-[1.06] tracking-[-0.01em] text-[#f5f1e8]`}
+                    >
+                      {t('landing.tradition.title')}
+                    </h2>
+                  </RevealItem>
+                  <RevealItem>
+                    <p className={`${sectionBodyClass} mx-auto`}>
+                      {t('landing.tradition.body')}
+                    </p>
+                  </RevealItem>
+                </Reveal>
 
-                      <div className="mt-8 space-y-3">
-                        {launchNotes.map((note) => (
-                          <div
-                            key={note}
-                            className="flex items-start gap-3 rounded-2xl border border-[#e7dfd4] bg-[#fbfaf7] px-4 py-3"
-                          >
-                            <BadgeCheck className="mt-0.5 h-4 w-4 text-[#70819a]" />
-                            <p className="text-sm leading-6 text-[#596170]">{note}</p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                <Reveal className="mt-10 flex flex-wrap justify-center gap-2.5">
+                  {CULTURAL_NAMES.map((name) => (
+                    <RevealItem key={name}>
+                      <span className="rounded-full border border-[#2a2620] bg-[#13121a]/70 px-4 py-2 text-sm font-medium text-[#EDE4D3]">
+                        {name}
+                      </span>
+                    </RevealItem>
+                  ))}
+                </Reveal>
+              </div>
+            </section>
 
-                    <div className={`${mutedCardClass} p-6 sm:p-7`}>
-                      <div className="inline-flex items-center gap-2 rounded-full border border-[#e4dbcf] bg-white px-3 py-2 text-sm font-medium text-[#556070]">
-                        <Mail className="h-4 w-4 text-[#70819a]" />
+            {/* ================= LAUNCH / WAITLIST ================= */}
+            <section id="launch" className="relative px-5 py-20 sm:px-8 md:py-28">
+              <div className="mx-auto max-w-6xl">
+                <div className="relative overflow-hidden rounded-3xl border border-[#2a2620]/40 bg-[#13121a]/70 p-7 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] backdrop-blur-sm sm:p-9 lg:p-10">
+                  <div aria-hidden className="bg-rings pointer-events-none absolute inset-0" />
+                  {/* Soft corner vignette — the card melts into the page at the
+                      edges while the center stays fully readable. */}
+                  <div
+                    aria-hidden
+                    className="pointer-events-none absolute inset-0"
+                    style={{
+                      background:
+                        'radial-gradient(125% 115% at 50% 42%, transparent 46%, rgba(10,10,12,0.82) 100%)',
+                    }}
+                  />
+                  <div className="relative grid gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-start">
+                    <Reveal className="min-w-0 max-w-xl">
+                      <RevealItem>
+                        <p className={sectionEyebrowClass}>{t('landing.launch.eyebrow')}</p>
+                      </RevealItem>
+                      <RevealItem>
+                        <h2 className={sectionTitleClass}>{t('landing.launch.title')}</h2>
+                      </RevealItem>
+                      <RevealItem>
+                        <p className={sectionBodyClass}>{t('landing.launch.body')}</p>
+                      </RevealItem>
+                      <RevealItem>
+                        <div className="mt-8 space-y-3">
+                          {launchNotes.map((note) => (
+                            <div
+                              key={note}
+                              className="flex items-start gap-3 rounded-2xl border border-[#221f29] bg-[#0d0c12]/70 px-4 py-3"
+                            >
+                              <BadgeCheck className="mt-0.5 h-4 w-4 shrink-0 text-[#E8B04B]" />
+                              <p className="text-sm leading-6 text-[#a8a294]">{note}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </RevealItem>
+                    </Reveal>
+
+                    <div className={`${mutedCardClass} min-w-0 p-6 sm:p-7`}>
+                      <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2620] bg-[#0d0c12]/70 px-3 py-2 text-sm font-medium text-[#a8a294]">
+                        <Mail className="h-4 w-4 text-[#E8B04B]" />
                         {t('landing.launch.eyebrow')}
                       </div>
 
@@ -1184,19 +1373,23 @@ export default function Home() {
                         onSubmit={handleMainnetSignup}
                         className="mt-6 flex flex-col gap-3"
                       >
+                        <label htmlFor="mainnet-email" className="sr-only">
+                          {t('landing.launch.emailPlaceholder')}
+                        </label>
                         <input
+                          id="mainnet-email"
                           type="email"
                           placeholder={t('landing.launch.emailPlaceholder')}
                           value={signupEmail}
                           onChange={(e) => setSignupEmail(e.target.value)}
                           required
                           disabled={isSignupLoading}
-                          className="w-full rounded-2xl border border-[#d8d0c4] bg-white px-5 py-4 text-base text-[#171923] outline-none transition-colors duration-200 placeholder:text-[#8a93a1] focus:border-[#9aa7b9] disabled:cursor-not-allowed disabled:bg-[#f7f4ee]"
+                          className="w-full rounded-xl border border-[#2a2620] bg-[#0d0c12] px-5 py-4 text-base text-[#f3efe6] outline-none transition-colors duration-200 placeholder:text-[#a89e8d] focus:border-[#E8B04B] focus-visible:ring-2 focus-visible:ring-[#f6d99a] disabled:cursor-not-allowed disabled:opacity-60"
                         />
                         <button
                           type="submit"
                           disabled={isSignupLoading}
-                          className="inline-flex items-center justify-center rounded-2xl bg-[#1d2533] px-5 py-4 text-sm font-semibold text-white transition-colors duration-200 hover:bg-[#101723] disabled:cursor-not-allowed disabled:opacity-60"
+                          className={`${goldButtonClass} w-full py-4 disabled:cursor-not-allowed disabled:opacity-60`}
                         >
                           {isSignupLoading
                             ? t('landing.launch.signingUp')
@@ -1208,15 +1401,15 @@ export default function Home() {
                         <div
                           className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${
                             showSignupSuccess
-                              ? 'border-[#b6d8c0] bg-[#edf7ef] text-[#24553a]'
-                              : 'border-[#e5c5c5] bg-[#fdf1f1] text-[#7b3636]'
+                              ? 'border-[#2e6b46] bg-[#102a1c] text-[#7ee2a8]'
+                              : 'border-[#6b2e2e] bg-[#2a1010] text-[#f0a8a8]'
                           }`}
                         >
                           {signupMessage}
                         </div>
                       )}
 
-                      <p className="mt-4 text-sm leading-6 text-[#667085]">
+                      <p className="mt-4 text-sm leading-6 text-[#8b8578]">
                         {t('landing.launch.disclaimer')}
                       </p>
                     </div>
@@ -1225,41 +1418,52 @@ export default function Home() {
               </div>
             </section>
 
-            <section className="px-4 py-18 sm:px-6 lg:px-8 lg:py-24">
+            {/* ===================== FAQ ===================== */}
+            <section className="relative px-5 py-20 sm:px-8 md:py-28">
               <div className="mx-auto max-w-4xl">
-                <div className="text-center">
-                  <span className={sectionEyebrowClass}>{t('landing.faq.eyebrow')}</span>
-                  <h2 className={sectionTitleClass}>{t('landing.faq.title')}</h2>
-                  <p className={`${sectionBodyClass} mx-auto`}>
-                    {t('landing.faq.body')}
-                  </p>
-                </div>
+                <Reveal className="text-center">
+                  <RevealItem>
+                    <p className={sectionEyebrowClass}>{t('landing.faq.eyebrow')}</p>
+                  </RevealItem>
+                  <RevealItem>
+                    <h2 className={sectionTitleClass}>{t('landing.faq.title')}</h2>
+                  </RevealItem>
+                  <RevealItem>
+                    <p className={`${sectionBodyClass} mx-auto`}>{t('landing.faq.body')}</p>
+                  </RevealItem>
+                </Reveal>
 
                 <div className="mt-12 space-y-4">
                   {FAQ_ITEMS.map((item) => (
-                    <div key={item.id} className={`${shellCardClass} overflow-hidden`}>
+                    <div key={item.id} className={`${glassCardClass} overflow-hidden`}>
                       <button
                         type="button"
+                        id={`faq-q-${item.id}`}
                         onClick={() => toggleFaqItem(item.id)}
                         aria-expanded={openFaqItems[item.id]}
-                        className="flex w-full items-center justify-between gap-4 px-6 py-5 text-left sm:px-7"
+                        aria-controls={`faq-panel-${item.id}`}
+                        className="flex w-full items-center justify-between gap-4 px-6 py-5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#f6d99a] sm:px-7"
                       >
-                        <span className="text-lg font-semibold tracking-[-0.03em] text-[#171923]">
-                          {item.question}
+                        <span className="text-lg font-semibold tracking-[-0.02em] text-[#f5f1e8]">
+                          {t(item.questionKey)}
                         </span>
                         <ChevronDown
-                          className={`h-5 w-5 shrink-0 text-[#6b7280] transition-transform duration-200 ${
+                          className={`h-5 w-5 shrink-0 text-[#E8B04B] transition-transform duration-200 ${
                             openFaqItems[item.id] ? 'rotate-180' : ''
                           }`}
                         />
                       </button>
-                      {openFaqItems[item.id] && (
-                        <div className="border-t border-[#ece4d8] px-6 pb-6 pt-4 sm:px-7">
-                          <p className="text-sm leading-7 text-[#5f6674] sm:text-base">
-                            {item.answer}
-                          </p>
-                        </div>
-                      )}
+                      <div
+                        id={`faq-panel-${item.id}`}
+                        role="region"
+                        aria-labelledby={`faq-q-${item.id}`}
+                        hidden={!openFaqItems[item.id]}
+                        className="border-t border-[#221f29] px-6 pb-6 pt-4 sm:px-7"
+                      >
+                        <p className="text-sm leading-7 text-[#a8a294] sm:text-base">
+                          {t(item.answerKey)}
+                        </p>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1267,14 +1471,14 @@ export default function Home() {
                 <div className="mt-8 flex flex-col items-center justify-center gap-3 text-sm font-semibold sm:flex-row">
                   <Link
                     href="/learn"
-                    className="inline-flex items-center gap-2 text-[#556070] transition-colors duration-200 hover:text-[#171923]"
+                    className="inline-flex items-center gap-2 py-2.5 text-[#cfc8ba] transition-colors duration-200 hover:text-[#f6d99a] focus-visible:outline-none focus-visible:underline focus-visible:underline-offset-4"
                   >
                     {t('landing.faq.learnLink')}
                     <ArrowRight className="h-4 w-4" />
                   </Link>
                   <Link
                     href="/faq"
-                    className="inline-flex items-center gap-2 text-[#556070] transition-colors duration-200 hover:text-[#171923]"
+                    className="inline-flex items-center gap-2 py-2.5 text-[#cfc8ba] transition-colors duration-200 hover:text-[#f6d99a] focus-visible:outline-none focus-visible:underline focus-visible:underline-offset-4"
                   >
                     {t('landing.faq.fullFaqLink')}
                     <ArrowRight className="h-4 w-4" />
@@ -1282,38 +1486,14 @@ export default function Home() {
                 </div>
               </div>
             </section>
-
-            <section className="px-4 pb-20 sm:px-6 lg:px-8 lg:pb-24">
-              <div className="mx-auto max-w-7xl">
-                <div className={`${shellCardClass} p-7 sm:p-9`}>
-                  <div className="max-w-3xl">
-                    <span className={sectionEyebrowClass}>{t('landing.tradition.eyebrow')}</span>
-                    <h2 className={sectionTitleClass}>{t('landing.tradition.title')}</h2>
-                    <p className={sectionBodyClass}>
-                      {t('landing.tradition.body')}
-                    </p>
-                  </div>
-
-                  <div className="mt-8 flex flex-wrap gap-3">
-                    {CULTURAL_NAMES.map((name) => (
-                      <span
-                        key={name}
-                        className="rounded-full border border-[#ddd5ca] bg-[#fbfaf7] px-4 py-2 text-sm font-medium text-[#556070]"
-                      >
-                        {name}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </section>
           </main>
 
-          <footer className="border-t border-[#e6ddd1]/90 bg-[#f1ece4]/80">
-            <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+          <footer className="relative border-t border-[#2a2620] bg-[#0a0a0c]/80">
+            <div className="bg-weave pointer-events-none absolute inset-0" aria-hidden />
+            <div className="relative mx-auto max-w-6xl px-5 py-10 sm:px-8">
               <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:justify-between">
                 <div className="flex items-center gap-4">
-                  <span className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[#dfd7cb] bg-white">
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/[0.04]">
                     <Image
                       src="/njangi-on-chain-logo.png"
                       alt="Njangi On-Chain"
@@ -1325,11 +1505,11 @@ export default function Home() {
                   </span>
                   <div>
                     <p
-                      className={`${wordmarkFont.className} text-[1.9rem] leading-none tracking-[-0.05em] text-[#111827]`}
+                      className={`${wordmarkFont.className} text-[1.9rem] leading-none tracking-[-0.04em] text-[#f5f1e8]`}
                     >
                       Njangi
                     </p>
-                    <p className="mt-1 text-[0.7rem] font-semibold uppercase tracking-[0.42em] text-[#65748b]">
+                    <p className="mt-1 text-[0.62rem] font-semibold uppercase tracking-[0.42em] text-[#E8B04B]">
                       On-chain
                     </p>
                   </div>
@@ -1364,7 +1544,7 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="mt-8 flex flex-col gap-2 border-t border-[#ddd5c9] pt-4 text-sm text-[#6b7280] sm:flex-row sm:items-center sm:justify-between">
+              <div className="mt-8 flex flex-col gap-2 border-t border-[#221f29] pt-4 text-sm text-[#8b8578] sm:flex-row sm:items-center sm:justify-between">
                 <p>{t('landing.footer.rights', { year: new Date().getFullYear() })}</p>
                 <LegalFooter />
                 <p>{t('landing.footer.tagline')}</p>

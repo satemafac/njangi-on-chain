@@ -110,11 +110,11 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'nav.signOut': 'Sign Out',
     'nav.notifications': 'Notifications',
     // Landing page
-    'landing.eyebrow': 'Community savings, rebuilt with restraint',
+    'landing.eyebrow': 'Rotating savings circles — for the global diaspora',
     'landing.heroTitle':
-      'A more accountable home for the savings circle your community already trusts.',
+      'The savings circle your family already trusts — now with rules nobody can quietly break.',
     'landing.heroSubtitle':
-      'Njangi On-Chain preserves the social logic of traditional circles while giving members clearer schedules, auditable contributions, and low-friction access through zkLogin on Sui.',
+      "Members contribute on schedule, each takes the pot in turn. Njangi On-Chain keeps that exact rhythm and makes every contribution and payout self-custodied, scheduled, and verifiable — no treasurer holding the cash, no seed phrase to start.",
     'landing.heroCardTitle': 'Start with a familiar identity',
     'landing.heroCardBody':
       'Sign in with a social account. Wallet creation happens in the background so members can start with less operational friction.',
@@ -126,6 +126,10 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.proof.supportedAssets': 'Supported assets',
     'landing.proof.currentEnvironment': 'Current environment',
     'landing.proof.syncing': 'Syncing',
+    'landing.proof.custodyLabel': 'Custody',
+    'landing.proof.custodyValue': 'Self-held',
+    'landing.heritageAlso':
+      'Also known as njangi, esusu, stokvel, tontine and many other names.',
     'landing.signInTitle': 'Sign in with a familiar account',
     'landing.signInBody':
       'Use Google, Facebook, or Apple with zkLogin. Wallet creation happens in the background so you can enter the app without a separate crypto onboarding step.',
@@ -134,37 +138,36 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'Network environments use different wallet addresses. Switching clears the active zkLogin session so balances, circles, and history stay aligned to the environment you selected.',
     'landing.networkSwitchStay': 'Stay here',
     'landing.networkSwitchConfirm': 'Switch to {network}',
-    'landing.features.eyebrow': 'What becomes easier to trust',
+    'landing.features.eyebrow': "Why it's built this way",
     'landing.features.title':
-      'The platform removes ambiguity without stripping out the community.',
+      "Tradition's trust, with infrastructure's clarity.",
     'landing.features.body':
       'The goal is not to make a savings circle feel like a trading product. The goal is to make it easier for members to know what is happening, when it is happening, and where funds are moving.',
-    'landing.feature.sharedVisibility.title': 'Shared visibility',
+    'landing.feature.sharedVisibility.title': 'Everyone sees the same ledger',
     'landing.feature.sharedVisibility.body':
-      'Contributions, payout order, and status changes are visible to the people running the circle, not buried in personal messages.',
-    'landing.feature.selfCustody.title': 'Self-custodied settlement',
+      "Contributions, payout order, and who's next are visible to the whole circle — not living in one person's chat history or notebook.",
+    'landing.feature.selfCustody.title': 'No one holds the pot but the chain',
     'landing.feature.selfCustody.body':
-      'Members contribute and receive payouts directly to their own wallet addresses with no platform-held balance.',
-    'landing.feature.borderless.title': 'Borderless participation',
+      "Members contribute from and get paid to their own wallets. Njangi never holds a balance, so there's no treasurer to chase and nothing for us to lose.",
+    'landing.feature.borderless.title': 'One circle across many countries',
     'landing.feature.borderless.body':
-      'Diaspora groups and distributed communities can stay coordinated without relying on one geography or one banking rail.',
-    'landing.feature.culturalContinuity.title': 'Cultural continuity',
+      'Diaspora groups stay in sync without depending on a single bank, currency, or time zone. Save together from anywhere.',
+    'landing.feature.culturalContinuity.title': 'The same circle, less friction',
     'landing.feature.culturalContinuity.body':
-      'The social rhythm of a savings circle stays intact while the operational friction becomes calmer and easier to trust.',
-    'landing.workflow.eyebrow': 'Operational flow',
-    'landing.workflow.title':
-      'A circle still feels familiar. The tooling just stops getting in the way.',
+      "The trust and rhythm of your njangi stay exactly as they are. We only remove the spreadsheets, reminders, and did-you-pay-yet messages.",
+    'landing.workflow.eyebrow': 'How a cycle works',
+    'landing.workflow.title': 'Three moves, one clear rhythm.',
     'landing.workflow.body':
       'Njangi On-Chain is built for communities that already know how to save together. It adds clearer structure, not a new social model.',
-    'landing.workflow.step1.title': 'Sign in with a familiar account',
+    'landing.workflow.step1.title': 'Sign in, no wallet setup',
     'landing.workflow.step1.body':
-      'Use Google, Facebook, or Apple with zkLogin. Members do not need a separate crypto onboarding flow to get started.',
-    'landing.workflow.step2.title': 'Set the circle structure once',
+      'Use Google, Apple, or Facebook. Your on-chain wallet is created in the background — no seed phrase, no app to install.',
+    'landing.workflow.step2.title': 'Set the rules once, together',
     'landing.workflow.step2.body':
-      'Define members, contribution amounts, and payout order in one place so expectations stay clear for everyone involved.',
-    'landing.workflow.step3.title': 'Run contributions with less ambiguity',
+      "Agree on members, amounts, schedule, and payout order up front. Everyone sees the same terms, so there's nothing to renegotiate later.",
+    'landing.workflow.step3.title': 'Contribute and get paid, on schedule',
     'landing.workflow.step3.body':
-      'Track upcoming turns, completed contributions, and wallet activity without relying on spreadsheets or verbal follow-up.',
+      "Each turn pays out automatically to the next member's own wallet. Track who's contributed and who's next — no follow-up texts required.",
     'landing.launch.eyebrow': 'Mainnet release',
     'landing.launch.title': 'Follow the launch without following noise.',
     'landing.launch.body':
@@ -180,8 +183,25 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'If you want the full context, the deeper guides live in the learning and FAQ sections. These cover the basics.',
     'landing.faq.learnLink': 'Learn about savings circles',
     'landing.faq.fullFaqLink': 'View the full FAQ',
+    'landing.heroPrimaryCta': 'Start a circle',
+    'landing.heroCtaReassure':
+      'Takes about 30 seconds — sign in with Google, Apple, or Facebook. No wallet to set up.',
+    'landing.testnetNote':
+      'Live on testnet today — explore the full flow with test funds, no real money at risk.',
+    'landing.faq.q1': 'What is a Njangi?',
+    'landing.faq.a1':
+      'A Njangi is a rotating community savings structure where members contribute on a shared schedule and each member receives the pooled amount in turn. Similar systems exist globally under many different names.',
+    'landing.faq.q2': 'Why put a savings circle on-chain?',
+    'landing.faq.a2':
+      'The point is not novelty. The point is clarity. On-chain records make contributions, payout order, and settlement easier to verify, especially when members are distributed across cities or countries.',
+    'landing.faq.q3': 'Do members need deep crypto experience?',
+    'landing.faq.a3':
+      'No. zkLogin lowers the onboarding burden by letting members start with a familiar social account while still receiving a wallet tied to the selected network.',
+    'landing.faq.q4': 'What happens when I switch between testnet and mainnet?',
+    'landing.faq.a4':
+      'Your wallet address changes because each network has its own state. The app clears the current session so the selected environment stays clean and consistent.',
     'landing.tradition.eyebrow': 'A global tradition',
-    'landing.tradition.title': 'Known by many names, held by the same instinct.',
+    'landing.tradition.title': 'One tradition, twenty-five names.',
     'landing.tradition.body':
       'Communities across the world already understand rotating savings. Njangi On-Chain is designed to respect that history rather than flatten it into a generic fintech pattern.',
     'landing.footer.tagline':
@@ -424,11 +444,11 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'nav.signOut': 'Se déconnecter',
     'nav.notifications': 'Notifications',
     // Page d'accueil
-    'landing.eyebrow': "L'épargne communautaire, repensée avec sobriété",
+    'landing.eyebrow': "Cercles d'épargne tournante — pour la diaspora mondiale",
     'landing.heroTitle':
-      "Une maison plus fiable pour le cercle d'épargne auquel votre communauté fait déjà confiance.",
+      "Le cercle d'épargne auquel votre famille fait déjà confiance — désormais avec des règles que personne ne peut contourner en silence.",
     'landing.heroSubtitle':
-      "Njangi On-Chain préserve la logique sociale des cercles traditionnels tout en offrant aux membres des échéances plus claires, des versements vérifiables et un accès simplifié grâce à zkLogin sur Sui.",
+      "Les membres cotisent selon un calendrier, chacun reçoit la cagnotte à son tour. Njangi On-Chain conserve ce rythme exact et rend chaque cotisation et chaque versement autodétenu, planifié et vérifiable — aucun trésorier ne détient l'argent, aucune phrase secrète pour démarrer.",
     'landing.heroCardTitle': 'Commencez avec une identité familière',
     'landing.heroCardBody':
       "Connectez-vous avec un compte social. La création du portefeuille se fait en arrière-plan, pour démarrer avec moins de friction.",
@@ -440,6 +460,10 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'landing.proof.supportedAssets': 'Actifs pris en charge',
     'landing.proof.currentEnvironment': 'Environnement actuel',
     'landing.proof.syncing': 'Synchronisation',
+    'landing.proof.custodyLabel': 'Garde',
+    'landing.proof.custodyValue': 'Auto-détenue',
+    'landing.heritageAlso':
+      "Aussi appelé njangi, esusu, stokvel, tontine et bien d'autres noms.",
     'landing.signInTitle': 'Connectez-vous avec un compte familier',
     'landing.signInBody':
       "Utilisez Google, Facebook ou Apple avec zkLogin. La création du portefeuille se fait en arrière-plan, sans étape d'intégration crypto séparée.",
@@ -448,37 +472,36 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "Les environnements réseau utilisent des adresses de portefeuille différentes. Le changement efface la session zkLogin active afin que vos soldes, cercles et historique restent alignés sur l'environnement choisi.",
     'landing.networkSwitchStay': 'Rester ici',
     'landing.networkSwitchConfirm': 'Passer sur {network}',
-    'landing.features.eyebrow': 'Ce qui devient plus simple à vérifier',
+    'landing.features.eyebrow': "Pourquoi c'est conçu ainsi",
     'landing.features.title':
-      "La plateforme lève l'ambiguïté sans dénaturer la communauté.",
+      "La confiance de la tradition, avec la clarté de l'infrastructure.",
     'landing.features.body':
       "L'objectif n'est pas de transformer un cercle d'épargne en produit de trading. L'objectif est d'aider les membres à savoir ce qui se passe, quand cela se passe et où circulent les fonds.",
-    'landing.feature.sharedVisibility.title': 'Visibilité partagée',
+    'landing.feature.sharedVisibility.title': 'Tout le monde voit le même registre',
     'landing.feature.sharedVisibility.body':
-      "Les versements, l'ordre des tours et les changements de statut sont visibles par les personnes qui gèrent le cercle, et non enfouis dans des messages privés.",
-    'landing.feature.selfCustody.title': 'Règlement en autodétention',
+      "Les cotisations, l'ordre des versements et le prochain bénéficiaire sont visibles par tout le cercle — pas enfouis dans la messagerie ou le carnet d'une seule personne.",
+    'landing.feature.selfCustody.title': 'Personne ne détient la cagnotte, sauf la blockchain',
     'landing.feature.selfCustody.body':
-      "Les membres versent et reçoivent leurs paiements directement sur leur propre adresse de portefeuille, sans solde détenu par la plateforme.",
-    'landing.feature.borderless.title': 'Participation sans frontières',
+      "Les membres cotisent depuis leur propre portefeuille et y reçoivent leurs paiements. Njangi ne détient jamais de solde : aucun trésorier à relancer, et rien que nous puissions perdre.",
+    'landing.feature.borderless.title': 'Un seul cercle, plusieurs pays',
     'landing.feature.borderless.body':
-      "Les groupes de la diaspora et les communautés dispersées restent coordonnés sans dépendre d'un seul pays ni d'un seul réseau bancaire.",
-    'landing.feature.culturalContinuity.title': 'Continuité culturelle',
+      "Les groupes de la diaspora restent synchronisés sans dépendre d'une seule banque, devise ou fuseau horaire. Épargnez ensemble, où que vous soyez.",
+    'landing.feature.culturalContinuity.title': 'Le même cercle, moins de friction',
     'landing.feature.culturalContinuity.body':
-      "Le rythme social du cercle d'épargne reste intact, tandis que la friction opérationnelle devient plus apaisée et plus digne de confiance.",
-    'landing.workflow.eyebrow': 'Déroulé opérationnel',
-    'landing.workflow.title':
-      "Un cercle reste familier. L'outil cesse simplement de gêner.",
+      "La confiance et le rythme de votre njangi restent exactement les mêmes. Nous retirons seulement les tableurs, les rappels et les messages « tu as payé ? ».",
+    'landing.workflow.eyebrow': 'Comment se déroule un cycle',
+    'landing.workflow.title': 'Trois étapes, un rythme clair.',
     'landing.workflow.body':
       "Njangi On-Chain est conçu pour les communautés qui savent déjà épargner ensemble. Il apporte une structure plus claire, pas un nouveau modèle social.",
-    'landing.workflow.step1.title': 'Connectez-vous avec un compte familier',
+    'landing.workflow.step1.title': 'Connectez-vous, sans configurer de portefeuille',
     'landing.workflow.step1.body':
-      "Utilisez Google, Facebook ou Apple avec zkLogin. Les membres n'ont pas besoin d'un parcours d'intégration crypto séparé pour démarrer.",
-    'landing.workflow.step2.title': 'Définissez la structure du cercle une seule fois',
+      "Utilisez Google, Apple ou Facebook. Votre portefeuille on-chain est créé en arrière-plan — aucune phrase secrète, aucune application à installer.",
+    'landing.workflow.step2.title': 'Fixez les règles une fois, ensemble',
     'landing.workflow.step2.body':
-      "Définissez les membres, les montants de versement et l'ordre des tours au même endroit, pour des attentes claires pour tout le monde.",
-    'landing.workflow.step3.title': 'Gérez les versements avec moins d\'ambiguïté',
+      "Convenez des membres, des montants, du calendrier et de l'ordre des versements dès le départ. Tout le monde voit les mêmes règles, il n'y a donc rien à renégocier ensuite.",
+    'landing.workflow.step3.title': 'Cotisez et soyez payé, selon le calendrier',
     'landing.workflow.step3.body':
-      "Suivez les tours à venir, les versements effectués et l'activité du portefeuille sans tableurs ni relances verbales.",
+      "À chaque tour, le versement part automatiquement vers le portefeuille du membre suivant. Suivez qui a cotisé et qui est le prochain — sans aucun message de relance.",
     'landing.launch.eyebrow': 'Lancement mainnet',
     'landing.launch.title': 'Suivez le lancement sans subir le bruit.',
     'landing.launch.body':
@@ -494,8 +517,25 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "Pour le contexte complet, les guides détaillés se trouvent dans les sections Découvrir et FAQ. Ceci couvre l'essentiel.",
     'landing.faq.learnLink': "En savoir plus sur les cercles d'épargne",
     'landing.faq.fullFaqLink': 'Voir la FAQ complète',
+    'landing.heroPrimaryCta': 'Démarrer un cercle',
+    'landing.heroCtaReassure':
+      'Environ 30 secondes — connectez-vous avec Google, Apple ou Facebook. Aucun portefeuille à configurer.',
+    'landing.testnetNote':
+      "En ligne sur testnet aujourd'hui — explorez tout le parcours avec des fonds de test, sans argent réel en jeu.",
+    'landing.faq.q1': "Qu'est-ce qu'un Njangi ?",
+    'landing.faq.a1':
+      "Un Njangi est une structure d'épargne communautaire tournante où les membres cotisent selon un calendrier commun et où chacun reçoit la somme mise en commun à son tour. Des systèmes similaires existent partout dans le monde sous de nombreux noms.",
+    'landing.faq.q2': "Pourquoi mettre un cercle d'épargne sur la blockchain ?",
+    'landing.faq.a2':
+      "Le but n'est pas la nouveauté, mais la clarté. Les enregistrements on-chain rendent les cotisations, l'ordre des versements et les règlements plus faciles à vérifier, surtout lorsque les membres sont répartis dans plusieurs villes ou pays.",
+    'landing.faq.q3': 'Les membres doivent-ils bien connaître la crypto ?',
+    'landing.faq.a3':
+      "Non. zkLogin allège l'intégration en permettant aux membres de commencer avec un compte social familier, tout en recevant un portefeuille lié au réseau sélectionné.",
+    'landing.faq.q4': 'Que se passe-t-il quand je passe du testnet au mainnet ?',
+    'landing.faq.a4':
+      "Votre adresse de portefeuille change car chaque réseau a son propre état. L'application efface la session en cours pour que l'environnement sélectionné reste propre et cohérent.",
     'landing.tradition.eyebrow': 'Une tradition mondiale',
-    'landing.tradition.title': 'Connue sous bien des noms, portée par le même instinct.',
+    'landing.tradition.title': 'Une tradition, vingt-cinq noms.',
     'landing.tradition.body':
       "Partout dans le monde, les communautés connaissent déjà l'épargne tournante. Njangi On-Chain est conçu pour respecter cette histoire plutôt que de l'aplatir en un schéma fintech générique.",
     'landing.footer.tagline':
@@ -928,7 +968,10 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
   },
 };
 
-let currentLocale: Locale = detectLocale();
+// Start at the SSR default so the first CLIENT render matches the server HTML
+// (no hydration mismatch). The persisted/browser locale is applied AFTER mount
+// via hydrateLocale() — see LocaleDirSync.
+let currentLocale: Locale = 'en';
 const listeners = new Set<(locale: Locale) => void>();
 
 function detectLocale(): Locale {
@@ -950,6 +993,17 @@ function detectLocale(): Locale {
 
 export function getLocale(): Locale {
   return currentLocale;
+}
+
+/**
+ * Apply the persisted / browser locale on the CLIENT, after hydration. Kept out
+ * of module init so SSR and the first client render both use 'en' (matching the
+ * server HTML); call this once from a mount effect to switch to the real locale.
+ */
+export function hydrateLocale(): void {
+  if (typeof window === 'undefined') return;
+  const detected = detectLocale();
+  if (detected !== currentLocale) setLocale(detected);
 }
 
 export function setLocale(locale: Locale): void {
