@@ -922,7 +922,7 @@ export default function Home() {
             {/* ===================== HERO ===================== */}
             <section
               id="main"
-              className="relative flex min-h-[100svh] items-center overflow-hidden"
+              className="relative flex min-h-[100svh] items-center overflow-hidden [@media(min-height:1000px)]:items-start"
             >
               {/* genuine 3D scene + CSS fallback behind it */}
               <div className="absolute inset-0">
