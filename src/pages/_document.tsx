@@ -38,7 +38,8 @@ export default function Document() {
         <meta name="twitter:image:alt" content="Njangi On-Chain logo with the text 'Community Savings Circles on SUI Blockchain'" />
         
         {/* Web App capabilities */}
-        <meta name="theme-color" content="#3B82F6" /> {/* Blue-600 color */}
+        {/* theme-color is set per-page via next/head (the landing uses #0a0a0c);
+            no global default here so it can't conflict / force a tint on light pages. */}
         <meta name="google-site-verification" content="f6bd3c31267ded21" />
       </Head>
       <body>
