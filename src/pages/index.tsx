@@ -592,6 +592,12 @@ export default function Home() {
         <meta property="twitter:creator" content="@njangi_on_chain" />
 
         <meta name="theme-color" content="#0a0a0c" />
+        {/* Tell the browser this page is dark + paint html/body dark, so iOS
+            Safari tints the status bar / top safe-area dark instead of sampling
+            the (globally white) body background. Scoped to the landing via
+            next/head, so light app pages keep their default. */}
+        <meta name="color-scheme" content="dark" />
+        <style>{`html,body{background-color:#0a0a0c!important}`}</style>
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="apple-mobile-web-app-title" content="Njangi On-Chain" />
