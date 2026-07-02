@@ -332,7 +332,10 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       'Your circles keep running and every member keeps full access to their funds. You simply return to the Free plan limits for new circles and features.',
     'pricing.faq.fees.q': 'Are there other fees?',
     'pricing.faq.fees.a':
-      'Only standard Sui network transaction fees (typically a few cents), paid to the blockchain — not to us.',
+      'Only standard Sui network fees (typically a few cents), paid to the blockchain — not to us. On Premium, we cover those network fees for your members’ contributions and claims (fair use), so they never need to hold crypto for gas. On the Free plan members simply pay their own small network fee.',
+    'pricing.faq.gasFree.q': 'What is “gas-free for members”?',
+    'pricing.faq.gasFree.a':
+      'Every Sui transaction needs a tiny network fee (“gas”), normally paid in SUI. When you subscribe to Premium, your subscription covers that fee for your members’ contributions and claims — so someone can join and pay into your circle with only USDC, without first buying SUI for gas. Fair-use limits apply to prevent abuse; the money flow itself is never blocked.',
     'pricing.footerDisclaimer':
       'Premium covers coordination features only. It is not financial advice, custody, or a guarantee of returns. Cryptocurrency use carries risk — check the rules that apply in your country.',
     'pricing.free.feature.circles': '{count} savings circle',
@@ -344,6 +347,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'pricing.premium.feature.circles': 'Run up to {count} circles at once',
     'pricing.premium.feature.whatsapp': 'WhatsApp linking + turn and payout notifications',
     'pricing.premium.feature.goals': 'Smart savings goals for your circles',
+    'pricing.premium.feature.gasFree': 'Gas-free contributions for all your members (fair use)',
     'pricing.premium.feature.analytics': 'Circle analytics and contribution insights',
     'pricing.premium.feature.everything': 'Everything in Free',
     'pricing.alwaysFreeNoteLabel': 'Always free, on every plan:',
@@ -667,7 +671,10 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "Vos cercles continuent de fonctionner et chaque membre conserve un accès complet à ses fonds. Vous revenez simplement aux limites du forfait Gratuit pour les nouveaux cercles et fonctionnalités.",
     'pricing.faq.fees.q': "Y a-t-il d'autres frais ?",
     'pricing.faq.fees.a':
-      "Uniquement les frais de transaction standard du réseau Sui (généralement quelques centimes), versés à la blockchain — pas à nous.",
+      "Uniquement les frais de réseau Sui standard (généralement quelques centimes), versés à la blockchain — pas à nous. Avec Premium, nous prenons en charge ces frais de réseau pour les cotisations et les retraits de vos membres (usage raisonnable), afin qu'ils n'aient jamais besoin de détenir de crypto pour le gaz. Sur le forfait Gratuit, les membres paient simplement leur petit frais de réseau.",
+    'pricing.faq.gasFree.q': "Qu'est-ce que « sans frais de gaz pour les membres » ?",
+    'pricing.faq.gasFree.a':
+      "Chaque transaction Sui nécessite un petit frais de réseau (« gaz »), normalement payé en SUI. Lorsque vous souscrivez à Premium, votre abonnement couvre ce frais pour les cotisations et retraits de vos membres — ainsi une personne peut rejoindre votre cercle et y cotiser avec uniquement de l'USDC, sans avoir à acheter d'abord du SUI pour le gaz. Des limites d'usage raisonnable s'appliquent pour éviter les abus ; le flux d'argent lui-même n'est jamais bloqué.",
     'pricing.footerDisclaimer':
       "Premium couvre uniquement les fonctionnalités de coordination. Ce n'est pas un conseil financier, ni de la conservation, ni une garantie de rendement. L'usage de cryptomonnaies comporte des risques — vérifiez les règles applicables dans votre pays.",
     'pricing.free.feature.circles': "{count} cercle d'épargne",
@@ -679,6 +686,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'pricing.premium.feature.circles': "Gérez jusqu'à {count} cercles à la fois",
     'pricing.premium.feature.whatsapp': 'Liaison WhatsApp + notifications de tour et de paiement',
     'pricing.premium.feature.goals': "Objectifs d'épargne intelligents pour vos cercles",
+    'pricing.premium.feature.gasFree': 'Cotisations sans frais de gaz pour tous vos membres (usage raisonnable)',
     'pricing.premium.feature.analytics': 'Analyses du cercle et aperçus des versements',
     'pricing.premium.feature.everything': 'Tout ce qui est inclus dans Gratuit',
     'pricing.alwaysFreeNoteLabel': 'Toujours gratuit, sur tous les forfaits :',

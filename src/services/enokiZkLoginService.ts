@@ -11,7 +11,10 @@ import {
   jwtToAddress,
 } from '@mysten/sui/zklogin';
 import { decodeJwt } from 'jose';
+import { EnokiClient } from '@mysten/enoki';
+import { toBase64, fromBase64 } from '@mysten/sui/utils';
 import { SuiTransactionBlockResponse, ExecuteTransactionRequestType } from '@mysten/sui/client';
+import { allowedMoveCallTargets } from '@/lib/gas-sponsorship';
 import {
   getCurrentEnokiConfig,
   getCurrentGraphqlUrl,
@@ -109,6 +112,10 @@ export interface AccountData {
 interface TransactionOptions {
   gasBudget?: number;
   requestType?: ExecuteTransactionRequestType;
+}
+
+export interface SponsoredExecutionResult extends TransactionResult {
+  sponsored: boolean;
 }
 
 interface TransactionResult {
@@ -759,6 +766,118 @@ export class EnokiZkLoginService {
    * @param options Transaction options
    * @returns Transaction result
    */
+  /**
+   * Builds, sponsors, and executes a transaction via Enoki so the user pays
+   * NO gas. The user still authorizes with their own zkLogin signature — the
+   * sponsor only provides (and pays for) the gas coin, so this is not
+   * custodial: we cannot move funds the user didn't sign for.
+   *
+   * Flow (Enoki sponsored-transaction protocol):
+   *   1. Build a gas-less transaction KIND (onlyTransactionKind) — no gas coin,
+   *      no gas budget set by us.
+   *   2. Enoki `createSponsoredTransaction` returns full tx bytes (with the
+   *      sponsor's gas) + a digest, restricted to `allowedMoveCallTargets`.
+   *   3. User signs those bytes with the ephemeral key -> zkLogin signature.
+   *   4. Enoki `executeSponsoredTransaction(digest, signature)` submits it.
+   *
+   * The caller is responsible for the eligibility decision (see
+   * `src/lib/gas-sponsorship.ts`); this method just performs a sponsored
+   * execution and throws on failure so the caller can fall back to self-paid
+   * `sendTransaction`.
+   */
+  public async sendSponsoredTransaction(
+    account: AccountData,
+    prepareBlock: (txb: TransactionBlock) => void,
+    targetNetwork?: 'testnet' | 'mainnet',
+  ): Promise<SponsoredExecutionResult> {
+    await this.validateAccountData(account);
+
+    const effectiveNetwork = this.resolveEffectiveNetwork(targetNetwork);
+    const networkConfig = getNetworkConfig(effectiveNetwork);
+    const apiKey = networkConfig.enoki?.apiKey;
+    if (!apiKey) {
+      throw new Error('Enoki API key not configured for sponsorship');
+    }
+    const allowedTargets = allowedMoveCallTargets(networkConfig.packageId);
+    if (allowedTargets.length === 0) {
+      throw new Error('No package id available for sponsored move-call allowlist');
+    }
+
+    const { client: suiClient } = await getHealthySuiClient(
+      effectiveNetwork,
+      'enoki.sendSponsoredTransaction',
+    );
+
+    // 1. Build the gas-LESS transaction kind. We must NOT set a sender or gas
+    //    here — the sponsor owns the gas; sender is passed to Enoki separately.
+    const txb = new TransactionBlock();
+    prepareBlock(txb);
+    const kindBytes = await txb.build({ client: suiClient, onlyTransactionKind: true });
+
+    const enoki = new EnokiClient({ apiKey });
+
+    // 2. Ask Enoki to sponsor, pinned to our entry functions only.
+    const sponsored = await enoki.createSponsoredTransaction({
+      network: effectiveNetwork,
+      transactionKindBytes: toBase64(kindBytes),
+      sender: account.userAddr,
+      allowedMoveCallTargets: allowedTargets,
+      allowedAddresses: [account.userAddr],
+    });
+
+    // 3. User authorizes the sponsored bytes with their zkLogin signature.
+    const ephemeralKeyPair = this.keypairFromSecretKey(account.ephemeralPrivateKey);
+    const sponsoredBytes = fromBase64(sponsored.bytes);
+    const { signature: userSignature } = await ephemeralKeyPair.signTransaction(sponsoredBytes);
+
+    const addressSeed = genAddressSeed(
+      BigInt(account.userSalt),
+      'sub',
+      account.sub,
+      account.aud,
+    ).toString();
+
+    const zkLoginSignature = getZkLoginSignature({
+      inputs: {
+        ...account.zkProofs,
+        proofPoints: this.formatProofPoints(account.zkProofs.proofPoints),
+        addressSeed,
+      },
+      maxEpoch: account.maxEpoch,
+      userSignature,
+    });
+
+    // 4. Submit through Enoki.
+    const { digest } = await enoki.executeSponsoredTransaction({
+      digest: sponsored.digest,
+      signature: zkLoginSignature,
+    });
+
+    // Enoki returns only the digest; fetch effects for a consistent result
+    // shape and to surface on-chain execution failures to the caller.
+    const receipt = await suiClient.waitForTransaction({
+      digest,
+      options: { showEffects: true, showEvents: true },
+    });
+
+    const status = receipt.effects?.status?.status === 'success' ? 'success' : 'failure';
+    if (status !== 'success') {
+      throw new Error(
+        `Sponsored transaction failed on-chain: ${receipt.effects?.status?.error || 'unknown'}`,
+      );
+    }
+
+    return {
+      digest,
+      status,
+      sponsored: true,
+      error: receipt.effects?.status?.error || undefined,
+      gasUsed: receipt.effects?.gasUsed || undefined,
+      timestampMs: receipt.timestampMs || undefined,
+      checkpoint: receipt.checkpoint || undefined,
+    };
+  }
+
   public async sendTransaction(
     account: AccountData,
     prepareBlock: ((txb: TransactionBlock) => void) | TransactionBlock,

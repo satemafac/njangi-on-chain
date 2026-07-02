@@ -343,6 +343,28 @@ const STATEMENTS = [
           CREATE INDEX IF NOT EXISTS legal_acceptances_address_idx
             ON legal_acceptances (user_address);`,
   },
+  {
+    // Enoki gas-sponsorship metering (src/lib/gas-sponsorship.ts). One row per
+    // successfully sponsored transaction, used to enforce the per-user daily
+    // and global monthly fair-use caps that bound sponsored gas spend. Keyed on
+    // tx_digest so a retried record insert is idempotent. Sponsorship is a
+    // Premium-admin benefit; free-tier circles self-pay gas and never appear
+    // here. Purely a cost guard — the Enoki portal budget is the hard backstop.
+    name: 'gas_sponsorship_usage',
+    sql: `CREATE TABLE IF NOT EXISTS gas_sponsorship_usage (
+            id            BIGSERIAL PRIMARY KEY,
+            zklogin_sub   TEXT NOT NULL,
+            user_address  TEXT NOT NULL,
+            circle_id     TEXT,
+            action        TEXT NOT NULL,
+            tx_digest     TEXT NOT NULL UNIQUE,
+            sponsored_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+          CREATE INDEX IF NOT EXISTS gas_sponsorship_usage_user_recent_idx
+            ON gas_sponsorship_usage (zklogin_sub, sponsored_at DESC);
+          CREATE INDEX IF NOT EXISTS gas_sponsorship_usage_month_idx
+            ON gas_sponsorship_usage (sponsored_at);`,
+  },
 ];
 
 async function main() {

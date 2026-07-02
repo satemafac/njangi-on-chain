@@ -49,6 +49,8 @@ import {
   entitlementErrorBody,
   EntitlementError,
 } from '@/lib/entitlement-gate';
+import { resolveEscrowSponsorship } from '@/lib/gas-sponsorship-eligibility';
+import { recordSponsoredUsage } from '@/lib/gas-sponsorship';
 
 // Add at the top with other imports
 interface RPCError extends Error {
@@ -3293,39 +3295,83 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               }
 
               usdcCoins.sort((a, b) => Number(BigInt(b.balance) - BigInt(a.balance)));
-            
-            txResult = await instance.sendTransaction(
-              session.account,
-                (txb: Transaction) => {
-                txb.setSender(session.account!.userAddr);
-                
-                  const primaryCoinId = usdcCoins[0].coinObjectId;
-                  const secondaryCoinIds = usdcCoins.slice(1).map((coin) => coin.coinObjectId);
-                  if (secondaryCoinIds.length > 0) {
-                    txb.mergeCoins(
-                      txb.object(primaryCoinId),
-                      secondaryCoinIds.map((coinId) => txb.object(coinId))
-                    );
-                  }
 
-                  const depositCoin = txb.splitCoins(
+              // Build once; reused by sponsored + self-paid paths. The deposit
+              // coin is split from an OWNED USDC object (not txb.gas), so the
+              // sponsor's gas coin is never touched for value -> safe to sponsor.
+              const buildSecurityDeposit = (txb: Transaction) => {
+                txb.setSender(session.account!.userAddr);
+
+                const primaryCoinId = usdcCoins[0].coinObjectId;
+                const secondaryCoinIds = usdcCoins.slice(1).map((coin) => coin.coinObjectId);
+                if (secondaryCoinIds.length > 0) {
+                  txb.mergeCoins(
                     txb.object(primaryCoinId),
-                    [txb.pure.u64(requiredUsdcAmount)]
+                    secondaryCoinIds.map((coinId) => txb.object(coinId))
                   );
+                }
+
+                const depositCoin = txb.splitCoins(
+                  txb.object(primaryCoinId),
+                  [txb.pure.u64(requiredUsdcAmount)]
+                );
 
                 txb.moveCall({
                   target: `${packageIdToUse}::njangi_circles::member_deposit_security_deposit`,
-                    typeArguments: [USDC_COIN_TYPE],
+                  typeArguments: [USDC_COIN_TYPE],
                   arguments: [
-                      txb.object(circleId),
+                    txb.object(circleId),
                     txb.object(walletId),
                     depositCoin,
-                      txb.object(CLOCK_OBJECT_ID),
+                    txb.object(CLOCK_OBJECT_ID),
                   ],
                 });
-            },
-                { gasBudget: 120000000 }
-              );
+              };
+
+              // Gas sponsorship (Premium admin benefit) for the join deposit —
+              // the first action a brand-new, zero-SUI member takes. Falls back
+              // to self-paid gas on any failure; join is never blocked.
+              try {
+                const decision = await resolveEscrowSponsorship({
+                  sub: session.account.sub,
+                  escrowId: circleId, // circleId supplied directly below
+                  circleId,
+                  coinType: USDC_COIN_TYPE,
+                  packageId: packageIdToUse,
+                  network: getCurrentNetwork(),
+                  usesGasCoinForValue: false,
+                });
+                if (decision.sponsor) {
+                  const sponsoredResult = await instance.sendSponsoredTransaction(
+                    session.account,
+                    buildSecurityDeposit,
+                  );
+                  txResult = sponsoredResult;
+                  await recordSponsoredUsage({
+                    sub: session.account.sub,
+                    userAddress: session.account.userAddr,
+                    circleId,
+                    action: 'paySecurityDeposit',
+                    digest: sponsoredResult.digest,
+                  });
+                } else {
+                  txResult = await instance.sendTransaction(
+                    session.account,
+                    buildSecurityDeposit,
+                    { gasBudget: 120000000 }
+                  );
+                }
+              } catch (sponsorErr) {
+                console.error(
+                  'paySecurityDeposit: sponsored path failed, falling back to self-paid gas',
+                  sponsorErr,
+                );
+                txResult = await instance.sendTransaction(
+                  session.account,
+                  buildSecurityDeposit,
+                  { gasBudget: 120000000 }
+                );
+              }
             } else {
               const configFields = await getCircleConfigFields(suiClient, circleId);
               const configuredSuiDeposit = parsePositiveNumber(configFields?.security_deposit);
@@ -5683,22 +5729,69 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             userAddress: session.account.userAddr,
           });
 
-          const txResult = await instance.sendTransaction(
-            session.account,
-            (txb: Transaction) => {
-              txb.setSender(session.account!.userAddr);
-              txb.moveCall({
-                target: `${packageIdToUse}::njangi_cycle_escrow::contribute`,
-                typeArguments: [coinType],
-                arguments: [txb.object(escrowId), txb.object(paymentCoinId)],
+          // Build the contribute move call once; reused by both the sponsored
+          // and self-paid paths so they can never drift.
+          const buildContribute = (txb: Transaction) => {
+            txb.setSender(session.account!.userAddr);
+            txb.moveCall({
+              target: `${packageIdToUse}::njangi_cycle_escrow::contribute`,
+              typeArguments: [coinType],
+              arguments: [txb.object(escrowId), txb.object(paymentCoinId)],
+            });
+          };
+
+          // Gas sponsorship (Premium admin benefit). Non-custodial: the user
+          // still signs; the sponsor only pays gas. Any failure falls back to
+          // self-paid gas so a member is NEVER blocked from contributing.
+          let txResult: { digest: string; status: string; gasUsed?: unknown };
+          let sponsored = false;
+          try {
+            const decision = await resolveEscrowSponsorship({
+              sub: session.account.sub,
+              escrowId,
+              coinType,
+              packageId: packageIdToUse,
+              network: getCurrentNetwork(),
+              usesGasCoinForValue: false, // explicit payment coin object, not txb.gas
+            });
+            if (decision.sponsor) {
+              const sponsoredResult = await instance.sendSponsoredTransaction(
+                session.account,
+                buildContribute,
+              );
+              txResult = sponsoredResult;
+              sponsored = true;
+              await recordSponsoredUsage({
+                sub: session.account.sub,
+                userAddress: session.account.userAddr,
+                circleId: escrowId,
+                action: 'contributeToCycleEscrow',
+                digest: sponsoredResult.digest,
               });
-            },
-            { gasBudget: 80_000_000 },
-          );
+            } else {
+              txResult = await instance.sendTransaction(
+                session.account,
+                buildContribute,
+                { gasBudget: 80_000_000 },
+              );
+            }
+          } catch (sponsorErr) {
+            console.error(
+              'contributeToCycleEscrow: sponsored path failed, falling back to self-paid gas',
+              sponsorErr,
+            );
+            txResult = await instance.sendTransaction(
+              session.account,
+              buildContribute,
+              { gasBudget: 80_000_000 },
+            );
+          }
+
           return res.status(200).json({
             digest: txResult.digest,
             status: txResult.status,
             gasUsed: txResult.gasUsed,
+            sponsored,
           });
         } catch (error) {
           console.error('contributeToCycleEscrow failed', error);

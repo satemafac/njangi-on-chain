@@ -209,6 +209,7 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
     t('pricing.premium.feature.circles', { count: premiumTier.maxCircles }),
     t('pricing.premium.feature.whatsapp'),
     t('pricing.premium.feature.goals'),
+    t('pricing.premium.feature.gasFree'),
     t('pricing.premium.feature.analytics'),
     t('pricing.premium.feature.everything'),
   ];
@@ -502,6 +503,14 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
                 </h3>
                 <p className="mt-2 text-sm leading-6 text-[#596170]">
                   {t('pricing.faq.fees.a')}
+                </p>
+              </div>
+              <div className={`${shellCardClass} p-5`}>
+                <h3 className="text-sm font-semibold text-[#171923]">
+                  {t('pricing.faq.gasFree.q')}
+                </h3>
+                <p className="mt-2 text-sm leading-6 text-[#596170]">
+                  {t('pricing.faq.gasFree.a')}
                 </p>
               </div>
             </div>

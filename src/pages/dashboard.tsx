@@ -11,6 +11,8 @@ import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
 import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink, ArrowRightLeft, ChevronDown, ChevronUp } from 'lucide-react';
 import RampPicker from '@/components/RampPicker';
+import ReceiveFundsModal from '@/components/ReceiveFundsModal';
+import CashOutGuide from '@/components/CashOutGuide';
 import NjangiRoundAlerts from '@/components/NjangiRoundAlerts';
 import GoalPoolsSection from '@/components/goals/GoalPoolsSection';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
@@ -1659,6 +1661,8 @@ export default function Dashboard() {
   const [balance, setBalance] = useState<string>('0');
   const [allCoins, setAllCoins] = useState<{coinType: string, symbol: string, balance: string}[]>([]);
   const [showFullAddress, setShowFullAddress] = useState(false);
+  const [isReceiveOpen, setIsReceiveOpen] = useState(false);
+  const [isCashOutOpen, setIsCashOutOpen] = useState(false);
   const [showToast, setShowToast] = useState(false);
   
   // Enhanced circles state with caching
@@ -2128,6 +2132,20 @@ export default function Dashboard() {
       toast.error(`Failed to refresh balance on ${activeNetwork}`);
     }
     return false;
+  }, [userAddress]);
+
+  // Live USDC balance (whole units) for the Receive modal's arrival watcher.
+  // Reads the current USDC coin balance directly so a CEX transfer is detected
+  // the moment it lands, without waiting for the periodic dashboard refresh.
+  const pollUsdcBalance = useCallback(async (): Promise<number> => {
+    if (!userAddress) return 0;
+    const cfg = getCurrentNetworkConfig();
+    const client = getSuiClientFromPool(cfg.rpcUrl);
+    const { totalBalance } = await client.getBalance({
+      owner: userAddress,
+      coinType: cfg.coinTypes.USDC,
+    });
+    return Number(BigInt(totalBalance)) / 1e6; // USDC has 6 decimals
   }, [userAddress]);
 
   // Handle manual balance refresh
@@ -6697,11 +6715,11 @@ export default function Dashboard() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => openBuyFlow('usdc')}
+                        onClick={() => setIsReceiveOpen(true)}
                         className={secondaryActionClass}
                       >
                         <CreditCard className="mr-2 h-4 w-4" />
-                        Buy crypto
+                        Add funds
                       </button>
                     </div>
                   </div>
@@ -6857,13 +6875,21 @@ export default function Dashboard() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => openBuyFlow('usdc')}
+                      onClick={() => setIsReceiveOpen(true)}
                       className={secondaryActionClass}
                     >
                       <CreditCard className="mr-2 h-4 w-4" />
-                      Buy crypto
+                      Add funds
                     </button>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsCashOutOpen(true)}
+                    className="mt-2 inline-flex items-center text-xs font-medium text-slate-500 hover:text-slate-700"
+                  >
+                    <ArrowRightLeft className="mr-1.5 h-3.5 w-3.5" />
+                    Cash out to your exchange
+                  </button>
                 </div>
 
                 <div className="hidden space-y-5 md:block">
@@ -7011,11 +7037,19 @@ export default function Dashboard() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => openBuyFlow('usdc')}
+                      onClick={() => setIsReceiveOpen(true)}
                       className={secondaryActionClass}
                     >
                       <CreditCard className="mr-2 h-4 w-4" />
-                      Buy crypto
+                      Add funds
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsCashOutOpen(true)}
+                      className={`sm:col-span-2 ${secondaryActionClass}`}
+                    >
+                      <ArrowRightLeft className="mr-2 h-4 w-4" />
+                      Cash out to your exchange
                     </button>
                     {network === 'testnet' && (
                       <a
@@ -8729,6 +8763,42 @@ export default function Dashboard() {
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+
+      <ReceiveFundsModal
+        isOpen={isReceiveOpen}
+        onClose={() => setIsReceiveOpen(false)}
+        walletAddress={userAddress || ''}
+        pollBalance={pollUsdcBalance}
+        onArrived={() => {
+          void fetchBalance();
+        }}
+      />
+
+      <CashOutGuide
+        isOpen={isCashOutOpen}
+        onClose={() => setIsCashOutOpen(false)}
+        availableUsdc={
+          Number(allCoins.find((c) => c.symbol === 'USDC')?.balance || '0') / 1e6
+        }
+        availableSui={Number(balance || '0') / 1e9}
+        onSend={async ({ toAddress, amount, coin }) => {
+          const cfg = getCurrentNetworkConfig();
+          const coinType = coin === 'USDC' ? cfg.coinTypes.USDC : cfg.coinTypes.SUI;
+          const decimals = coin === 'USDC' ? 1e6 : 1e9;
+          const smallestUnit = Math.floor(amount * decimals).toString();
+          const result = await sendTokens({
+            recipientAddress: toAddress,
+            amount: smallestUnit,
+            coinType,
+          });
+          if (!result.success) {
+            throw new Error('Send failed. Check the address and your balance, then try again.');
+          }
+          if (userAddress) clearWalletBalanceCache(userAddress);
+          void fetchBalance();
+          return { digest: result.digest };
+        }}
+      />
     </div>
   );
 }
