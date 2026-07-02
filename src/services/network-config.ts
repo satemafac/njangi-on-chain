@@ -114,27 +114,32 @@ function buildNetworkConfig(network: NetworkType): NetworkConfig {
     },
     coinTypes: {
       SUI: '0x2::sui::SUI',
-      USDC: process.env.NEXT_PUBLIC_MAINNET_USDC || '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN',
+      // Native Circle-issued USDC — the asset CEX withdrawals (Binance, Coinbase, …)
+      // deliver on Sui. NOT the Wormhole-bridged ::coin::COIN.
+      USDC: process.env.NEXT_PUBLIC_MAINNET_USDC || '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
       SUI_USDE: process.env.NEXT_PUBLIC_MAINNET_SUI_USDE || '0x41d587e5336f1c86cad50d38a7136db99333bb9bda91cea4ba69115defeb1402::sui_usde::SUI_USDE',
     },
     cetus: {
-      packageId: process.env.NEXT_PUBLIC_MAINNET_CETUS_PACKAGE || '0x0c7ae833c220aa73a3643a0d508afa4ac5d50d97312ea4584e35f9eb21b9df12',
-      globalConfig: process.env.NEXT_PUBLIC_MAINNET_CETUS_GLOBAL_CONFIG || '0xf5ff7d5ba73b581bca6b4b9fa0049cd320360abd154b809f8700a8fd3cfaf7ca',
+      packageId: process.env.NEXT_PUBLIC_MAINNET_CETUS_PACKAGE || '0x1eabed72c53feb3805120a081dc15963c204dc8d091542592abaf7a35689b2fb',
+      globalConfig: process.env.NEXT_PUBLIC_MAINNET_CETUS_GLOBAL_CONFIG || '0xdaa46292632c3c4d8f31f23ea0f9b36a28ff3677e9684980e4438403a67a3d8f',
       pools: {
-        SUI_USDC: process.env.NEXT_PUBLIC_MAINNET_CETUS_POOL_SUI_USDC || '0x5eb2dfcdd1b15c8d13a4b0b53ae77b3916fae780160ef9f19ca3e49686541c7a',
-        SUI_USDT: '0x06d8af9e6afd27262db436f0d37b304a041f710c3ea1fa4c3a9bab36b3569cc3',
+        // Pool<native USDC, SUI>, 0.25% fee tier (coin A = USDC, coin B = SUI)
+        SUI_USDC: process.env.NEXT_PUBLIC_MAINNET_CETUS_POOL_SUI_USDC || '0xb8d7d9e66a60c239e7a60110efcf8de6c705580ed924d0dde141f4a0e2c90105',
+        // Pool<native suiUSDT, SUI>, 0.25% fee tier — thin liquidity; USDT routes
+        // are better served via the USDC↔suiUSDT pool through the aggregator
+        SUI_USDT: '0x84fc1515fd3d2395b2d67b301dc2b60040e31af7e295f8731c84bd528733252f',
       },
       aggregatorRouter: '0xeffc8ae61f439bb34c9b905ff8f29ec56873dcedf81c7123ff2f1f67c45ec302',
-      pools_id: '0xdf23f5920fbe7d529ddda0c814efd1c5ab3a4ce67fa34dadf9e135c3d617df25',
-      published_at: '0xb2a1d27337788bda89d350703b8326952413bd94b35b9b573ac8401b9803d018',
-      coin_list_id: '0x1eabed72c53feb3805120a081dc15963c204dc8d091542592abaf7a35689b2fb',
-      launchpad_pools_id: '0x38465dad7da5e2c57cd68be9cfb7a7b370ac0fae42057a6085e9c7b924af9b09',
-      cert_id: '0x6f1a1ccc1c8bfc4a5612fbea2d62c531832e99cbf46582410ec92d938cd1c66a',
+      pools_id: '0xf699e7f2276f5c9a75944b37a0c5b5d9ddfd2471bf6242483b03ab2887d198d0',
+      published_at: '0xc6faf3703b0e8ba9ed06b7851134bbbe7565eb35ff823fd78432baa4cbeaa12e',
+      coin_list_id: '0x8cbc11d9e10140db3d230f50b4d30e9b721201c0083615441707ffec1ef77b23',
+      launchpad_pools_id: '0x1098fac992eab3a0ab7acf15bb654fc1cf29b5a6142c4ef1058e6c408dd15115',
     },
     tokens: {
       SUI: '0x2::sui::SUI',
-      USDC: '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN',
-      USDT: '0x6674cb08a6ef2a155b3c240df0c559fcb5fef5738a17851c124dfbe96bc9a744::coin::COIN',
+      USDC: process.env.NEXT_PUBLIC_MAINNET_USDC || '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+      // Native suiUSDT (Sui Bridge Tether) — what CEXes deliver for USDT on Sui
+      USDT: process.env.NEXT_PUBLIC_MAINNET_USDT || '0x375f70cf2ae4c00bf37117d0c85a2c71545e6ee05c4a5c7d282cd66a4504b068::usdt::USDT',
       SUI_USDE: process.env.NEXT_PUBLIC_MAINNET_SUI_USDE || '0x41d587e5336f1c86cad50d38a7136db99333bb9bda91cea4ba69115defeb1402::sui_usde::SUI_USDE',
     },
     ember: {
