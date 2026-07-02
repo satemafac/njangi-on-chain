@@ -615,7 +615,7 @@ export default function AdminCompliancePage() {
 
           <Field
             label="Internal compliance secret"
-            hint="Matches COMPLIANCE_ISSUANCE_SECRET (falls back to INTERNAL_NOTIFY_SECRET)."
+            hint="Matches COMPLIANCE_ISSUANCE_SECRET (server-side env)."
           >
             <input
               value={internalSecret}

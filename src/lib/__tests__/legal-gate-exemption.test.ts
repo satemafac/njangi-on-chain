@@ -1,11 +1,15 @@
 /**
  * Legal-gate route exemptions (docs/legal-drafts/ACCEPTANCE-GATE-SPEC.md):
- * recovery/claim flows must remain reachable for a user who has NOT
- * accepted the current document versions — a read-only legal hold must
- * never lock funds access. Claim payouts, recovery proposals/votes/
- * execution, and refunds all live under /circle/[id]/**, so the whole
- * /circle prefix is exempt, as are the /auth flow and the /legal pages
- * the user is being asked to read.
+ * accessing EXISTING funds (claim payouts, recovery proposals/votes/
+ * execution, refunds, withdraw) must remain reachable for a user who has
+ * NOT accepted the current document versions — a read-only legal hold must
+ * never lock funds access. Those live on the circle detail page
+ * (/circle/[id]) and its non-entry subroutes, so those stay exempt.
+ *
+ * 2026-07 GTM hardening: the two ENTRY actions that create a NEW financial
+ * commitment — /circle/[id]/join and /circle/[id]/contribute — are gated,
+ * so a deep link can no longer let someone commit funds without accepting
+ * the disclosures. /auth and /legal remain exempt.
  */
 
 import {
@@ -14,12 +18,18 @@ import {
 } from '@/lib/legal-acceptance';
 
 describe('isLegalGateExemptPath', () => {
-  it('never gates recovery/claim routes under /circle (route patterns and concrete paths)', () => {
+  it('never gates fund-ACCESS routes under /circle (detail page, manage, patterns + concrete)', () => {
     expect(isLegalGateExemptPath('/circle/[id]')).toBe(true);
     expect(isLegalGateExemptPath('/circle/[id]/manage')).toBe(true);
-    expect(isLegalGateExemptPath('/circle/[id]/contribute')).toBe(true);
+    expect(isLegalGateExemptPath('/circle/[id]/goals')).toBe(true);
     expect(isLegalGateExemptPath('/circle/0xabc123')).toBe(true);
-    expect(isLegalGateExemptPath('/circle/0xabc123/contribute')).toBe(true);
+  });
+
+  it('GATES the entry actions (join, contribute) — new commitment needs acceptance', () => {
+    expect(isLegalGateExemptPath('/circle/[id]/contribute')).toBe(false);
+    expect(isLegalGateExemptPath('/circle/[id]/join')).toBe(false);
+    expect(isLegalGateExemptPath('/circle/0xabc123/contribute')).toBe(false);
+    expect(isLegalGateExemptPath('/circle/0xabc123/join')).toBe(false);
   });
 
   it('never gates the auth flow or the legal pages themselves', () => {

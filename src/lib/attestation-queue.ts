@@ -13,7 +13,7 @@
 //
 // Security model:
 //   * POSTs require `x-internal-auth` matching COMPLIANCE_ISSUANCE_SECRET
-//     (or INTERNAL_NOTIFY_SECRET fallback). The queue layer assumes its
+//     (no INTERNAL_NOTIFY_SECRET fallback). The queue layer assumes its
 //     caller has already enforced that gate; do not expose these helpers
 //     behind unauthenticated HTTP.
 //   * Raw case ids are only kept when the operator needs to inspect them

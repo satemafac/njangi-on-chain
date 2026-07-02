@@ -13,6 +13,7 @@ import {
   type CreateTransakSessionInput,
   type TransakAssetIntent,
 } from '../../../../services/transak-service';
+import { isSanctionedCountry } from '../../../../lib/ramp-geo';
 
 interface RequestBody {
   walletAddress?: string;
@@ -91,6 +92,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       !COUNTRY_CODE_PATTERN.test(body.countryCode.trim()))
   ) {
     return invalidRequest(res, 'countryCode must be a 2-letter ISO code.');
+  }
+  // Sanctions screen (client-supplied country AND the edge-detected IP
+  // country): as the coordinator we refuse to mint ramp sessions for
+  // comprehensively sanctioned jurisdictions rather than deferring entirely
+  // to the provider's own KYC.
+  const ipCountry = (req.headers['x-vercel-ip-country'] as string | undefined)
+    ?.trim()
+    .toUpperCase();
+  if (isSanctionedCountry(body.countryCode) || isSanctionedCountry(ipCountry)) {
+    return res.status(403).json({
+      error: 'This service is not available in your region.',
+      code: 'BLOCKED_REGION',
+    });
   }
   if (body.redirectURL !== undefined) {
     // The redirect lands the buyer back in the app after checkout; never

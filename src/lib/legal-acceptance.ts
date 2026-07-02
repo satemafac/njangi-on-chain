@@ -79,22 +79,41 @@ export const LEGAL_DRAFT_NOTICE: Record<LegalLocale, { badge: string; body: stri
 };
 
 /**
- * Routes the acceptance gate must NEVER block (mirror of the "recovery is
- * never paywalled" rule in docs/legal-drafts/ACCEPTANCE-GATE-SPEC.md):
+ * Routes the acceptance gate must NEVER block (mirror of the "fund access is
+ * never paywalled/held" rule in docs/legal-drafts/ACCEPTANCE-GATE-SPEC.md):
  *
  *  - `/auth`   — the login/callback flow itself (the gate runs after it);
  *  - `/legal`  — users must be able to read the documents they are accepting;
- *  - `/circle` — claim_payout, recovery proposals/votes/execution, and refund
- *    flows all live under /circle/[id]/**. A read-only legal hold must never
- *    lock funds access, so a user deep-linking to a recovery/claim route is
- *    always let through even with outstanding acceptances.
+ *  - `/circle` — claim_payout, recovery proposals/votes/execution, refund,
+ *    and withdraw all live on the circle detail page (`/circle/[id]`) and
+ *    its non-entry subroutes. A read-only legal hold must never lock a user
+ *    out of their money, so these stay exempt even with outstanding
+ *    acceptances.
  *
- * Matched against `router.pathname`, so both the route pattern
- * (`/circle/[id]`) and concrete asPath forms are covered by the prefix.
+ * EXCEPTION (2026-07 GTM hardening): the two ENTRY actions that create a new
+ * financial commitment — joining a circle and contributing — are NOT exempt.
+ * A user must have accepted the current Terms/Privacy/Risk before they can
+ * join or pay in. This closes the gap where a deep link to
+ * `/circle/[id]/contribute` let someone commit funds without ever accepting
+ * the disclosures. Claiming, recovering, and withdrawing what they are owed
+ * remain always-open (the detail page is exempt), so nothing about accessing
+ * existing funds is gated — only entering a NEW commitment is.
+ *
+ * Matched against `router.pathname` (route-pattern form like
+ * `/circle/[id]/contribute`) and also robust to concrete `asPath` ids.
  */
 export const LEGAL_GATE_EXEMPT_PATH_PREFIXES = ['/auth', '/legal', '/circle'] as const;
 
+// Entry subroutes under /circle that DO require acceptance. Matched on the
+// last path segment so both `/circle/[id]/contribute` and
+// `/circle/0xabc/join` are caught.
+const LEGAL_GATE_CIRCLE_ENTRY_SUBROUTES = /^\/circle\/[^/]+\/(contribute|join)(\/|$)/;
+
 export function isLegalGateExemptPath(pathname: string): boolean {
+  // Entry actions are gated even though they live under /circle.
+  if (LEGAL_GATE_CIRCLE_ENTRY_SUBROUTES.test(pathname)) {
+    return false;
+  }
   return LEGAL_GATE_EXEMPT_PATH_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
   );

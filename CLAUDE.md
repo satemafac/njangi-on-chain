@@ -261,8 +261,9 @@ the Vercel `/api/cron/cycle-finalized` job on the Vercel deploy above):
   operator never posts their ephemeral key to the server.
 - Required env:
   `COMPLIANCE_REF_HMAC_SALT` (server),
-  `COMPLIANCE_ISSUANCE_SECRET` or fallback `INTERNAL_NOTIFY_SECRET`
-  (server, sent by the console as `x-internal-auth`),
+  `COMPLIANCE_ISSUANCE_SECRET` (server, sent by the console as
+  `x-internal-auth`; the old `INTERNAL_NOTIFY_SECRET` fallback was removed
+  2026-07 — the two secrets are separate concerns now),
   `NJANGI_ATTESTOR_CAP_ID` (ops-side reference of the AttestorCap object),
   `NEXT_PUBLIC_NJANGI_ATTESTATION_ISSUER` (browser-visible issuer pin).
 - Flow: enter AttestorCap id + subject + provider case id + TTL → the page

@@ -67,7 +67,7 @@ function packageIdFor(network: NetworkType): string {
 // returned zero rows, which surfaced as a perpetual "round hasn't been opened
 // yet" even though the open tx had landed. Prefer the original id for event
 // queries; fall back to the published-at when no lineage is recorded.
-function eventTypePackageIdFor(network: NetworkType): string {
+export function eventTypePackageIdFor(network: NetworkType): string {
   const { originalId } = getPublishedPackageMetadata(network);
   if (originalId && originalId.trim() !== '') return originalId;
   return packageIdFor(network);

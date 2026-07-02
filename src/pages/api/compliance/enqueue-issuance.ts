@@ -5,8 +5,8 @@
  * after a KYC decision so the attestor console can one-click the
  * on-chain issuance later.
  *
- * Auth: `x-internal-auth` matching COMPLIANCE_ISSUANCE_SECRET (falls
- * back to INTERNAL_NOTIFY_SECRET) so the queue can't be abused by
+ * Auth: `x-internal-auth` matching COMPLIANCE_ISSUANCE_SECRET (no
+ * INTERNAL_NOTIFY_SECRET fallback) so the queue cannot be abused by
  * random browsers.
  */
 

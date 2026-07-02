@@ -5,7 +5,7 @@
  * compliance console can show ops "did the nudge go out?" without psql.
  *
  * Query: `?address=0x…&limit=50` (limit defaults to 25, capped at 100).
- * Auth: shared `INTERNAL_NOTIFY_SECRET` / `COMPLIANCE_ISSUANCE_SECRET`
+ * Auth: shared `COMPLIANCE_ISSUANCE_SECRET`
  * via `guardComplianceRequest` (Phase 10 limiter included).
  */
 

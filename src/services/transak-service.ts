@@ -171,6 +171,19 @@ export function decodeTransakWebhook(
   // Lightweight HS256 verify so we don't pull in another crypto dep.
   const parts = token.split('.');
   if (parts.length !== 3) return null;
+  // Pin the algorithm before verifying: a manual JWT check that never reads
+  // the JOSE header is one refactor away from an alg-confusion bypass (e.g.
+  // a future switch to a library that honours `alg: none`). Only HS256 —
+  // exactly what Transak signs with the partner API secret — is accepted.
+  try {
+    const header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+    if (!header || typeof header !== 'object' || (header as { alg?: unknown }).alg !== 'HS256') {
+      console.warn('[transak] webhook JWT alg is not HS256 — rejecting');
+      return null;
+    }
+  } catch {
+    return null;
+  }
   const data = `${parts[0]}.${parts[1]}`;
   const expected = createHmac('sha256', secret).update(data).digest('base64url');
   const provided = parts[2];

@@ -11,8 +11,12 @@ const DEFAULT_LIMIT = Number(process.env.COMPLIANCE_RATE_LIMIT ?? '60');
 const DEFAULT_WINDOW_MS = Number(process.env.COMPLIANCE_RATE_LIMIT_WINDOW_MS ?? '60000');
 
 function sharedSecret(): string | null {
-  const candidate =
-    process.env.COMPLIANCE_ISSUANCE_SECRET || process.env.INTERNAL_NOTIFY_SECRET;
+  // COMPLIANCE_ISSUANCE_SECRET only — no INTERNAL_NOTIFY_SECRET fallback.
+  // The notify secret authenticates WhatsApp dispatch; letting it also open
+  // the compliance APIs meant a leak of the (more widely shared) notify
+  // secret silently granted attestation-queue access. Separate concerns:
+  // if this env is unset the compliance endpoints fail closed (401).
+  const candidate = process.env.COMPLIANCE_ISSUANCE_SECRET;
   return candidate && candidate.length > 0 ? candidate : null;
 }
 

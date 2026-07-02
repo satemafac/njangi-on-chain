@@ -14,6 +14,10 @@
     {
       "path": "/api/cron/walrus-renewal",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/attestation-expiry",
+      "schedule": "0 8 * * *"
     }
   ],
   "functions": {
@@ -24,6 +28,9 @@
       "maxDuration": 60
     },
     "src/pages/api/cron/walrus-renewal.ts": {
+      "maxDuration": 60
+    },
+    "src/pages/api/cron/attestation-expiry.ts": {
       "maxDuration": 60
     },
     "src/pages/api/zkLogin.ts": {

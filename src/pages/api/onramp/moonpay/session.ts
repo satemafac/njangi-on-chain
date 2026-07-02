@@ -13,6 +13,7 @@ import {
   type MoonPayAssetIntent,
   type MoonPayBaseCurrency,
 } from '../../../../services/moonpay-service';
+import { isSanctionedCountry } from '../../../../lib/ramp-geo';
 
 interface RequestBody {
   walletAddress?: string;
@@ -46,6 +47,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       provider: 'moonpay',
       error: 'INVALID_REQUEST',
       message: 'walletAddress and preferredAssetIntent are required.',
+    });
+  }
+
+  // Sanctions screen on the edge-detected IP country: refuse to mint ramp
+  // sessions for comprehensively sanctioned jurisdictions (coordinator-level
+  // block, ahead of the provider's own KYC).
+  const ipCountry = (req.headers['x-vercel-ip-country'] as string | undefined)
+    ?.trim()
+    .toUpperCase();
+  if (isSanctionedCountry(ipCountry)) {
+    return res.status(403).json({
+      provider: 'moonpay',
+      error: 'BLOCKED_REGION',
+      message: 'This service is not available in your region.',
     });
   }
 

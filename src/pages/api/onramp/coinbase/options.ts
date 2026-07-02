@@ -13,6 +13,7 @@ import {
   createOnrampRequestLogger,
   hashForLogs,
 } from '@/lib/onramp-logging';
+import { getTrustedClientIp } from '@/lib/trusted-client-ip';
 
 type SupportedAsset = {
   intent: CoinbaseAssetIntent;
@@ -85,23 +86,6 @@ function firstQueryValue(value: string | string[] | undefined): string | undefin
   return value;
 }
 
-function normalizeIp(rawIp: string | undefined): string | null {
-  if (!rawIp) {
-    return null;
-  }
-  if (rawIp === '::1') {
-    return '127.0.0.1';
-  }
-  if (rawIp.startsWith('::ffff:')) {
-    return rawIp.replace('::ffff:', '');
-  }
-  return rawIp;
-}
-
-function getTrustedClientIp(req: NextApiRequest): string | null {
-  // We intentionally do not trust X-Forwarded-For for security-sensitive logic.
-  return normalizeIp(req.socket?.remoteAddress);
-}
 
 function checkRateLimit(
   store: Map<string, { count: number; resetAt: number }>,

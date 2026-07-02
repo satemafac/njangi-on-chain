@@ -63,6 +63,33 @@ export function isCemacCountry(country: string | null | undefined): boolean {
 }
 
 /**
+ * Comprehensively OFAC-sanctioned jurisdictions (US sanctions programs the
+ * ramp partners themselves are bound by): Iran, North Korea, Cuba, Syria,
+ * plus Russia/Belarus (broad 2022+ programs the ramps block anyway).
+ * Crimea/Donetsk/Luhansk are region-level within UA and cannot be expressed
+ * as ISO-3166 alpha-2 — the ramps' own KYC handles those; we block at the
+ * country level only.
+ *
+ * As the ramp COORDINATOR (not the money handler) we should not route users
+ * from these jurisdictions to on-ramps at all: `providerOrderForCountry`
+ * returns [] and the server session endpoints reject with BLOCKED_REGION
+ * before any provider widget is offered.
+ */
+export const SANCTIONED_COUNTRIES: ReadonlySet<string> = new Set([
+  'IR', // Iran
+  'KP', // North Korea
+  'CU', // Cuba
+  'SY', // Syria
+  'RU', // Russia
+  'BY', // Belarus
+]);
+
+export function isSanctionedCountry(country: string | null | undefined): boolean {
+  const normalized = normalizeCountryCode(country);
+  return normalized !== null && SANCTIONED_COUNTRIES.has(normalized);
+}
+
+/**
  * Ordered provider preference for a country (before enablement filtering):
  * - CEMAC (CM, GA, TD, CF, CG, GQ): [transak, moonpay] — Coinbase is
  *   unsupported there and is omitted entirely.
@@ -74,6 +101,11 @@ export function providerOrderForCountry(
   country: string | null | undefined,
 ): RampProviderId[] {
   const normalized = normalizeCountryCode(country);
+  // Sanctioned jurisdictions get NO providers. RampPicker already renders
+  // an empty-provider fallback state, so this degrades gracefully in the UI.
+  if (normalized && SANCTIONED_COUNTRIES.has(normalized)) {
+    return [];
+  }
   if (normalized && CEMAC_COUNTRIES.has(normalized)) {
     return ['transak', 'moonpay'];
   }
