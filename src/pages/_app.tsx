@@ -30,20 +30,37 @@ function AppContent({ Component, pageProps }: AppProps) {
         </>
       )}
       <Component {...pageProps} />
-      <Toaster 
-        position="bottom-center" 
+      {/* Toast palette mirrors BillingUpsellModal / CallbackStatusShell:
+          warm paper surface, ink text, muted green/brick status icons. */}
+      <Toaster
+        position="bottom-center"
         reverseOrder={false}
         toastOptions={{
           duration: 5000,
           style: {
-            background: '#363636',
-            color: '#fff',
+            background: '#fbfaf7',
+            color: '#171923',
+            border: '1px solid #dfd6ca',
+            borderRadius: '14px',
+            boxShadow: '0 18px 50px -24px rgba(15, 23, 42, 0.35)',
+            padding: '10px 14px',
+            fontSize: '14px',
+            fontWeight: 500,
+            lineHeight: '1.45',
           },
           success: {
             duration: 3000,
+            iconTheme: {
+              primary: '#3f7d54',
+              secondary: '#fbfaf7',
+            },
           },
           error: {
             duration: 6000,
+            iconTheme: {
+              primary: '#a1493c',
+              secondary: '#fbfaf7',
+            },
           }
         }}
       />

@@ -14,6 +14,11 @@ import { toast } from 'react-hot-toast';
 import { AccountData } from '@/services/zkLoginService';
 import { getCurrentNetwork } from '@/services/network-config';
 import ConfirmationModal from './ConfirmationModal';
+import BillingUpsellModal, {
+  parseUpgradeRequired,
+  type UpgradeRequiredDetails,
+} from './BillingUpsellModal';
+import { humanizeErrorMessage } from '@/lib/user-error-messages';
 import PhoneInput, { isValidPhoneNumber } from 'react-phone-number-input';
 import 'react-phone-number-input/style.css';
 
@@ -119,6 +124,9 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
   const [linkType, setLinkType] = useState<1 | 2>(1);
   const [phoneOrGroup, setPhoneOrGroup] = useState('');
   const [validationError, setValidationError] = useState<string | null>(null);
+  // WhatsApp linking is a premium feature — a 402 opens the upsell
+  // modal instead of toasting the raw UPGRADE_REQUIRED code.
+  const [upsell, setUpsell] = useState<UpgradeRequiredDetails | null>(null);
 
   // Fetch current link status
   useEffect(() => {
@@ -221,7 +229,13 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
       const data = await response.json();
 
       if (!response.ok) {
-        toast.error(data.error || 'Failed to link circle');
+        console.error('Failed to link circle:', data);
+        const upgrade = parseUpgradeRequired(data);
+        if (upgrade) {
+          setUpsell(upgrade);
+          return;
+        }
+        toast.error(humanizeErrorMessage(data.error, 'Failed to link circle'));
         return;
       }
 
@@ -598,6 +612,14 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
         message="Are you sure you want to unlink this circle from WhatsApp? This action cannot be undone."
         confirmText="Unlink"
         cancelText="Cancel"
+      />
+
+      {/* Premium upsell when WhatsApp linking is not on the caller's plan */}
+      <BillingUpsellModal
+        open={!!upsell}
+        onClose={() => setUpsell(null)}
+        feature={upsell?.feature ?? 'whatsappSuite'}
+        message={upsell?.message}
       />
     </div>
   );

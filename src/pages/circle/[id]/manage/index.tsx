@@ -36,6 +36,11 @@ import {
 } from '../../../../services/network-config';
 import RotationOrderList from '../../../../components/RotationOrderList';
 import ConfirmationModal from '../../../../components/ConfirmationModal';
+import BillingUpsellModal, {
+  parseUpgradeRequired,
+  type UpgradeRequiredDetails,
+} from '@/components/BillingUpsellModal';
+import { humanizeErrorMessage } from '@/lib/user-error-messages';
 import {
   ZkLoginClient,
   ZkLoginError,
@@ -580,10 +585,13 @@ const parseMoveError = (error: string): { code: number; message: string } => {
     return { code: 401, message: 'Your session has expired. Please log in again to continue.' };
   }
 
-  // Final fallback (keep as is)
+  // Final fallback: never surface machine codes (UPGRADE_REQUIRED, raw
+  // MoveAbort dumps) to the user — humanizeErrorMessage maps known codes
+  // and collapses unknown ones to a generic message. The raw string is
+  // already in the console via the call sites' console.error.
   const cleanedMessage = error.replace('zkLogin signature error: ', '').split(' in command')[0] || 'An unknown error occurred.';
-  console.log("[parseMoveError] Using final fallback message:", cleanedMessage); 
-  return { code: 0, message: cleanedMessage };
+  console.log("[parseMoveError] Using final fallback message:", cleanedMessage);
+  return { code: 0, message: humanizeErrorMessage(cleanedMessage) };
 };
 
 // Define an error code mapping for rotation position errors
@@ -732,6 +740,9 @@ export default function ManageCircle() {
   const [isEditingMaxMembers, setIsEditingMaxMembers] = useState(false);
   const [newMaxMembersValue, setNewMaxMembersValue] = useState<number | string>('');
   const [isSavingMaxMembers, setIsSavingMaxMembers] = useState(false);
+  // Entitlement 402s (e.g. member cap above the free plan) render the
+  // upsell modal instead of a raw error toast.
+  const [upsell, setUpsell] = useState<UpgradeRequiredDetails | null>(null);
 
   // Add state for member count visual animation
   const [animateMembers, setAnimateMembers] = useState(false);
@@ -2218,6 +2229,12 @@ export default function ManageCircle() {
       
       if (!maxMembersResponse.ok) {
         console.error('Failed to update max members:', maxMembersResult);
+        const upgrade = parseUpgradeRequired(maxMembersResult);
+        if (upgrade) {
+          toast.dismiss(toastId);
+          setUpsell(upgrade);
+          return;
+        }
         const errorDetail = parseMoveError(maxMembersResult.error || '');
         toast.error(`Failed to increase max members: ${errorDetail.message}`, { id: toastId });
         return;
@@ -4099,6 +4116,12 @@ export default function ManageCircle() {
           
           if (!response.ok) {
             console.error('Failed to update max members:', result);
+            const upgrade = parseUpgradeRequired(result);
+            if (upgrade) {
+              toast.dismiss(toastId);
+              setUpsell(upgrade);
+              return;
+            }
             const errorDetail = parseMoveError(result.error || '');
             toast.error(errorDetail.message, { id: toastId });
             return;
@@ -8361,6 +8384,14 @@ export default function ManageCircle() {
         confirmButtonVariant={confirmationModal.confirmButtonVariant}
       />
       <SecurityDepositPayoutModal />
+
+      {/* Premium upsell when a member-cap change exceeds the caller's plan */}
+      <BillingUpsellModal
+        open={!!upsell}
+        onClose={() => setUpsell(null)}
+        feature={upsell?.feature ?? 'maxMembers'}
+        message={upsell?.message}
+      />
     </div>
   );
 }
