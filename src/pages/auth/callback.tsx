@@ -3,6 +3,7 @@ import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 import { CallbackStatusShell } from '@/components/ui/CallbackStatusShell';
+import { claimCallbackToken } from '@/lib/auth-callback-guard';
 
 export default function AuthCallback() {
   const router = useRouter();
@@ -44,6 +45,23 @@ export default function AuthCallback() {
     }
 
     hasProcessedCallbackRef.current = true;
+
+    // On failure, decide the destination when the timer fires, not now: a
+    // parallel run (duplicate page load, or a dev StrictMode re-run) may
+    // have established the session while the error was on screen, and an
+    // authenticated user belongs on the dashboard, not the landing page.
+    const redirectAfterFailure = () => {
+      redirectTimeoutRef.current = setTimeout(() => {
+        if (
+          window.localStorage.getItem('isAuthenticated') === 'true' &&
+          window.localStorage.getItem('account')
+        ) {
+          router.replace('/dashboard');
+        } else {
+          router.replace('/');
+        }
+      }, 2000);
+    };
 
     const processCallback = async () => {
       try {
@@ -122,9 +140,15 @@ export default function AuthCallback() {
           setIsError(true);
           setStatus('Authentication failed');
           setError('No ID token found in callback URL. Check the OAuth redirect configuration and try again.');
-          redirectTimeoutRef.current = setTimeout(() => {
-            router.replace('/');
-          }, 2000);
+          redirectAfterFailure();
+          return;
+        }
+
+        if (!claimCallbackToken(idToken)) {
+          // A concurrent invocation of this effect (React StrictMode
+          // re-runs it in dev with a fresh ref) already owns this token —
+          // let that run drive the UI instead of racing it with a
+          // duplicate /api/zkLogin call.
           return;
         }
 
@@ -135,8 +159,10 @@ export default function AuthCallback() {
         
         // Set progress to 100% when done
         setProgress(100);
+        // Clear any error tone a losing duplicate run painted first.
+        setIsError(false);
         setStatus('Authentication successful! Redirecting...');
-        
+
         // Check if this is a WhatsApp authentication
         const whatsappToken = localStorage.getItem('whatsappAuthToken');
         const whatsappPhone = localStorage.getItem('whatsappAuthPhone');
@@ -203,6 +229,7 @@ export default function AuthCallback() {
         ) {
           console.log('Auth callback: session already established; treating as success');
           setProgress(100);
+          setIsError(false);
           setStatus('Authentication successful! Redirecting...');
           redirectTimeoutRef.current = setTimeout(() => {
             const stored = localStorage.getItem('redirectAfterLogin');
@@ -250,9 +277,7 @@ export default function AuthCallback() {
         }
         
         // Short delay before redirecting on error
-        redirectTimeoutRef.current = setTimeout(() => {
-          router.replace('/');
-        }, 2000);
+        redirectAfterFailure();
       }
     };
 

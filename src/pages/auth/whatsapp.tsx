@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import { LoginButton } from '../../components/LoginButton';
 import { useAuth } from '../../contexts/AuthContext';
+import { claimCallbackToken } from '@/lib/auth-callback-guard';
 
 export default function WhatsAppAuth() {
   const { handleCallback } = useAuth();
@@ -102,6 +103,12 @@ export default function WhatsAppAuth() {
     const jwtStr = Array.isArray(jwt) ? jwt[0] : jwt;
     
     if (tokenStr && phoneStr && jwtStr) {
+      // This effect re-fires whenever handleCallback's identity changes
+      // (every AuthContext render) and StrictMode re-runs it in dev, so
+      // claim the JWT to process it exactly once per page load.
+      if (!claimCallbackToken(jwtStr)) {
+        return;
+      }
       // Complete authentication flow
       completeAuthentication(tokenStr, phoneStr, jwtStr);
     } else if (tokenStr && phoneStr) {
