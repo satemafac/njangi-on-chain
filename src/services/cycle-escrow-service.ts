@@ -51,6 +51,13 @@ export interface OpenCycleParams extends CycleEscrowCallBase {
    *  the plain `open_cycle`. */
   withComplianceGate?: boolean;
   /**
+   * Required when withComplianceGate: the shared ComplianceConfig object
+   * id the gated entrypoints take as their second argument (resolve it
+   * with `resolveComplianceConfigId` from lib/compliance-gate). Omitting
+   * it used to produce an on-chain "Incorrect number of arguments" error.
+   */
+  complianceConfigId?: string;
+  /**
    * When set, opens a stablecoin-settled escrow. The per-member contribution
    * target is derived on-chain from the circle's USD value at this many
    * decimals (USDC = 6), so $0.30 becomes 300000 base units. Omit for
@@ -102,6 +109,12 @@ export function buildOpenCycleTx(params: OpenCycleParams): BuildTransactionFn {
   const packageId = packageIdFor(params.network);
   const circleId = requireAddr(params.circleId, 'circleId');
   const isStable = typeof params.stableDecimals === 'number';
+  // The *_with_gate entrypoints take the shared ComplianceConfig as their
+  // second argument — enforce its presence here so a missing id fails at
+  // build time with a named error instead of an on-chain arity abort.
+  const complianceConfigId = params.withComplianceGate
+    ? requireAddr(params.complianceConfigId ?? '', 'complianceConfigId')
+    : null;
   const target = isStable
     ? params.withComplianceGate
       ? `${packageId}::njangi_cycle_escrow::open_cycle_stable_with_gate`
@@ -110,16 +123,18 @@ export function buildOpenCycleTx(params: OpenCycleParams): BuildTransactionFn {
       ? `${packageId}::njangi_cycle_escrow::open_cycle_with_gate`
       : `${packageId}::njangi_cycle_escrow::open_cycle`;
   return (txb: Transaction) => {
+    const gateArgs = complianceConfigId ? [txb.object(complianceConfigId)] : [];
     txb.moveCall({
       target,
       typeArguments: [params.coinType],
       arguments: isStable
         ? [
             txb.object(circleId),
+            ...gateArgs,
             txb.pure.u8(params.stableDecimals as number),
             txb.object(CLOCK_OBJECT_ID),
           ]
-        : [txb.object(circleId), txb.object(CLOCK_OBJECT_ID)],
+        : [txb.object(circleId), ...gateArgs, txb.object(CLOCK_OBJECT_ID)],
     });
   };
 }

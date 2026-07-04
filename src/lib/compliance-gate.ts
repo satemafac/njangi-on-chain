@@ -29,6 +29,7 @@ import type { SuiClient } from '@mysten/sui/client';
 import type { NetworkType } from '../services/whatsapp-registry-service';
 import { getNetworkConfig, getPackageIdForNetwork } from '../services/network-config';
 import { getPooledSuiClient } from '../services/sui-rpc-failover';
+import { getPackageLookupIds } from './circle-chain';
 
 function packageIdFor(network: NetworkType): string {
   const fromConfig = getPackageIdForNetwork(network);
@@ -55,6 +56,61 @@ export function isComplianceGateEnabled(): boolean {
 export function expectedIssuerAddress(): string | null {
   const raw = process.env.NEXT_PUBLIC_NJANGI_ATTESTATION_ISSUER;
   return raw && raw.length > 0 ? raw.toLowerCase() : null;
+}
+
+// One shared ComplianceConfig exists per package lineage (created by
+// `njangi_compliance::init` on publish, or `create_config` on upgraded
+// lineages) — the id is announced once via ComplianceConfigCreated and
+// never changes, so a per-network cache is safe for the page lifetime.
+const complianceConfigIdCache = new Map<NetworkType, string>();
+
+/**
+ * Resolves the shared ComplianceConfig singleton's object id by replaying
+ * the ComplianceConfigCreated audit event. Sui keys event types by the
+ * module's DEFINING package id — on an upgraded lineage that is the
+ * original publish, not the active package — so the lookup walks every
+ * lineage id (current, published-at, original) instead of just the
+ * configured one. Returns null when no config exists on this lineage
+ * (the gated entrypoints cannot be called at all in that case).
+ */
+export async function resolveComplianceConfigId(
+  network: NetworkType,
+  client?: SuiClient,
+): Promise<string | null> {
+  const cached = complianceConfigIdCache.get(network);
+  if (cached) return cached;
+  const rpcClient =
+    client ??
+    getPooledSuiClient({
+      network,
+      rpcUrl: getNetworkConfig(network).rpcUrl,
+    });
+  const lookupIds = getPackageLookupIds({
+    network,
+    packageId: null,
+    currentPackageId: packageIdFor(network),
+  });
+  for (const lineagePackageId of lookupIds) {
+    try {
+      const events = await rpcClient.queryEvents({
+        query: {
+          MoveEventType: `${lineagePackageId}::njangi_compliance::ComplianceConfigCreated`,
+        },
+        limit: 1,
+        order: 'ascending',
+      });
+      const configId = (
+        events.data[0]?.parsedJson as { config_id?: string } | undefined
+      )?.config_id;
+      if (configId) {
+        complianceConfigIdCache.set(network, configId);
+        return configId;
+      }
+    } catch {
+      // Wrong lineage id for this event type — try the next candidate.
+    }
+  }
+  return null;
 }
 
 export interface AttestationRow {

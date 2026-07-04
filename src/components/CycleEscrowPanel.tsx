@@ -24,6 +24,7 @@ import type { NetworkType } from '@/services/whatsapp-registry-service';
 import {
   findFreshestAttestation,
   isComplianceGateEnabled,
+  resolveComplianceConfigId,
 } from '@/lib/compliance-gate';
 
 interface CycleEscrowPanelProps {
@@ -321,13 +322,29 @@ export function CycleEscrowPanel({
   // short `0x2::sui::SUI` or the long zero-padded address.
   const isStableSettlement = !coinType.toLowerCase().endsWith('::sui::sui');
 
-  const onStartRound = useCallback(() => {
+  const onStartRound = useCallback(async () => {
     const gated = requireAttestationOnOpen ?? isComplianceGateEnabled();
+    // The gated entrypoints need the shared ComplianceConfig object as an
+    // argument. Resolve it up front and abort with a readable message if
+    // it can't be found — sending the call without it aborts on-chain
+    // with an unfriendly "Incorrect number of arguments".
+    let complianceConfigId: string | undefined;
+    if (gated) {
+      complianceConfigId =
+        (await resolveComplianceConfigId(network).catch(() => null)) ?? undefined;
+      if (!complianceConfigId) {
+        toast.error(
+          'KYC-gated rounds are not available yet: no compliance configuration was found on this network. Start the round without the KYC requirement, or contact support.',
+        );
+        return;
+      }
+    }
     const build = buildOpenCycleTx({
       network,
       circleId,
       coinType,
       withComplianceGate: gated,
+      complianceConfigId,
       stableDecimals: isStableSettlement ? coinDecimals : undefined,
     });
     void runWithSigner('open', build, 80_000_000);
@@ -345,7 +362,7 @@ export function CycleEscrowPanel({
     // Stage check: only when no round is currently open.
     if (summary || liveState) return;
     onAutoOpenFired?.();
-    onStartRound();
+    void onStartRound();
   }, [
     autoOpenWhenReady,
     isAdmin,
