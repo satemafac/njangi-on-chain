@@ -19,7 +19,10 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20.x
+          # Keep in lockstep with package.json "engines.node" — that field is
+          # what Vercel uses for the serverless runtime, so CI must test the
+          # same major or the pipeline validates a different Node than prod.
+          node-version: 24.x
           cache: npm
 
       - name: Cache Sui CLI
