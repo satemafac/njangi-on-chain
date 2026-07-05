@@ -94,7 +94,9 @@ describe('legal-acceptance-server (in-memory dev store)', () => {
       currentVersion: '1.1.0',
       acceptedVersion: '1.0.0',
     });
-    expect(status.required.find((r) => r.doc === 'privacy')?.acceptedVersion).toBe('1.0.0');
+    expect(status.required.find((r) => r.doc === 'privacy')?.acceptedVersion).toBe(
+      CURRENT_LEGAL_VERSIONS.privacy,
+    );
 
     // Accepting only the changed doc at the new version satisfies the gate
     // again, and both versions remain recorded.
@@ -163,8 +165,8 @@ describe('legal-acceptance-server (Postgres path)', () => {
     const query = jest.fn().mockResolvedValue({
       rowCount: 2,
       rows: [
-        { doc: 'terms', version: '1.0.0' },
-        { doc: 'privacy', version: '1.0.0' },
+        { doc: 'terms', version: CURRENT_LEGAL_VERSIONS.terms },
+        { doc: 'privacy', version: CURRENT_LEGAL_VERSIONS.privacy },
       ],
     });
     mockedGetPool.mockReturnValue({ query } as unknown as ReturnType<typeof getSharedPgPool>);

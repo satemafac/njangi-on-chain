@@ -32,7 +32,9 @@ export function isLegalLocale(value: unknown): value is LegalLocale {
  */
 export const CURRENT_LEGAL_VERSIONS: Record<LegalDocId, string> = {
   terms: '1.0.0',
-  privacy: '1.0.0',
+  // 1.1.0 (2026-07-05): named Vercel + Neon explicitly in the processor
+  // table (GDPR transparency — roadmap A2/A4).
+  privacy: '1.1.0',
   risk: '1.0.0',
 };
 

@@ -1,6 +1,6 @@
 ---
 title: "Njangi On-Chain — Privacy Policy"
-version: 1.0.0
+version: 1.1.0
 effective_date: "{{EFFECTIVE_DATE}}"
 language: en
 ---
@@ -66,7 +66,8 @@ We share personal data with the following categories of recipients, only as need
 | **Meta — WhatsApp Business Platform** | Delivery of WhatsApp notifications | Recipient phone number / group and message content at the moment of sending, under Meta's terms |
 | **Walrus (decentralized storage network)** | Storage of encrypted PII envelopes | Ciphertext only; node operators cannot read it |
 | **Fiat ramp partners (Coinbase, MoonPay, Transak)** | Fiat-to-crypto purchases, KYC/AML | If you use them, they collect your identity data **as independent controllers** under their own privacy policies; we receive transaction status and the destination wallet address |
-| **Cloud hosting and database providers** | Infrastructure | Data listed in Section 1 hosted on our behalf |
+| **Vercel Inc.** | Application hosting and serverless functions | Data listed in Section 1 processed on our behalf; request logs (IP, user agent) |
+| **Neon Inc.** | Managed Postgres database | Data listed in Section 1 hosted on our behalf, encrypted in transit and at rest |
 | **Sui RPC providers** | Blockchain reads/writes | Your address and transaction payloads (already public chain data) |
 | **Authorities** | Legal compliance | Where required by applicable law |
 

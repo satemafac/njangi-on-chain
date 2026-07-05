@@ -250,6 +250,14 @@ function ensureRenewalAuditTable(): Promise<void> {
  * the phone. Requires Postgres (the in-memory fallback has no expiry data
  * and is dev-only); throws when unavailable so the cron fails closed rather
  * than silently renewing nothing.
+ *
+ * GDPR exclusion (roadmap A4): rows whose phone matches a COMPLETED
+ * deletion request are never renewed — the deletion executor
+ * (scripts/process-deletion-request.mjs) both deletes the rows and
+ * records the phone_hmac on the request, so even a stale re-index can't
+ * resurrect a deleted user's blob renewals. The NOT EXISTS tolerates the
+ * column not existing yet only via migration ordering — run
+ * `npm run migrate:postgres` before deploying this code.
  */
 export async function listActiveLinksForRenewal(): Promise<RenewableLinkRow[]> {
   if (!isPostgresAvailable()) {
@@ -264,9 +272,14 @@ export async function listActiveLinksForRenewal(): Promise<RenewableLinkRow[]> {
     walrus_blob_id: string;
     walrus_end_epoch: string | number | null;
   }>(
-    `SELECT id, circle_id, walrus_blob_id, walrus_end_epoch
-       FROM whatsapp_phone_index
-      ORDER BY id ASC`,
+    `SELECT idx.id, idx.circle_id, idx.walrus_blob_id, idx.walrus_end_epoch
+       FROM whatsapp_phone_index idx
+      WHERE NOT EXISTS (
+              SELECT 1 FROM deletion_requests dr
+               WHERE dr.phone_hmac = idx.phone_hmac
+                 AND dr.status = 'completed'
+            )
+      ORDER BY idx.id ASC`,
   );
   return result.rows.map((row) => ({
     id: row.id,

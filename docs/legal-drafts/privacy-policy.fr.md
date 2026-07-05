@@ -1,6 +1,6 @@
 ---
 title: "Njangi On-Chain — Politique de Confidentialité"
-version: 1.0.0
+version: 1.1.0
 effective_date: "{{EFFECTIVE_DATE}}"
 language: fr
 ---
@@ -67,7 +67,8 @@ Nous partageons des données personnelles avec les catégories de destinataires 
 | **Meta — Plateforme WhatsApp Business** | Acheminement des notifications WhatsApp | Numéro/groupe destinataire et contenu du message au moment de l'envoi, selon les conditions de Meta |
 | **Walrus (réseau de stockage décentralisé)** | Stockage des enveloppes de données chiffrées | Texte chiffré uniquement ; les opérateurs de nœuds ne peuvent pas le lire |
 | **Partenaires d'achat (Coinbase, MoonPay, Transak)** | Achats fiat-crypto, KYC/LBC | Si vous les utilisez, ils collectent vos données d'identité **en qualité de responsables de traitement indépendants**, selon leurs propres politiques ; nous recevons le statut de la transaction et l'adresse de destination |
-| **Hébergeurs cloud et fournisseurs de bases de données** | Infrastructure | Données de l'article 1 hébergées pour notre compte |
+| **Vercel Inc.** | Hébergement de l'application et fonctions serverless | Données de l'article 1 traitées pour notre compte ; journaux de requêtes (IP, agent utilisateur) |
+| **Neon Inc.** | Base de données Postgres gérée | Données de l'article 1 hébergées pour notre compte, chiffrées en transit et au repos |
 | **Fournisseurs RPC Sui** | Lectures/écritures blockchain | Votre adresse et le contenu des transactions (données de chaîne déjà publiques) |
 | **Autorités** | Conformité légale | Lorsque le droit applicable l'exige |
 
