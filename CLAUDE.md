@@ -2,6 +2,25 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Compliance invariants (check EVERY money-touching PR)
+
+The legal posture ("non-custodial coordination software" — see
+`docs/compliance-roadmap-cex-dex-non-kyc.md` §0) rests on five invariants.
+A PR that breaks one is a regulatory event, not a feature:
+
+1. **No custody** — no operator/admin function may direct user funds.
+2. **No fiat** — funding is CEX transfer or partner-hosted ramps only.
+3. **No fees on fund flows** — revenue is the coordination SaaS
+   subscription, never a cut/spread on contributions, payouts, or swaps.
+4. **No yield/investment features** — the yield module was retired;
+   "grow your pot" features require counsel review BEFORE design.
+5. **Neutral DEX routing** — member-initiated swaps only, no routing fee.
+
+Also: user-facing copy must pass `npm run check:copy` (no
+interest/returns/yield vocabulary — enforced in preflight), and the OFAC
+screen (`src/lib/sanctions.ts`, `docs/sanctions-program.md`) must stay
+default-ON.
+
 ## Development Commands
 
 ### Move Smart Contracts
