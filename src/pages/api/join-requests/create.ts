@@ -7,10 +7,14 @@ import { getClientIp } from '../../../lib/client-ip';
 import { consumeRateLimit } from '../../../lib/rate-limit';
 import { getCurrentRpcUrl } from '../../../services/network-config';
 import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
+import { screenAddress, sanctionsErrorBody } from '../../../lib/sanctions';
+import { isEmbargoedHeaders, embargoErrorBody } from '../../../lib/embargo';
 
 type ResponseData = {
   success: boolean;
   message?: string;
+  code?: string;
+  error?: string;
   data?: Record<string, unknown>;
 };
 
@@ -93,6 +97,17 @@ export default async function handler(
         success: false,
         message: 'Too many join requests. Please wait a moment and try again.'
       });
+    }
+
+    // OFAC screen (docs/sanctions-program.md) — before any DB write.
+    if (isEmbargoedHeaders((name) => req.headers[name] as string | undefined)) {
+      const body = embargoErrorBody();
+      return res.status(403).json({ success: false, message: body.message, code: body.code, error: body.error });
+    }
+    const screen = await screenAddress(userAddress, 'circle_join');
+    if (screen.blocked) {
+      const body = sanctionsErrorBody();
+      return res.status(403).json({ success: false, message: body.message, code: body.code, error: body.error });
     }
 
     const circleJoinWindow = await getCircleJoinWindow(circleId);

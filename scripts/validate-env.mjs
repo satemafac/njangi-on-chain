@@ -223,6 +223,17 @@ if (billingEnabled) {
   );
 }
 
+// OFAC sanctions program (docs/sanctions-program.md): both controls are
+// default-ON — disabling one is a deliberate operator act that must be
+// visible in CI output, never a silent misconfiguration.
+for (const flag of ['SANCTIONS_SCREENING_ENABLED', 'SANCTIONS_GEO_BLOCK_ENABLED']) {
+  if ((read(flag) || 'true').toLowerCase() === 'false') {
+    warnings.push(
+      `${flag} is explicitly "false" — the OFAC ${flag.includes('GEO') ? 'geo-block' : 'address screen'} is OFF. See docs/sanctions-program.md before shipping this to production.`,
+    );
+  }
+}
+
 // June 2026 Vercel migration: the cycle-finalized notifier runs as a Vercel
 // cron authenticated by `Authorization: Bearer ${CRON_SECRET}`. Without it,
 // /api/cron/cycle-finalized fails closed (500) and no nudges go out.

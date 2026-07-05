@@ -33,6 +33,10 @@ import {
 import { hasFeaturePreflight } from '../components/milestones/entitlement-preflight';
 import { useTranslation } from '../hooks/useTranslation';
 import BillingUpsellModal from '../components/BillingUpsellModal';
+import {
+  preflightSanctionsCheck,
+  SANCTIONS_BLOCKED_MESSAGE,
+} from '../lib/sanctions-preflight';
 import GoalPotProgress from '../components/goals/GoalPotProgress';
 import { goalDisplayFont } from '../lib/fonts';
 import { useZkLoginSigner } from '../hooks/useZkLoginSigner';
@@ -724,6 +728,14 @@ export default function CreateCircle() {
     const beneficiary = (formData.goalBeneficiary || '').trim() || userAddress;
     const name = formData.goalEmoji ? `${formData.goalEmoji} ${formData.name}`.trim() : formData.name;
     const network = getCurrentNetwork() as NetworkType;
+
+    // Goal pools sign client-side (straight to RPC), so the server choke
+    // points never see this flow — courtesy OFAC preflight; the server
+    // screens stay authoritative (docs/sanctions-program.md).
+    if (userAddress && (await preflightSanctionsCheck(userAddress))) {
+      setError(SANCTIONS_BLOCKED_MESSAGE);
+      return;
+    }
 
     try {
       const build = buildOpenGoalPoolTx({

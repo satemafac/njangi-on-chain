@@ -27,6 +27,10 @@ import {
   resolveComplianceConfigId,
 } from '@/lib/compliance-gate';
 import VerificationRequiredModal from '@/components/VerificationRequiredModal';
+import {
+  preflightSanctionsCheck,
+  SANCTIONS_BLOCKED_MESSAGE,
+} from '@/lib/sanctions-preflight';
 
 interface CycleEscrowPanelProps {
   circleId: string;
@@ -327,6 +331,13 @@ export function CycleEscrowPanel({
   const isStableSettlement = !coinType.toLowerCase().endsWith('::sui::sui');
 
   const onStartRound = useCallback(async () => {
+    // Escrow opens sign client-side (straight to RPC), so the server
+    // choke points never see this flow — courtesy OFAC preflight; the
+    // server screens stay authoritative (docs/sanctions-program.md).
+    if (userAddress && (await preflightSanctionsCheck(userAddress))) {
+      toast.error(SANCTIONS_BLOCKED_MESSAGE);
+      return;
+    }
     const gated = requireAttestationOnOpen ?? isComplianceGateEnabled();
     // The gated entrypoints need the shared ComplianceConfig object as an
     // argument. Resolve it up front and abort with a readable message if
@@ -352,7 +363,7 @@ export function CycleEscrowPanel({
       stableDecimals: isStableSettlement ? coinDecimals : undefined,
     });
     void runWithSigner('open', build, 80_000_000);
-  }, [network, circleId, coinType, coinDecimals, isStableSettlement, runWithSigner, requireAttestationOnOpen]);
+  }, [network, circleId, coinType, coinDecimals, isStableSettlement, runWithSigner, requireAttestationOnOpen, userAddress]);
 
   // Auto-chain: when the manage page sets `autoOpenWhenReady` after a
   // successful Activate Circle call, fire onStartRound exactly once as

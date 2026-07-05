@@ -1,5 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCanonicalBaseOrigin, preferCanonicalOrigin } from '@/lib/canonical-host';
+import { isEmbargoedHeaders } from '@/lib/embargo';
+
+// App-route prefixes blocked for embargoed jurisdictions
+// (docs/sanctions-program.md). Marketing/legal/learn pages stay visible —
+// the block covers the routes where circles are created, joined, funded,
+// and managed. /restricted itself must never appear here (redirect loop).
+const GEO_BLOCKED_PREFIXES = [
+  '/dashboard',
+  '/create-circle',
+  '/circle',
+  '/pool',
+  '/auth',
+  '/callback',
+  '/admin',
+  '/automation',
+];
 
 function addSecurityHeaders(response: NextResponse): NextResponse {
   response.headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
@@ -28,12 +44,29 @@ export function middleware(request: NextRequest) {
   if (process.env.NODE_ENV === 'production') {
     const protocol = request.headers.get('x-forwarded-proto');
     const host = request.headers.get('host');
-    
+
     // If request is HTTP, redirect to HTTPS
     if (protocol === 'http') {
       const httpsUrl = `https://${host}${request.nextUrl.pathname}${request.nextUrl.search}`;
       return addSecurityHeaders(NextResponse.redirect(httpsUrl, 301));
     }
+  }
+
+  // Embargoed-jurisdiction block (docs/sanctions-program.md). Reads the
+  // Vercel geo headers (Next 15: headers only — request.geo is gone). The
+  // console line is the evidence trail; edge middleware cannot reach
+  // Postgres, and the API choke points log there instead.
+  const { pathname } = request.nextUrl;
+  if (
+    GEO_BLOCKED_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)) &&
+    isEmbargoedHeaders((name) => request.headers.get(name))
+  ) {
+    console.log(
+      `[geo-block] country=${request.headers.get('x-vercel-ip-country') ?? '?'} region=${request.headers.get('x-vercel-ip-country-region') ?? '?'} path=${pathname}`,
+    );
+    return addSecurityHeaders(
+      NextResponse.redirect(new URL('/restricted', request.nextUrl.origin), 302),
+    );
   }
 
   // Create response

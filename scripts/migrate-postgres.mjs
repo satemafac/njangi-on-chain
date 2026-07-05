@@ -365,6 +365,65 @@ const STATEMENTS = [
           CREATE INDEX IF NOT EXISTS gas_sponsorship_usage_month_idx
             ON gas_sponsorship_usage (sponsored_at);`,
   },
+  {
+    // GDPR deletion pipeline: the executor (scripts/
+    // process-deletion-request.mjs) records the HMAC of the requester's
+    // WhatsApp number on the request row, which (a) documents what was
+    // erased and (b) lets the walrus-renewal query exclude any index row
+    // matching a completed deletion — so a stale re-index can never
+    // resurrect a deleted user's blob renewals.
+    name: 'deletion_requests_phone_hmac',
+    sql: `ALTER TABLE deletion_requests
+            ADD COLUMN IF NOT EXISTS phone_hmac TEXT;
+          CREATE INDEX IF NOT EXISTS deletion_requests_phone_hmac_idx
+            ON deletion_requests (phone_hmac)
+            WHERE phone_hmac IS NOT NULL;`,
+  },
+  {
+    // OFAC sanctions program (docs/sanctions-program.md): cached SDN
+    // digital-currency address set, refreshed weekly by
+    // /api/cron/sanctions-refresh. address is normalized lowercase;
+    // address_original keeps OFAC's verbatim casing for evidence fidelity.
+    name: 'sanctioned_addresses',
+    sql: `CREATE TABLE IF NOT EXISTS sanctioned_addresses (
+            address          TEXT PRIMARY KEY,
+            address_original TEXT NOT NULL,
+            ticker           TEXT NOT NULL,
+            list_version     TEXT NOT NULL,
+            first_seen       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_seen        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+          CREATE INDEX IF NOT EXISTS sanctioned_addresses_version_idx
+            ON sanctioned_addresses (list_version);`,
+  },
+  {
+    name: 'sanctions_list_meta',
+    sql: `CREATE TABLE IF NOT EXISTS sanctions_list_meta (
+            id            INTEGER PRIMARY KEY CHECK (id = 1),
+            list_version  TEXT NOT NULL,
+            source_url    TEXT NOT NULL,
+            address_count INTEGER NOT NULL,
+            refreshed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );`,
+  },
+  {
+    // Screening audit trail — the evidence the program runs. Contexts:
+    // circle_create / circle_join / whatsapp_link / client_preflight /
+    // retro_sweep; results: pass / blocked / error_fail_open.
+    name: 'sanctions_screen_log',
+    sql: `CREATE TABLE IF NOT EXISTS sanctions_screen_log (
+            id           BIGSERIAL PRIMARY KEY,
+            address      TEXT NOT NULL,
+            context      TEXT NOT NULL,
+            result       TEXT NOT NULL,
+            list_version TEXT,
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+          CREATE INDEX IF NOT EXISTS sanctions_screen_log_created_idx
+            ON sanctions_screen_log (created_at);
+          CREATE INDEX IF NOT EXISTS sanctions_screen_log_address_idx
+            ON sanctions_screen_log (address);`,
+  },
 ];
 
 async function main() {

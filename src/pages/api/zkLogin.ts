@@ -49,6 +49,8 @@ import {
   entitlementErrorBody,
   EntitlementError,
 } from '@/lib/entitlement-gate';
+import { screenAddress, sanctionsErrorBody } from '@/lib/sanctions';
+import { isEmbargoedHeaders, embargoErrorBody } from '@/lib/embargo';
 import { resolveEscrowSponsorship } from '@/lib/gas-sponsorship-eligibility';
 import { recordSponsoredUsage } from '@/lib/gas-sponsorship';
 
@@ -1282,6 +1284,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             autoReleaseEnabled,
             autoReleaseDelayMs: autoReleaseDelayMs.toString()
           });
+
+          // OFAC screen (docs/sanctions-program.md): refuse SDN-listed
+          // wallets and embargoed regions before any side effect. Unlike
+          // the billing gate below this is a compliance control — the
+          // screen itself fails open only on infrastructure errors (see
+          // src/lib/sanctions.ts for the compensating retro-sweep).
+          if (isEmbargoedHeaders((name) => req.headers[name] as string | undefined)) {
+            return res.status(403).json(embargoErrorBody());
+          }
+          {
+            const screen = await screenAddress(session.account.userAddr, 'circle_create');
+            if (screen.blocked) {
+              return res.status(403).json(sanctionsErrorBody());
+            }
+          }
 
           // Billing SOFT gate (create-circle path): requested member cap vs
           // the plan's maxMembers, and the admin's existing circle count vs

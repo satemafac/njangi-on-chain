@@ -48,6 +48,8 @@ import {
   type WhatsAppPiiPayload,
 } from '../../../lib/walrus-pii';
 import { indexWhatsAppLink } from '../../../lib/whatsapp-link-index';
+import { screenAddress, sanctionsErrorBody } from '../../../lib/sanctions';
+import { isEmbargoedHeaders, embargoErrorBody } from '../../../lib/embargo';
 import {
   assertEntitled,
   entitlementErrorBody,
@@ -234,6 +236,17 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
       return res
         .status(400)
         .json({ success: false, error: 'Invalid linkType (must be 1 or 2)' });
+    }
+
+    // OFAC screen (docs/sanctions-program.md) — before the Walrus upload
+    // and every other side effect.
+    if (isEmbargoedHeaders((name) => req.headers[name] as string | undefined)) {
+      return res.status(403).json(embargoErrorBody());
+    }
+    const sanctionsScreen = await screenAddress(adminAddr, 'whatsapp_link');
+    if (sanctionsScreen.blocked) {
+      logAdminAction('LINK_CIRCLE_SANCTIONS_BLOCKED', adminAddr, { circleId });
+      return res.status(403).json(sanctionsErrorBody());
     }
 
     // Premium gate (ENFORCEABLE): the WhatsApp suite is fully
