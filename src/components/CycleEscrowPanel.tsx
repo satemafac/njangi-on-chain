@@ -26,6 +26,7 @@ import {
   isComplianceGateEnabled,
   resolveComplianceConfigId,
 } from '@/lib/compliance-gate';
+import VerificationRequiredModal from '@/components/VerificationRequiredModal';
 
 interface CycleEscrowPanelProps {
   circleId: string;
@@ -135,6 +136,9 @@ export function CycleEscrowPanel({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<null | 'open' | 'pay' | 'claim' | 'advance'>(null);
   const [lastDigest, setLastDigest] = useState<string | null>(null);
+  // Gated round + no attestation on the caller's wallet: explain the
+  // verification requirement instead of a dead-end error toast.
+  const [showVerificationRequired, setShowVerificationRequired] = useState(false);
   // Phase 12: when the central WhatsApp dispatcher reports `no_link`
   // (member hasn't paired their phone yet), surface a friendly prompt so
   // they can ask the admin to add them. We check this lazily after a
@@ -388,9 +392,10 @@ export function CycleEscrowPanel({
     if (!userAddress) return null;
     const attestation = await findFreshestAttestation(userAddress, network);
     if (!attestation) {
-      toast.error(
-        'Your KYC check has expired or is not yet complete. Please run through the ramp partner flow and try again.',
-      );
+      // No dead-end toast: the modal explains what verification is and
+      // that the circle admin arranges it (there is no self-serve KYC
+      // flow yet — see VerificationRequiredModal for the full context).
+      setShowVerificationRequired(true);
       return 'ABORT';
     }
     return attestation.objectId;
@@ -791,6 +796,11 @@ export function CycleEscrowPanel({
           {t('escrow.lastTx', { digest: lastDigest })}
         </p>
       ) : null}
+
+      <VerificationRequiredModal
+        open={showVerificationRequired}
+        onClose={() => setShowVerificationRequired(false)}
+      />
     </section>
   );
 }

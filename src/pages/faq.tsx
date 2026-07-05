@@ -83,6 +83,11 @@ export default function FAQPage() {
           answer: "Members can leave circles, but there are important considerations: 1) If they haven't received their payout yet, they may forfeit their contributions (depending on circle rules), 2) If they've already been paid, they must complete their remaining contribution obligations, 3) Some circles allow transferring membership to a trusted replacement, 4) All departure rules are set when the circle is created and enforced by smart contracts."
         },
         {
+          id: "identity-verification",
+          question: "Why am I asked to complete identity verification before contributing?",
+          answer: "Some circles turn on an identity verification requirement — usually because the circle operates in a region where regulations require it, or because the admin wants an extra layer of trust between members. Verification is a one-time check arranged through your circle admin: once you're verified, an attestation is recorded on-chain against your wallet and your contributions and payouts go through normally until it expires. Njangi On-Chain never sees or stores your identity documents — checks are performed by licensed verification partners, and only the pass/fail attestation touches the blockchain. If you're seeing a verification prompt, ask your circle admin to start your verification."
+        },
+        {
           id: "blockchain-fails",
           question: "What happens if the blockchain goes down?",
           answer: "Blockchain networks like Sui are designed to be highly resilient with thousands of validators worldwide. Even if some nodes go offline, your funds and circle data remain secure and accessible. In the extremely unlikely event of a complete network failure, your funds are still recoverable using your private keys. However, major blockchains have operated continuously for years without such issues."
