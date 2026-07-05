@@ -235,8 +235,8 @@ export default function TontineBlockchainPage() {
                       <div className="flex items-start space-x-3">
                         <div className="w-2 h-2 bg-red-500 rounded-full mt-2"></div>
                         <div>
-                          <h4 className="font-semibold text-gray-900">No Yield Generation</h4>
-                          <p className="text-sm text-gray-600">Funds earn no returns while pooled</p>
+                          <h4 className="font-semibold text-gray-900">Cash Custody Risk</h4>
+                          <p className="text-sm text-gray-600">One treasurer physically holds everyone&rsquo;s money</p>
                         </div>
                       </div>
                     </div>
@@ -262,8 +262,8 @@ export default function TontineBlockchainPage() {
                       <div className="flex items-start space-x-3">
                         <div className="w-2 h-2 bg-green-500 rounded-full mt-2"></div>
                         <div>
-                          <h4 className="font-semibold text-gray-900">DeFi Yield Generation</h4>
-                          <p className="text-sm text-gray-600">3-8% annual returns on pooled funds</p>
+                          <h4 className="font-semibold text-gray-900">Automated Escrow</h4>
+                          <p className="text-sm text-gray-600">Contributions held and released by smart contract, on schedule</p>
                         </div>
                       </div>
                     </div>
@@ -276,7 +276,7 @@ struct AfricanTontine {
     members: vector<TontineMember>,
     contribution_amount: u64,
     cultural_fund: Balance<USDC>,
-    yield_strategy: u8, // Conservative, Moderate, Aggressive
+    rotation_position: u64, // whose turn receives the payout
     current_cycle: u64,
     is_active: bool
 }
@@ -366,9 +366,9 @@ public fun make_monthly_contribution(
                         </p>
                       </div>
                       <div>
-                        <h4 className="font-semibold text-gray-900">Yield Strategies</h4>
+                        <h4 className="font-semibold text-gray-900">Stablecoin Settlement</h4>
                         <p className="text-sm text-gray-600 mt-1">
-                          Conservative to aggressive DeFi strategies for additional returns.
+                          USD-pegged contributions keep the pot&rsquo;s value steady across borders.
                         </p>
                       </div>
                     </div>

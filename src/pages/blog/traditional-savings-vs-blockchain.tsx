@@ -159,22 +159,23 @@ export default function TraditionalSavingsVsBlockchainPost() {
               participating in the same rotating savings system while maintaining cultural connections.
             </p>
 
-            <h3 className="text-2xl font-semibold text-gray-900 mt-8 mb-4">3. Yield Generation and Financial Growth</h3>
+            <h3 className="text-2xl font-semibold text-gray-900 mt-8 mb-4">3. Fund Custody and Safety</h3>
 
             <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 my-8">
               <h4 className="text-lg font-semibold text-yellow-800 mb-3">💰 The Money Factor</h4>
               <p className="text-yellow-700 text-sm">
-                Traditional savings circles typically don&rsquo;t generate returns on pooled funds—the money 
-                sits idle until distribution. Blockchain systems can deploy funds into DeFi protocols 
-                to generate 3-8% annual returns, significantly increasing the value members receive.
+                In a traditional circle, the pooled cash physically sits with one treasurer until
+                distribution — a single point of trust and a single point of failure. In a blockchain
+                circle, contributions are held by a smart-contract escrow that nobody (not even the
+                platform) can redirect, and released to the scheduled recipient automatically.
               </p>
             </div>
 
             <p className="text-lg text-gray-700 leading-relaxed mb-8">
-              This might be the most compelling practical difference. When your traditional savings circle 
-              pools $10,000 per month, that money earns nothing while waiting for distribution. In a 
-              blockchain system, those same funds can be automatically deployed into secure yield-generating 
-              protocols, meaning members receive both their contributions plus additional returns.
+              This might be the most compelling practical difference. When your traditional savings circle
+              pools $10,000 per month, everyone is trusting one person to hold and hand over that money.
+              In a blockchain system, the same funds sit in transparent escrow the whole group can verify,
+              and the payout goes to the right member on schedule without anyone touching the cash.
             </p>
 
             <h2 className="text-3xl font-bold text-gray-900 mt-12 mb-6">Real-World Examples</h2>
@@ -202,9 +203,9 @@ export default function TraditionalSavingsVsBlockchainPost() {
                 <h4 className="text-lg font-semibold text-blue-800 mb-3">Blockchain ROSCA</h4>
                 <div className="space-y-3 text-sm text-blue-700">
                   <div>• Monthly pool: $2,000</div>
-                  <div>• Each member receives: $2,160 (includes 5% annual yield)</div>
-                  <div>• Total program value: $43,200</div>
-                  <div>• Returns generated: $3,200 (8% increase)</div>
+                  <div>• Each member receives: $2,000 (on a verifiable schedule)</div>
+                  <div>• Total program value: $40,000</div>
+                  <div>• Custody risk: None (smart-contract escrow)</div>
                   <div>• Coordinator risk: None</div>
                   <div>• Time investment: 15 minutes/month</div>
                 </div>
@@ -263,9 +264,9 @@ export default function TraditionalSavingsVsBlockchainPost() {
             </p>
 
             <p className="text-lg text-gray-700 leading-relaxed mb-8">
-              These systems use blockchain technology for the financial infrastructure while maintaining 
-              traditional cultural and social elements through digital community features, virtual ceremonies, 
-              and diaspora connections. Members get the security and yield generation of blockchain with 
+              These systems use blockchain technology for the financial infrastructure while maintaining
+              traditional cultural and social elements through digital community features, virtual ceremonies,
+              and diaspora connections. Members get the security and automation of blockchain with
               the cultural richness of traditional practices.
             </p>
 
@@ -341,16 +342,16 @@ export default function TraditionalSavingsVsBlockchainPost() {
                 </div>
               </Link>
               
-              <Link href="/blog/defi-yield-strategies-community-savings" className="group">
+              <Link href="/learn/blockchain-rosca" className="group">
                 <div className="border border-gray-200 rounded-lg p-4 hover:border-indigo-300 hover:shadow-md transition-all">
                   <span className="bg-orange-100 text-orange-800 text-xs font-semibold px-2 py-1 rounded-full">
-                    DeFi
+                    Education
                   </span>
                   <h4 className="font-semibold text-gray-900 group-hover:text-indigo-600 mt-3 mb-2">
-                    DeFi Yield Strategies for Community Savings
+                    ROSCAs on the Blockchain: A Complete Guide
                   </h4>
                   <p className="text-sm text-gray-600">
-                    Understanding how to safely generate 3-8% returns on community savings funds.
+                    How rotating savings circles work on-chain — escrow, schedules, and transparency.
                   </p>
                 </div>
               </Link>
@@ -397,8 +398,8 @@ export default function TraditionalSavingsVsBlockchainPost() {
           <section className="mt-16 bg-gradient-to-r from-indigo-600 to-purple-600 rounded-lg text-white p-8 text-center">
             <h3 className="text-2xl font-bold mb-4">Ready to Experience the Difference?</h3>
             <p className="text-indigo-100 mb-6">
-              Join thousands of people worldwide who are using blockchain technology to enhance 
-              their savings circles with security, transparency, and yield generation.
+              Join thousands of people worldwide who are using blockchain technology to enhance
+              their savings circles with security, transparency, and automation.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link 

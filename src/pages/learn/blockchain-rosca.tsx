@@ -86,8 +86,8 @@ export default function BlockchainRoscaPage() {
                 <div className="text-sm text-gray-600">Annual ROSCA volume</div>
               </div>
               <div>
-                <div className="text-3xl font-bold text-orange-600">8%</div>
-                <div className="text-sm text-gray-600">Average DeFi yields</div>
+                <div className="text-3xl font-bold text-orange-600">100%</div>
+                <div className="text-sm text-gray-600">On-chain auditability</div>
               </div>
             </div>
           </div>
@@ -250,7 +250,7 @@ export default function BlockchainRoscaPage() {
                       <ul className="mt-2 space-y-1">
                         <li>• Geographic constraints</li>
                         <li>• Manual record keeping</li>
-                        <li>• No yield generation</li>
+                        <li>• Cash sits with one treasurer</li>
                         <li>• Limited scalability</li>
                       </ul>
                     </div>
@@ -313,8 +313,8 @@ public fun make_contribution(
                       <div className="flex items-start space-x-3">
                         <div className="w-2 h-2 bg-red-500 rounded-full mt-2"></div>
                         <div>
-                          <h4 className="font-semibold text-gray-900">No Returns</h4>
-                          <p className="text-sm text-gray-600">Funds earn no interest while pooled</p>
+                          <h4 className="font-semibold text-gray-900">Treasurer Risk</h4>
+                          <p className="text-sm text-gray-600">One person physically holds the pooled cash</p>
                         </div>
                       </div>
                     </div>
@@ -340,8 +340,8 @@ public fun make_contribution(
                       <div className="flex items-start space-x-3">
                         <div className="w-2 h-2 bg-green-500 rounded-full mt-2"></div>
                         <div>
-                          <h4 className="font-semibold text-gray-900">DeFi Yield Generation</h4>
-                          <p className="text-sm text-gray-600">3-8% annual returns on pooled funds</p>
+                          <h4 className="font-semibold text-gray-900">Automated Escrow</h4>
+                          <p className="text-sm text-gray-600">Contributions held and released by smart contract, on schedule</p>
                         </div>
                       </div>
                     </div>
@@ -387,10 +387,10 @@ public fun make_contribution(
                         </p>
                       </div>
                       <div className="border border-gray-200 rounded-lg p-4">
-                        <h4 className="font-semibold text-green-600 mb-2">DeFi Integration</h4>
+                        <h4 className="font-semibold text-green-600 mb-2">Stablecoin Settlement</h4>
                         <p className="text-sm text-gray-600">
-                          Automatic yield generation through conservative DeFi strategies 
-                          while maintaining security and liquidity.
+                          Contribute in USD-pegged stablecoins so the pot&rsquo;s value
+                          stays predictable across borders.
                         </p>
                       </div>
                       <div className="border border-gray-200 rounded-lg p-4">

@@ -43,18 +43,6 @@ export default function BlogIndexPage() {
       href: '/blog/caribbean-sou-sou-success-stories'
     },
     {
-      id: 'defi-yield-strategies-community-savings',
-      title: "DeFi Yield Strategies for Community Savings: A Beginner's Guide",
-      excerpt: "Understanding how to safely generate 3-8% returns on community savings funds through decentralized finance protocols.",
-      category: 'DeFi',
-      readTime: '15 min read',
-      publishDate: '2024-01-08',
-      author: 'Dr. James Okonkwo',
-      tags: ['defi', 'yield-farming', 'education'],
-      image: '/images/blog/defi-yield-guide.jpg',
-      href: '/blog/defi-yield-strategies-community-savings'
-    },
-    {
       id: 'women-led-savings-circles-africa',
       title: "Women-Led Savings Circles: The Backbone of African Community Finance",
       excerpt: "How 75% of traditional savings circles across Africa are led by women, and how blockchain technology empowers this leadership.",

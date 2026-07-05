@@ -14,7 +14,8 @@
     "bootstrap:package": "node scripts/bootstrap-package.mjs",
     "smoke:testnet": "node scripts/smoke-testnet.mjs",
     "notifier:cycle-finalized": "node scripts/cycle-finalized-notifier.mjs",
-    "preflight": "npm run validate:move-network && cd move && sui move build && cd .. && npx tsc --noEmit -p . && npx next lint --dir src",
+    "check:copy": "node scripts/check-marketing-copy.mjs",
+    "preflight": "npm run validate:move-network && cd move && sui move build && cd .. && npx tsc --noEmit -p . && npx next lint --dir src && npm run check:copy",
     "preflight:full": "npm run preflight && cd move && sui move test --filter njangi -- --skip-fetch-latest-git-deps; status=$?; cd ..; if [ $status -ne 0 ] && [ \"$NJANGI_ALLOW_MOVE_TEST_FAIL\" = \"true\" ]; then echo '[preflight:full] sui move test failed; ignoring (NJANGI_ALLOW_MOVE_TEST_FAIL=true).'; exit 0; else exit $status; fi",
     "lint": "next lint"
   },

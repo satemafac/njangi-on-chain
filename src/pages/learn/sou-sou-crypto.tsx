@@ -364,8 +364,8 @@ public fun make_contribution(
                       <p>Online cultural celebrations and community meetings</p>
                     </div>
                     <div>
-                      <h4 className="font-medium">Yield Generation</h4>
-                      <p>DeFi strategies earning 3-8% on pooled funds</p>
+                      <h4 className="font-medium">Automated Escrow</h4>
+                      <p>Smart contracts hold and release the pot on schedule</p>
                     </div>
                   </div>
                 </div>
