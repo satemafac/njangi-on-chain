@@ -380,6 +380,24 @@ const STATEMENTS = [
             WHERE phone_hmac IS NOT NULL;`,
   },
   {
+    // Identity binding for the destructive erasure step. The public
+    // deletion endpoint captures the server-verified zkLogin identity
+    // (from the HttpOnly session cookie) when the requester is signed in.
+    // scripts/process-deletion-request.mjs erases salts/recovery_codes
+    // ONLY against these columns (or an operator override), never against
+    // the client-supplied, unauthenticated user_address — which is a public
+    // on-chain value and thus can't prove wallet ownership. Anonymous
+    // (locked-out) requests keep identity_verified = FALSE and require an
+    // explicit operator override before any cryptographic erasure.
+    name: 'deletion_requests_identity_binding',
+    sql: `ALTER TABLE deletion_requests
+            ADD COLUMN IF NOT EXISTS verified_sub TEXT;
+          ALTER TABLE deletion_requests
+            ADD COLUMN IF NOT EXISTS verified_aud TEXT;
+          ALTER TABLE deletion_requests
+            ADD COLUMN IF NOT EXISTS identity_verified BOOLEAN NOT NULL DEFAULT FALSE;`,
+  },
+  {
     // OFAC sanctions program (docs/sanctions-program.md): cached SDN
     // digital-currency address set, refreshed weekly by
     // /api/cron/sanctions-refresh. address is normalized lowercase;

@@ -11,6 +11,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import handler from '@/pages/api/legal/data-deletion-request';
 import { consumeRateLimit } from '@/lib/rate-limit';
 import { getSharedPgPool, isPostgresConfigured } from '@/lib/pg-pool';
+import { getZkLoginSessionAccount } from '@/lib/zklogin-session-registry';
 
 jest.mock('@/lib/rate-limit', () => ({
   consumeRateLimit: jest.fn(),
@@ -21,9 +22,16 @@ jest.mock('@/lib/pg-pool', () => ({
   isPostgresConfigured: jest.fn(),
 }));
 
+jest.mock('@/lib/zklogin-session-registry', () => ({
+  getZkLoginSessionAccount: jest.fn(),
+}));
+
 const mockedRateLimit = consumeRateLimit as jest.MockedFunction<typeof consumeRateLimit>;
 const mockedIsConfigured = isPostgresConfigured as jest.MockedFunction<typeof isPostgresConfigured>;
 const mockedGetPool = getSharedPgPool as jest.MockedFunction<typeof getSharedPgPool>;
+const mockedGetSessionAccount = getZkLoginSessionAccount as jest.MockedFunction<
+  typeof getZkLoginSessionAccount
+>;
 
 type MockRes = NextApiResponse & {
   statusCode: number;
@@ -84,6 +92,8 @@ describe('POST /api/legal/data-deletion-request', () => {
   beforeEach(() => {
     delete process.env.LEGAL_ACCEPT_IP_SALT;
     mockedIsConfigured.mockReturnValue(true);
+    // Default: anonymous (no session) — the locked-out-user path.
+    mockedGetSessionAccount.mockResolvedValue(null);
     mockedRateLimit.mockResolvedValue({ allowed: true, remaining: 2, resetMs: 1000 });
     consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
     consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -155,7 +165,41 @@ describe('POST /api/legal/data-deletion-request', () => {
     const [sql, params] = query.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('INSERT INTO deletion_requests');
     expect(sql).toContain("ON CONFLICT (email) WHERE status = 'pending' DO NOTHING");
-    expect(params).toEqual(['member@example.com', '0xabc123', 'please delete everything', 'fr', null]);
+    // No session → identity_verified=false, verified_sub/aud null. The
+    // client-supplied address is retained (audit) but not identity-bound.
+    expect(params).toEqual([
+      'member@example.com',
+      '0xabc123',
+      'please delete everything',
+      'fr',
+      null,
+      null,
+      null,
+      false,
+    ]);
+  });
+
+  it('binds an authenticated request to the server-verified identity and ignores a spoofed address', async () => {
+    const PROVEN_ADDR = '0xa11ce0000000000000000000000000000000000000000000000000000000face';
+    const VICTIM_ADDR = '0xdead0000000000000000000000000000000000000000000000000000beef0000';
+    mockedGetSessionAccount.mockResolvedValue({
+      sub: 'google-sub-123',
+      aud: 'client-aud-456',
+      userAddr: PROVEN_ADDR,
+    } as never);
+    const query = mockQueryOnce(1);
+    const res = createRes();
+    // Attacker-style body: a victim's (valid-format) address typed into the
+    // form. It must be discarded in favour of the session's proven address.
+    await handler(createReq({ ...VALID_BODY, userAddress: VICTIM_ADDR }), res);
+
+    expect(res.statusCode).toBe(200);
+    const params = (query.mock.calls[0] as [string, unknown[]])[1];
+    expect(params[1]).toBe(PROVEN_ADDR); // user_address = proven, not spoofed
+    expect(params[5]).toBe('google-sub-123'); // verified_sub
+    expect(params[6]).toBe('client-aud-456'); // verified_aud
+    expect(params[7]).toBe(true); // identity_verified
+    expect(JSON.stringify(params)).not.toContain(VICTIM_ADDR);
   });
 
   it('stores an HMAC of the client IP — never the raw IP — when the salt is set', async () => {

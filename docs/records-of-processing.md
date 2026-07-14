@@ -32,3 +32,24 @@ happens at the exchange/ramp as an independent controller.
 row → operator runs `scripts/process-deletion-request.mjs` (deletes rows,
 records phone HMAC so Walrus blobs are never renewed again and expire
 on-network). On-chain data cannot be erased; disclosed in the policy.
+
+**Identity verification before erasure (mandatory):** the public form is
+unauthenticated by design (a locked-out user must still be able to request
+deletion) and its `user_address` is a *public on-chain value* — it does not
+prove the requester owns that wallet. The destructive step of the executor
+erases the zkLogin salt + recovery codes, which permanently and irreversibly
+locks the wallet, so it must only run against a **proven** identity:
+
+- **Signed-in requests** are captured with the server-verified zkLogin
+  identity (`verified_sub`/`verified_aud`/`identity_verified`, taken from the
+  HttpOnly session cookie, never from the request body). The executor erases
+  salts/recovery_codes only against those columns.
+- **Anonymous (locked-out) requests** have `identity_verified = false`. The
+  executor SKIPS the cryptographic-erasure step and leaves the request in
+  `status = processing`. Before completing it, the operator MUST verify the
+  requester controls the wallet out-of-band (e.g. a signed message from the
+  address, or a support-desk identity check), then re-run with
+  `--sub <s> --aud <a> --force-unverified-identity`.
+
+Never mark a wallet-bearing request `completed` while its salt still exists —
+that would falsely record an erasure that did not happen.
