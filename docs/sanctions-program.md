@@ -44,6 +44,14 @@ use Njangi On-Chain.") with stable codes (`SANCTIONS_BLOCKED`,
 - **Bootstrap after each fresh deploy/migration:**
   `curl -H "Authorization: Bearer $CRON_SECRET" https://<host>/api/cron/sanctions-refresh`
   then confirm the response reports a plausible `addressCount` (~400-500).
+  Note: production `CRON_SECRET` is a Vercel **sensitive** env var —
+  `vercel env pull` returns it empty, so the curl needs the real value
+  (Vercel's own scheduled invocations inject it automatically and are
+  unaffected; verified firing on schedule 2026-07-13). If the value isn't
+  at hand, the fallback used for the 2026-07-05 bootstrap works: run the
+  app locally with the production `DATABASE_URL` and a temporary
+  `CRON_SECRET`, and curl localhost — the real handler then executes
+  against the production table.
 
 ## Fail mode and compensations
 

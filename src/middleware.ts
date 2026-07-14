@@ -12,7 +12,6 @@ const GEO_BLOCKED_PREFIXES = [
   '/circle',
   '/pool',
   '/auth',
-  '/callback',
   '/admin',
   '/automation',
 ];

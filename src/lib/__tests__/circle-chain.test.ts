@@ -59,9 +59,11 @@ describe('circle-chain helpers', () => {
 
     it('returns lookup ids for the active upgrade lineage', () => {
       // A lineage lookup must return every id the lineage spans so
-      // reads/event filters resolve across upgrades. The 2026-06-12 testnet
-      // republish (0x89cddf…) is a fresh v1 lineage — original id and
-      // published-at coincide, so the set collapses to the single id.
+      // reads/event filters resolve across upgrades. The testnet lineage
+      // is original 0x89cddf… (2026-06-12 v1) upgraded to published-at
+      // 0x5578b7… (v2/v3, 2026-06-15) — a current-lineage query must
+      // return both so event filters keyed by defining package id still
+      // match (see resolveComplianceConfigId for a real consumer).
       expect(
         getPackageLookupIds({
           network: 'testnet',
@@ -72,6 +74,7 @@ describe('circle-chain helpers', () => {
         }),
       ).toEqual([
         '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
+        '0x5578b73bd2a00eeb6d2bcdd791f4288202f6b10744536554db4868188c68302f',
       ]);
 
       // An app still configured with the retired package id is treated as
@@ -87,6 +90,7 @@ describe('circle-chain helpers', () => {
         }),
       ).toEqual([
         '0xc5aed33e4da2530d0f9b36a64d96d662b109ba2962bb6918bc3fa21be1622465',
+        '0x5578b73bd2a00eeb6d2bcdd791f4288202f6b10744536554db4868188c68302f',
         '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
       ]);
     });

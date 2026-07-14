@@ -150,6 +150,15 @@ const nextConfig = {
   // Add redirects to force HTTPS
   async redirects() {
     return [
+      // Legacy OAuth callback route, removed 2026-07-14. Nothing in the
+      // codebase links here, but an old OAuth client config could still
+      // redirect to it — the fragment (#id_token=...) survives a 308, so
+      // a stale provider entry keeps working through /auth/callback.
+      {
+        source: '/callback',
+        destination: '/auth/callback',
+        permanent: true,
+      },
       {
         source: '/:path*',
         has: [

@@ -20,6 +20,8 @@ import {
   buildCancelAfterDeadlineTx,
   buildClaimRefundTx,
 } from '@/services/goal-pool-service';
+import { findFreshestAttestation } from '@/lib/compliance-gate';
+import VerificationRequiredModal from '@/components/VerificationRequiredModal';
 
 interface Props {
   poolId: string;
@@ -54,6 +56,9 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
   const [myContribution, setMyContribution] = useState('0');
   const [amountInput, setAmountInput] = useState('');
   const [busy, setBusy] = useState(false);
+  // Gated pool + no attestation on the caller's wallet: explain the
+  // verification requirement instead of a dead-end error toast.
+  const [showVerificationRequired, setShowVerificationRequired] = useState(false);
 
   const rpc = useMemo(
     () => getPooledSuiClient({ network, rpcUrl: getNetworkConfig(network).rpcUrl }),
@@ -149,7 +154,7 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
     };
   }, [state, userAddress, myContribution]);
 
-  const onContribute = useCallback(() => {
+  const onContribute = useCallback(async () => {
     if (!state || !userAddress) return;
     const coin = resolveCoin(state.coinType);
     const value = parseFloat(amountInput);
@@ -157,9 +162,20 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
       toast.error('Enter an amount to chip in.');
       return;
     }
+    // Gated pools route through contribute_with_attestation — resolve the
+    // caller's freshest ComplianceAttestation first (same flow as the
+    // rotational escrow panel) and explain instead of erroring when they
+    // don't have one yet.
+    let attestationObjectId: string | undefined;
     if (state.requiresAttestation) {
-      toast.error('This pool requires verification to contribute.');
-      return;
+      const attestation = await findFreshestAttestation(userAddress, network).catch(
+        () => null,
+      );
+      if (!attestation) {
+        setShowVerificationRequired(true);
+        return;
+      }
+      attestationObjectId = attestation.objectId;
     }
     const base = BigInt(Math.round(value * 10 ** coin.decimals));
     void runWithSigner(
@@ -169,6 +185,7 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
         poolId,
         amount: base,
         ownerAddress: userAddress,
+        attestationObjectId,
       }),
       120_000_000,
       'Added to the pot! 🎉',
@@ -278,8 +295,9 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
         </div>
       </div>
 
-      {/* Contribute */}
-      {view.canContribute && !state.requiresAttestation ? (
+      {/* Contribute — gated pools included; the handler resolves the
+          caller's attestation and explains when verification is missing. */}
+      {view.canContribute ? (
         <div className="rounded-[24px] border border-emerald-200/70 bg-gradient-to-br from-emerald-50 to-[#fbfaf7] p-5">
           <h3 className={`${goalDisplayFont.className} text-lg font-semibold text-[#0f5132]`}>Chip in to the pot</h3>
           <p className="mt-1 text-sm text-[#3f6b54]">Add any amount — every contribution makes the pot grow.</p>
@@ -353,6 +371,11 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
           Released {fmt(view.total, coin.decimals)} {coin.symbol} to the beneficiary. 🎉
         </p>
       ) : null}
+
+      <VerificationRequiredModal
+        open={showVerificationRequired}
+        onClose={() => setShowVerificationRequired(false)}
+      />
     </div>
   );
 }
