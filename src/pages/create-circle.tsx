@@ -37,7 +37,7 @@ import {
   preflightSanctionsCheck,
   SANCTIONS_BLOCKED_MESSAGE,
 } from '../lib/sanctions-preflight';
-import { resolveComplianceConfigId } from '../lib/compliance-gate';
+import { resolveComplianceConfigId, isComplianceGateEnabled } from '../lib/compliance-gate';
 import GoalPotProgress from '../components/goals/GoalPotProgress';
 import { goalDisplayFont } from '../lib/fonts';
 import { useZkLoginSigner } from '../hooks/useZkLoginSigner';
@@ -738,16 +738,21 @@ export default function CreateCircle() {
       return;
     }
 
-    // Gated pools take the shared ComplianceConfig as an on-chain
-    // argument — resolve it up front and abort with a readable message
-    // when it can't be found (same flow as the rotational escrow panel).
+    // Compliance gating is an ops lever, not a user control: it is OFF
+    // unless NEXT_PUBLIC_COMPLIANCE_GATE_ENABLED is set (a corridor that
+    // demands KYC). Gated pools take the shared ComplianceConfig as an
+    // on-chain argument — resolve it up front, same flow as the rotational
+    // escrow. No user-facing toggle: for the CEX/DEX-funded, no-KYC launch,
+    // users never see a verification requirement
+    // (docs/compliance-roadmap-cex-dex-non-kyc.md §0).
+    const gated = isComplianceGateEnabled();
     let complianceConfigId: string | undefined;
-    if (sg.verificationRequired) {
+    if (gated) {
       complianceConfigId =
         (await resolveComplianceConfigId(network).catch(() => null)) ?? undefined;
       if (!complianceConfigId) {
         setError(
-          'KYC-gated pools are not available yet: no compliance configuration was found on this network. Create the pool without the verification requirement, or contact support.',
+          'Verification is required in your region but is not configured yet. Please contact support.',
         );
         return;
       }
@@ -763,7 +768,7 @@ export default function CreateCircle() {
         targetAmount: targetAmountMist,
         targetDateMs,
         deadlineMs,
-        withComplianceGate: sg.verificationRequired || undefined,
+        withComplianceGate: gated || undefined,
         complianceConfigId,
       });
       const result = await signGoalPool({ build, gasBudget: 100_000_000 });
@@ -1800,30 +1805,6 @@ The Njangi On-Chain Team`;
                   />
                   <p className="text-xs text-gray-500">Leave blank to receive the pot yourself.</p>
                 </div>
-
-                {/* Optional KYC gate: contributions route through
-                    contribute_with_attestation on-chain. */}
-                <label className="flex items-start gap-3 rounded-[16px] border border-gray-200 bg-white px-3 py-2.5">
-                  <input
-                    type="checkbox"
-                    checked={formData.smartGoal?.verificationRequired ?? false}
-                    onChange={(e) =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        smartGoal: prev.smartGoal
-                          ? { ...prev.smartGoal, verificationRequired: e.target.checked }
-                          : prev.smartGoal,
-                      }))
-                    }
-                    className="mt-0.5 h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
-                  />
-                  <span className="text-xs leading-5 text-gray-600">
-                    <strong className="font-semibold text-gray-800">Require identity verification to contribute.</strong>{' '}
-                    Each contributor must hold a valid verification issued through their
-                    circle admin before they can chip in. Leave off unless your region
-                    or group requires it.
-                  </span>
-                </label>
 
                 {/* Open-pool explainer */}
                 <div className="flex items-start gap-2 rounded-[16px] border border-emerald-200/70 bg-emerald-50/60 px-3 py-2.5 text-xs leading-5 text-[#3f6b54]">

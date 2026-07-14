@@ -723,10 +723,6 @@ export default function ManageCircle() {
   });
   const [loadingContributions, setLoadingContributions] = useState(false);
 
-  // Phase 10: per-circle "require KYC" toggle. Persisted in localStorage
-  // so admins don't have to flip it on every page load. When on, opening
-  // a new round uses the compliance-gated escrow.
-  const [gateRoundsForCircle, setGateRoundsForCircle] = useState(false);
   // Phase 12 UX chain: when the admin successfully activates the circle,
   // we set this flag so the CycleEscrowPanel automatically opens the
   // first contribution round once it sees `isActive=true`. Cleared by
@@ -860,16 +856,6 @@ export default function ManageCircle() {
     // `fetchCircleDetails` closes over id/userAddress already.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, userAddress]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof id !== 'string') return;
-    try {
-      const stored = window.localStorage.getItem(`njangi.gateRounds.${id}`);
-      setGateRoundsForCircle(stored === 'true');
-    } catch {
-      /* ignore */
-    }
-  }, [id]);
 
   useEffect(() => {
     const fetchPrice = async () => {
@@ -7547,40 +7533,12 @@ export default function ManageCircle() {
                         </p>
                       </div>
                     ) : null}
-                    <label className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                      <span>
-                        <span className="font-semibold">Require KYC for new rounds</span>
-                        <span className="ml-1 text-amber-800/80">
-                          When on, the next round will use the compliance-gated
-                          escrow so members must hold a valid attestation to pay
-                          or collect.
-                        </span>
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={gateRoundsForCircle}
-                        onChange={(e) => {
-                          const next = e.target.checked;
-                          setGateRoundsForCircle(next);
-                          try {
-                            localStorage.setItem(
-                              `njangi.gateRounds.${id}`,
-                              next ? 'true' : 'false',
-                            );
-                          } catch {
-                            /* ignore quota errors */
-                          }
-                        }}
-                        className="h-5 w-5"
-                      />
-                    </label>
                     <CycleEscrowPanel
                       circleId={id}
                       network={getCurrentNetwork() as NetworkType}
                       circleName={circle.name}
                       isAdmin
                       memberNames={memberNameMap}
-                      requireAttestationOnOpen={gateRoundsForCircle}
                       showAdminOpenButton
                       circleIsActive={circle.isActive && allDepositsPaid}
                       autoOpenWhenReady={autoOpenFirstRound}

@@ -51,13 +51,6 @@ interface CycleEscrowPanelProps {
    */
   memberNames?: Record<string, string>;
   /**
-   * Phase 8: when true, the admin's "Open this round" button calls the
-   * compliance-gated Move entrypoint so every contribute/claim requires a
-   * valid ComplianceAttestation. Defaults to the global feature flag so
-   * operators can flip the gate without redeploying the app.
-   */
-  requireAttestationOnOpen?: boolean;
-  /**
    * Render the admin-only "Open this round" button. Members never see
    * this; admins use it from the manage page. Default false so the
    * member-facing contribute page stays clean.
@@ -126,7 +119,6 @@ export function CycleEscrowPanel({
   circleName,
   isAdmin,
   memberNames,
-  requireAttestationOnOpen,
   showAdminOpenButton = false,
   circleIsActive = true,
   autoOpenWhenReady = false,
@@ -338,7 +330,12 @@ export function CycleEscrowPanel({
       toast.error(SANCTIONS_BLOCKED_MESSAGE);
       return;
     }
-    const gated = requireAttestationOnOpen ?? isComplianceGateEnabled();
+    // Compliance gating is an ops lever, not a per-circle admin control:
+    // OFF unless NEXT_PUBLIC_COMPLIANCE_GATE_ENABLED is set (a corridor
+    // that demands KYC). No user-facing toggle — for the CEX/DEX-funded,
+    // no-KYC launch, admins never opt a circle into verification
+    // (docs/compliance-roadmap-cex-dex-non-kyc.md §0).
+    const gated = isComplianceGateEnabled();
     // The gated entrypoints need the shared ComplianceConfig object as an
     // argument. Resolve it up front and abort with a readable message if
     // it can't be found — sending the call without it aborts on-chain
@@ -349,7 +346,7 @@ export function CycleEscrowPanel({
         (await resolveComplianceConfigId(network).catch(() => null)) ?? undefined;
       if (!complianceConfigId) {
         toast.error(
-          'KYC-gated rounds are not available yet: no compliance configuration was found on this network. Start the round without the KYC requirement, or contact support.',
+          'Verification is required in your region but is not configured yet. Please contact support.',
         );
         return;
       }
@@ -363,7 +360,7 @@ export function CycleEscrowPanel({
       stableDecimals: isStableSettlement ? coinDecimals : undefined,
     });
     void runWithSigner('open', build, 80_000_000);
-  }, [network, circleId, coinType, coinDecimals, isStableSettlement, runWithSigner, requireAttestationOnOpen, userAddress]);
+  }, [network, circleId, coinType, coinDecimals, isStableSettlement, runWithSigner, userAddress]);
 
   // Auto-chain: when the manage page sets `autoOpenWhenReady` after a
   // successful Activate Circle call, fire onStartRound exactly once as
