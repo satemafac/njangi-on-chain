@@ -23,6 +23,18 @@ jest.mock('../cycle-finalized-cron', () => {
     saveCycleFinalizedCursor: jest.fn(async () => undefined),
   };
 });
+// The Sui-first probe is mocked to "always run" for the drain-behavior
+// tests below — they exercise lease/cursor/dispatch semantics, which the
+// probe would otherwise short-circuit for streams with no recent events.
+// The probe-skip contract has its own test at the bottom of this file.
+jest.mock('../cron-event-probe', () => ({
+  isHourlyFullPassTick: jest.fn(() => false),
+  probeForRecentEvents: jest.fn(async () => ({
+    runFullPass: true,
+    reason: 'recent_event',
+    newestEventMs: null,
+  })),
+}));
 jest.mock('../whatsapp-notifier', () => ({
   sendMemberNotification: jest.fn(),
 }));
@@ -326,5 +338,27 @@ describe('ported event dispatch (smoke)', () => {
     expect(res.statusCode).toBe(500);
     expect((res.body as { halted: boolean }).halted).toBe(true);
     expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('never touches the lease/cursor when the Sui-first probe reports a quiet stream', async () => {
+    // The Neon-burn guard: quiet ticks must be DB-free so the database can
+    // autosuspend (see src/lib/cron-event-probe.ts).
+    const { probeForRecentEvents } = jest.requireMock('../cron-event-probe');
+    // ...Once so the suite's default always-run probe is restored for any
+    // test that might execute after this one.
+    for (let i = 0; i < CIRCLE_EVENT_STREAMS.length; i += 1) {
+      (probeForRecentEvents as jest.Mock).mockResolvedValueOnce({
+        runFullPass: false,
+        reason: 'no_recent_events',
+        newestEventMs: null,
+      });
+    }
+    const res = await run();
+    expect(res.statusCode).toBe(200);
+    expect(acquireMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+    const streams = (res.body as { streams: Array<{ skippedReason?: string }> }).streams;
+    expect(streams.length).toBeGreaterThan(0);
+    expect(streams.every((s) => s.skippedReason === 'no_recent_events')).toBe(true);
   });
 });

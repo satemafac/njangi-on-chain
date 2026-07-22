@@ -55,6 +55,10 @@ import {
   resolveCirclePhone,
 } from '../../../lib/whatsapp-bot/circle-phone';
 import { sendMemberNotification } from '../../../lib/whatsapp-notifier';
+import {
+  isHourlyFullPassTick,
+  probeForRecentEvents,
+} from '../../../lib/cron-event-probe';
 import { getPublishedPackageMetadata } from '../../../lib/circle-chain';
 import {
   getCurrentNetwork,
@@ -151,6 +155,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const phoneCache = new Map<string, string | null>();
   const nameCache = new Map<string, string>();
 
+  // Computed once per run: on the hourly tick every stream drains fully
+  // (probe bypassed) so no cursor can stall behind the quiet-tick skip.
+  const forceFullPass = isHourlyFullPassTick();
+
   const summaries: StreamSummary[] = [];
 
   try {
@@ -179,6 +187,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           appBaseUrl,
           phoneCache,
           nameCache,
+          forceFullPass,
         }),
       );
     }
@@ -216,6 +225,8 @@ interface DrainStreamContext {
   appBaseUrl: string;
   phoneCache: Map<string, string | null>;
   nameCache: Map<string, string>;
+  /** Hourly tick: bypass the Sui-first probe and drain every stream. */
+  forceFullPass: boolean;
 }
 
 async function drainStream(
@@ -236,6 +247,18 @@ async function drainStream(
     failed: 0,
     halted: false,
   };
+
+  // Sui-first probe (no Postgres): a stream with nothing recent on-chain
+  // is skipped before its lease/cursor, so quiet ticks never wake Neon.
+  // The hourly forced pass drains stale streams and advances cursors.
+  const probe = await probeForRecentEvents({
+    client: ctx.client,
+    eventType,
+    forceFullPass: ctx.forceFullPass,
+  });
+  if (!probe.runFullPass) {
+    return { ...base, skippedReason: 'no_recent_events' };
+  }
 
   // Per-stream single-flight: the loser of the lease skips THIS stream
   // only (a backlog drain on one stream must not block the others).

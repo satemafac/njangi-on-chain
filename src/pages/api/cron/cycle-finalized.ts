@@ -58,6 +58,10 @@ import {
 } from '../../../lib/circle-chain';
 import { getCurrentNetwork, getNetworkConfig } from '../../../services/network-config';
 import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
+import {
+  isHourlyFullPassTick,
+  probeForRecentEvents,
+} from '../../../lib/cron-event-probe';
 import { appLogger } from '../../../utils/logger';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -150,6 +154,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   };
 
   const cursorKey = cycleFinalizedCursorKey(packageId, network);
+
+  // Sui-first probe (no Postgres): skip the lease + cursor machinery when
+  // nothing recent exists on-chain, so Neon can autosuspend between quiet
+  // ticks. The first tick of each hour forces a full pass regardless, so
+  // the cursor can never stall behind this early-exit.
+  const probe = await probeForRecentEvents({
+    client,
+    eventType,
+    forceFullPass: isHourlyFullPassTick(),
+  });
+  if (!probe.runFullPass) {
+    return res.status(200).json({
+      skipped: 'no_recent_events',
+      network,
+      eventType,
+      newestEventMs: probe.newestEventMs,
+    });
+  }
 
   try {
     // Single-flight: atomically claim the run lease before reading the
