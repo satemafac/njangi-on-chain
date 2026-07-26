@@ -1,3 +1,4 @@
+import fs from 'fs';
 import path from 'path';
 import {
   findRepoRoot,
@@ -5,6 +6,8 @@ import {
   resolveBotRuntimeEnvFromProcessEnv,
   resolveLocalEnvFilePath,
 } from '..';
+
+const realExistsSync = fs.existsSync;
 
 describe('bot env resolution', () => {
   const repoRoot = path.resolve(__dirname, '../../../../');
@@ -21,12 +24,23 @@ describe('bot env resolution', () => {
   });
 
   it('defaults to the root .env.local for local bot runs', () => {
+    // `.env.local` is gitignored, so it is absent on a clean CI checkout —
+    // resolveLocalEnvFilePath returns null when the file does not exist,
+    // which used to make this test pass locally (file present) but fail in
+    // CI. Force just that path to "exist" (real fs for everything else, so
+    // findRepoRoot's package.json probes still work) to test the resolution
+    // logic rather than the runner's filesystem.
+    const expected = path.join(repoRoot, '.env.local');
+    jest
+      .spyOn(fs, 'existsSync')
+      .mockImplementation((p) => p === expected || realExistsSync(p as fs.PathLike));
+
     expect(
       resolveLocalEnvFilePath({
         cwd: backendDir,
         nodeEnv: 'development',
       }),
-    ).toBe(path.join(repoRoot, '.env.local'));
+    ).toBe(expected);
   });
 
   it('uses legacy aliases for the active network when canonical values are missing', () => {
