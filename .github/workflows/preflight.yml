@@ -36,14 +36,26 @@ jobs:
 
       - name: Install Sui CLI
         if: steps.sui-cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "$HOME/.local/bin"
-          # Download a pinned Sui release so preflight builds are reproducible.
-          # Bump the version intentionally when the Move toolchain updates.
-          SUI_VERSION="mainnet-v1.49.0"
-          curl -L --fail \
-            "https://github.com/MystenLabs/sui/releases/download/${SUI_VERSION}/sui-${SUI_VERSION}-ubuntu-x86_64.tgz" \
-            -o /tmp/sui.tgz
+          # Pinned Sui release for reproducible Move builds. Bump intentionally
+          # when the Move toolchain updates. MystenLabs PRUNES old releases, so
+          # if the pinned tag has been removed we self-heal to the latest hosted
+          # mainnet release rather than hard-failing every merge (the pinned
+          # mainnet-v1.49.0 was pruned, which broke this job for weeks).
+          SUI_VERSION="mainnet-v1.75.2"
+          URL="https://github.com/MystenLabs/sui/releases/download/${SUI_VERSION}/sui-${SUI_VERSION}-ubuntu-x86_64.tgz"
+          if ! curl -L --fail --silent --show-error "$URL" -o /tmp/sui.tgz; then
+            echo "::warning::Pinned ${SUI_VERSION} unavailable (likely pruned) — resolving latest hosted mainnet release"
+            URL=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/MystenLabs/sui/releases?per_page=40" \
+              | jq -r '[.[] | select(.tag_name|startswith("mainnet-")) | .assets[] | select(.name|endswith("ubuntu-x86_64.tgz")) | .browser_download_url][0]')
+            test -n "$URL" && test "$URL" != "null"
+            echo "Falling back to $URL"
+            curl -L --fail "$URL" -o /tmp/sui.tgz
+          fi
           tar -xzf /tmp/sui.tgz -C "$HOME/.local/bin" sui
           chmod +x "$HOME/.local/bin/sui"
 
