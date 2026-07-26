@@ -1,0 +1,85 @@
+name: readiness
+
+# Self-owned external READINESS monitor: "can the app reach Postgres (Neon)?".
+# Probes /api/health?deep=1, which runs SELECT 1 and returns 503 when the DB
+# is unreachable.
+#
+# Cadence is deliberately SLOW (every 30 min, not every 5 like liveness).
+# Each deep probe wakes Neon, and Neon autosuspends after ~5 min idle — so a
+# 30-min cadence lets the database sleep ~25 of every 30 min (~17% duty cycle)
+# instead of being pinned awake 24/7, which is what exhausted the free-tier
+# compute quota on 2026-07-21. A Neon outage is still caught within 30 min,
+# while the app-level liveness (uptime.yml, every 5 min) catches app outages
+# fast. To trade quota for faster DB-outage detection, tighten to */15; to
+# save more quota, relax to hourly.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch: # allow a manual "is the DB reachable?" run
+
+permissions:
+  contents: read
+
+concurrency:
+  group: readiness
+  cancel-in-progress: true
+
+jobs:
+  readiness:
+    name: Probe /api/health (readiness / DB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # Override by setting an Actions *variable* named READINESS_URL.
+      # Must include ?deep=1 so the endpoint actually runs the DB check.
+      READINESS_URL: ${{ vars.READINESS_URL || 'https://njangionchain.com/api/health?deep=1' }}
+    steps:
+      - name: Probe health endpoint (readiness)
+        id: probe
+        run: |
+          set -euo pipefail
+          echo "Probing $READINESS_URL"
+          # Retry transient blips (Neon cold start can take a few seconds) so a
+          # single slow wake doesn't page. 3 attempts, 10s apart.
+          attempt=0
+          max=3
+          while :; do
+            attempt=$((attempt+1))
+            code=$(curl -sS -o /tmp/ready.json -w '%{http_code}' --max-time 20 "$READINESS_URL" || echo "000")
+            body=$(cat /tmp/ready.json 2>/dev/null || echo '')
+            echo "attempt $attempt → HTTP $code | $body"
+            # Readiness pass requires HTTP 200 + status:"ok" (deep mode only
+            # returns status:"ok" when the DB answered SELECT 1).
+            if [ "$code" = "200" ] \
+               && printf '%s' "$body" | grep -q '"status":"ok"'; then
+              echo "ready=true" >> "$GITHUB_OUTPUT"
+              echo "✅ database reachable"
+              exit 0
+            fi
+            if [ "$attempt" -ge "$max" ]; then
+              {
+                echo "ready=false"
+                echo "code=$code"
+                echo "body=$body"
+              } >> "$GITHUB_OUTPUT"
+              echo "::error::Readiness (DB) check FAILED after $max attempts (last HTTP $code)"
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Alert webhook (optional)
+        if: failure()
+        env:
+          WEBHOOK: ${{ secrets.UPTIME_ALERT_WEBHOOK }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WEBHOOK:-}" ]; then
+            echo "UPTIME_ALERT_WEBHOOK not set — relying on GitHub's failed-run email."
+            exit 0
+          fi
+          msg="🟠 njangi-on-chain DB UNREACHABLE — $READINESS_URL readiness check failed (run ${{ github.run_id }})"
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data "{\"text\":\"$msg\",\"content\":\"$msg\"}" \
+            "$WEBHOOK" || echo "webhook post failed (non-fatal)"

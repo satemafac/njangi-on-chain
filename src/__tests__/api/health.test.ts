@@ -1,8 +1,9 @@
 /**
  * /api/health (June 2026 platform hardening): uptime probe for the Vercel
- * deployment. 200 when Postgres answers SELECT 1, 503 otherwise. The body
- * must report version + network and must never echo connection strings or
- * raw driver errors.
+ * deployment. Two modes: LIVENESS (default, no DB — always 200 when the app
+ * is serving, so the frequent uptime ping never wakes Neon) and READINESS
+ * (?deep=1 — runs SELECT 1, 200/503). The body must report version +
+ * network and must never echo connection strings or raw driver errors.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -44,9 +45,14 @@ function createMockRes(): NextApiResponse & MockRes {
   return res as unknown as NextApiResponse & MockRes;
 }
 
-function createReq(method = 'GET'): NextApiRequest {
-  return { method, headers: {}, query: {}, cookies: {} } as unknown as NextApiRequest;
+function createReq(
+  method = 'GET',
+  query: Record<string, string> = {},
+): NextApiRequest {
+  return { method, headers: {}, query, cookies: {} } as unknown as NextApiRequest;
 }
+
+const DEEP = { deep: '1' };
 
 describe('/api/health', () => {
   let consoleErrorSpy: jest.SpyInstance;
@@ -59,11 +65,8 @@ describe('/api/health', () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it('returns 200 with version, network, and db latency when SELECT 1 succeeds', async () => {
+  it('liveness (default): returns 200 without touching Postgres', async () => {
     mockedIsConfigured.mockReturnValue(true);
-    mockedGetPool.mockReturnValue({
-      query: jest.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] }),
-    } as unknown as ReturnType<typeof getSharedPgPool>);
 
     const res = createMockRes();
     await handler(createReq(), res);
@@ -71,27 +74,60 @@ describe('/api/health', () => {
     expect(res.statusCode).toBe(200);
     const body = res.jsonBody as Record<string, unknown>;
     expect(body.status).toBe('ok');
-    expect(typeof body.version).toBe('string');
-    expect(['testnet', 'mainnet']).toContain(body.network);
-    expect((body.db as Record<string, unknown>).ok).toBe(true);
-    expect(typeof (body.db as Record<string, unknown>).latencyMs).toBe('number');
+    expect(body.mode).toBe('liveness');
+    expect(body.db).toEqual({ ok: false, checked: false, reason: 'skipped' });
+    // The whole point: the frequent probe must not wake the database.
+    expect(mockedGetPool).not.toHaveBeenCalled();
     expect(res.headers['Cache-Control']).toBe('no-store, max-age=0');
   });
 
-  it('returns 503 with reason "unconfigured" when DATABASE_URL is missing', async () => {
+  it('liveness stays 200 even when the DB is down (app is still serving)', async () => {
     mockedIsConfigured.mockReturnValue(false);
 
     const res = createMockRes();
     await handler(createReq(), res);
 
-    expect(res.statusCode).toBe(503);
-    const body = res.jsonBody as Record<string, unknown>;
-    expect(body.status).toBe('unhealthy');
-    expect(body.db).toEqual({ ok: false, reason: 'unconfigured' });
+    expect(res.statusCode).toBe(200);
+    expect((res.jsonBody as Record<string, unknown>).status).toBe('ok');
     expect(mockedGetPool).not.toHaveBeenCalled();
   });
 
-  it('returns 503 without leaking driver error details when the query fails', async () => {
+  it('readiness (?deep=1): returns 200 with db latency when SELECT 1 succeeds', async () => {
+    mockedIsConfigured.mockReturnValue(true);
+    mockedGetPool.mockReturnValue({
+      query: jest.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] }),
+    } as unknown as ReturnType<typeof getSharedPgPool>);
+
+    const res = createMockRes();
+    await handler(createReq('GET', DEEP), res);
+
+    expect(res.statusCode).toBe(200);
+    const body = res.jsonBody as Record<string, unknown>;
+    expect(body.status).toBe('ok');
+    expect(body.mode).toBe('readiness');
+    expect(typeof body.version).toBe('string');
+    expect(['testnet', 'mainnet']).toContain(body.network);
+    const db = body.db as Record<string, unknown>;
+    expect(db.ok).toBe(true);
+    expect(db.checked).toBe(true);
+    expect(typeof db.latencyMs).toBe('number');
+    expect(res.headers['Cache-Control']).toBe('no-store, max-age=0');
+  });
+
+  it('readiness returns 503 with reason "unconfigured" when DATABASE_URL is missing', async () => {
+    mockedIsConfigured.mockReturnValue(false);
+
+    const res = createMockRes();
+    await handler(createReq('GET', DEEP), res);
+
+    expect(res.statusCode).toBe(503);
+    const body = res.jsonBody as Record<string, unknown>;
+    expect(body.status).toBe('unhealthy');
+    expect(body.db).toEqual({ ok: false, checked: true, reason: 'unconfigured' });
+    expect(mockedGetPool).not.toHaveBeenCalled();
+  });
+
+  it('readiness returns 503 without leaking driver error details when the query fails', async () => {
     mockedIsConfigured.mockReturnValue(true);
     mockedGetPool.mockReturnValue({
       query: jest
@@ -100,11 +136,11 @@ describe('/api/health', () => {
     } as unknown as ReturnType<typeof getSharedPgPool>);
 
     const res = createMockRes();
-    await handler(createReq(), res);
+    await handler(createReq('GET', DEEP), res);
 
     expect(res.statusCode).toBe(503);
     const body = res.jsonBody as Record<string, unknown>;
-    expect(body.db).toEqual({ ok: false, reason: 'unreachable' });
+    expect(body.db).toEqual({ ok: false, checked: true, reason: 'unreachable' });
     expect(JSON.stringify(body)).not.toContain('hunter2');
     expect(JSON.stringify(body)).not.toContain('ECONNREFUSED');
   });

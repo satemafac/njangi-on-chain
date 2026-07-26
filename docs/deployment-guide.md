@@ -447,20 +447,34 @@ For deployment issues:
 
 ## 📈 **Uptime monitoring**
 
-Production health lives at `GET /api/health` — returns `200 {status:"ok", db:{ok:true}}`
-when the app and Neon Postgres are reachable, `503` otherwise. It is public (no
-deployment protection) so external probes can hit it directly.
+Production health lives at `GET /api/health`, with two modes so the frequent
+uptime ping never wakes Neon (a DB query more often than Neon's ~5-min
+autosuspend keeps the compute awake 24/7 and burns the free-tier quota — the
+2026-07-21 outage):
+- **Liveness (default, no DB):** `200 {status:"ok", mode:"liveness"}` whenever
+  the app is serving — touches no Postgres, so it stays green even during a DB
+  outage and lets Neon sleep.
+- **Readiness (`?deep=1`):** runs `SELECT 1`; `200 {status:"ok",
+  mode:"readiness", db:{ok:true}}` when Neon answers, `503` otherwise.
 
-**Baseline (self-owned, always on):** `.github/workflows/uptime.yml` probes the
-production URL every 5 minutes from GitHub's scheduler — external to Vercel, so it
-catches outages the in-app crons cannot. A sustained failure (3 retries) turns the
-run red and GitHub emails the repo admins. Optional richer alerting: set the repo
-secret `UPTIME_ALERT_WEBHOOK` to a Slack/Discord incoming-webhook URL. Override the
-target with the Actions variable `HEALTHCHECK_URL`.
+It is public (no deployment protection) so external probes can hit it directly.
 
-**Recommended add-on (2 min, SaaS):** layer UptimeRobot (free) or BetterStack on the
-same URL for sub-minute checks, SMS/phone escalation, and a public status page:
-- Monitor type: HTTPS · URL: `https://njangi-on-chain.vercel.app/api/health`
+**Baseline (self-owned, always on):** two GitHub workflows probe from GitHub's
+scheduler, external to Vercel:
+- `.github/workflows/uptime.yml` — liveness every 5 min ("is the app up?").
+- `.github/workflows/readiness.yml` — readiness (`?deep=1`) every 30 min ("is
+  Neon reachable?"), slow on purpose so the DB isn't pinned awake.
+A sustained failure (3 retries) turns the run red and GitHub emails the repo
+admins. Optional richer alerting: set the repo secret `UPTIME_ALERT_WEBHOOK` to
+a Slack/Discord incoming-webhook URL. Override the targets with the Actions
+variables `HEALTHCHECK_URL` (liveness) / `READINESS_URL` (readiness, keep the
+`?deep=1`). A DB-down-but-app-up state shows GREEN on uptime and RED on
+readiness — the intended signal.
+
+**Recommended add-on (2 min, SaaS):** layer UptimeRobot (free) or BetterStack on
+the liveness URL for sub-minute checks, SMS/phone escalation, and a public
+status page:
+- Monitor type: HTTPS · URL: `https://njangionchain.com/api/health` (liveness)
 - Interval: 1 min · Expect: HTTP 200 containing `"status":"ok"`
 - Alert contacts: ops email + phone
 
