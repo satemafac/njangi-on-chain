@@ -125,6 +125,16 @@ export function accountToSignerSession(
   account: AccountData,
   network: 'testnet' | 'mainnet',
 ): ClientSignerSession {
+  if (!account.ephemeralPrivateKey) {
+    // The server does not supply this — the browser merges in the key it
+    // generated at beginLogin (see `zklogin-ephemeral-key.ts`). Reaching here
+    // means that merge did not happen, most likely because the OAuth redirect
+    // landed in a different browser context than the one that started it.
+    throw new Error(
+      'Cannot build a signing session: no ephemeral key is present for this account.',
+    );
+  }
+
   return {
     ephemeralPrivateKey: account.ephemeralPrivateKey,
     zkProofs: account.zkProofs,

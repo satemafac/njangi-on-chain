@@ -62,6 +62,22 @@ async function tryClientSideSigner(
   }
 }
 
+/**
+ * Strip signing material before an account goes over the wire.
+ *
+ * The server identifies the caller from the `session-id` cookie and reads
+ * everything it needs from its own session record — the posted `account` is
+ * advisory. Sending the ephemeral private key with it served only the
+ * now-removed `session.ephemeralPrivateKey === account.ephemeralPrivateKey`
+ * comparison, while putting a live signing key into request bodies, and from
+ * there into edge, WAF, and APM logs.
+ */
+function withoutSigningKey(account: AccountData): AccountData {
+  const { ephemeralPrivateKey: _omitted, ...rest } = account;
+  void _omitted;
+  return rest as AccountData;
+}
+
 export interface EmberOperationLifecycle {
   status: string;
   partialCompletion: boolean;
@@ -250,15 +266,43 @@ export class ZkLoginClient {
     return ZkLoginClient.instance;
   }
 
+  /**
+   * Begin an OAuth login.
+   *
+   * The ephemeral keypair is minted here, in the browser. Only its public half
+   * and the JWT randomness go to the server, which derives `maxEpoch` from the
+   * chain and computes the nonce. The private key is held in sessionStorage
+   * until the callback promotes it into a signer session, and is never
+   * transmitted.
+   *
+   * Must run in the same browser context that will handle the OAuth redirect
+   * back — sessionStorage is per-context. See `InAppBrowserModal`, which hands
+   * off to `/login` in the external browser so this runs there rather than
+   * stranding the key in a webview.
+   */
   public async beginLogin(provider: OAuthProvider = 'Google'): Promise<{ loginUrl: string }> {
+    if (typeof window === 'undefined') {
+      throw new Error('beginLogin must run in the browser: it generates the ephemeral signing key.');
+    }
+
     const network = getCurrentNetwork();
-    const origin = typeof window !== 'undefined' ? window.location.origin : undefined;
+    const origin = window.location.origin;
     console.log('🌍 ZkLoginClient.beginLogin: Starting login on network:', network);
+
+    const { createEphemeralKey, savePendingLogin } = await import('@/lib/zklogin-ephemeral-key');
+    const fresh = createEphemeralKey();
 
     const response = await fetch('/api/zkLogin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'beginLogin', provider, network, origin })
+      body: JSON.stringify({
+        action: 'beginLogin',
+        provider,
+        network,
+        origin,
+        ephemeralPublicKey: fresh.ephemeralPublicKey,
+        randomness: fresh.randomness,
+      })
     });
 
     if (!response.ok) {
@@ -271,7 +315,42 @@ export class ZkLoginClient {
       throw new Error('No login URL returned from server');
     }
 
+    // Persist only after the server accepted the key, so a failed begin does
+    // not leave a stale pending login behind.
+    savePendingLogin({
+      ephemeralPrivateKey: fresh.ephemeralPrivateKey,
+      ephemeralPublicKey: fresh.ephemeralPublicKey,
+      randomness: fresh.randomness,
+      maxEpoch: typeof data.maxEpoch === 'number' ? data.maxEpoch : undefined,
+      network,
+      provider,
+    });
+
     return data;
+  }
+
+  /**
+   * Reunite the server's proof payload with the browser-held ephemeral key.
+   *
+   * On a v2 session the server never had the key, so the account it returns is
+   * unsignable until this runs. Legacy v1 sessions still carry a key in the
+   * response; those are left as-is and expire on their own.
+   */
+  private async attachLocalEphemeralKey(account: AccountData): Promise<AccountData> {
+    if (account.ephemeralPrivateKey) return account;
+
+    const { loadPendingLogin, clearPendingLogin } = await import('@/lib/zklogin-ephemeral-key');
+    const pending = loadPendingLogin();
+
+    if (!pending?.ephemeralPrivateKey) {
+      throw new ZkLoginError(
+        'Your sign-in could not be completed in this browser tab. Please start again from the same tab you began in.',
+        true,
+      );
+    }
+
+    clearPendingLogin();
+    return { ...account, ephemeralPrivateKey: pending.ephemeralPrivateKey };
   }
 
   public async handleCallback(jwt: string): Promise<AccountData> {
@@ -323,8 +402,11 @@ export class ZkLoginClient {
           throw new Error(errorData.error || 'Failed to process authentication');
         }
         
-        // Success - return the account data
-        return response.json();
+        // Success. The server's response carries proofs, address and salt but
+        // no signing key — it does not have one. Merge in the ephemeral key
+        // this browser generated at beginLogin so the account is signable
+        // locally.
+        return this.attachLocalEphemeralKey(await response.json());
       } catch (err) {
         // If we've hit our retry limit or received a non-processing error, rethrow
         if (retries > maxRetries || !(err instanceof Error && err.message.includes('taking too long'))) {
@@ -355,7 +437,7 @@ export class ZkLoginClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           action: 'sendTransaction', 
-          account,
+          account: withoutSigningKey(account),
           circleData
         })
       });
@@ -633,7 +715,7 @@ export class ZkLoginClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           action: 'deleteCircle', 
-          account,
+          account: withoutSigningKey(account),
           circleId
         })
       });
@@ -730,7 +812,7 @@ export class ZkLoginClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           action: 'activateCircle', 
-          account,
+          account: withoutSigningKey(account),
           circleId
         })
       });
@@ -813,7 +895,7 @@ export class ZkLoginClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           action: 'paySecurityDeposit',
-          account,
+          account: withoutSigningKey(account),
           walletId,
           depositAmount
         })
@@ -897,7 +979,7 @@ export class ZkLoginClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'configureStablecoinSwap',
-          account,
+          account: withoutSigningKey(account),
           walletId,
           config
         })
@@ -952,7 +1034,7 @@ export class ZkLoginClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'deployToEmberVault',
-          account,
+          account: withoutSigningKey(account),
           payload
         })
       });
@@ -1007,7 +1089,7 @@ export class ZkLoginClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'requestEmberRedemption',
-          account,
+          account: withoutSigningKey(account),
           payload
         })
       });
@@ -1093,7 +1175,7 @@ export class ZkLoginClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           action: 'setRotationPosition', 
-          account,
+          account: withoutSigningKey(account),
           circleId,
           memberAddress: normalizedMemberAddress,
           position
@@ -1196,7 +1278,7 @@ export class ZkLoginClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           action: 'reorderRotationPositions', 
-          account,
+          account: withoutSigningKey(account),
           circleId,
           newOrder,
           network // Include network parameter for correct chain targeting
@@ -1282,7 +1364,7 @@ export class ZkLoginClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           action: 'adminApproveMembers', 
-          account,
+          account: withoutSigningKey(account),
           circleId,
           memberAddresses
         })
@@ -1355,7 +1437,7 @@ export class ZkLoginClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'adminTriggerPayout',
-          account,
+          account: withoutSigningKey(account),
           circleId,
           walletId,
           network,
@@ -1404,7 +1486,7 @@ export class ZkLoginClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           action: 'resumeCycle', 
-          account,
+          account: withoutSigningKey(account),
           circleId
         })
       });

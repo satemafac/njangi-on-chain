@@ -59,6 +59,31 @@ interface RPCError extends Error {
   code?: number;
 }
 
+/**
+ * Every dispatcher action that signs a transaction with a server-held key.
+ *
+ * Deliberately an explicit denylist rather than "everything except beginLogin
+ * and handleCallback": adding a new signing action should be a conscious act,
+ * and an omission here fails safe (the action runs and hits the typed
+ * ClientSigningRequiredError from `validateAccountData`) rather than silently
+ * signing for a session that should not be signable.
+ *
+ * The end state is that this set is empty and the actions are gone. Until
+ * then, membership here means "not yet migrated to client-side signing".
+ */
+const SERVER_SIGNING_ACTIONS = new Set([
+  'activateCircle', 'adminApproveMember', 'adminApproveMembers', 'adminRemoveMember',
+  'adminSetMaxMembers', 'adminTriggerPayout', 'configureStablecoinSwap',
+  'contributeFromCustody', 'contributeToCycleEscrow', 'deleteCircle',
+  'deployToEmberVault', 'depositStablecoin', 'depositUsdcDirect', 'executeRecovery',
+  'executeStablecoinSwap', 'executeSwapOnly', 'finalizeAndRedeemCycleEscrow',
+  'openCycleEscrow', 'paySecurityDeposit', 'proposeEmergencyStop',
+  'reorderRotationPositions', 'requestEmberRedemption', 'resumeCycle', 'sendTokens',
+  'sendTransaction', 'setRotationPosition', 'swapAndDepositCetus',
+  'swapAndDepositDeepBook', 'toggleAutoSwap', 'triggerAutoRelease',
+  'voteEmergencyStop',
+]);
+
 // Constants
 // (A `MAX_EPOCH = 2` constant lived here to support the proof-expiry check in
 // `validateSession`. That check never fired and has been removed; the real
@@ -889,6 +914,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const instance = enokiZkLoginService;
     // Do not initialize Cetus SDK here since we're not using it directly
 
+    // Sessions created after the ephemeral key moved into the browser carry no
+    // server-held secret, so every server-signing action below is structurally
+    // unable to run for them. Reject once, up front, with a code the client can
+    // act on — rather than letting 30-odd handlers each fail late with a
+    // generic 500 from deep inside the signing path.
+    //
+    // Legacy v1 sessions still have a key and keep working until they expire.
+    // maxEpoch is one Sui epoch (~24h) and the cookie matches, so this branch
+    // stops being reachable roughly a day after deploy.
+    if (sessionId && SERVER_SIGNING_ACTIONS.has(action)) {
+      const existing = await sessions.get(sessionId);
+      if (existing && !existing.ephemeralPrivateKey) {
+        console.log('Rejecting server-signing action for client-signing session:', {
+          action,
+          protocolVersion: existing.protocolVersion ?? 2,
+        });
+        return res.status(409).json({
+          error:
+            'This action must be signed in your browser. Please refresh the page and try again.',
+          code: 'CLIENT_SIGNING_REQUIRED',
+        });
+      }
+    }
+
     switch (action) {
       case 'beginLogin':
         // Generate new session ID and clear any existing sessions
@@ -898,23 +947,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           network === 'testnet' || network === 'mainnet' ? network : getCurrentNetwork();
         const requestOrigin = resolveRequestOrigin(req, origin);
 
+        // The ephemeral keypair is generated in the browser; we receive only
+        // the public half. Nothing stored against this session can produce a
+        // user signature.
         const { loginUrl, setupData: initialSetup } = await instance.beginLogin(
           provider as OAuthProvider,
           requestedNetwork,
           requestOrigin,
+          {
+            ephemeralPublicKey: req.body.ephemeralPublicKey,
+            randomness: req.body.randomness,
+          },
         );
-        
+
         // Log the setup data being stored
         console.log('Storing initial setup:', {
           sessionId,
           provider: initialSetup.provider,
           maxEpoch: initialSetup.maxEpoch,
           network: initialSetup.network,
-          ephemeralPublicKey: instance.getPublicKeyFromPrivate(initialSetup.ephemeralPrivateKey)
+          protocolVersion: initialSetup.protocolVersion,
+          ephemeralPublicKey: initialSetup.ephemeralPublicKey,
         });
-        
+
         await sessions.set(sessionId, initialSetup);
-        return res.status(200).json({ loginUrl });
+        return res.status(200).json({ loginUrl, maxEpoch: initialSetup.maxEpoch });
 
       case 'handleCallback':
         if (!jwt) {
@@ -974,7 +1031,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             // Clean up any existing sessions for this user
             await cleanupUserSessions(result.address, sessionId);
             
-            // Create the account data object
+            // Create the account data object.
+            // `ephemeralPrivateKey` is carried only for legacy v1 sessions,
+            // where the server generated it. On v2 it is undefined here and in
+            // the response — the browser merges in its own key. Do not
+            // reintroduce a server-side source for this field.
             const accountData: AccountData = {
               provider: savedSetup.provider,
               userAddr: result.address,
@@ -1010,7 +1071,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             sessionId,
             address: accountData.userAddr,
             maxEpoch: savedSetup.maxEpoch,
-            ephemeralPublicKey: instance.getPublicKeyFromPrivate(savedSetup.ephemeralPrivateKey)
+            protocolVersion: savedSetup.protocolVersion ?? 1,
+            ephemeralPublicKey: savedSetup.ephemeralPublicKey,
           });
           
           return res.status(200).json(accountData);
@@ -1044,7 +1106,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             sessionId,
             address: account.userAddr,
             hasSession: await sessions.has(sessionId),
-            ephemeralPublicKey: instance.getPublicKeyFromPrivate(account.ephemeralPrivateKey)
           });
 
           // Validate session with action context
@@ -1059,8 +1120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           // Verify session matches account data
-          if (session.account.userAddr !== account.userAddr || 
-              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+          if (session.account.userAddr !== account.userAddr) {
             await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
@@ -1405,7 +1465,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             address: account.userAddr,
             circleId: req.body.circleId,
             hasSession: await sessions.has(sessionId),
-            ephemeralPublicKey: instance.getPublicKeyFromPrivate(account.ephemeralPrivateKey)
           });
 
           // Validate session with action context
@@ -3017,8 +3076,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           // Verify session matches account data
-          if (session.account.userAddr !== account.userAddr || 
-              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+          if (session.account.userAddr !== account.userAddr) {
             if (sessionId) await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
@@ -3168,8 +3226,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           // Verify session matches account data
-          if (session.account.userAddr !== account.userAddr || 
-              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+          if (session.account.userAddr !== account.userAddr) {
             if (sessionId) await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
@@ -4524,8 +4581,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           // Verify session matches account data
-          if (session.account.userAddr !== account.userAddr || 
-            session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+          if (session.account.userAddr !== account.userAddr) {
             await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
@@ -6193,8 +6249,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           // Verify session matches account data
-          if (session.account.userAddr !== account.userAddr || 
-              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+          if (session.account.userAddr !== account.userAddr) {
             await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
