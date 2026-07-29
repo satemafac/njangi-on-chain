@@ -60,7 +60,10 @@ interface RPCError extends Error {
 }
 
 // Constants
-const MAX_EPOCH = 2; // Number of epochs to keep session alive (1 epoch ~= 24h)
+// (A `MAX_EPOCH = 2` constant lived here to support the proof-expiry check in
+// `validateSession`. That check never fired and has been removed; the real
+// epoch check lives in `EnokiZkLoginService.validateAccountData`, which uses
+// its own MAX_EPOCH. Two disagreeing copies of this constant was itself a bug.)
 const PROCESSING_COOLDOWN = 30000; // 30 seconds between processing attempts for the same session
 
 // Minimum slippage for aggregator transactions
@@ -172,16 +175,12 @@ async function validateSession(sessionId: string | undefined, action: string): P
       throw new Error('Invalid session: missing account data');
     }
     
-    // Validate proof expiration
-    if (session.maxEpoch) {
-      const currentEpoch = Math.floor(Number(session.maxEpoch) - MAX_EPOCH);
-      const maxEpoch = Number(session.maxEpoch);
-      
-      if (currentEpoch >= maxEpoch) {
-        if (sessionId) await sessions.delete(sessionId);
-        throw new Error('Session has expired. Please login again.');
-      }
-    }
+    // Proof expiry is NOT checked here. A previous check in this spot compared
+    // `maxEpoch - 2 >= maxEpoch`, which is never true, so it expired
+    // nothing while reading like a control. The real check needs the live chain
+    // epoch and runs in `EnokiZkLoginService.validateAccountData` immediately
+    // before signing; the session registry separately enforces its own TTL.
+    // Do not add a lookalike check here without an RPC epoch read.
 
     // Validate proof components
     if (!session.account.zkProofs?.proofPoints?.a?.length ||
@@ -309,75 +308,10 @@ async function createSuiClient(targetNetwork?: NetworkType): Promise<SuiClient> 
   }
 }
 
-function normalizeSerializedTransactionBytes(input: unknown): Uint8Array {
-  const isByte = (value: unknown): value is number =>
-    typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 255;
-
-  if (input instanceof Uint8Array) {
-    return input;
-  }
-
-  if (input instanceof ArrayBuffer) {
-    return new Uint8Array(input);
-  }
-
-  if (ArrayBuffer.isView(input)) {
-    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
-  }
-
-  if (Array.isArray(input)) {
-    if (!input.every(isByte)) {
-      throw new Error('Serialized transaction array must contain only byte values.');
-    }
-    return Uint8Array.from(input);
-  }
-
-  if (typeof input === 'string') {
-    const trimmed = input.trim();
-    if (!trimmed) {
-      throw new Error('Serialized transaction payload is empty.');
-    }
-
-    if (/^0x[0-9a-fA-F]+$/.test(trimmed)) {
-      return Uint8Array.from(Buffer.from(trimmed.slice(2), 'hex'));
-    }
-
-    if (/^[0-9a-fA-F]+$/.test(trimmed) && trimmed.length % 2 === 0) {
-      return Uint8Array.from(Buffer.from(trimmed, 'hex'));
-    }
-
-    return Uint8Array.from(Buffer.from(trimmed, 'base64'));
-  }
-
-  if (input && typeof input === 'object') {
-    const candidate = input as Record<string, unknown>;
-
-    if (candidate.type === 'Buffer' && Array.isArray(candidate.data)) {
-      if (!candidate.data.every(isByte)) {
-        throw new Error('Serialized Buffer payload must contain only byte values.');
-      }
-      return Uint8Array.from(candidate.data);
-    }
-
-    if (typeof candidate.length === 'number' && Number.isInteger(candidate.length) && candidate.length >= 0) {
-      const values = Array.from({ length: candidate.length }, (_, index) => candidate[String(index)]);
-      if (!values.every(isByte)) {
-        throw new Error('Serialized transaction object must contain only byte values.');
-      }
-      return Uint8Array.from(values);
-    }
-  }
-
-  throw new Error('Unsupported serialized transaction payload.');
-}
-
-function deserializeTransactionPayload(input: unknown): Transaction {
-  if (typeof input === 'string' && input.trim().startsWith('{')) {
-    return Transaction.from(input.trim());
-  }
-
-  return Transaction.from(normalizeSerializedTransactionBytes(input));
-}
+// Removed with the `sendSerializedTransaction` action: these parsed
+// caller-supplied transaction payloads so the server could sign them. Nothing
+// server-side accepts a client-built transaction any more — clients sign their
+// own. Do not reintroduce without reading the note on that case.
 
 // When using swapAndDepositCetus, replace accessing the private suiClient directly with the proper API
 const getEpochData = async (): Promise<{ epoch: string }> => {
@@ -3758,101 +3692,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       case 'executeSwap':
       case 'sendSerializedTransaction':
-        if (!account) {
-          return res.status(400).json({ error: 'Account data is required' });
-        }
-
-        if (!req.body.txb) {
-          return res.status(400).json({ error: 'Missing required parameter: txb (serialized transaction)' });
-        }
-
-        try {
-          const requestedNetwork =
-            req.body.network === 'testnet' || req.body.network === 'mainnet'
-              ? (req.body.network as NetworkType)
-              : undefined;
-
-          // Validate session with action context
-          const session = await validateSession(sessionId, 'sendTransaction');
-          
-          if (!session.account) {
-            if (sessionId) await sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              error: 'Authentication error: Your session has expired. Please login again.',
-              requireRelogin: true
-            });
-          }
-
-          // Verify session matches account data
-          if (session.account.userAddr !== account.userAddr || 
-              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
-            if (sessionId) await sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              error: 'Session mismatch: Please refresh your authentication',
-              requireRelogin: true
-            });
-          }
-          
-          // Deserialize the transaction
-          const tx = deserializeTransactionPayload(req.body.txb);
-          tx.setSender(session.account.userAddr);
-          
-          // Execute the transaction
-          const txResult = await instance.sendTransaction(
-            session.account,
-            tx,
-            {},
-            requestedNetwork
-          );
-          
-          return res.status(200).json({ 
-            digest: txResult.digest,
-            status: txResult.status,
-            gasUsed: txResult.gasUsed
-          });
-        } catch (error) {
-          const serializedActionLabel = action === 'executeSwap' ? 'DEX swap' : 'serialized transaction';
-          console.error(`Error executing ${serializedActionLabel}:`, error);
-          
-          if (error instanceof Error && 
-              (error.message.includes('proof verify failed') ||
-               error.message.includes('Session expired') ||
-               error.message.includes('re-authenticate'))) {
-            
-            if (sessionId) await sessions.delete(sessionId);
-            clearSessionCookie(res);
-            
-            return res.status(401).json({
-              error: 'Authentication error: Your session has expired. Please login again.',
-              requireRelogin: true
-            });
-          }
-          
-          // Check for common DEX errors
-          if (action === 'executeSwap' && error instanceof Error) {
-            if (error.message.includes('insufficient liquidity')) {
-              return res.status(400).json({ 
-                error: 'Insufficient liquidity in DEX pool. Try a smaller amount.'
-              });
-            }
-            
-            if (error.message.includes('slippage')) {
-              return res.status(400).json({ 
-                error: 'Price movement exceeded slippage tolerance. Try increasing slippage or try again.'
-              });
-            }
-          }
-          
-          return res.status(500).json({ 
-            error: error instanceof Error
-              ? error.message
-              : action === 'executeSwap'
-                ? 'Failed to execute swap'
-                : 'Failed to execute serialized transaction'
-          });
-        }
+        // Removed: this endpoint signed arbitrary caller-supplied transaction
+        // bytes with the session's ephemeral key, gated only by possession of
+        // the session cookie. That made it an unconditional signing oracle
+        // over the user's entire wallet — no Move-target allowlist, no
+        // recipient constraint — so cookie theft was equivalent to wallet
+        // theft.
+        //
+        // Every caller already builds its transaction in the browser, so they
+        // now sign locally via `src/lib/zklogin-client-signer.ts`. An
+        // allowlisted server signer was considered and rejected: Cetus routing
+        // is mostly non-MoveCall commands into packages we do not control, so
+        // any allowlist permissive enough to admit it would also admit
+        // transfers to an attacker.
+        return res.status(410).json({
+          error:
+            'Server-side transaction signing has been removed. Please refresh the page so your client can sign locally.',
+          code: 'SERIALIZED_TX_REMOVED',
+          requireRelogin: true,
+        });
 
       case 'toggleAutoSwap': {
         try {

@@ -121,64 +121,9 @@ class CetusService {
     }
   }
 
-  /**
-   * Perform a swap and contribute in a single transaction using zkLogin
-   */
-  async swapAndContributeViaZkLogin(
-    account: unknown,
-    fromCoinType: string,
-    amountIn: number | string,
-    circleId: string,
-    walletId: string,
-    slippage = 150 // basis points (1.5%)
-  ): Promise<{ success: boolean; digest?: string; status?: string; error?: string; requireRelogin?: boolean }> {
-    try {
-      const parsedAmount =
-        typeof amountIn === 'string' ? Number.parseFloat(amountIn) : Number(amountIn);
-      if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
-        return { success: false, error: 'Invalid swap amount. Provide a positive SUI amount.' };
-      }
-
-      const slippageBps = slippage <= 10 ? Math.floor(slippage * 100) : Math.floor(slippage);
-
-      const result = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'swapAndDepositCetus',
-          account,
-          circleId,
-          walletId,
-          fromCoinType,
-          suiAmount: parsedAmount,
-          slippage: slippageBps,
-          network: this.network,
-        }),
-      });
-
-      const data = await result.json();
-      
-      if (!result.ok) {
-        return { 
-          success: false, 
-          error: data.error || 'Failed to execute swap and contribution',
-          requireRelogin: Boolean(data?.requireRelogin),
-        };
-      }
-
-      return { 
-        success: true, 
-        digest: data.digest,
-        status: data.status,
-      };
-    } catch (error) {
-      console.error('Error performing swap and contribution:', error);
-      return { 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Unknown error' 
-      };
-    }
-  }
+  // Removed: `swapAndContributeViaZkLogin` had no callers and routed to the
+  // server-signing `swapAndDepositCetus` action. Leaving an unused entry point
+  // into a server signer would only have to be migrated later.
 
   /**
    * List all available tokens that can be swapped

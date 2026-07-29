@@ -16,20 +16,22 @@ import { getCircleTransactionPackageId } from './circle-service';
 import { getCurrentNetwork, getCurrentPackageId, getNetworkConfig } from './network-config';
 
 /**
- * Phase 5: non-React helper that returns a client-side signer wrapper when
- * the ephemeral-key session is present in the browser sessionStorage.
- * Returns null in SSR contexts or when the user hasn't signed in yet so
- * callers can fall back to the legacy server-signing path transparently.
+ * Non-React helper that returns a client-side signer wrapper when the
+ * ephemeral-key session is present in the browser sessionStorage. Returns
+ * null in SSR contexts or when the user hasn't signed in yet.
+ *
+ * `networkOverride` targets the RPC client at a specific chain when a caller
+ * operates on a network other than the one recorded at login. The signing
+ * session itself is unaffected — only which node the transaction is submitted
+ * to changes.
  */
-async function tryClientSideSigner(): Promise<
+async function tryClientSideSigner(
+  networkOverride?: NetworkOverride,
+): Promise<
   | {
-      signAndExecute: (input: {
-        build: (
-          txb: Transaction,
-          client: import('@mysten/sui/client').SuiClient,
-        ) => void | Promise<void>;
-        gasBudget?: number;
-      }) => Promise<{ digest: string }>;
+      signAndExecute: (
+        input: import('@/lib/zklogin-client-signer').SignTransactionInput,
+      ) => Promise<{ digest: string }>;
     }
   | null
 > {
@@ -42,7 +44,7 @@ async function tryClientSideSigner(): Promise<
     const session = signerModule.loadSignerSession();
     if (!session) return null;
     const client = new SuiClient({
-      url: getNetworkConfig(session.network).rpcUrl,
+      url: getNetworkConfig(networkOverride ?? session.network).rpcUrl,
     });
     return {
       signAndExecute: async (input) => {
@@ -410,6 +412,19 @@ export class ZkLoginClient {
     }
   }
 
+  /**
+   * Signs and submits a caller-built transaction locally.
+   *
+   * This previously POSTed the serialized bytes to `/api/zkLogin`, where
+   * the server deserialized them, overrode the sender, and signed with the
+   * ephemeral key it held. That endpoint was an unconditional "sign
+   * anything" oracle gated only by cookie possession, so it has been
+   * removed (410). Every caller here already builds its transaction in the
+   * browser, so signing locally is the natural home for this work.
+   *
+   * The name and signature are unchanged so the eight public callers below
+   * are unaffected.
+   */
   private async sendSerializedTransaction(
     account: AccountData,
     tx: Transaction,
@@ -418,41 +433,49 @@ export class ZkLoginClient {
     try {
       this.assertTransactionAccount(account);
 
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'sendSerializedTransaction',
-          account,
-          txb: tx.serialize(),
-          network,
-        }),
-      });
-
-      const responseData: ZkLoginResponse = await response.json();
-
-      if (response.status === 401) {
+      const signer = await tryClientSideSigner(network);
+      if (!signer) {
         throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`,
+          'Your signing session is unavailable. Please sign in again.',
           true,
         );
       }
 
-      if (!response.ok) {
+      const { digest } = await signer.signAndExecute({ transaction: tx });
+      return { digest };
+    } catch (error) {
+      if (error instanceof ZkLoginError) {
+        throw error;
+      }
+
+      throw new ZkLoginError(String(error), false);
+    }
+  }
+
+  /**
+   * Sign and submit transaction bytes that a builder already serialized
+   * (Cetus swap routing builds and serializes in the browser). The signer
+   * verifies the baked-in sender against the session address before
+   * signing.
+   */
+  public async sendPrebuiltTransactionBytes(
+    account: AccountData,
+    bytes: Uint8Array,
+    network?: NetworkOverride,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    try {
+      this.assertTransactionAccount(account);
+
+      const signer = await tryClientSideSigner(network);
+      if (!signer) {
         throw new ZkLoginError(
-          responseData.error || 'Transaction failed',
-          !!responseData.requireRelogin,
+          'Your signing session is unavailable. Please sign in again.',
+          true,
         );
       }
 
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-
-      return {
-        digest: responseData.digest,
-        requireRelogin: responseData.requireRelogin,
-      };
+      const { digest } = await signer.signAndExecute({ bytes });
+      return { digest };
     } catch (error) {
       if (error instanceof ZkLoginError) {
         throw error;

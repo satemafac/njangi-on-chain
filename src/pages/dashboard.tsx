@@ -25,6 +25,7 @@ import { resolveCircleLifecycleState } from '@/lib/circle-chain';
 import { discoverMemberCircleIds } from '@/lib/membership-discovery';
 import { readObjects } from '@/lib/sui-read';
 import { cetusService } from '@/lib/cetus-service';
+import { ZkLoginClient } from '@/services/zkLoginClient';
 import { getCircleConfigFieldsByObjectId, getCircleConfigObjectId } from '@/lib/circle-config';
 import { clearWalletBalanceCache, refreshWalletBalances } from '@/lib/wallet';
 import type { CoinbaseAssetIntent } from '@/types/coinbase-onramp';
@@ -2301,21 +2302,14 @@ export default function Dashboard() {
         id: 'dashboard-manual-swap',
       });
 
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'executeSwap',
-          account,
-          txb: Array.from(payload),
-          network: activeSwapNetwork,
-        }),
-      });
-
-      const result = await response.json();
-      if (!response.ok) {
-        throw new Error(result.error || 'Swap failed.');
-      }
+      // Signed in the browser. `getSwapTransactionPayload` already built and
+      // serialized the routing transaction here, so the bytes never leave the
+      // client and the server has no part in authorizing the swap.
+      const result = await new ZkLoginClient().sendPrebuiltTransactionBytes(
+        account,
+        payload,
+        activeSwapNetwork,
+      );
 
       setLastSwapDigest(result.digest || null);
       if (userAddress) {

@@ -141,37 +141,15 @@ export class SwapService {
       return null;
     }
   }
-  
-  // Method to execute swaps
-  async executeSwap(
-    fromCoin: string,
-    toCoin: string,
-    amountIn: number,
-    minAmountOut: number,
-    circleId: string
-  ): Promise<{ success: boolean; txId?: string; error?: string }> {
-    try {
-      if (!circleId) {
-        throw new Error('Missing circle ID');
-      }
-      
-      // In a real implementation, this would call the blockchain
-      // For now we'll just simulate success
-      console.log('Executing swap:', { fromCoin, toCoin, amountIn, minAmountOut, circleId });
-      
-      // Simulate transaction
-      return {
-        success: true,
-        txId: `0x${Math.random().toString(16).slice(2)}`,
-      };
-    } catch (error) {
-      console.error('Swap execution error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error during swap',
-      };
-    }
-  }
+
+  // Removed: `executeSwap` never touched the chain. It logged its arguments
+  // and returned `{ success: true, txId: '0x' + Math.random()... }`, so the
+  // UI reported a completed swap for a transaction that was never submitted.
+  // Its only caller (SwapAndDepositForm) was deleted with it. Real swap
+  // execution builds and signs in the browser — see `cetusService
+  // .getSwapTransactionPayload` plus `ZkLoginClient.sendPrebuiltTransactionBytes`.
+  //
+  // This class is quote-only. Do not add an execution method here.
 }
 
 // Create singleton instance

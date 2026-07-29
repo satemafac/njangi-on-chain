@@ -16,6 +16,7 @@ import {
   getCurrentTokens,
 } from '../../../../services/network-config';
 import { cetusService } from '../../../../lib/cetus-service';
+import { ZkLoginClient } from '@/services/zkLoginClient';
 import RampPicker from '@/components/RampPicker';
 import CycleEscrowPanel from '@/components/CycleEscrowPanel';
 import { resolveCircleSettlementCoin } from '@/lib/circle-settlement';
@@ -2427,21 +2428,13 @@ export default function ContributeToCircle() {
         throw new Error('Failed to prepare the SUI -> USDC swap transaction.');
       }
 
-      const swapResponse = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'executeSwap',
-          account,
-          txb: Array.from(payload),
-          network: getCurrentNetwork(),
-        }),
-      });
-
-      const swapResponseData = await swapResponse.json();
-      if (!swapResponse.ok) {
-        throw new Error(swapResponseData.error || 'Failed to submit the SUI -> USDC swap.');
-      }
+      // Signed in the browser — the routing transaction is already built and
+      // serialized here, so the swap is authorized entirely client-side.
+      const swapResponseData = await new ZkLoginClient().sendPrebuiltTransactionBytes(
+        account,
+        payload,
+        getCurrentNetwork(),
+      );
 
       setOneClickSwapDigest(swapResponseData.digest || null);
       toast.loading('Transaction submitted. Waiting for on-chain confirmation...', {
@@ -2581,22 +2574,12 @@ export default function ContributeToCircle() {
         throw new Error('Failed to prepare the USDC -> SUI swap transaction.');
       }
 
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'executeSwap',
-          account,
-          txb: Array.from(payload),
-          network: getCurrentNetwork(),
-        }),
-      });
-
-      const responseData = await response.json();
-
-      if (!response.ok) {
-        throw new Error(responseData.error || 'Failed to convert USDC into SUI.');
-      }
+      // Signed in the browser — see the SUI -> USDC path above.
+      const responseData = await new ZkLoginClient().sendPrebuiltTransactionBytes(
+        account,
+        payload,
+        getCurrentNetwork(),
+      );
 
       setTokenAssistSwapDigest(responseData.digest || null);
       toast.success('Converted USDC to SUI. Your SUI balance is refreshing now.', {

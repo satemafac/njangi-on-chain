@@ -42,15 +42,48 @@ export interface ClientSignerResult {
   events?: unknown;
 }
 
-export interface SignTransactionInput {
-  /**
-   * Populate the programmable transaction block. The client is passed
-   * as a second argument so async builders (e.g. coin-merge helpers that
-   * need `suiClient.getCoins`) don't have to receive it separately.
-   */
-  build: (txb: Transaction, client: SuiClient) => void | Promise<void>;
+/**
+ * Populates a programmable transaction block. The client is passed as a
+ * second argument so async builders (e.g. coin-merge helpers that need
+ * `suiClient.getCoins`) don't have to receive it separately.
+ */
+export type TransactionBuilder = (
+  txb: Transaction,
+  client: SuiClient,
+) => void | Promise<void>;
+
+export interface BuildTransactionInput {
+  build: TransactionBuilder;
   gasBudget?: number;
 }
+
+export interface PrebuiltTransactionInput {
+  /**
+   * A `Transaction` the caller already assembled. The sender is set here
+   * (overwriting any the caller set) so the signature can only ever
+   * authorize the session's own address.
+   */
+  transaction: Transaction;
+  gasBudget?: number;
+}
+
+export interface PrebuiltBytesInput {
+  /**
+   * Already-serialized transaction bytes from `txb.build({ client })`.
+   * Used by builders that must resolve their own object references
+   * before serializing — notably Cetus swap routing, which builds in the
+   * browser and hands back finished bytes.
+   *
+   * The sender is baked into these bytes, so it is verified against the
+   * session address rather than overwritten.
+   */
+  bytes: Uint8Array;
+}
+
+export type SignTransactionInput =
+  | BuildTransactionInput
+  | PrebuiltTransactionInput
+  | PrebuiltBytesInput;
 
 /**
  * Persist the AccountData required for client-side signing. Stored in
@@ -113,6 +146,67 @@ function buildKeypair(privateKey: string): Ed25519Keypair {
 }
 
 /**
+ * Assemble the zkLogin signature for already-serialized transaction
+ * bytes. Split out from `signAndExecuteWithZkLogin` so the sponsored
+ * flow (which receives bytes back from the sponsor) can reuse it without
+ * going through transaction construction.
+ */
+export async function signTransactionBytes(
+  session: ClientSignerSession,
+  txBytes: Uint8Array,
+): Promise<string> {
+  const keypair = buildKeypair(session.ephemeralPrivateKey);
+  const userSig = await keypair.signTransaction(txBytes);
+
+  const addressSeed = genAddressSeed(
+    BigInt(session.userSalt),
+    'sub',
+    session.sub,
+    session.aud,
+  ).toString();
+
+  return getZkLoginSignature({
+    inputs: { ...session.zkProofs, addressSeed },
+    maxEpoch: session.maxEpoch,
+    userSignature: userSig.signature,
+  });
+}
+
+/**
+ * Resolve any of the three input shapes down to signable bytes, pinning
+ * the sender to the session address in every case. A prebuilt payload
+ * whose sender is some other address is rejected rather than silently
+ * re-signed — the session key must never authorize a transaction that
+ * claims to come from someone else.
+ */
+async function resolveTransactionBytes(
+  session: ClientSignerSession,
+  client: SuiClient,
+  input: SignTransactionInput,
+): Promise<Uint8Array> {
+  if ('bytes' in input) {
+    const sender = Transaction.from(input.bytes).getData().sender;
+    if (sender && sender !== session.userAddress) {
+      throw new Error(
+        `Refusing to sign: transaction sender ${sender} does not match session address ${session.userAddress}.`,
+      );
+    }
+    return input.bytes;
+  }
+
+  const txb = 'transaction' in input ? input.transaction : new Transaction();
+  txb.setSender(session.userAddress);
+  if (typeof input.gasBudget === 'number') {
+    txb.setGasBudget(input.gasBudget);
+  }
+  if ('build' in input) {
+    await input.build(txb, client);
+  }
+
+  return txb.build({ client });
+}
+
+/**
  * Builds, signs, and submits a transaction client-side using zkLogin
  * proofs and the user's local ephemeral key. The server is never
  * consulted for signing — only for the original zkProof generation that
@@ -123,29 +217,8 @@ export async function signAndExecuteWithZkLogin(
   client: SuiClient,
   input: SignTransactionInput,
 ): Promise<ClientSignerResult> {
-  const txb = new Transaction();
-  txb.setSender(session.userAddress);
-  if (typeof input.gasBudget === 'number') {
-    txb.setGasBudget(input.gasBudget);
-  }
-  await input.build(txb, client);
-
-  const keypair = buildKeypair(session.ephemeralPrivateKey);
-  const txBytes = await txb.build({ client });
-  const userSig = await keypair.signTransaction(txBytes);
-
-  const addressSeed = genAddressSeed(
-    BigInt(session.userSalt),
-    'sub',
-    session.sub,
-    session.aud,
-  ).toString();
-
-  const zkSignature = getZkLoginSignature({
-    inputs: { ...session.zkProofs, addressSeed },
-    maxEpoch: session.maxEpoch,
-    userSignature: userSig.signature,
-  });
+  const txBytes = await resolveTransactionBytes(session, client, input);
+  const zkSignature = await signTransactionBytes(session, txBytes);
 
   const result = await client.executeTransactionBlock({
     transactionBlock: txBytes,
