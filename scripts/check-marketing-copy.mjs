@@ -25,6 +25,10 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
 const SCAN_DIRS = [
   'src/pages',
   'src/components',
+  // Marketing copy moved out of the page components and into data modules
+  // (src/content/rosca-terms.ts). Without this line the glossary's ~6,500 words
+  // of user-facing prose would sit outside the guard entirely.
+  'src/content',
   'whatsapp-bot-backend/src/services',
 ];
 const SCAN_FILES = ['src/lib/i18n.ts'];
