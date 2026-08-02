@@ -122,10 +122,13 @@ describe('zkLogin login protocol', () => {
         json: async () => ({ digest: '0xd' }),
       } as Response)) as unknown as typeof fetch;
 
-      await ZkLoginClient.getInstance().activateCircle(account, '0xcircle');
+      // Uses a method that STILL posts. As actions migrate to client-side
+      // signing this list shrinks; when it empties, the guarantee is
+      // structural (nothing posts an account at all) and this test can go.
+      await ZkLoginClient.getInstance().adminTriggerPayout(account, '0xcircle', '0xwallet');
 
       const raw = (global.fetch as jest.Mock).mock.calls[0][1].body as string;
-      expect(raw).toContain('activateCircle');
+      expect(raw).toContain('adminTriggerPayout');
       expect(raw).not.toContain('suiprivkey-MUST-NOT-LEAK');
       expect(raw).not.toContain('ephemeralPrivateKey');
     });

@@ -3,7 +3,17 @@ import type { OAuthProvider } from './zkLoginService';
 import { Transaction } from '@mysten/sui/transactions';
 import {
   buildBatchHeartbeatAdminLivenessTx,
+  buildActivateCircleTx,
+  buildAdminApproveMemberTx,
+  buildAdminRemoveMemberTx,
+  buildAdminSetMaxMembersTx,
+  buildToggleAutoSwapTx,
+  buildAdminApproveMembersTx,
   buildClaimMembershipTx,
+  buildDeleteCircleTx,
+  buildReorderRotationPositionsTx,
+  buildResumeCycleTx,
+  buildSetRotationPositionTx,
   buildCreateCircleTx,
   buildExecuteRecoveryTx,
   buildHeartbeatAdminLivenessTx,
@@ -106,6 +116,40 @@ async function trySponsoredGas(args: {
  * comparison, while putting a live signing key into request bodies, and from
  * there into edge, WAF, and APM logs.
  */
+/**
+ * Build a transaction with the caller's builder and sign it locally.
+ *
+ * The shared spine for every action that used to POST to /api/zkLogin and be
+ * signed with the server-held ephemeral key. Those began returning 409 once
+ * sessions stopped carrying a server key, so each is moved here.
+ *
+ * `resolvePackageId` is a callback, and async, because a circle created under
+ * an earlier package in the upgrade lineage must be addressed with THAT
+ * package rather than the newest one.
+ */
+async function signLocallyWithBuilder(args: {
+  account: AccountData;
+  resolvePackageId: () => Promise<string> | string;
+  build: (packageId: string) => Transaction;
+  network?: NetworkOverride;
+}): Promise<{ digest: string; requireRelogin?: boolean }> {
+  if (!args.account?.zkProofs?.proofPoints) {
+    throw new ZkLoginError('Missing authentication data. Please login again.', true);
+  }
+
+  const signer = await tryClientSideSigner(args.network);
+  if (!signer) {
+    throw new ZkLoginError(
+      'Your signing session is unavailable. Please sign in again.',
+      true,
+    );
+  }
+
+  const packageId = await args.resolvePackageId();
+  const { digest } = await signer.signAndExecute({ transaction: args.build(packageId) });
+  return { digest };
+}
+
 function withoutSigningKey(account: AccountData): AccountData {
   const { ephemeralPrivateKey: _omitted, ...rest } = account;
   void _omitted;
@@ -722,183 +766,33 @@ export class ZkLoginClient {
     return this.sendSerializedTransaction(account, tx, request.network);
   }
 
-  public async deleteCircle(account: AccountData, circleId: string): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      // Log key information for debugging
-      console.log('ZkLoginClient: Deleting circle with account:', {
-        address: account.userAddr,
-        circleId: circleId,
-        hasProofPoints: !!account.zkProofs?.proofPoints,
-        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
-        hasHeaderBase64: !!account.zkProofs?.headerBase64,
-        maxEpoch: account.maxEpoch
-      });
-
-      // Verify the account has valid proof data
-      if (!account.zkProofs?.proofPoints || 
-          !account.zkProofs.issBase64Details || 
-          !account.zkProofs.headerBase64) {
-        throw new ZkLoginError(
-          'Missing required authentication data. Please login again.',
-          true
-        );
-      }
-
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          action: 'deleteCircle', 
-          account: withoutSigningKey(account),
-          circleId
-        })
-      });
-      
-      // Try to parse the response even if status is not OK
-      let responseData;
-      try {
-        responseData = await response.json();
-        console.log('ZkLoginClient: Circle deletion response:', 
-          response.status, response.statusText, responseData);
-      } catch (parseError) {
-        console.error('Failed to parse response:', parseError);
-        throw new ZkLoginError(`Failed to parse server response: ${response.statusText}`, false);
-      }
-      
-      // Handle authentication errors (401)
-      if (response.status === 401) {
-        console.error('Authentication error:', responseData);
-        throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
-          true
-        );
-      }
-      
-      // Handle server errors (500)
-      if (!response.ok) {
-        console.error('Circle deletion failed:', responseData);
-        
-        // Check for specific contract errors
-        const errorMsg = responseData.error || 'Circle deletion failed';
-        
-        if (errorMsg.includes('ECircleHasActiveMembers') || 
-            errorMsg.includes('ECircleHasContributions') ||
-            errorMsg.includes('EOnlyCircleAdmin')) {
-          // These are expected contract error conditions, not authentication errors
-          throw new ZkLoginError(errorMsg, false);
-        }
-        
-        throw new ZkLoginError(
-          errorMsg, 
-          !!responseData.requireRelogin
-        );
-      }
-      
-      // Even for successful response, check if we have a digest
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      
-      console.log('ZkLoginClient: Circle deletion succeeded:', responseData);
-      return {
-        digest: responseData.digest,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      console.error('ZkLoginClient: Circle deletion error:', error);
-      
-      // Rethrow ZkLoginError as is
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      
-      // Otherwise wrap in a new error
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error('ZkLoginClient: Non-ZkLoginError occurred:', errorMessage);
-      throw new ZkLoginError(errorMessage, false);
+  public async deleteCircle(
+    account: AccountData,
+    circleId: string,
+    walletId?: string,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    if (!walletId) {
+      throw new ZkLoginError(
+        'A custody wallet id is required to delete a circle.',
+        false,
+      );
     }
+    return signLocallyWithBuilder({
+      account,
+      resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
+      build: (packageId) => buildDeleteCircleTx({ packageId, circleId, walletId }),
+    });
   }
 
-  public async activateCircle(account: AccountData, circleId: string): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      // Log key information for debugging
-      console.log('ZkLoginClient: Activating circle with account:', {
-        address: account.userAddr,
-        circleId: circleId,
-        hasProofPoints: !!account.zkProofs?.proofPoints,
-        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
-        hasHeaderBase64: !!account.zkProofs?.headerBase64,
-        maxEpoch: account.maxEpoch
-      });
-
-      // Verify the account has valid proof data
-      if (!account.zkProofs?.proofPoints || 
-          !account.zkProofs.issBase64Details || 
-          !account.zkProofs.headerBase64) {
-        throw new ZkLoginError(
-          'Missing required authentication data. Please login again.',
-          true
-        );
-      }
-
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          action: 'activateCircle', 
-          account: withoutSigningKey(account),
-          circleId
-        })
-      });
-      
-      // Try to parse the response even if status is not OK
-      let responseData;
-      try {
-        responseData = await response.json();
-        console.log('ZkLoginClient: Circle activation response:', 
-          response.status, response.statusText, responseData);
-      } catch (parseError) {
-        console.error('Failed to parse response:', parseError);
-        throw new ZkLoginError(`Failed to parse server response: ${response.statusText}`, false);
-      }
-      
-      // Handle authentication errors (401)
-      if (response.status === 401) {
-        console.error('Authentication error:', responseData);
-        throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
-          true
-        );
-      }
-      
-      // Handle server errors (500)
-      if (!response.ok) {
-        console.error('Circle activation failed:', responseData);
-        throw new ZkLoginError(
-          responseData.error || 'Circle activation failed', 
-          !!responseData.requireRelogin
-        );
-      }
-      
-      // Even for successful response, check if we have a digest
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      
-      console.log('Circle activation succeeded:', responseData);
-      return {
-        digest: responseData.digest,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      console.error('Circle activation error in client:', error);
-      // Rethrow ZkLoginError as is
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      // Otherwise wrap in a new error
-      throw new ZkLoginError(String(error), false);
-    }
+  public async activateCircle(
+    account: AccountData,
+    circleId: string,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    return signLocallyWithBuilder({
+      account,
+      resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
+      build: (packageId) => buildActivateCircleTx({ packageId, circleId }),
+    });
   }
 
   public async paySecurityDeposit(account: AccountData, walletId: string, depositAmount: number): Promise<{ digest: string; requireRelogin?: boolean }> {
@@ -1169,295 +1063,99 @@ export class ZkLoginClient {
   }
 
   public async setRotationPosition(
-    account: AccountData, 
+    account: AccountData,
     circleId: string,
     memberAddress: string,
-    position: number
+    position: number,
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      // Ensure address is in the correct format for the smart contract
-      // First, strip any leading 0x if present
-      const cleanAddress = memberAddress.toLowerCase().replace(/^0x/, '');
-      // Then ensure it has 0x prefix for the API call
-      const normalizedMemberAddress = `0x${cleanAddress}`;
-      
-      // Log key information for debugging
-      console.log('Setting rotation position with:', {
-        sender: account.userAddr,
-        circleId,
-        rawMemberAddress: memberAddress,
-        normalizedMemberAddress,
-        position,
-        hasProofPoints: !!account.zkProofs?.proofPoints,
-        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
-        hasHeaderBase64: !!account.zkProofs?.headerBase64,
-        maxEpoch: account.maxEpoch
-      });
-
-      // Verify the account has valid proof data
-      if (!account.zkProofs?.proofPoints || 
-          !account.zkProofs.issBase64Details || 
-          !account.zkProofs.headerBase64) {
-        throw new ZkLoginError(
-          'Missing required authentication data. Please login again.',
-          true
-        );
-      }
-
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          action: 'setRotationPosition', 
-          account: withoutSigningKey(account),
-          circleId,
-          memberAddress: normalizedMemberAddress,
-          position
-        })
-      });
-      
-      // Try to parse the response even if status is not OK
-      let responseData;
-      try {
-        responseData = await response.json();
-        console.log('ZkLoginClient: Set rotation position response:', 
-          response.status, response.statusText, responseData);
-      } catch (parseError) {
-        console.error('Failed to parse response:', parseError);
-        throw new ZkLoginError(`Failed to parse server response: ${response.statusText}`, false);
-      }
-      
-      // Handle authentication errors (401)
-      if (response.status === 401) {
-        console.error('Authentication error:', responseData);
-        throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
-          true
-        );
-      }
-      
-      // Handle server errors (500)
-      if (!response.ok) {
-        console.error('Set rotation position failed:', responseData);
-        
-        // Check if this is a business logic error (HTTP 400)
-        if (response.status === 400 && responseData.error) {
-          throw new Error(responseData.error);
-        }
-        
-        throw new ZkLoginError(
-          responseData.error || 'Failed to set rotation position', 
-          !!responseData.requireRelogin
-        );
-      }
-      
-      // Even for successful response, check if we have a digest
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      
-      console.log('Set rotation position succeeded:', responseData);
-      return {
-        digest: responseData.digest,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      console.error('Set rotation position error in client:', error);
-      // Rethrow ZkLoginError as is
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      // Otherwise wrap in a new error
-      throw new ZkLoginError(String(error), false);
-    }
+    return signLocallyWithBuilder({
+      account,
+      resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
+      build: (packageId) =>
+        buildSetRotationPositionTx({ packageId, circleId, memberAddress, position }),
+    });
   }
 
-  /**
-   * Reorder all rotation positions in one transaction
-   * @param account ZkLogin account data
-   * @param circleId The circle ID
-   * @param newOrder Array of member addresses in the desired order
-   * @param network Optional network override (testnet/mainnet)
-   */
   public async reorderRotationPositions(
-    account: AccountData, 
+    account: AccountData,
     circleId: string,
     newOrder: string[],
-    network?: 'testnet' | 'mainnet'
+    network?: NetworkOverride,
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      // Log key information for debugging
-      console.log('ZkLoginClient: Reordering rotation positions with account:', {
-        address: account.userAddr,
-        circleId,
-        newOrderLength: newOrder.length,
-        hasProofPoints: !!account.zkProofs?.proofPoints,
-        hasHeaderBase64: !!account.zkProofs?.headerBase64,
-        maxEpoch: account.maxEpoch,
-        network
-      });
+    return signLocallyWithBuilder({
+      account,
+      network,
+      resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
+      build: (packageId) =>
+        buildReorderRotationPositionsTx({ packageId, circleId, newOrder }),
+    });
+  }
 
-      // Verify the account has valid proof data
-      if (!account.zkProofs?.proofPoints || 
-          !account.zkProofs.issBase64Details || 
-          !account.zkProofs.headerBase64) {
-        throw new ZkLoginError(
-          'Missing required authentication data. Please login again.',
-          true
-        );
-      }
+  public async adminApproveMember(
+    account: AccountData,
+    circleId: string,
+    memberAddress: string,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    return signLocallyWithBuilder({
+      account,
+      resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
+      build: (packageId) =>
+        buildAdminApproveMemberTx({ packageId, circleId, memberAddress }),
+    });
+  }
 
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          action: 'reorderRotationPositions', 
-          account: withoutSigningKey(account),
-          circleId,
-          newOrder,
-          network // Include network parameter for correct chain targeting
-        })
-      });
-      
-      // Try to parse the response even if status is not OK
-      let responseData;
-      try {
-        responseData = await response.json();
-      } catch (parseError) {
-        console.error('Failed to parse response:', parseError);
-        throw new ZkLoginError(`Failed to parse server response: ${response.statusText}`, false);
-      }
-      
-      // Handle authentication errors (401)
-      if (response.status === 401) {
-        console.error('Authentication error:', responseData);
-        throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
-          true
-        );
-      }
-      
-      // Handle server errors (500)
-      if (!response.ok) {
-        console.error('Transaction failed:', responseData);
-        throw new ZkLoginError(
-          responseData.error || 'Transaction failed', 
-          !!responseData.requireRelogin
-        );
-      }
-      
-      // Even for successful response, check if we have a digest
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      
-      console.log('Reorder rotation positions succeeded:', responseData);
-      return {
-        digest: responseData.digest,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      console.error('Reorder rotation positions error in client:', error);
-      // Rethrow ZkLoginError as is
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      // Otherwise wrap in a new error
-      throw new ZkLoginError(String(error), false);
-    }
+  public async adminRemoveMember(
+    account: AccountData,
+    circleId: string,
+    memberAddress: string,
+    walletId: string,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    return signLocallyWithBuilder({
+      account,
+      resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
+      build: (packageId) =>
+        buildAdminRemoveMemberTx({ packageId, circleId, memberAddress, walletId }),
+    });
+  }
+
+  public async adminSetMaxMembers(
+    account: AccountData,
+    circleId: string,
+    newMaxMembers: number,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    return signLocallyWithBuilder({
+      account,
+      resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
+      build: (packageId) =>
+        buildAdminSetMaxMembersTx({ packageId, circleId, newMaxMembers }),
+    });
+  }
+
+  public async toggleAutoSwap(
+    account: AccountData,
+    circleId: string,
+    enabled: boolean,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    return signLocallyWithBuilder({
+      account,
+      resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
+      build: (packageId) => buildToggleAutoSwapTx({ packageId, circleId, enabled }),
+    });
   }
 
   public async adminApproveMembers(
-    account: AccountData, 
+    account: AccountData,
     circleId: string,
-    memberAddresses: string[]
+    memberAddresses: string[],
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      // Log key information for debugging
-      console.log('ZkLoginClient: Approving multiple members with account:', {
-        address: account.userAddr,
-        circleId,
-        memberCount: memberAddresses.length,
-        hasProofPoints: !!account.zkProofs?.proofPoints,
-        hasHeaderBase64: !!account.zkProofs?.headerBase64,
-        maxEpoch: account.maxEpoch
-      });
-
-      // Verify the account has valid proof data
-      if (!account.zkProofs?.proofPoints || 
-          !account.zkProofs.issBase64Details || 
-          !account.zkProofs.headerBase64) {
-        throw new ZkLoginError(
-          'Missing required authentication data. Please login again.',
-          true
-        );
-      }
-
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          action: 'adminApproveMembers', 
-          account: withoutSigningKey(account),
-          circleId,
-          memberAddresses
-        })
-      });
-      
-      // Try to parse the response even if status is not OK
-      let responseData;
-      try {
-        responseData = await response.json();
-      } catch (parseError) {
-        console.error('Failed to parse response:', parseError);
-        throw new ZkLoginError(`Failed to parse server response: ${response.statusText}`, false);
-      }
-      
-      // Handle authentication errors (401)
-      if (response.status === 401) {
-        console.error('Authentication error:', responseData);
-        throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
-          true
-        );
-      }
-      
-      // Handle server errors (500)
-      if (!response.ok) {
-        console.error('Transaction failed:', responseData);
-        throw new ZkLoginError(
-          responseData.error || 'Transaction failed', 
-          !!responseData.requireRelogin
-        );
-      }
-      
-      // Even for successful response, check if we have a digest
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      
-      console.log('Approve multiple members succeeded:', responseData);
-      return {
-        digest: responseData.digest,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      console.error('Approve multiple members error in client:', error);
-      // Rethrow ZkLoginError as is
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      // Otherwise wrap in a new error
-      throw new ZkLoginError(String(error), false);
-    }
+    return signLocallyWithBuilder({
+      account,
+      resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
+      build: (packageId) =>
+        buildAdminApproveMembersTx({ packageId, circleId, memberAddresses }),
+    });
   }
 
-  /**
-   * Trigger the permissionless `trigger_payout<T>` Move function. The
-   * dispatcher accepts a CoinType-specific call (USDC by default) and the
-   * Move function routes USDC-first with a SUI fallback. The previous SUI
-   * → USDC fallback chain has been collapsed into a single call.
-   */
   async adminTriggerPayout(
     account: AccountData,
     circleId: string,
@@ -1500,95 +1198,14 @@ export class ZkLoginClient {
 
   async resumeCycle(
     account: AccountData,
-    circleId: string
+    circleId: string,
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      console.log(`ZkLoginClient: Resuming cycle for circle ${circleId}`);
-
-      // Verify the account has valid proof data
-      if (!account.zkProofs?.proofPoints || 
-          !account.zkProofs.issBase64Details || 
-          !account.zkProofs.headerBase64) {
-        throw new ZkLoginError(
-          'Missing required authentication data. Please login again.',
-          true
-        );
-      }
-
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          action: 'resumeCycle', 
-          account: withoutSigningKey(account),
-          circleId
-        })
-      });
-      
-      // Try to parse the response
-      let responseData;
-      try {
-        responseData = await response.json();
-        console.log('ZkLoginClient: Resume cycle response:', 
-          response.status, response.statusText, responseData);
-      } catch (parseError) {
-        console.error('Failed to parse response:', parseError);
-        throw new ZkLoginError(`Failed to parse server response: ${response.statusText}`, false);
-      }
-      
-      // Handle authentication errors (401)
-      if (response.status === 401) {
-        console.error('Authentication error:', responseData);
-        throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
-          true
-        );
-      }
-      
-      // Handle server errors (500)
-      if (!response.ok) {
-        console.error('Resume cycle failed:', responseData);
-        throw new ZkLoginError(
-          responseData.error || 'Failed to resume cycle', 
-          !!responseData.requireRelogin
-        );
-      }
-      
-      // Even for successful response, check if we have a digest
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      
-      console.log('Resume cycle succeeded:', responseData);
-      return {
-        digest: responseData.digest,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      console.error('Resume cycle error in client:', error);
-      // Rethrow ZkLoginError as is
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      // Otherwise wrap in a new error
-      throw new ZkLoginError(String(error), false);
-    }
+    return signLocallyWithBuilder({
+      account,
+      resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
+      build: (packageId) => buildResumeCycleTx({ packageId, circleId }),
+    });
   }
-
-  // Phase 2 cleanup: payoutSecurityDepositSui, payoutSecurityDepositStablecoin,
-  // addCetusLiquidity, removeCetusLiquidity, collectCetusFees, configureCetusYield,
-  // and rebalanceCetusPosition were removed. They wrapped Move entrypoints that
-  // were deleted in Phase 1 (admin_payout_security_deposit_*, the entire
-  // njangi_yield_integration module). Refunds now run through the recovery
-  // path in njangi_circles, and the yield product line is out of scope.
-
-  // ------------------------------------------------------------------
-  // Phase 5: CycleEscrow wrappers default to the client-side zkLogin
-  // signer (ephemeral key stays in the browser); they only fall back to
-  // the server-signing API when the sessionStorage signer session hasn't
-  // been populated yet. That keeps the legacy admin surfaces working
-  // while giving member-facing flows a non-custodial default.
-  // ------------------------------------------------------------------
 
   async openCycleEscrow(
     account: AccountData,
