@@ -63,6 +63,39 @@ async function tryClientSideSigner(
 }
 
 /**
+ * Attempt the sponsored-gas path, returning null when it is unavailable.
+ *
+ * Sponsorship is a subsidy, never a precondition: every "no" here — disabled,
+ * over caps, admin not premium, target not allowlisted, verification failed —
+ * falls through to the caller paying their own gas. Bundled here so the
+ * sponsored and self-paid paths share one builder and cannot drift.
+ */
+async function trySponsoredGas(args: {
+  action: string;
+  build: (txb: Transaction, client: import('@mysten/sui/client').SuiClient) => void | Promise<void>;
+  network: NetworkOverride;
+  context: Record<string, unknown>;
+}): Promise<{ digest: string } | null> {
+  if (typeof window === 'undefined') return null;
+  try {
+    const [{ SuiClient }, { trySponsoredExecute }] = await Promise.all([
+      import('@mysten/sui/client'),
+      import('@/lib/sponsored-tx-client'),
+    ]);
+    const client = new SuiClient({ url: getNetworkConfig(args.network).rpcUrl });
+    return await trySponsoredExecute({
+      action: args.action,
+      buildKind: (txb) => args.build(txb, client),
+      client,
+      context: args.context,
+    });
+  } catch (err) {
+    console.warn('[zkLoginClient] sponsored gas unavailable', err);
+    return null;
+  }
+}
+
+/**
  * Strip signing material before an account goes over the wire.
  *
  * The server identifies the caller from the `session-id` cookie and reads
@@ -1583,6 +1616,17 @@ export class ZkLoginClient {
     if (client) {
       const { buildContributeTx } = await import('./cycle-escrow-service');
       const build = buildContributeTx({ network, escrowId, paymentCoinId, coinType });
+
+      // Try sponsored gas first (Premium admin benefit). Declining is normal
+      // and silent — the member pays their own gas rather than being blocked.
+      const sponsored = await trySponsoredGas({
+        action: 'contributeToCycleEscrow',
+        build,
+        network,
+        context: { escrowId, coinType, usesGasCoinForValue: false },
+      });
+      if (sponsored) return { digest: sponsored.digest };
+
       const res = await client.signAndExecute({ build, gasBudget: 100_000_000 });
       return { digest: res.digest };
     }

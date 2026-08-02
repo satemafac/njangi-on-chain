@@ -3354,42 +3354,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 });
               };
 
-              // Gas sponsorship (Premium admin benefit) for the join deposit —
-              // the first action a brand-new, zero-SUI member takes. Falls back
-              // to self-paid gas on any failure; join is never blocked.
+              // Self-paid only. Sponsorship moved to the client protocol
+              // (/api/sponsor/prepare + execute) because the server-side
+              // version minted the USER's signature from a server-held key —
+              // Enoki supplied only the gas coin, so that path was exactly as
+              // custodial as the unsponsored one.
+              //
+              // This branch is reachable only by pre-Phase-1 sessions, which
+              // SERVER_SIGNING_ACTIONS already rejects for anything newer and
+              // which expire within a Sui epoch. Those sessions pay their own
+              // gas for the short remainder of their life rather than keeping a
+              // server-signing path alive for a subsidy.
               try {
-                const decision = await resolveEscrowSponsorship({
-                  sub: session.account.sub,
-                  escrowId: circleId, // circleId supplied directly below
-                  circleId,
-                  coinType: USDC_COIN_TYPE,
-                  packageId: packageIdToUse,
-                  network: getCurrentNetwork(),
-                  usesGasCoinForValue: false,
-                });
-                if (decision.sponsor) {
-                  const sponsoredResult = await instance.sendSponsoredTransaction(
-                    session.account,
-                    buildSecurityDeposit,
-                  );
-                  txResult = sponsoredResult;
-                  await recordSponsoredUsage({
-                    sub: session.account.sub,
-                    userAddress: session.account.userAddr,
-                    circleId,
-                    action: 'paySecurityDeposit',
-                    digest: sponsoredResult.digest,
-                  });
-                } else {
-                  txResult = await instance.sendTransaction(
-                    session.account,
-                    buildSecurityDeposit,
-                    { gasBudget: 120000000 }
-                  );
-                }
+                txResult = await instance.sendTransaction(
+                  session.account,
+                  buildSecurityDeposit,
+                  { gasBudget: 120000000 }
+                );
               } catch (sponsorErr) {
                 console.error(
-                  'paySecurityDeposit: sponsored path failed, falling back to self-paid gas',
+                  'paySecurityDeposit: transaction failed',
                   sponsorErr,
                 );
                 txResult = await instance.sendTransaction(
@@ -5689,52 +5673,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           };
 
-          // Gas sponsorship (Premium admin benefit). Non-custodial: the user
-          // still signs; the sponsor only pays gas. Any failure falls back to
-          // self-paid gas so a member is NEVER blocked from contributing.
-          let txResult: { digest: string; status: string; gasUsed?: unknown };
-          let sponsored = false;
-          try {
-            const decision = await resolveEscrowSponsorship({
-              sub: session.account.sub,
-              escrowId,
-              coinType,
-              packageId: packageIdToUse,
-              network: getCurrentNetwork(),
-              usesGasCoinForValue: false, // explicit payment coin object, not txb.gas
-            });
-            if (decision.sponsor) {
-              const sponsoredResult = await instance.sendSponsoredTransaction(
-                session.account,
-                buildContribute,
-              );
-              txResult = sponsoredResult;
-              sponsored = true;
-              await recordSponsoredUsage({
-                sub: session.account.sub,
-                userAddress: session.account.userAddr,
-                circleId: escrowId,
-                action: 'contributeToCycleEscrow',
-                digest: sponsoredResult.digest,
-              });
-            } else {
-              txResult = await instance.sendTransaction(
-                session.account,
-                buildContribute,
-                { gasBudget: 80_000_000 },
-              );
-            }
-          } catch (sponsorErr) {
-            console.error(
-              'contributeToCycleEscrow: sponsored path failed, falling back to self-paid gas',
-              sponsorErr,
-            );
-            txResult = await instance.sendTransaction(
+          // Self-paid only — see the note on paySecurityDeposit above.
+          // Sponsorship now runs entirely client-side so the user's signature
+          // is never minted here.
+          const sponsored = false;
+          const txResult: { digest: string; status: string; gasUsed?: unknown } =
+            await instance.sendTransaction(
               session.account,
               buildContribute,
               { gasBudget: 80_000_000 },
             );
-          }
 
           return res.status(200).json({
             digest: txResult.digest,
