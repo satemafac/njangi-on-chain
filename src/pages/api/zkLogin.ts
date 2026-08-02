@@ -51,13 +51,48 @@ import {
 } from '@/lib/entitlement-gate';
 import { screenAddress, sanctionsErrorBody } from '@/lib/sanctions';
 import { isEmbargoedHeaders, embargoErrorBody } from '@/lib/embargo';
-import { resolveEscrowSponsorship } from '@/lib/gas-sponsorship-eligibility';
-import { recordSponsoredUsage } from '@/lib/gas-sponsorship';
+import {
+  disabledResponse,
+  isLegacyRailEnabled,
+  isSwapsEnabled,
+} from '@/config/feature-flags';
 
 // Add at the top with other imports
 interface RPCError extends Error {
   code?: number;
 }
+
+/**
+ * Embedded Cetus swap routing, gated by SWAPS_ENABLED (default off).
+ *
+ * Nothing here holds user funds — a blocked swap leaves the member with the
+ * coins they already had — so the whole surface can be closed without
+ * stranding anything.
+ */
+const SWAP_ACTIONS = new Set([
+  'executeStablecoinSwap',
+  'swapAndDepositCetus',
+  'swapAndDepositDeepBook',
+  'configureStablecoinSwap',
+  'toggleAutoSwap',
+  'executeSwapOnly',
+]);
+
+/**
+ * Legacy custody/payments rail, gated by LEGACY_RAIL_ENABLED (default off).
+ *
+ * Deliberately CONTRIBUTIONS ONLY. Payouts (adminTriggerPayout) and the
+ * recovery paths (executeRecovery, triggerAutoRelease, emergency stop voting)
+ * are NOT listed and must never be: money already committed to a legacy
+ * circle has to remain claimable after the rail stops accepting new deposits.
+ * A kill switch that traps funds is a worse compliance outcome than the
+ * feature it was meant to retire.
+ */
+const LEGACY_RAIL_ACTIONS = new Set([
+  'contributeFromCustody',
+  'depositUsdcDirect',
+  'depositStablecoin',
+]);
 
 /**
  * Every dispatcher action that signs a transaction with a server-held key.
@@ -913,6 +948,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const instance = enokiZkLoginService;
     // Do not initialize Cetus SDK here since we're not using it directly
+
+    // Capability gates. Enforced here, ahead of the dispatcher, so a disabled
+    // feature is unreachable by direct API call and not merely hidden in the
+    // UI — which is how the Coinbase ramp stayed open while appearing off.
+    if (SWAP_ACTIONS.has(action) && !isSwapsEnabled()) {
+      return res.status(503).json(
+        disabledResponse(
+          'swaps',
+          'Token swaps are disabled. Fund your circle with the contribution currency directly.',
+        ),
+      );
+    }
+    if (LEGACY_RAIL_ACTIONS.has(action) && !isLegacyRailEnabled()) {
+      return res.status(503).json(
+        disabledResponse(
+          'legacy_rail',
+          'This contribution route has been retired. Please use the current round escrow.',
+        ),
+      );
+    }
 
     // Sessions created after the ephemeral key moved into the browser carry no
     // server-held secret, so every server-signing action below is structurally

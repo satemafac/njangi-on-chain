@@ -26,6 +26,7 @@ import { discoverMemberCircleIds } from '@/lib/membership-discovery';
 import { readObjects } from '@/lib/sui-read';
 import { cetusService } from '@/lib/cetus-service';
 import { ZkLoginClient } from '@/services/zkLoginClient';
+import { isSwapsEnabled } from '@/config/feature-flags';
 import { getCircleConfigFieldsByObjectId, getCircleConfigObjectId } from '@/lib/circle-config';
 import { clearWalletBalanceCache, refreshWalletBalances } from '@/lib/wallet';
 import type { CoinbaseAssetIntent } from '@/types/coinbase-onramp';
@@ -7094,7 +7095,10 @@ export default function Dashboard() {
             </aside>
           </div>
 
-          <div className={`${primarySurfaceClass} overflow-hidden`}>
+          {/* Hidden when swaps are off so members aren't offered an action the
+              API will refuse. The server gate is the enforcement; this is
+              ergonomics. */}
+          <div className={`${primarySurfaceClass} overflow-hidden ${isSwapsEnabled() ? '' : 'hidden'}`}>
             <div className="border-b border-stone-200 px-8 py-6">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>

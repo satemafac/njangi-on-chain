@@ -93,6 +93,45 @@ describe('POST /api/onramp/coinbase/session', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     delete process.env.COINBASE_ONRAMP_ALLOWED_ORIGINS;
+    // The provider flag now gates this endpoint server-side. It defaults OFF,
+    // so every test exercising real behaviour must opt in explicitly — the
+    // disabled path is covered separately below.
+    process.env.NEXT_PUBLIC_COINBASE_ONRAMP_ENABLED = 'true';
+  });
+
+  afterEach(() => {
+    delete process.env.NEXT_PUBLIC_COINBASE_ONRAMP_ENABLED;
+  });
+
+  it('refuses when the provider flag is off, even on a valid request', async () => {
+    // Regression: this endpoint used to ignore its own flag entirely. The flag
+    // hid the launcher in RampPicker while the route stayed callable directly,
+    // so the ramp was reachable in an environment that reported it disabled.
+    delete process.env.NEXT_PUBLIC_COINBASE_ONRAMP_ENABLED;
+    mockCreateSessionToken.mockResolvedValue({
+      token: 'session-token',
+      channelId: 'channel-1',
+      assetIntent: 'USDC_ON_SUI',
+    });
+
+    const req = createMockRequest({
+      body: {
+        walletAddress:
+          '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd',
+        preferredAssetIntent: 'USDC_ON_SUI',
+        country: 'US',
+      },
+    });
+    const res = createMockResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toEqual(
+      expect.objectContaining({ error: 'COINBASE_DISABLED' }),
+    );
+    // The point of a server-side gate: no session token is ever minted.
+    expect(mockCreateSessionToken).not.toHaveBeenCalled();
   });
 
   it('creates session on happy path', async () => {

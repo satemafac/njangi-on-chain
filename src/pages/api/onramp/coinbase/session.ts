@@ -12,6 +12,7 @@ import {
 } from '@/lib/onramp-logging';
 import { isSanctionedCountry } from '@/lib/ramp-geo';
 import { getTrustedClientIp } from '@/lib/trusted-client-ip';
+import { isRampEnabled } from '@/config/feature-flags';
 
 type ErrorResponse = {
   provider: 'coinbase';
@@ -231,6 +232,20 @@ export default async function handler(
       error: 'METHOD_NOT_ALLOWED',
       message: 'Method not allowed',
       fallbackProvider: 'moonpay',
+    });
+  }
+
+  // This endpoint previously never consulted NEXT_PUBLIC_COINBASE_ONRAMP_ENABLED
+  // — the flag only hid the launcher in RampPicker, so the ramp stayed
+  // reachable by direct call while the UI claimed it was off. MoonPay and
+  // Transak already enforced theirs here; Coinbase now matches.
+  if (!isRampEnabled('coinbase')) {
+    logger.warn('session_provider_disabled');
+    return res.status(503).json({
+      provider: 'coinbase',
+      error: 'COINBASE_DISABLED',
+      message: 'Coinbase onramp is not enabled in this environment.',
+      fallbackProvider: null,
     });
   }
 

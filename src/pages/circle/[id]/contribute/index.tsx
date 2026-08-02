@@ -17,6 +17,7 @@ import {
 } from '../../../../services/network-config';
 import { cetusService } from '../../../../lib/cetus-service';
 import { ZkLoginClient } from '@/services/zkLoginClient';
+import { isSwapsEnabled } from '@/config/feature-flags';
 import RampPicker from '@/components/RampPicker';
 import CycleEscrowPanel from '@/components/CycleEscrowPanel';
 import { resolveCircleSettlementCoin } from '@/lib/circle-settlement';
@@ -45,7 +46,10 @@ const DEFAULT_SLIPPAGE = 0.5; // Default slippage percentage
 const BUFFER_PERCENTAGE = 1.5; // Additional buffer percentage for swap rate fluctuations
 const TOKEN_ASSIST_SWAP_GAS_RESERVE_SUI = 0.005;
 const TOKEN_ASSIST_EXTRA_OUTPUT_BUFFER_PERCENT = 0.5;
-const ENABLE_SWAP_AND_DEPOSIT_FORM = process.env.NEXT_PUBLIC_ENABLE_SWAP_AND_DEPOSIT_FORM === 'true';
+// Requires BOTH its own opt-in and the global swaps capability, so the v1
+// swap kill switch cannot be bypassed by leaving this legacy flag set.
+const ENABLE_SWAP_AND_DEPOSIT_FORM =
+  process.env.NEXT_PUBLIC_ENABLE_SWAP_AND_DEPOSIT_FORM === 'true' && isSwapsEnabled();
 const ONE_CLICK_GAS_RESERVE_SUI = 0.005;
 const onrampProviderFlag = normalizeOnrampProviderFlag(
   process.env.NEXT_PUBLIC_ONRAMP_PROVIDER,
