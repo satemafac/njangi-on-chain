@@ -3,6 +3,7 @@ import type { OAuthProvider } from './zkLoginService';
 import { Transaction } from '@mysten/sui/transactions';
 import {
   buildBatchHeartbeatAdminLivenessTx,
+  buildClaimMembershipTx,
   buildCreateCircleTx,
   buildExecuteRecoveryTx,
   buildHeartbeatAdminLivenessTx,
@@ -1635,6 +1636,36 @@ export class ZkLoginClient {
       paymentCoinId,
       coinType,
     });
+  }
+
+  /**
+   * Mint the caller's missing membership receipts so their circles stay
+   * discoverable without an event scan.
+   *
+   * Signed client-side and batched into one transaction. Aborts on-chain
+   * (ENotMember) for any circle the caller isn't actually a member of, so this
+   * cannot be used to fabricate membership.
+   */
+  async claimMembership(
+    account: AccountData,
+    circles: Array<{ packageId: string; circleId: string }>,
+  ): Promise<{ digest: string; claimed: number }> {
+    this.assertTransactionAccount(account);
+    if (circles.length === 0) {
+      throw new ZkLoginError('No circles to restore.', false);
+    }
+
+    const signer = await tryClientSideSigner();
+    if (!signer) {
+      throw new ZkLoginError(
+        'Your signing session is unavailable. Please sign in again.',
+        true,
+      );
+    }
+
+    const tx = buildClaimMembershipTx({ circles });
+    const { digest } = await signer.signAndExecute({ transaction: tx });
+    return { digest, claimed: circles.length };
   }
 
   async finalizeAndRedeemCycleEscrow(

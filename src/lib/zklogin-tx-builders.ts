@@ -405,3 +405,50 @@ export function buildBatchHeartbeatAdminLivenessTx({
 
   return tx;
 }
+
+export interface ClaimMembershipBuilderInput {
+  /** One entry per circle whose receipt is missing. */
+  circles: Array<{ packageId: string; circleId: string }>;
+}
+
+/**
+ * Mints the caller's own `CircleMembership` receipts.
+ *
+ * Receipts make a circle discoverable through `getOwnedObjects`, which is
+ * server-side filtered and works on any RPC endpoint. Circles predating the
+ * receipt upgrade have none, so they are only findable by scanning the
+ * `CircleCreated` / `MemberJoined` event streams — and event history is the
+ * one thing replacement RPC providers do NOT reliably serve (publicnode and
+ * suiscan both fail with "Could not find the referenced transaction events";
+ * only blockvision answers, and it rate-limits). A circle without a receipt is
+ * therefore one rate-limit away from vanishing from the dashboard.
+ *
+ * `claim_membership` is permissionless for a current member and aborts with
+ * ENotMember otherwise, so this can only ever mint the caller's own receipts.
+ * Duplicates are harmless — discovery dedups by circle_id and re-verifies
+ * against the circle's live members table.
+ *
+ * Batched into one transaction so restoring N circles costs one signature.
+ */
+export function buildClaimMembershipTx({
+  circles,
+}: ClaimMembershipBuilderInput): Transaction {
+  if (!Array.isArray(circles) || circles.length === 0) {
+    throw new Error('At least one circle target is required.');
+  }
+
+  const tx = new Transaction();
+  tx.setGasBudget(RECOVERY_VOTE_GAS_BUDGET * circles.length);
+
+  circles.forEach(({ packageId, circleId }) => {
+    tx.moveCall({
+      target: `${normalizeRequiredPackageId(packageId)}::njangi_circles::claim_membership`,
+      arguments: [
+        tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+        tx.object(CLOCK_OBJECT_ID),
+      ],
+    });
+  });
+
+  return tx;
+}

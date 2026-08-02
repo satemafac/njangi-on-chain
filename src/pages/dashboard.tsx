@@ -1789,6 +1789,10 @@ export default function Dashboard() {
   const [isSwapSubmitting, setIsSwapSubmitting] = useState(false);
   const [lastSwapDigest, setLastSwapDigest] = useState<string | null>(null);
   const [isManualSwapOpen, setIsManualSwapOpen] = useState(false);
+  const [circlesMissingReceipts, setCirclesMissingReceipts] = useState<
+    Array<{ packageId: string; circleId: string }>
+  >([]);
+  const [isRestoringCircles, setIsRestoringCircles] = useState(false);
 
   // Keep the confirmation modal state
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
@@ -3757,6 +3761,28 @@ export default function Dashboard() {
         }
       } catch (membershipError) {
         console.warn('Membership receipt discovery failed (non-fatal, falling back to event scan):', membershipError);
+      }
+
+      // Circles we know about ONLY because the event scan found them hold no
+      // membership receipt. That makes them fragile: `getOwnedObjects` works on
+      // every RPC endpoint, but event history does not — publicnode and suiscan
+      // both refuse it, leaving blockvision as the sole source and it
+      // rate-limits. Such a circle can silently vanish from this dashboard on a
+      // bad RPC day. Offer a one-signature backfill instead of leaving it to
+      // luck. Only current-lineage circles qualify; retired packages have no
+      // claim_membership to call.
+      try {
+        const receiptSet = new Set(await discoverMemberCircleIds(userAddress, { network: currentNetwork }));
+        const currentPackageId = getCurrentPackageId();
+        const missing = Array.from(allUserCircleIds)
+          .filter((cid) => !receiptSet.has(cid))
+          .map((circleId) => ({ packageId: currentPackageId, circleId }));
+        setCirclesMissingReceipts(missing);
+        if (missing.length > 0) {
+          console.log(`🎟️ ${missing.length} circle(s) have no membership receipt and depend on the event scan`);
+        }
+      } catch {
+        setCirclesMissingReceipts([]);
       }
 
       console.log(`Found ${allUserCircleIds.size} unique circles for user:`, Array.from(allUserCircleIds));
@@ -7094,6 +7120,54 @@ export default function Dashboard() {
               </div>
             </aside>
           </div>
+
+          {circlesMissingReceipts.length > 0 && (
+            <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-6 py-5">
+              <h3 className="text-base font-semibold text-amber-900">
+                Make {circlesMissingReceipts.length === 1 ? 'a circle' : 'these circles'} load reliably
+              </h3>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-amber-800">
+                {circlesMissingReceipts.length === 1 ? 'One of your circles was' : `${circlesMissingReceipts.length} of your circles were`}{' '}
+                created before we started issuing membership receipts, so finding
+                {circlesMissingReceipts.length === 1 ? ' it' : ' them'} depends on a
+                network history lookup that is not always available. Claiming your
+                receipt fixes that permanently — it is a one-off, and you can only
+                ever claim your own.
+              </p>
+              <button
+                type="button"
+                disabled={isRestoringCircles}
+                onClick={async () => {
+                  if (!account) return;
+                  setIsRestoringCircles(true);
+                  const toastId = 'restore-circles';
+                  toast.loading('Claiming your membership receipts...', { id: toastId });
+                  try {
+                    const { claimed } = await new ZkLoginClient().claimMembership(
+                      account,
+                      circlesMissingReceipts,
+                    );
+                    setCirclesMissingReceipts([]);
+                    toast.success(
+                      `Restored ${claimed} circle${claimed === 1 ? '' : 's'}. They'll load reliably from now on.`,
+                      { id: toastId },
+                    );
+                    await fetchUserCircles();
+                  } catch (err) {
+                    toast.error(
+                      err instanceof Error ? err.message : 'Could not claim receipts.',
+                      { id: toastId },
+                    );
+                  } finally {
+                    setIsRestoringCircles(false);
+                  }
+                }}
+                className={`${secondaryActionClass} mt-4`}
+              >
+                {isRestoringCircles ? 'Claiming...' : 'Claim membership receipts'}
+              </button>
+            </div>
+          )}
 
           {/* Hidden when swaps are off so members aren't offered an action the
               API will refuse. The server gate is the enforcement; this is
