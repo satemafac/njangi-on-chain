@@ -30,9 +30,6 @@ import { getCirclePackageId, getSuiClientFromPool } from '../../../../services/c
 import {
   getCurrentRpcUrl,
   getCurrentNetwork,
-  getCurrentCoinTypes,
-  getCurrentTokens,
-  getCurrentEmberConfig,
 } from '../../../../services/network-config';
 import RotationOrderList from '../../../../components/RotationOrderList';
 import ConfirmationModal from '../../../../components/ConfirmationModal';
@@ -44,8 +41,6 @@ import { humanizeErrorMessage } from '@/lib/user-error-messages';
 import {
   ZkLoginClient,
   ZkLoginError,
-  type EmberSourceAsset,
-  type EmberOperationLifecycle,
 } from '../../../../services/zkLoginClient';
 import WhatsAppCircleIntegration from '../../../../components/WhatsAppCircleIntegration';
 import CycleEscrowPanel from '@/components/CycleEscrowPanel';
@@ -82,12 +77,6 @@ interface Circle {
     stablecoinBalance: number;
     suiBalance: number;
     securityDeposits?: number;
-    suiUsdeBalance?: number;
-    emberReceiptBalance?: number;
-    emberPendingRedeemShares?: number;
-    emberPendingRedeemRequests?: number;
-    emberGlobalPendingRequests?: number;
-    emberHasPendingRedemption?: boolean;
   };
 }
 
@@ -168,16 +157,6 @@ const extractNestedBalance = (value: unknown): bigint => {
   return 0n;
 };
 
-const extractVectorLength = (value: unknown): number => {
-  if (Array.isArray(value)) return value.length;
-  if (value && typeof value === 'object' && 'fields' in value) {
-    const fields = (value as { fields?: Record<string, unknown> }).fields;
-    const vec = fields?.vec;
-    if (Array.isArray(vec)) return vec.length;
-  }
-  return 0;
-};
-
 const toDisplayAmount = (value: bigint, decimals: number): number => {
   if (value <= 0n) return 0;
   return Number(value) / 10 ** decimals;
@@ -187,24 +166,6 @@ const formatTokenAmount = (value: number, maxFractionDigits: number): string => 
   if (!Number.isFinite(value)) return '0';
   const fixed = value.toFixed(maxFractionDigits);
   return fixed.replace(/\.?0+$/, '');
-};
-
-const decimalToBaseUnits = (amount: string, decimals: number): bigint => {
-  const normalized = amount.trim();
-  if (!normalized) return 0n;
-  if (!/^\d+(\.\d+)?$/.test(normalized)) {
-    throw new Error('Amount must be a positive number');
-  }
-
-  const [wholePart, fractionalPart = ''] = normalized.split('.');
-  const normalizedFraction = fractionalPart.slice(0, decimals).padEnd(decimals, '0');
-  const full = `${wholePart}${normalizedFraction}`.replace(/^0+/, '') || '0';
-  return BigInt(full);
-};
-
-const formatRawTokenAmount = (rawAmount: string, decimals: number): string => {
-  const value = toDisplayAmount(parseU64Like(rawAmount), decimals);
-  return value.toLocaleString(undefined, { maximumFractionDigits: Math.min(9, decimals) });
 };
 
 const normalizeMoveTypeKey = (value: string): string => value.trim().toLowerCase().replace(/^0x/, '');
@@ -443,28 +404,6 @@ const checkMemberDepositStatus = async (
 
 // Constants for time calculations
 const MS_PER_DAY = 86400000; // 24 * 60 * 60 * 1000
-const SOURCE_ASSET_DECIMALS: Record<EmberSourceAsset, number> = {
-  SUI: 9,
-  USDC: 6,
-  USDT: 6,
-  SUI_USDE: 9,
-};
-
-const SOURCE_ASSET_LABELS: Record<EmberSourceAsset, string> = {
-  SUI: 'SUI',
-  USDC: 'USDC',
-  USDT: 'USDT',
-  SUI_USDE: 'suiUSDe',
-};
-
-const EMBER_SOURCE_PRIORITY: EmberSourceAsset[] = ['USDC', 'SUI_USDE', 'USDT', 'SUI'];
-
-const formatAmountForInput = (amount: number, maxFractionDigits: number): string => {
-  if (!Number.isFinite(amount) || amount <= 0) return '';
-  const fixed = amount.toFixed(maxFractionDigits);
-  return fixed.replace(/\.?0+$/, '');
-};
-
 // Define types for SUI object field values
 type SuiFieldValue = string | number | boolean | null | undefined | SuiFieldValue[] | Record<string, unknown>;
 
@@ -615,18 +554,6 @@ interface CircleCreatedEvent {
   security_deposit_usd: string;
   max_members: string;
   cycle_length: string;
-}
-
-interface EmberActionSnapshot {
-  operation: 'deposit' | 'redemption_request';
-  digest: string;
-  status?: string;
-  lifecycle: EmberOperationLifecycle;
-  timestampMs: number;
-  sourceAsset?: EmberSourceAsset;
-  sourceAmountRaw?: string;
-  receiptAmountRaw?: string;
-  note?: string;
 }
 
 // Skeleton component for loading state
@@ -797,78 +724,6 @@ export default function ManageCircle() {
     actions: null,
     tools: null,
   });
-
-  const [emberSourceAsset, setEmberSourceAsset] = useState<EmberSourceAsset>('SUI_USDE');
-  const [emberDepositAmount, setEmberDepositAmount] = useState('');
-  const [emberRedeemAmount, setEmberRedeemAmount] = useState('');
-  const [isSubmittingEmberDeposit, setIsSubmittingEmberDeposit] = useState(false);
-  const [isSubmittingEmberRedemption, setIsSubmittingEmberRedemption] = useState(false);
-  const [lastEmberDigest, setLastEmberDigest] = useState<string | null>(null);
-  const [emberActionSnapshot, setEmberActionSnapshot] = useState<EmberActionSnapshot | null>(null);
-  const [emberActionHistory, setEmberActionHistory] = useState<EmberActionSnapshot[]>([]);
-
-  const emberSourceBalances = useMemo<Record<EmberSourceAsset, number>>(() => {
-    const stablecoinType = (circle?.custody?.stablecoinType || '').toUpperCase();
-    const stablecoinBalance = circle?.custody?.stablecoinBalance || 0;
-    return {
-      SUI: circle?.custody?.suiBalance || 0,
-      USDC: stablecoinType === 'USDC' ? stablecoinBalance : 0,
-      USDT: stablecoinType === 'USDT' ? stablecoinBalance : 0,
-      SUI_USDE: circle?.custody?.suiUsdeBalance || 0,
-    };
-  }, [
-    circle?.custody?.stablecoinType,
-    circle?.custody?.stablecoinBalance,
-    circle?.custody?.suiBalance,
-    circle?.custody?.suiUsdeBalance,
-  ]);
-
-  const emberDepositSourceCards = useMemo(() => {
-    return EMBER_SOURCE_PRIORITY.map((asset) => {
-      const balance = emberSourceBalances[asset] || 0;
-      const requiresSwap = asset !== 'SUI_USDE';
-      const routeSummary = requiresSwap
-        ? `${SOURCE_ASSET_LABELS[asset]} -> suiUSDe -> Ember Vault`
-        : 'suiUSDe -> Ember Vault';
-      return {
-        asset,
-        balance,
-        available: balance > 0,
-        label: SOURCE_ASSET_LABELS[asset],
-        requiresSwap,
-        routeSummary,
-      };
-    });
-  }, [emberSourceBalances]);
-
-  const recommendedEmberSource = useMemo<EmberSourceAsset | null>(() => {
-    const available = emberDepositSourceCards.find((card) => card.available);
-    return available?.asset || null;
-  }, [emberDepositSourceCards]);
-
-  const selectedEmberSourceCard = useMemo(() => {
-    return emberDepositSourceCards.find((card) => card.asset === emberSourceAsset) || emberDepositSourceCards[0];
-  }, [emberDepositSourceCards, emberSourceAsset]);
-
-  const emberDepositPrimaryCta = selectedEmberSourceCard?.requiresSwap
-    ? `Convert ${selectedEmberSourceCard.label} to suiUSDe and Deposit`
-    : 'Deposit suiUSDe to Ember Vault';
-
-  const emberDepositDisabledReason = !circle?.custody?.walletId
-    ? 'Custody wallet is unavailable.'
-    : !circle?.isActive
-      ? 'Circle must be active to deploy funds.'
-      : circle?.paused
-        ? 'Circle is paused. Resume before deploying.'
-        : (selectedEmberSourceCard?.balance || 0) <= 0
-          ? `No ${selectedEmberSourceCard?.label || 'source'} balance available.`
-          : null;
-
-  useEffect(() => {
-    if (!recommendedEmberSource) return;
-    if ((emberSourceBalances[emberSourceAsset] || 0) > 0) return;
-    setEmberSourceAsset(recommendedEmberSource);
-  }, [recommendedEmberSource, emberSourceBalances, emberSourceAsset]);
 
   useEffect(() => {
     if (authLoading) {
@@ -1412,17 +1267,10 @@ export default function ManageCircle() {
           const walletId = (custodyEvent?.parsedJson as { wallet_id?: string })?.wallet_id;
           
           if (walletId) {
-              const emberConfig = getCurrentEmberConfig();
-              const emberVaultId = emberConfig.suiUsdeVaultId || '';
-              const shouldLoadEmberVaultState = getCurrentNetwork() === 'mainnet' && !!emberVaultId;
-
               // Parallel fetch: wallet data and dynamic fields
-              const [walletData, walletDynamicFields, emberVaultData] = await Promise.all([
+              const [walletData, walletDynamicFields] = await Promise.all([
                 client.getObject({ id: walletId, options: { showContent: true } }),
-                client.getDynamicFields({ parentId: walletId }),
-                shouldLoadEmberVaultState
-                  ? client.getObject({ id: emberVaultId, options: { showContent: true } })
-                  : Promise.resolve(null)
+                client.getDynamicFields({ parentId: walletId })
               ]);
             if (walletData.data?.content && 'fields' in walletData.data.content) {
                   const wf = walletData.data.content.fields as Record<string, SuiFieldValue>; 
@@ -1489,77 +1337,6 @@ export default function ManageCircle() {
                     stablecoinBalance - stablecoinSecurityDeposits
                   );
 
-                  const coinTypes = getCurrentCoinTypes();
-                  const tokens = getCurrentTokens();
-                  const suiUsdeCoinType = coinTypes.SUI_USDE || tokens.SUI_USDE || '';
-                  const emberReceiptCoinType = emberConfig.receiptCoinType || '';
-
-                  const [suiUsdeBalanceRaw, emberReceiptBalanceRaw] = await Promise.all([
-                    readCustodyCoinBalance(client, dynamicFields, suiUsdeCoinType),
-                    readCustodyCoinBalance(client, dynamicFields, emberReceiptCoinType)
-                  ]);
-
-                  let emberGlobalPendingRequests = 0;
-                  let emberPendingRedeemSharesRaw = 0n;
-                  let emberPendingRedeemRequests = 0;
-
-                  if (emberVaultData && emberVaultData.data?.content && 'fields' in emberVaultData.data.content) {
-                    const vaultFields = emberVaultData.data.content.fields as Record<string, unknown>;
-                    const pendingWithdrawals = vaultFields.pending_withdrawals &&
-                      typeof vaultFields.pending_withdrawals === 'object' &&
-                      vaultFields.pending_withdrawals !== null &&
-                      'fields' in vaultFields.pending_withdrawals
-                        ? (vaultFields.pending_withdrawals as { fields: Record<string, unknown> }).fields
-                        : null;
-
-                    const pendingTable = pendingWithdrawals?.table &&
-                      typeof pendingWithdrawals.table === 'object' &&
-                      pendingWithdrawals.table !== null &&
-                      'fields' in pendingWithdrawals.table
-                        ? (pendingWithdrawals.table as { fields: Record<string, unknown> }).fields
-                        : null;
-
-                    emberGlobalPendingRequests = Number(parseU64Like(pendingTable?.size));
-
-                    const accountsField = vaultFields.accounts &&
-                      typeof vaultFields.accounts === 'object' &&
-                      vaultFields.accounts !== null &&
-                      'fields' in vaultFields.accounts
-                        ? (vaultFields.accounts as { fields: Record<string, unknown> }).fields
-                        : null;
-                    const accountsId = accountsField?.id &&
-                      typeof accountsField.id === 'object' &&
-                      accountsField.id !== null &&
-                      'id' in accountsField.id
-                        ? ((accountsField.id as { id?: string }).id || '')
-                        : '';
-
-                    const circleAdminAddress = typeof fields.admin === 'string' ? fields.admin : '';
-                    if (accountsId && circleAdminAddress) {
-                      try {
-                        const accountField = await client.getDynamicFieldObject({
-                          parentId: accountsId,
-                          name: { type: 'address', value: circleAdminAddress }
-                        });
-
-                        if (accountField.data?.content && 'fields' in accountField.data.content) {
-                          const accountWrapper = accountField.data.content.fields as Record<string, unknown>;
-                          const accountFields = accountWrapper.value &&
-                            typeof accountWrapper.value === 'object' &&
-                            accountWrapper.value !== null &&
-                            'fields' in accountWrapper.value
-                              ? (accountWrapper.value as { fields: Record<string, unknown> }).fields
-                              : accountWrapper;
-
-                          emberPendingRedeemSharesRaw = parseU64Like(accountFields.total_pending_withdrawal_shares);
-                          emberPendingRedeemRequests = extractVectorLength(accountFields.pending_withdrawal_requests);
-                        }
-                      } catch (error) {
-                        debugLog('No Ember account pending-redemption record found for admin yet', error);
-                      }
-                    }
-                  }
-                  
                   debugLog('Custody wallet info', {
                     walletId: shortenAddress(walletId),
                     contributionsBalance,
@@ -1585,13 +1362,6 @@ export default function ManageCircle() {
                       stablecoinBalance,
                       suiBalance: contributionsBalance, // This is for regular contributions
                       securityDeposits: securityDeposits > 0 ? securityDeposits : stablecoinSecurityDeposits,
-                      suiUsdeBalance: toDisplayAmount(suiUsdeBalanceRaw, 9),
-                      emberReceiptBalance: toDisplayAmount(emberReceiptBalanceRaw, 9),
-                      emberPendingRedeemShares: toDisplayAmount(emberPendingRedeemSharesRaw, 9),
-                      emberPendingRedeemRequests: emberPendingRedeemRequests,
-                      emberGlobalPendingRequests: emberGlobalPendingRequests,
-                      emberHasPendingRedemption:
-                        emberPendingRedeemRequests > 0 || emberPendingRedeemSharesRaw > 0n
                     }
                   } : prev);
             }
@@ -3527,40 +3297,13 @@ export default function ManageCircle() {
                                 </span>
                               </div>
                             )}
-
-                            {(circle?.custody?.suiUsdeBalance || circle?.custody?.emberReceiptBalance || circle?.custody?.emberHasPendingRedemption) && (
-                              <div className="mt-2 rounded-md border border-amber-200 bg-gradient-to-r from-amber-50 to-indigo-50 p-2">
-                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                  <div className="flex items-center">
-                                    <div className="w-3 h-3 bg-gradient-to-r from-amber-400 to-indigo-400 rounded-full mr-2"></div>
-                                    <span className="text-xs font-medium text-amber-900">
-                                      Ember Exposure: {(circle?.custody?.suiUsdeBalance || 0).toFixed(4)} suiUSDe / {(circle?.custody?.emberReceiptBalance || 0).toFixed(4)} esuiUSDe
-                                    </span>
-                                  </div>
-                                  <span className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-medium">
-                                    {circle?.custody?.emberHasPendingRedemption ? 'Pending Redemption' : 'Vault Active'}
-                                  </span>
-                                </div>
-                              </div>
-                            )}
                           </div>
                         )}
 
                         {!fetchingSuiBalance && (suiContributionBalance === null || suiContributionBalance === 0) &&
                           (suiSecurityDepositBalance === null || suiSecurityDepositBalance === 0) && (
                           <div>
-                            {(circle?.custody?.suiUsdeBalance || circle?.custody?.emberReceiptBalance) ? (
-                              <div className="p-2 bg-gradient-to-r from-amber-50 to-indigo-50 rounded-md border border-amber-200">
-                                <div className="flex items-center">
-                                  <div className="w-3 h-3 bg-gradient-to-r from-amber-400 to-indigo-400 rounded-full mr-2"></div>
-                                  <span className="text-xs font-medium text-amber-900">
-                                    Base SUI is fully deployed; custody currently tracks suiUSDe and Ember receipt balances.
-                                  </span>
-                                </div>
-                              </div>
-                            ) : (
-                              <p className="text-sm text-gray-500 mt-1">No SUI balances available</p>
-                            )}
+                            <p className="text-sm text-gray-500 mt-1">No SUI balances available</p>
                           </div>
                         )}
                       </div>
@@ -5319,191 +5062,6 @@ export default function ManageCircle() {
     );
   };
 
-  const formatEmberActionError = (error: unknown, fallback: string): string => {
-    if (error instanceof ZkLoginError) {
-      const tags = [error.operation, error.stage, error.code].filter(Boolean).join(' / ');
-      return tags ? `${tags}: ${error.message}` : error.message;
-    }
-    if (error instanceof Error && error.message) return error.message;
-    return fallback;
-  };
-
-  const recordEmberSnapshot = (snapshot: EmberActionSnapshot) => {
-    setEmberActionSnapshot(snapshot);
-    setEmberActionHistory((prev) => [snapshot, ...prev].slice(0, 8));
-  };
-
-  const handleUseMaxEmberDeposit = () => {
-    const maxAmount = selectedEmberSourceCard?.balance || 0;
-    if (maxAmount <= 0) return;
-    setEmberDepositAmount(formatAmountForInput(maxAmount, Math.min(SOURCE_ASSET_DECIMALS[emberSourceAsset], 6)));
-  };
-
-  const handleUseMaxEmberRedemption = () => {
-    const maxShares = circle?.custody?.emberReceiptBalance || 0;
-    if (maxShares <= 0) return;
-    setEmberRedeemAmount(formatAmountForInput(maxShares, 6));
-  };
-
-  const handleEmberDeposit = async () => {
-    if (!circle?.custody?.walletId) {
-      toast.error('Custody wallet information is missing.');
-      return;
-    }
-    if (!account) {
-      toast.error('Authentication required. Please login again.');
-      return;
-    }
-
-    let sourceAmountRaw = 0n;
-    try {
-      sourceAmountRaw = decimalToBaseUnits(emberDepositAmount, SOURCE_ASSET_DECIMALS[emberSourceAsset]);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Invalid deposit amount');
-      return;
-    }
-
-    if (sourceAmountRaw <= 0n) {
-      toast.error('Enter a deposit amount greater than zero.');
-      return;
-    }
-
-    const sourceBalance = selectedEmberSourceCard?.balance || 0;
-    const sourceBalanceRaw = decimalToBaseUnits(
-      formatAmountForInput(sourceBalance, SOURCE_ASSET_DECIMALS[emberSourceAsset]) || '0',
-      SOURCE_ASSET_DECIMALS[emberSourceAsset]
-    );
-
-    if (sourceBalanceRaw <= 0n) {
-      toast.error(`No ${SOURCE_ASSET_LABELS[emberSourceAsset]} balance available in custody.`);
-      return;
-    }
-
-    if (sourceAmountRaw > sourceBalanceRaw) {
-      toast.error(`Amount exceeds available ${SOURCE_ASSET_LABELS[emberSourceAsset]} balance.`);
-      return;
-    }
-
-    setIsSubmittingEmberDeposit(true);
-    const toastId = 'ember-deposit';
-    try {
-      toast.loading(
-        selectedEmberSourceCard?.requiresSwap
-          ? `Converting ${selectedEmberSourceCard.label} to suiUSDe and depositing...`
-          : 'Depositing suiUSDe to Ember vault...',
-        { id: toastId }
-      );
-      const zkLoginClient = ZkLoginClient.getInstance();
-      const result = await zkLoginClient.deployToEmberVault(account, {
-        circleId: circle.id,
-        walletId: circle.custody.walletId,
-        sourceAsset: emberSourceAsset,
-        sourceAmount: sourceAmountRaw.toString(),
-        targetCoinType: 'SUI_USDE',
-      });
-
-      setLastEmberDigest(result.digest);
-      recordEmberSnapshot({
-        operation: 'deposit',
-        digest: result.digest,
-        status: result.status,
-        lifecycle: result.lifecycle,
-        timestampMs: Date.now(),
-        sourceAsset: result.sourceAsset,
-        sourceAmountRaw: result.sourceAmount,
-        note: result.lifecycle.partialCompletion
-          ? 'Swap completed but vault deposit is partial; custody now holds intermediate suiUSDe.'
-          : 'Vault deposit completed and Ember receipt was redeposited to custody.',
-      });
-      setEmberDepositAmount('');
-      if (result.lifecycle.partialCompletion) {
-        toast.error(`Partial completion: ${result.lifecycle.status}`, { id: toastId });
-      } else {
-        toast.success(`Deposit submitted. ${result.lifecycle.status}`, { id: toastId });
-      }
-      await fetchCircleDetails();
-    } catch (error) {
-      const message = formatEmberActionError(error, 'Failed to deploy custody balance to Ember vault.');
-      toast.error(message, { id: toastId });
-      if (error instanceof ZkLoginError && error.requireRelogin) {
-        router.push('/');
-      }
-    } finally {
-      setIsSubmittingEmberDeposit(false);
-    }
-  };
-
-  const handleEmberRequestRedemption = async () => {
-    if (!circle?.custody?.walletId) {
-      toast.error('Custody wallet information is missing.');
-      return;
-    }
-    if (!account) {
-      toast.error('Authentication required. Please login again.');
-      return;
-    }
-
-    let receiptAmountRaw = 0n;
-    try {
-      receiptAmountRaw = decimalToBaseUnits(emberRedeemAmount, 9);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Invalid redemption amount');
-      return;
-    }
-
-    if (receiptAmountRaw <= 0n) {
-      toast.error('Enter a redemption amount greater than zero.');
-      return;
-    }
-
-    const receiptBalanceRaw = decimalToBaseUnits(
-      formatAmountForInput(circle?.custody?.emberReceiptBalance || 0, 9) || '0',
-      9
-    );
-    if (receiptBalanceRaw <= 0n) {
-      toast.error('No Ember receipt balance is available for redemption.');
-      return;
-    }
-    if (receiptAmountRaw > receiptBalanceRaw) {
-      toast.error('Requested redemption amount exceeds available receipt balance.');
-      return;
-    }
-
-    setIsSubmittingEmberRedemption(true);
-    const toastId = 'ember-redeem';
-    try {
-      toast.loading('Submitting Ember redemption request...', { id: toastId });
-      const zkLoginClient = ZkLoginClient.getInstance();
-      const result = await zkLoginClient.requestEmberRedemption(account, {
-        circleId: circle.id,
-        walletId: circle.custody.walletId,
-        receiptAmount: receiptAmountRaw.toString(),
-      });
-
-      setLastEmberDigest(result.digest);
-      recordEmberSnapshot({
-        operation: 'redemption_request',
-        digest: result.digest,
-        status: result.status,
-        lifecycle: result.lifecycle,
-        timestampMs: Date.now(),
-        receiptAmountRaw: result.receiptAmount,
-        note: result.message,
-      });
-      setEmberRedeemAmount('');
-      toast.success(`Redemption requested. ${result.lifecycle.status}`, { id: toastId });
-      await fetchCircleDetails();
-    } catch (error) {
-      const message = formatEmberActionError(error, 'Failed to request Ember redemption.');
-      toast.error(message, { id: toastId });
-      if (error instanceof ZkLoginError && error.requireRelogin) {
-        router.push('/');
-      }
-    } finally {
-      setIsSubmittingEmberRedemption(false);
-    }
-  };
-
   const pageSurfaceClass =
     'rounded-[28px] border border-stone-200 bg-white shadow-[0_24px_70px_-42px_rgba(15,23,42,0.32)] sm:rounded-[32px]';
   const sectionCardClass =
@@ -5573,7 +5131,7 @@ export default function ManageCircle() {
                 )}
               </h2>
                   <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
-                    Control membership, deposits, payout flow, and vault routing from one place.
+                    Control membership, deposits, payout flow, and token routing from one place.
                   </p>
                 </div>
               {!loading && circle && (
@@ -5737,7 +5295,7 @@ export default function ManageCircle() {
                           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
                             Tools
                           </p>
-                          <p className="mt-2 text-sm font-semibold text-slate-950">Routing and vault</p>
+                          <p className="mt-2 text-sm font-semibold text-slate-950">Token routing</p>
                           <p className="mt-1 text-xs text-slate-500">Advanced admin setup</p>
                         </button>
                       </div>
@@ -7549,272 +7107,6 @@ export default function ManageCircle() {
                     securityDepositLocalDisplay={manageCustodyUsdcSecurityDepositLocalDisplay}
                     contributionLocalDisplay={manageCustodyUsdcContributionLocalDisplay}
                   />}
-                </div>
-
-                {/* Ember Vault Operations */}
-                <div className={sectionCardClass}>
-                  {circle && (
-                    <div className="space-y-4">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-700">Yield Routing</p>
-                          <h3 className="mt-2 text-xl font-semibold tracking-tight text-slate-950">Ember Vault Operations</h3>
-                        </div>
-                        <span className="w-fit rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-800">
-                          Admin Only
-                        </span>
-                      </div>
-                      <p className="mt-3 text-sm leading-6 text-slate-600">
-                        Move custody balances into the Ember `suiUSDe` vault, then request redemption when liquidity is needed.
-                        Withdrawal processing stays external/operator-driven.
-                      </p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        APR is intentionally not shown here until a verified live share-price/APR source is wired for this exact vault route.
-                      </p>
-
-                      <div className="grid grid-cols-1 gap-3 md:gap-4 xl:grid-cols-5">
-                        <div className="xl:col-span-3 rounded-[22px] border border-stone-200 bg-stone-50/60 p-3 sm:p-5">
-                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                            <h4 className="text-base font-semibold text-slate-950">1) Convert and Deposit</h4>
-                            <span className="rounded-full bg-stone-100 px-2 py-1 text-xs font-medium text-slate-700">
-                              Guided Flow
-                            </span>
-                          </div>
-                          <p className="mt-1 text-xs text-slate-600 sm:text-sm">
-                            Pick a custody source. If it is not already <span className="font-medium">suiUSDe</span>, we convert it
-                            automatically, then deposit to Ember in one action.
-                          </p>
-
-                          <div className="mt-4">
-                            <p className="mb-2 text-xs font-medium text-slate-600">Funding Source</p>
-                            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                              {emberDepositSourceCards.map((card) => (
-                                <button
-                                  key={card.asset}
-                                  type="button"
-                                  onClick={() => setEmberSourceAsset(card.asset)}
-                                  disabled={!card.available}
-                                  className={`text-left rounded-lg border p-3 transition-all ${
-                                    emberSourceAsset === card.asset
-                                      ? 'border-slate-900 bg-stone-50 ring-1 ring-stone-300'
-                                      : card.available
-                                        ? 'border-stone-200 bg-white hover:border-stone-300 hover:bg-stone-50'
-                                        : 'cursor-not-allowed border-stone-200 bg-stone-50 opacity-60'
-                                  }`}
-                                >
-                                  <div className="flex items-center justify-between gap-2">
-                                    <span className="text-sm font-semibold text-slate-900">{card.label}</span>
-                                    {recommendedEmberSource === card.asset && card.available && (
-                                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
-                                        Recommended
-                                      </span>
-                                    )}
-                                  </div>
-                                  <p className="mt-1 text-xs text-slate-600">
-                                    {card.balance.toFixed(4)} available
-                                  </p>
-                                  <p className="mt-1 text-[11px] text-slate-500">{card.routeSummary}</p>
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div className="mt-4">
-                            <div className="flex items-center justify-between mb-1">
-                              <label className="text-xs font-medium text-slate-600">
-                                Amount ({selectedEmberSourceCard?.label || SOURCE_ASSET_LABELS[emberSourceAsset]})
-                              </label>
-                              <button
-                                type="button"
-                                onClick={handleUseMaxEmberDeposit}
-                                className="text-xs font-medium text-slate-700 hover:text-slate-900 disabled:text-stone-400"
-                                disabled={(selectedEmberSourceCard?.balance || 0) <= 0}
-                              >
-                                Use max
-                              </button>
-                            </div>
-                            <input
-                              type="number"
-                              min="0"
-                              step="any"
-                              value={emberDepositAmount}
-                              onChange={(event) => setEmberDepositAmount(event.target.value)}
-                              placeholder="0.0"
-                              className="w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm text-slate-800"
-                            />
-                            <p className="mt-1 text-xs text-slate-500">
-                              Available: {(selectedEmberSourceCard?.balance || 0).toFixed(4)}{' '}
-                              {selectedEmberSourceCard?.label || SOURCE_ASSET_LABELS[emberSourceAsset]}
-                            </p>
-                          </div>
-
-                          <div className="mt-4 border-t border-stone-200 pt-3 sm:rounded-[18px] sm:border sm:bg-white sm:p-3 sm:border-t-0">
-                            <p className="text-xs font-semibold text-slate-900">What happens next</p>
-                            <p className="mt-1 text-xs text-slate-700">
-                              1. Withdraw {selectedEmberSourceCard?.label || SOURCE_ASSET_LABELS[emberSourceAsset]} from custody.
-                            </p>
-                            <p className="mt-1 text-xs text-slate-700">
-                              2. {selectedEmberSourceCard?.requiresSwap
-                                ? `Swap into suiUSDe.`
-                                : 'Skip swap because source is already suiUSDe.'}
-                            </p>
-                            <p className="mt-1 text-xs text-slate-700">
-                              3. Deposit to Ember vault and redeposit esuiUSDe receipts back to custody.
-                            </p>
-                          </div>
-
-                          <button
-                            onClick={handleEmberDeposit}
-                            disabled={isSubmittingEmberDeposit || !!emberDepositDisabledReason}
-                            className={`mt-4 w-full ${
-                              isSubmittingEmberDeposit || !!emberDepositDisabledReason
-                                ? 'inline-flex cursor-not-allowed items-center justify-center rounded-full bg-stone-300 px-4 py-2.5 text-sm font-medium text-white/90'
-                                : primaryActionClass
-                            }`}
-                          >
-                            {isSubmittingEmberDeposit ? 'Submitting...' : emberDepositPrimaryCta}
-                          </button>
-                          {emberDepositDisabledReason && (
-                            <p className="text-xs text-amber-700 mt-2">{emberDepositDisabledReason}</p>
-                          )}
-                        </div>
-
-                        <div className="xl:col-span-2 rounded-[22px] border border-stone-200 bg-stone-50/60 p-3 sm:p-5">
-                          <h4 className="text-base font-semibold text-slate-950">2) Request Redemption</h4>
-                          <p className="mt-1 text-xs text-slate-600 sm:text-sm">
-                            Submit the shares to redeem. Processing is operator-driven; custody receives returned suiUSDe after settlement.
-                          </p>
-                          <div className="mt-4">
-                            <div className="flex items-center justify-between mb-1">
-                              <label className="text-xs font-medium text-slate-600">Receipt Amount (esuiUSDe)</label>
-                              <button
-                                type="button"
-                                onClick={handleUseMaxEmberRedemption}
-                                className="text-xs font-medium text-slate-700 hover:text-slate-900 disabled:text-stone-400"
-                                disabled={(circle.custody?.emberReceiptBalance || 0) <= 0}
-                              >
-                                Use max
-                              </button>
-                            </div>
-                            <input
-                              type="number"
-                              min="0"
-                              step="any"
-                              value={emberRedeemAmount}
-                              onChange={(event) => setEmberRedeemAmount(event.target.value)}
-                              placeholder="0.0"
-                              className="w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm text-slate-800"
-                            />
-                          </div>
-                          <button
-                            onClick={handleEmberRequestRedemption}
-                            disabled={isSubmittingEmberRedemption || !circle?.custody?.walletId || !circle?.isActive || circle?.paused}
-                            className={`mt-4 w-full ${
-                              isSubmittingEmberRedemption || !circle?.custody?.walletId || !circle?.isActive || circle?.paused
-                                ? 'inline-flex cursor-not-allowed items-center justify-center rounded-full bg-stone-300 px-4 py-2.5 text-sm font-medium text-white/90'
-                                : primaryActionClass
-                            }`}
-                          >
-                            {isSubmittingEmberRedemption ? 'Submitting...' : 'Request Redemption'}
-                          </button>
-                          <div className="mt-4 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
-                            <div className="rounded-md border border-stone-200 bg-white p-2">
-                              <p className="text-slate-500">Receipt Balance</p>
-                              <p className="font-semibold text-slate-900">
-                                {circle.custody?.emberReceiptBalance?.toFixed(4) || '0.0000'}
-                              </p>
-                            </div>
-                            <div className="rounded-md border border-stone-200 bg-white p-2">
-                              <p className="text-slate-500">Pending Requests</p>
-                              <p className="font-semibold text-slate-900">{circle.custody?.emberPendingRedeemRequests ?? 0}</p>
-                            </div>
-                            <div className="rounded-md border border-stone-200 bg-white p-2">
-                              <p className="text-slate-500">Pending Shares</p>
-                              <p className="font-semibold text-slate-900">
-                                {circle.custody?.emberPendingRedeemShares?.toFixed(4) || '0.0000'}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {(emberActionSnapshot || lastEmberDigest) && (
-                        <div className="mt-4 space-y-1 rounded-[18px] border border-stone-200 bg-white p-3 text-xs text-slate-700">
-                          <p className="font-medium text-slate-900">Latest Ember Transaction</p>
-                          {emberActionSnapshot?.operation && (
-                            <p>
-                              Operation: {emberActionSnapshot.operation === 'deposit' ? 'Deposit' : 'Request Redemption'}
-                            </p>
-                          )}
-                          {emberActionSnapshot?.status && <p>Status: {emberActionSnapshot.status}</p>}
-                          {emberActionSnapshot?.lifecycle?.status && (
-                            <p>Lifecycle: {emberActionSnapshot.lifecycle.status}</p>
-                          )}
-                          {emberActionSnapshot?.sourceAsset && emberActionSnapshot.sourceAmountRaw && (
-                            <p>
-                              Source: {emberActionSnapshot.sourceAsset} {formatRawTokenAmount(
-                                emberActionSnapshot.sourceAmountRaw,
-                                SOURCE_ASSET_DECIMALS[emberActionSnapshot.sourceAsset]
-                              )}
-                            </p>
-                          )}
-                          {emberActionSnapshot?.receiptAmountRaw && (
-                            <p>
-                              Requested Shares: {formatRawTokenAmount(emberActionSnapshot.receiptAmountRaw, 9)}
-                            </p>
-                          )}
-                          {emberActionSnapshot?.note && (
-                            <p className="text-amber-700">{emberActionSnapshot.note}</p>
-                          )}
-                          <p>
-                            Digest:{' '}
-                            <a
-                              href={`https://suivision.xyz/txblock/${emberActionSnapshot?.digest || lastEmberDigest}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="break-all text-slate-900 underline"
-                            >
-                              {emberActionSnapshot?.digest || lastEmberDigest}
-                            </a>
-                          </p>
-                          {circle.custody?.emberHasPendingRedemption && (
-                            <p className="text-amber-700">
-                              Pending redemption remains open until external operator processing settles withdrawals.
-                            </p>
-                          )}
-                        </div>
-                      )}
-
-                      {emberActionHistory.length > 0 && (
-                        <div className="mt-3 rounded-[18px] border border-stone-200 bg-white p-3">
-                          <p className="mb-2 text-xs font-medium text-slate-900">Recent Ember Activity</p>
-                          <div className="space-y-2">
-                            {emberActionHistory.map((item) => (
-                              <div
-                                key={`${item.digest}-${item.timestampMs}`}
-                                className="border-b border-stone-100 pb-2 text-xs text-slate-700 last:border-b-0 last:pb-0"
-                              >
-                                <p className="font-medium text-slate-900">
-                                  {item.operation === 'deposit' ? 'Deposit' : 'Request Redemption'} · {item.lifecycle.status}
-                                </p>
-                                <p className="text-slate-600">{new Date(item.timestampMs).toLocaleString()}</p>
-                                <p className="break-all">
-                                  <a
-                                    href={`https://suivision.xyz/txblock/${item.digest}`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="text-slate-900 underline"
-                                  >
-                                    {item.digest}
-                                  </a>
-                                </p>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
 
                 {/* Smart Goals Section */}
