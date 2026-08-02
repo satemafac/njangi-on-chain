@@ -83,16 +83,19 @@ describe('sui-rpc-failover', () => {
     warnSpy.mockRestore();
   });
 
-  it('returns unique valid RPC candidates in priority order', () => {
+  it('returns unique valid RPC candidates, rate-limited hosts last', () => {
     mockGetNetworkConfig.mockReturnValue({
       rpcUrl: 'https://primary.rpc',
       rpcAltUrl: 'not-a-url',
     });
 
+    // blockvision is the only endpoint serving event history, and it rations
+    // requests. Spending its budget on ordinary object reads starves the one
+    // thing only it can do — so it sorts last regardless of list position.
     expect(getRpcCandidateUrls('testnet')).toEqual([
       'https://primary.rpc',
-      'https://sui-testnet-endpoint.blockvision.org',
       'https://sui-testnet-rpc.publicnode.com',
+      'https://sui-testnet-endpoint.blockvision.org',
     ]);
   });
 
@@ -106,9 +109,30 @@ describe('sui-rpc-failover', () => {
       'https://preferred.rpc',
       'https://primary.rpc',
       'https://alt.rpc',
-      'https://sui-testnet-endpoint.blockvision.org',
       'https://sui-testnet-rpc.publicnode.com',
+      'https://sui-testnet-endpoint.blockvision.org',
     ]);
+  });
+
+  it('sinks a rate-limited host even when configured as the primary alt', () => {
+    // Regression for production 2026-08-02: blockvision sat second in the
+    // candidate order via NEXT_PUBLIC_TESTNET_RPC_ALT, so every dashboard load
+    // hit it, 429s followed, and an address holding 4.15 SUI and two
+    // membership receipts rendered as 0 circles / $0. Operator config decides
+    // WHICH endpoints are used; ordering decides which budget gets spent.
+    mockGetNetworkConfig.mockReturnValue({
+      rpcUrl: 'https://primary.rpc',
+      rpcAltUrl: 'https://sui-testnet-endpoint.blockvision.org',
+    });
+
+    const candidates = getRpcCandidateUrls('testnet');
+    expect(candidates[0]).toBe('https://primary.rpc');
+    expect(candidates[candidates.length - 1]).toBe(
+      'https://sui-testnet-endpoint.blockvision.org',
+    );
+    expect(candidates.indexOf('https://sui-testnet-rpc.publicnode.com')).toBeLessThan(
+      candidates.indexOf('https://sui-testnet-endpoint.blockvision.org'),
+    );
   });
 
   it('classifies 5xx and transport errors as retriable', () => {
@@ -198,10 +222,13 @@ describe('sui-rpc-failover', () => {
     });
 
     expect(result).toBe('ok');
+    // The third candidate is now publicnode, not blockvision — rate-limited
+    // hosts sort to the back, so the rotation reaches an unmetered endpoint
+    // before spending blockvision's budget.
     expect(attemptedUrls).toEqual([
       'https://primary.rpc',
       'https://alt.rpc',
-      'https://sui-testnet-endpoint.blockvision.org',
+      'https://sui-testnet-rpc.publicnode.com',
     ]);
   });
 

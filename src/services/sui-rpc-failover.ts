@@ -21,14 +21,37 @@ const TRANSIENT_FAILURE_COOLDOWN_MS = 10_000;
 const rpcCooldowns = new Map<string, { until: number; reason: string }>();
 const SHARED_RPC_FALLBACK_URLS: Record<NetworkType, string[]> = {
   testnet: [
-    'https://sui-testnet-endpoint.blockvision.org',
     'https://sui-testnet-rpc.publicnode.com',
+    'https://sui-testnet-endpoint.blockvision.org',
   ],
   mainnet: [
-    'https://sui-mainnet-endpoint.blockvision.org',
     'https://sui-rpc.publicnode.com',
+    'https://sui-mainnet-endpoint.blockvision.org',
   ],
 };
+
+/**
+ * Endpoints that answer correctly but ration requests, so they are tried LAST
+ * for general traffic no matter where the configuration puts them.
+ *
+ * The providers are not interchangeable, which is the whole reason this exists.
+ * After Sui retired JSON-RPC on its public fullnodes: publicnode and suiscan
+ * serve object reads but refuse event history, while blockvision serves both
+ * and rate-limits. Since object reads are the overwhelming majority of traffic
+ * and event scans are rare, spending blockvision's budget on reads starves the
+ * one thing only it can do.
+ *
+ * Observed on production 2026-08-02: blockvision sat second in the candidate
+ * order, so ordinary dashboard loads hit it constantly — 3 of 17 calls came
+ * back 429 and the dashboard rendered 0 circles and $0 for an address holding
+ * 4.15 SUI and two membership receipts. Correct endpoints, wrong order.
+ */
+const RATE_LIMITED_RPC_HOSTS = ['blockvision.org'];
+
+function deprioritizeRateLimited(urls: string[]): string[] {
+  const limited = (u: string) => RATE_LIMITED_RPC_HOSTS.some((h) => u.includes(h));
+  return [...urls.filter((u) => !limited(u)), ...urls.filter(limited)];
+}
 
 export interface SuiRpcAttemptContext {
   attempt: number;
@@ -124,11 +147,12 @@ export function isRateLimitedSuiRpcError(error: unknown): boolean {
 
 export function getRpcCandidateUrls(network: NetworkType): string[] {
   const { rpcUrl, rpcAltUrl } = getNetworkConfig(network);
-  const candidates = dedupeRpcUrls([
-    rpcUrl,
-    rpcAltUrl,
-    ...SHARED_RPC_FALLBACK_URLS[network],
-  ]);
+  // Deprioritize AFTER dedupe, so a rate-limited host sinks to the back even
+  // when it is what NEXT_PUBLIC_*_RPC_ALT points at. Operator config decides
+  // WHICH endpoints are used; this decides the order they are spent in.
+  const candidates = deprioritizeRateLimited(
+    dedupeRpcUrls([rpcUrl, rpcAltUrl, ...SHARED_RPC_FALLBACK_URLS[network]]),
+  );
 
   if (candidates.length === 0) {
     throw new Error(`No valid RPC URLs configured for ${network}.`);
