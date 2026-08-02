@@ -3,7 +3,7 @@ import { AccountData, OAuthProvider } from '@/services/zkLoginService';
 import { ZkLoginClient } from '@/services/zkLoginClient';
 import { LegalAcceptanceGate } from '@/components/LegalAcceptanceModal';
 import { useIdleTimer } from '@/hooks/useIdleTimer';
-import { getCurrentNetwork } from '@/services/network-config';
+import { getCurrentNetwork, getNetworkConfig } from '@/services/network-config';
 import { refreshAdminHeartbeatsAfterAuth } from '@/lib/admin-heartbeat-refresh';
 import {
   accountToSignerSession,
@@ -368,21 +368,22 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     console.log(`AuthContext: Using package ID: ${packageId || '(default)'}`);
     
     try {
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          action: 'deleteCircle', 
-          account,
-          circleId,
-          walletId,
-          packageId, // Pass the circle-specific package ID
-          network: getCurrentNetwork() // Add current network to request
-        })
-      });
-      
-      // Parse response data first to get error details if any
-      const responseData = await response.json();
+      // Signed in the browser — the server no longer holds a key that could
+      // do it. deleteCircle asserts on chain that the circle is empty
+      // (contributions, deposits and wallet balances all zero), so this
+      // cannot destroy a circle holding funds.
+      const { digest: deleteDigest } = await new ZkLoginClient().deleteCircle(
+        account,
+        circleId,
+        walletId,
+      );
+      const response = { ok: true, status: 200 };
+      const responseData: {
+        digest?: string;
+        error?: string;
+        details?: string;
+        code?: string;
+      } = { digest: deleteDigest };
       console.log('AuthContext: Delete circle response:', responseData);
       
       // If response is not ok, handle differently based on error type
@@ -530,35 +531,44 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     console.log('AuthContext: Sending token transfer request');
     
     try {
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          action: 'sendTokens', 
-          account,
-          ...transferData
-        })
-      });
-      
-      const responseData = await response.json();
-      console.log('AuthContext: Send tokens response:', responseData);
-      
-      if (!response.ok) {
-        if (response.status === 401) {
-          // Authentication error
-          const message = responseData.error || 'Authentication failed. Please login again.';
-          throw new Error(message);
-        } else {
-          // Other server errors
-          const errorMessage = responseData.error || 'Failed to send tokens';
-          throw new Error(errorMessage);
-        }
+      // Signed in the browser. This action was the most dangerous thing on
+      // the old server-signing surface: an arbitrary "move `amount` of
+      // `coinType` to `recipient`" primitive that no Move-target allowlist
+      // could constrain, because it makes no Move call at all. With the
+      // session cookie it was enough to drain a wallet. The server can no
+      // longer perform it.
+      const [{ SuiClient }, signerModule, { buildSendTokensTx }] = await Promise.all([
+        import('@mysten/sui/client'),
+        import('@/lib/zklogin-client-signer'),
+        import('@/lib/send-tokens-tx'),
+      ]);
+      const signerSession = signerModule.loadSignerSession();
+      if (!signerSession) {
+        throw new Error('Your signing session is unavailable. Please sign in again.');
       }
-      
+      const suiClient = new SuiClient({
+        url: getNetworkConfig(signerSession.network).rpcUrl,
+      });
+
+      const { digest } = await signerModule.signAndExecuteWithZkLogin(
+        signerSession,
+        suiClient,
+        {
+          build: (txb, client) =>
+            buildSendTokensTx(txb, client, {
+              recipientAddress: transferData.recipientAddress,
+              amount: BigInt(transferData.amount),
+              coinType: transferData.coinType,
+              userAddress: signerSession.userAddress,
+            }),
+          gasBudget: 30_000_000,
+        },
+      );
+
       // Success case
-      return { 
-        success: true, 
-        digest: responseData.digest || '' 
+      return {
+        success: true,
+        digest,
       };
     } catch (error) {
       console.error('Error in AuthContext.sendTokens:', error);
