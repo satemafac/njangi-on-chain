@@ -53,8 +53,34 @@ describe('sitemap routes resolve to real pages', () => {
   );
 
   it('covers every glossary term exactly once', () => {
-    const inSitemap = SITE_ROUTES.filter((r) => r.page === 'learn/[term]').map((r) => r.path);
-    expect(inSitemap.sort()).toEqual(ROSCA_TERMS.map((t) => `/learn/${t.slug}`).sort());
+    // Every term gets exactly one sitemap entry at /learn/<slug>, whichever
+    // route serves it. A term promoted to a pillar keeps its URL — that is the
+    // whole point of promoting rather than creating a second page — so this
+    // asserts the URL set, not which file renders it.
+    const termPaths = ROSCA_TERMS.map((t) => `/learn/${t.slug}`).sort();
+    const inSitemap = SITE_ROUTES.map((r) => r.path).filter((p) => termPaths.includes(p));
+    expect(inSitemap.sort()).toEqual(termPaths);
+  });
+
+  it('routes each term at the file that actually renders it', () => {
+    // A static file under src/pages/learn/ wins over the dynamic route, so a
+    // promoted term must not claim to be served by learn/[term] — the
+    // route-existence test above resolves `page` against the filesystem, and a
+    // wrong value there would silently stop guarding anything.
+    for (const term of ROSCA_TERMS) {
+      const route = SITE_ROUTES.find((r) => r.path === `/learn/${term.slug}`);
+      expect(route?.page).toBe(term.hasPillarPage ? `learn/${term.slug}` : 'learn/[term]');
+    }
+  });
+
+  it('does not generate a dynamic path for a term that has a pillar page', () => {
+    // Mirrors getStaticPaths in src/pages/learn/[term].tsx. Building both would
+    // produce a page that can never be served.
+    const dynamic = ROSCA_TERMS.filter((t) => !t.hasPillarPage).map((t) => t.slug);
+    for (const term of ROSCA_TERMS.filter((t) => t.hasPillarPage)) {
+      expect(dynamic).not.toContain(term.slug);
+      expect(existsSync(join(PAGES, `learn/${term.slug}.tsx`))).toBe(true);
+    }
   });
 
   it('lists no noindex route', () => {

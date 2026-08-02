@@ -21,7 +21,12 @@ interface TermPageProps {
 }
 
 export const getStaticPaths: GetStaticPaths = async () => ({
-  paths: ROSCA_TERMS.map((term) => ({ params: { term: term.slug } })),
+  // Terms with a hand-built pillar page are skipped: a static file under
+  // src/pages/learn/ already wins over this dynamic route, so generating both
+  // would just build a page that can never be served.
+  paths: ROSCA_TERMS.filter((term) => !term.hasPillarPage).map((term) => ({
+    params: { term: term.slug },
+  })),
   fallback: false,
 });
 

@@ -97,10 +97,12 @@ export const SITE_ROUTES: SiteRoute[] = [
   ...ROSCA_TERMS.map(
     (term): SiteRoute => ({
       path: `/learn/${term.slug}`,
-      page: 'learn/[term]',
+      // A term promoted to a pillar is served by its own file, not the
+      // dynamic route, and the route-existence test checks the real path.
+      page: term.hasPillarPage ? `learn/${term.slug}` : 'learn/[term]',
       lastmod: term.modified,
       changefreq: 'monthly',
-      priority: 0.7,
+      priority: term.hasPillarPage ? 0.9 : 0.7,
     })
   ),
   { path: '/faq', page: 'faq', lastmod: '2026-08-02', changefreq: 'monthly', priority: 0.8 },

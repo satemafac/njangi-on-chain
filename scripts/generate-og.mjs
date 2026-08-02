@@ -79,6 +79,11 @@ const CARDS = [
     title: 'What is a susu?',
   },
   {
+    slug: 'learn-chit-fund',
+    eyebrow: 'Learn · Chit fund',
+    title: 'What is a chit fund?',
+  },
+  {
     slug: 'faq',
     eyebrow: 'Questions',
     title: 'A few things people ask first',

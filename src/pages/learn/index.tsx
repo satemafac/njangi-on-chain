@@ -53,6 +53,15 @@ export default function LearnIndexPage() {
       tag: "Cultural Traditions",
       readTime: "8 min read",
       color: "orange"
+    },
+    {
+      title: "What is a Chit Fund?",
+      subtitle: "India, and the only one decided by auction",
+      description: "Every other rotating circle fixes the turn order once. A chit fund re-decides it every month by bidding — worked through with numbers.",
+      href: "/learn/chit-fund",
+      tag: "Fundamentals",
+      readTime: "9 min read",
+      color: "blue"
     }
   ];
 
@@ -244,7 +253,7 @@ export default function LearnIndexPage() {
             </div>
 
             <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {ROSCA_TERMS.map((term) => (
+              {ROSCA_TERMS.filter((term) => !term.hasPillarPage).map((term) => (
                 <li key={term.slug}>
                   <Link
                     href={`/learn/${term.slug}`}

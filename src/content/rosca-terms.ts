@@ -51,10 +51,22 @@ export interface RoscaTerm {
   diaspora: string[];
   /** Shown as a callout. Required where the practice is a licensed activity. */
   regulatoryNote?: string;
-  /** Slugs from this file, or absolute paths to the four pillar pages. */
+  /** Slugs from this file, or absolute paths to the pillar pages. */
   related: string[];
   published: string;
   modified: string;
+  /**
+   * True when this term has its own hand-built long-form page under
+   * src/pages/learn/ rather than being rendered by /learn/[term].
+   *
+   * The URL is identical either way — the entry stays here so it keeps its
+   * place in the DefinedTermSet, so `related` references still resolve, and so
+   * there is still exactly one source of truth for the term's data. What
+   * changes is that getStaticPaths skips it (a static page file already wins
+   * over the dynamic route, and generating both is wasted build work) and the
+   * sitemap points at the real page file.
+   */
+  hasPillarPage?: boolean;
 }
 
 export const ROSCA_TERMS: RoscaTerm[] = [
@@ -93,6 +105,7 @@ export const ROSCA_TERMS: RoscaTerm[] = [
     related: ['/learn/rosca', 'paluwagan', 'hui', 'pandero'],
     published: '2026-08-02',
     modified: '2026-08-02',
+    hasPillarPage: true,
   },
 
   {
