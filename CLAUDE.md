@@ -211,19 +211,32 @@ login reaches it. Recovery means restoring the previous salt source, which
 re-orphans anyone onboarded since. **On mainnet this is permanent user fund
 loss, not an inconvenience.**
 
-Observed on testnet 2026-08-02: circles created 2026-07-04 belong to
-`...92b680`, everything after to `...9de17d`, and new Enoki keys were issued
-that same day. The operator reports the Enoki *app* was unchanged and only the
-keys rotated — which per Enoki's model (salt derived per user per app) should
-NOT have moved the address. Root cause is **unconfirmed**, so treat any change
-to the above as address-affecting until a staging test proves otherwise:
+**Rotating an Enoki API key changes the salt — even within the same app.**
+This is the important one, because it is counter-intuitive: Enoki's docs
+describe the salt as derived "per user per app", which reads as though key
+rotation is safe. It is not.
 
-1. On a staging deploy with the NEW value, log in with a test account whose
-   address you already know. Confirm the derived address is unchanged.
-2. Keep the previous key/client id — it is the only route back.
-3. There is currently NO application-level guard that detects a user's address
-   changing between logins. Adding one (warn when a returning `sub` resolves to
-   a new address) is unbuilt work worth doing before mainnet.
+Evidence (testnet, 2026-08-02): the Enoki portal held ONE application
+("Njangi OnChain") with two testnet keys — `9b2ce…` (2025-05-24) and
+`75675…` (2026-07-04). Circles created 2026-07-04 belong to `...92b680`;
+everything after belongs to `...9de17d`. Same Google account, same `sub`,
+same client id (unchanged for 49 days), same app. The only variable that
+moved was which API key was live, and the address moved with it.
+
+Practical consequences:
+1. Treat key rotation as an ADDRESS MIGRATION, not a credential refresh.
+   Rotate before you have users, never after.
+2. Keep the previous key. It is the only route back to the old addresses.
+3. If a key is ever leaked post-launch you are forced to choose between
+   leaving a compromised key live and re-homing every user. Avoid that
+   position: keep the private keys out of screenshots, bug reports, and
+   support threads, and never put one in a `NEXT_PUBLIC_*` var (which
+   inlines it into the browser bundle).
+4. There is currently NO application-level guard that detects a user's
+   address changing between logins. Adding one (warn when a returning `sub`
+   resolves to a new address) is unbuilt work worth doing before mainnet —
+   without it, this failure is silent and the first signal is a support
+   ticket about missing funds.
 
 **Vercel deploy (web app)**:
 The app is hosted on **Vercel**; production Postgres is **Neon**. The Move
