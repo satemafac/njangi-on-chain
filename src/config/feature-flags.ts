@@ -27,14 +27,37 @@ function flagEnabled(raw: string | undefined, defaultOn = false): boolean {
 }
 
 /**
- * Embedded Cetus swap routing.
+ * Member-initiated DEX/CEX swap routing (Cetus today, other venues later).
  *
- * OFF for v1. Member-initiated swaps are the feature most likely to pull the
- * product into exchange / broker / order-routing analysis, and route and
- * slippage are currently chosen by the app rather than the user — which
- * undercuts the "neutral routing" posture the compliance invariants claim.
- * Re-enabling needs user-selected assets and slippage, disclosed objective
- * routing, client-side construction and signing, and no spread or rebate.
+ * A SUPPORTED PRODUCT FEATURE, not a retired one — members need a way to
+ * convert what they hold into the circle's contribution currency, and the
+ * roadmap adds venues rather than removing them. The flag exists to disable
+ * routing per environment (an outage, an unvetted new venue), not to phase
+ * the capability out.
+ *
+ * The kill switch stays default-OFF because that is the safe direction for an
+ * unset value, NOT a recommendation: production sets it true.
+ *
+ * What keeps this compatible with compliance invariant #5 ("neutral DEX
+ * routing — member-initiated swaps only, no routing fee"), and what any new
+ * venue integration has to preserve:
+ *
+ *   1. MEMBER-INITIATED. The app never swaps on a member's behalf or as a
+ *      side effect of another action.
+ *   2. NO FEE, SPREAD, REBATE, OR PAYMENT FOR ORDER FLOW. Revenue is the
+ *      coordination subscription; taking a cut of a swap converts this into
+ *      a fee on a fund flow, which invariant #3 forbids outright.
+ *   3. CLIENT-SIGNED. Routing transactions are built and signed in the
+ *      browser (`cetusService.getSwapTransactionPayload` ->
+ *      `ZkLoginClient.sendPrebuiltTransactionBytes`). The server must never
+ *      regain the ability to sign one — that was the Phase 0 oracle.
+ *   4. DISCLOSED, OBJECTIVE ROUTING. Venue and slippage should be visible to
+ *      the member and chosen on stated criteria, not silently by the app.
+ *
+ * (3) already holds. (4) is the weakest today: route and default slippage are
+ * app-chosen, which is the part most worth tightening before a jurisdiction
+ * where broker/order-routing analysis bites — surfacing the venue and letting
+ * the member set slippage would close it.
  */
 export function isSwapsEnabled(): boolean {
   return flagEnabled(process.env.NEXT_PUBLIC_SWAPS_ENABLED);

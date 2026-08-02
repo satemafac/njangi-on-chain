@@ -75,11 +75,14 @@ class SanctionsBlockedAtLoginError extends Error {
 }
 
 /**
- * Embedded Cetus swap routing, gated by SWAPS_ENABLED (default off).
+ * Member-initiated swap routing, gated by NEXT_PUBLIC_SWAPS_ENABLED.
  *
- * Nothing here holds user funds — a blocked swap leaves the member with the
- * coins they already had — so the whole surface can be closed without
- * stranding anything.
+ * Swaps are a supported feature (production enables them) — this switch is
+ * for disabling routing per environment, e.g. a venue outage or an
+ * unvetted new integration, not for retiring the capability.
+ *
+ * Safe to flip either way: nothing here holds user funds, so a blocked swap
+ * just leaves the member with the coins they already had.
  */
 const SWAP_ACTIONS = new Set([
   'executeStablecoinSwap',
