@@ -380,8 +380,8 @@ export async function getUserPackageIds(userAddress: string): Promise<string[]> 
     // Use official Sui RPC to avoid rate limits during package discovery
     const currentNetwork = getCurrentNetwork();
     const officialRpcUrl = currentNetwork === 'mainnet'
-      ? 'https://fullnode.mainnet.sui.io:443'
-      : 'https://fullnode.testnet.sui.io:443';
+      ? 'https://sui-rpc.publicnode.com'
+      : 'https://sui-testnet-rpc.publicnode.com';
 
     console.log(`🔍 getUserPackageIds: Using official RPC ${officialRpcUrl} for package discovery`);
     const client = getPooledSuiClient({

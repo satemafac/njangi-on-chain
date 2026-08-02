@@ -54,9 +54,18 @@ export interface ResolvedPublicEnv {
 }
 
 const warnedLegacyKeys = new Set<string>();
+// NOT `fullnode.{testnet,mainnet}.sui.io`. Sui retired JSON-RPC on its public
+// fullnodes; as of 2026-08-02 both answer every JSON-RPC method with
+// `-32601 Method not found. JSON-RPC on public fullnodes has been deprecated`
+// (verified against sui_getChainIdentifier, the most trivial call there is).
+// They remain valid hosts for gRPC/GraphQL — so if this app ever migrates off
+// JSON-RPC, revisit these rather than assuming the hosts are gone.
+//
+// publicnode serves JSON-RPC for both networks and already backs the failover
+// list in sui-rpc-failover.ts.
 const DEFAULT_RPC_URLS: Record<NetworkType, string> = {
-  testnet: 'https://fullnode.testnet.sui.io:443',
-  mainnet: 'https://fullnode.mainnet.sui.io:443',
+  testnet: 'https://sui-testnet-rpc.publicnode.com',
+  mainnet: 'https://sui-rpc.publicnode.com',
 };
 const DEFAULT_RPC_ALT_URLS: Record<NetworkType, string> = {
   testnet: 'https://sui-testnet-endpoint.blockvision.org',

@@ -85,8 +85,8 @@ async function scanRegistryAndDecryptForPhone(phoneNumber: string): Promise<stri
 
     const registry = registries[0];
     const rpcUrl = network === 'testnet'
-      ? (process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://fullnode.testnet.sui.io:443')
-      : (process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://fullnode.mainnet.sui.io:443');
+      ? (process.env.NEXT_PUBLIC_TESTNET_RPC_URL || 'https://sui-testnet-rpc.publicnode.com')
+      : (process.env.NEXT_PUBLIC_MAINNET_RPC_URL || 'https://sui-rpc.publicnode.com');
     const suiClient = getPooledSuiClient({ network, rpcUrl });
 
     const normalizedPhone = phoneNumber.replace(/^\+/, '');

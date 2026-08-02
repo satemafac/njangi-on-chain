@@ -53,11 +53,11 @@ function resolveRpcUrl(network: WalletNetwork, override?: string): string {
   if (network === 'mainnet') {
     return (
       process.env.NEXT_PUBLIC_MAINNET_RPC_URL ??
-      'https://fullnode.mainnet.sui.io:443'
+      'https://sui-rpc.publicnode.com'
     );
   }
   return (
-    process.env.NEXT_PUBLIC_TESTNET_RPC_URL ?? 'https://fullnode.testnet.sui.io:443'
+    process.env.NEXT_PUBLIC_TESTNET_RPC_URL ?? 'https://sui-testnet-rpc.publicnode.com'
   );
 }
 

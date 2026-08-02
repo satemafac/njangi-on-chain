@@ -408,7 +408,21 @@ export function isRetriableSuiRpcError(error: unknown): boolean {
     // can ask the alternate node.
     normalized.includes('could not find the referenced transaction') ||
     normalized.includes('could not find object') ||
-    normalized.includes('transaction not found')
+    normalized.includes('transaction not found') ||
+    // An endpoint that has withdrawn its JSON-RPC surface. Sui deprecated
+    // JSON-RPC on its public fullnodes, which `fullnode.*.sui.io` serves as
+    // HTTP 200 carrying a JSON-RPC error body — so it reaches us as an
+    // application error, not a transport failure, and every check above
+    // misses it. The endpoint is permanently dead rather than blipping, but
+    // "try the next host" is exactly the right response and is what failover
+    // exists for: without this, a healthy alternate is never attempted and
+    // the whole app loses chain access behind one retired primary.
+    //
+    // Cost when the method is genuinely absent everywhere: we walk the host
+    // list before failing. That is a slower failure, not a wrong one.
+    normalized.includes('method not found') ||
+    normalized.includes('json-rpc on public fullnodes has been deprecated') ||
+    normalized.includes('jsonrpc has been deprecated')
   );
 }
 

@@ -118,6 +118,28 @@ describe('sui-rpc-failover', () => {
     expect(isRetriableSuiRpcError(new Error('Permission denied'))).toBe(false);
   });
 
+  it('fails over when an endpoint withdraws its JSON-RPC surface', () => {
+    // Sui deprecated JSON-RPC on public fullnodes and serves the refusal as
+    // HTTP 200 with a JSON-RPC error body, so it arrives as an application
+    // error rather than a transport failure. Before this was classified, a
+    // healthy alternate was never tried and the app lost all chain access
+    // behind one retired primary (2026-08-02).
+    expect(
+      isRetriableSuiRpcError(
+        new Error(
+          'Method not found. JSON-RPC on public fullnodes has been deprecated. ' +
+            'Please migrate to gRPC or GraphQL endpoints.',
+        ),
+      ),
+    ).toBe(true);
+    expect(isRetriableSuiRpcError(new Error('Method not found'))).toBe(true);
+
+    // Still not a blanket "retry everything": unrelated application errors
+    // must stay terminal so a real failure is not masked by N host attempts.
+    expect(isRetriableSuiRpcError(new Error('Invalid params'))).toBe(false);
+    expect(isRetriableSuiRpcError(new Error('Permission denied'))).toBe(false);
+  });
+
   it('classifies 429 and rate-limit messages explicitly', () => {
     expect(isRateLimitedSuiRpcError(new Error('Unexpected status code: 429'))).toBe(true);
     expect(

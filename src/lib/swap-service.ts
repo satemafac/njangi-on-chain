@@ -17,7 +17,7 @@ class SwapService {
 
   constructor() {
     // Initialize with default values
-    this.suiClient = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+    this.suiClient = new SuiClient({ url: 'https://sui-testnet-rpc.publicnode.com' });
   }
 
   /**
