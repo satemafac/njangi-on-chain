@@ -263,6 +263,24 @@ class SuiFailoverTransport implements SuiTransport {
 
   private markCooldown(rpcUrl: string, error: unknown): void {
     const message = getSuiRpcErrorMessage(error);
+
+    // A capability gap is not ill health. publicnode serves object reads
+    // perfectly but has no event history, so every queryEvents against it
+    // fails — benching it for 10s over that took the ONE endpoint that
+    // answers the app's most common call out of rotation, cascading into
+    // "all endpoints cooling down" and a dashboard showing 0 circles and $0
+    // for a funded account (observed in production 2026-08-02).
+    //
+    // These failures still fail OVER — the request moves to the next
+    // candidate — they just do not penalise the endpoint for the methods it
+    // does serve.
+    if (isCapabilityGapError(message)) {
+      console.warn(
+        `[sui.transport] ${rpcUrl} does not serve this method; failing over without cooldown: ${message}`,
+      );
+      return;
+    }
+
     const statusCode = extractStatusCode(message);
     const durationMs =
       statusCode === 429 ? RATE_LIMIT_COOLDOWN_MS : TRANSIENT_FAILURE_COOLDOWN_MS;
@@ -400,6 +418,27 @@ export function clearSuiRpcClientPool(): void {
   directClientPool.clear();
   failoverClientPool.clear();
   rpcCooldowns.clear();
+}
+
+/**
+ * True when the endpoint is healthy but does not serve THIS method or data.
+ *
+ * Distinct from a transient failure: retrying later against the same endpoint
+ * will never work, and taking it out of rotation punishes it for calls it
+ * handles fine. Sui's public fullnodes withdrew JSON-RPC entirely; publicnode
+ * and suiscan serve object reads but prune event history. Both present as
+ * application errors on an otherwise healthy connection.
+ *
+ * Callers should fail OVER on these, and must NOT cool the endpoint down.
+ */
+export function isCapabilityGapError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('could not find the referenced transaction') ||
+    normalized.includes('method not found') ||
+    normalized.includes('json-rpc on public fullnodes has been deprecated') ||
+    normalized.includes('jsonrpc has been deprecated')
+  );
 }
 
 export function isRetriableSuiRpcError(error: unknown): boolean {

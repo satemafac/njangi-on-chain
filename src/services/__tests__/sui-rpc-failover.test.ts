@@ -59,6 +59,7 @@ import {
   getPooledSuiClient,
   getRpcCandidateUrls,
   getRpcCandidateUrlsForRpcUrl,
+  isCapabilityGapError,
   isRateLimitedSuiRpcError,
   isRetriableSuiRpcError,
   logSuiReadError,
@@ -344,5 +345,51 @@ describe('sui-rpc-failover', () => {
       expect(errorSpy).toHaveBeenCalled();
       errorSpy.mockRestore();
     });
+  });
+});
+
+describe('capability gaps vs ill health', () => {
+  // The distinction this suite defends: an endpoint that cannot serve a
+  // METHOD must not be benched for the methods it serves fine.
+  //
+  // Production 2026-08-02: every queryEvents against publicnode failed
+  // ("Could not find the referenced transaction events") because it prunes
+  // event history. Each failure cooled publicnode down for 10s — removing the
+  // one endpoint that answers the app's most common call. blockvision then
+  // 429'd, everything entered cooldown, and a funded account rendered as
+  // 0 circles / $0.
+
+  it('classifies pruned event history and withdrawn JSON-RPC as capability gaps', () => {
+    expect(
+      isCapabilityGapError(
+        'Could not find the referenced transaction events [TransactionDigest(abc)].',
+      ),
+    ).toBe(true);
+    expect(
+      isCapabilityGapError(
+        'Method not found. JSON-RPC on public fullnodes has been deprecated.',
+      ),
+    ).toBe(true);
+  });
+
+  it('does not treat genuine ill health as a capability gap', () => {
+    // These SHOULD cool the endpoint down — retrying the same host soon is
+    // exactly the wrong move when it is rate-limited or falling over.
+    for (const msg of [
+      'Unexpected status code: 429',
+      'Unexpected status code: 503',
+      'fetch failed',
+      'socket hang up',
+    ]) {
+      expect(isCapabilityGapError(msg)).toBe(false);
+    }
+  });
+
+  it('keeps capability gaps retriable so the request still fails over', () => {
+    // Failing over is right; penalising the endpoint is not. Both properties
+    // have to hold at once.
+    const msg = 'Could not find the referenced transaction events [TransactionDigest(x)].';
+    expect(isCapabilityGapError(msg)).toBe(true);
+    expect(isRetriableSuiRpcError(new Error(msg))).toBe(true);
   });
 });
