@@ -940,6 +940,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     switch (action) {
       case 'beginLogin':
+        // Validate the browser-supplied key material at the boundary. The
+        // service guards this too, but throwing from there surfaces as a 500
+        // via the outer catch — and a malformed request is the caller's fault,
+        // not a server fault. Returning 500 would page on client errors and
+        // bury real faults in monitoring noise.
+        if (
+          typeof req.body.ephemeralPublicKey !== 'string' ||
+          !req.body.ephemeralPublicKey ||
+          typeof req.body.randomness !== 'string' ||
+          !req.body.randomness
+        ) {
+          return res.status(400).json({
+            error:
+              'A browser-generated ephemeral public key and randomness are required. Refresh the page and try signing in again.',
+            code: 'EPHEMERAL_KEY_REQUIRED',
+          });
+        }
+
         // Generate new session ID and clear any existing sessions
         sessionId = crypto.randomUUID();
         setSessionCookie(res, sessionId);
