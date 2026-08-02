@@ -15,9 +15,12 @@
     "smoke:testnet": "node scripts/smoke-testnet.mjs",
     "notifier:cycle-finalized": "node scripts/cycle-finalized-notifier.mjs",
     "check:copy": "node scripts/check-marketing-copy.mjs",
-    "preflight": "npm run validate:move-network && cd move && sui move build && cd .. && npx tsc --noEmit -p . && npx next lint --dir src && npm run check:copy",
+    "preflight": "npm run validate:move-network && cd move && sui move build && cd .. && npx tsc --noEmit -p . && npx next lint --dir src && npm run check:copy && npm run test:seo",
     "preflight:full": "npm run preflight && cd move && sui move test --filter njangi -- --skip-fetch-latest-git-deps; status=$?; cd ..; if [ $status -ne 0 ] && [ \"$NJANGI_ALLOW_MOVE_TEST_FAIL\" = \"true\" ]; then echo '[preflight:full] sui move test failed; ignoring (NJANGI_ALLOW_MOVE_TEST_FAIL=true).'; exit 0; else exit $status; fi",
-    "lint": "next lint"
+    "lint": "next lint",
+    "generate:icons": "node scripts/generate-icons.mjs",
+    "test:seo": "jest src/__tests__/seo --runInBand",
+    "generate:og": "node scripts/generate-og.mjs"
   },
   "engines": {
     "node": "24.x",
@@ -93,6 +96,8 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
+    "@fontsource/instrument-serif": "^5.3.0",
+    "@fontsource/manrope": "^5.3.0",
     "@types/better-sqlite3": "^7.6.12",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
@@ -115,6 +120,8 @@
     "express": "^4.21.2",
     "jest": "^30.2.0",
     "postcss": "^8.4.49",
+    "satori": "^0.29.0",
+    "sharp": "^0.34.5",
     "tailwindcss": "^3.4.17",
     "task-master-ai": "^0.42.0",
     "ts-jest": "^29.4.6",
