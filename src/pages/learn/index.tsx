@@ -7,38 +7,48 @@ import { SourcedStat, PlainStat } from '../../components/marketing/SourcedStat';
 import { REMITTANCES_AFRICA, REMITTANCE_COST_AFRICA, SAVINGS_CLUB_PARTICIPATION } from '../../content/sourced-facts';
 
 export default function LearnIndexPage() {
+  // Card copy follows the page it links to. The slug migration updated these
+  // hrefs but left the display text on the old product-first framing — cards
+  // reading "Blockchain ROSCA" and "Sou Sou Crypto" pointing at pages titled
+  // "What is a ROSCA?" and "What is a Susu?". A card that promises something
+  // different from its destination is a bounce, and the anchor text is itself a
+  // ranking signal for the target page.
+  //
+  // NOTE: unlike the glossary grid below, this array is hand-maintained. It has
+  // exactly one entry per pillar page under src/pages/learn/. Adding an entry
+  // here without the page existing produces an internal link to a 404.
   const articles = [
     {
-      title: "What is Njangi?",
-      subtitle: "Understanding Cameroon's Traditional Savings Circle",
-      description: "Discover how Njangi works and how blockchain technology revolutionizes traditional Cameroon savings circles.",
+      title: "What is a Njangi?",
+      subtitle: "Cameroon's rotating savings circle",
+      description: "Where the word comes from, how a njangi actually runs, and what it means in English.",
       href: "/learn/what-is-njangi",
       tag: "Fundamentals",
       readTime: "5 min read",
       color: "green"
     },
     {
-      title: "Blockchain ROSCA",
-      subtitle: "The Future of Community Savings",
-      description: "Learn how blockchain technology transforms traditional ROSCAs worldwide with smart contracts and DeFi.",
+      title: "What is a ROSCA?",
+      subtitle: "The structure behind all of them",
+      description: "Rotating savings and credit association — the economists' name for what njangi, tontine, susu and chit funds all are.",
       href: "/learn/rosca",
-      tag: "Technology",
+      tag: "Fundamentals",
       readTime: "7 min read",
       color: "blue"
     },
     {
-      title: "Tontine Blockchain",
-      subtitle: "Revolutionizing African Finance",
-      description: "Explore how French African tontine traditions are digitized through blockchain for modern communities.",
+      title: "What is a Tontine?",
+      subtitle: "Francophone Africa",
+      description: "How tontines run across West and Central Africa, and why the word means something different in French financial history.",
       href: "/learn/tontine",
       tag: "Regional Focus",
       readTime: "9 min read",
       color: "purple"
     },
     {
-      title: "Sou Sou Crypto",
-      subtitle: "Caribbean Savings Circles Meet Blockchain",
-      description: "See how Caribbean and West African susu traditions embrace cryptocurrency and smart contracts.",
+      title: "What is a Susu?",
+      subtitle: "The Caribbean and West Africa",
+      description: "Susu, sou-sou and Partner — one practice carried across the Atlantic, and still running on both sides of it.",
       href: "/learn/susu",
       tag: "Cultural Traditions",
       readTime: "8 min read",
