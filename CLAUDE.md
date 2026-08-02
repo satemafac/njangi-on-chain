@@ -241,6 +241,11 @@ Practical consequences:
 **Vercel deploy (web app)**:
 The app is hosted on **Vercel**; production Postgres is **Neon**. The Move
 publish runbook below is separate (it ships contracts, not the web app).
+0. After ANY database migration or swap, run `npm run bootstrap:sanctions`
+   (or the cron-secret curl in `docs/sanctions-program.md`). `migrate:postgres`
+   creates the sanctions tables but does not populate them, and an empty list
+   means screening CANNOT RUN — every fail-closed surface (circle join, ramp
+   session) refuses with `SCREENING_UNAVAILABLE` until the list is loaded.
 1. Provision a Neon Postgres database; set `DATABASE_URL` (Neon URLs include
    `?sslmode=require`). Run `npm run migrate:postgres` against it before the
    first deploy — idempotent; it also adds the `walrus_end_epoch` column to

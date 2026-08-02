@@ -70,8 +70,18 @@ use Njangi On-Chain.") with stable codes (`SANCTIONS_BLOCKED`,
   delisting prune → meta row. Optional read-only mirror cross-check
   (`SANCTIONS_MIRROR_CROSSCHECK_URL`) warns on >10% divergence, never
   ingests.
-- **Bootstrap after each fresh deploy/migration:**
+- **Bootstrap after each fresh deploy/migration — REQUIRED, not optional:**
   `curl -H "Authorization: Bearer $CRON_SECRET" https://<host>/api/cron/sanctions-refresh`
+
+  Or, with database access instead of the cron secret:
+  `DATABASE_URL=<target> npm run bootstrap:sanctions`
+
+  An empty list is not "everything passes" — it is "screening cannot run".
+  Every fail-closed surface (circle join, ramp session) therefore refuses
+  with `SCREENING_UNAVAILABLE` until this has run. Observed 2026-08-02:
+  after migrating to a new Neon database, `sanctions_list_meta` was empty
+  and joins returned 503 until the list was bootstrapped. `migrate:postgres`
+  creates the tables; it does NOT populate them.
   then confirm the response reports a plausible `addressCount` (~400-500).
   Note: production `CRON_SECRET` is a Vercel **sensitive** env var —
   `vercel env pull` returns it empty, so the curl needs the real value

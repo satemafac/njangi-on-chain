@@ -10,6 +10,7 @@
     "validate:env": "node scripts/validate-env.mjs",
     "validate:move-network": "bash move/scripts/switch-network.sh verify",
     "migrate:postgres": "node scripts/migrate-postgres.mjs",
+    "bootstrap:sanctions": "ts-node --compiler-options {\"module\":\"commonjs\",\"target\":\"es2020\",\"esModuleInterop\":true,\"moduleResolution\":\"node\"} scripts/bootstrap-sanctions.ts",
     "generate:secrets": "node scripts/generate-secrets.mjs",
     "bootstrap:package": "node scripts/bootstrap-package.mjs",
     "smoke:testnet": "node scripts/smoke-testnet.mjs",
