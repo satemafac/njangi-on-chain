@@ -24,6 +24,7 @@ import { SITE_ROUTES, isNoindexRoute } from '@/lib/seo-routes';
 import { ROSCA_TERMS } from '@/content/rosca-terms';
 import { buildRobotsTxt } from '@/pages/robots.txt';
 import { buildSitemapXml } from '@/pages/sitemap.xml';
+import * as SOURCED_FACTS from '@/content/sourced-facts';
 
 const ROOT = join(__dirname, '../../..');
 const PAGES = join(ROOT, 'src/pages');
@@ -115,6 +116,47 @@ describe('open graph images exist', () => {
       .filter((f) => stale.test(readFileSync(f, 'utf8')))
       .map((f) => f.replace(`${ROOT}/`, ''));
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('no unsourced statistics on marketing pages', () => {
+  // The learn pages carried invented figures presented as fact — "1B+ people",
+  // "$500B+ annual volume", "80% women-led savings circles", and "200+ countries
+  // with active savings circle traditions", which exceeds the number of
+  // countries that exist. Google's helpful-content guidance treats
+  // unverifiable claims as a quality signal against the site, and on a page
+  // about other people's money they are a liability besides.
+  //
+  // Figures now live in src/content/sourced-facts.ts, each with a year and a
+  // link, and render through <SourcedStat> so a number cannot appear without
+  // its citation.
+  const marketing = pageFiles().filter((f) =>
+    /\/(learn|blog)\//.test(f) || f.endsWith(`${'faq'}.tsx`)
+  );
+
+  const RETIRED = [
+    '1B+', '200+', '$500B+', '45M+', '$25B+',
+    '80%</', '75% of', '100 million Africans', '$50+ billion',
+    '40% of businesses', '$48 billion', '4M+ in United States',
+    '1M+ Caribbean-heritage',
+  ];
+
+  it.each(RETIRED)('the retired claim %p is gone', (claim) => {
+    const offenders = marketing
+      .filter((f) => readFileSync(f, 'utf8').includes(claim))
+      .map((f) => f.replace(`${ROOT}/`, ''));
+    expect(offenders).toEqual([]);
+  });
+
+  it('every sourced fact carries a year, a source and a resolvable https link', () => {
+    // Required at the type level too, but a fact with an empty string would
+    // still compile and would render a citation that says nothing.
+    for (const [name, fact] of Object.entries(SOURCED_FACTS)) {
+      expect(`${name}:${fact.value}`.length).toBeGreaterThan(name.length);
+      expect(fact.year).toMatch(/\d{4}/);
+      expect(fact.source.length).toBeGreaterThan(4);
+      expect(fact.url).toMatch(/^https:\/\//);
+    }
   });
 });
 

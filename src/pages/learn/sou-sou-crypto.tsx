@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { Seo } from '../../components/Seo';
 import { article, breadcrumbs, definedTerm } from '../../lib/structured-data';
 import { MarketingShell } from '../../components/marketing/ArticleLayout';
+import { SourcedStat, PlainStat } from '../../components/marketing/SourcedStat';
+import { REMITTANCES_LAC, REMITTANCE_COST_GLOBAL } from '../../content/sourced-facts';
 
 export default function SouSouCryptoPage() {
   const [activeSection, setActiveSection] = useState('overview');
@@ -93,26 +95,21 @@ export default function SouSouCryptoPage() {
           </div>
         </section>
 
-        {/* Quick Stats */}
-        <section className="bg-ink-surface border-b">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-center">
-              <div>
-                <div className="text-3xl font-bold text-gold">45M+</div>
-                <div className="text-sm text-sand">Caribbean diaspora globally</div>
-              </div>
-              <div>
-                <div className="text-3xl font-bold text-gold">80%</div>
-                <div className="text-sm text-sand">Women-led savings circles</div>
-              </div>
-              <div>
-                <div className="text-3xl font-bold text-gold">$25B+</div>
-                <div className="text-sm text-sand">Annual remittances to Caribbean</div>
-              </div>
-              <div>
-                <div className="text-3xl font-bold text-gold">15+</div>
-                <div className="text-sm text-sand">Countries with active traditions</div>
-              </div>
+        {/* Sourced figures only. The block this replaced asserted a diaspora
+            population, a share of circles led by women, and a Caribbean
+            remittance total, none of them sourced. The regional total below is
+            for Latin America and the Caribbean together, which is how the World
+            Bank reports it — deliberately not narrowed to the Caribbean alone,
+            since that would invent a breakdown the source does not give. */}
+        <section className="bg-ink-surface border-b border-ink-border">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-8">
+              <SourcedStat fact={REMITTANCES_LAC} />
+              <SourcedStat fact={REMITTANCE_COST_GLOBAL} />
+              <PlainStat
+                value="One tradition"
+                label="Susu, sou-sou and Partner name the same practice across the Caribbean and West Africa"
+              />
             </div>
           </div>
         </section>
@@ -438,17 +435,17 @@ public fun make_contribution(
                       <div className="border border-ink-border rounded-lg p-4">
                         <h4 className="font-semibold text-gold mb-2">North America</h4>
                         <ul className="text-sm text-sand space-y-1">
-                          <li>• 4M+ in United States (NY, FL, CA)</li>
-                          <li>• 800K+ in Canada (Toronto, Montreal)</li>
-                          <li>• Strong remittance networks</li>
+                          <li>• Long-established communities in New York, Florida and California</li>
+                          <li>• Toronto and Montreal in Canada</li>
+                          <li>• Dense remittance corridors back to the islands</li>
                         </ul>
                       </div>
                       <div className="border border-ink-border rounded-lg p-4">
                         <h4 className="font-semibold text-gold mb-2">United Kingdom</h4>
                         <ul className="text-sm text-sand space-y-1">
-                          <li>• 1M+ Caribbean-heritage residents</li>
+                          <li>• Caribbean-heritage communities since the Windrush generation</li>
                           <li>• Established community institutions</li>
-                          <li>• Cultural preservation initiatives</li>
+                          <li>• Pardna kept going alongside formal banking</li>
                         </ul>
                       </div>
                       <div className="border border-ink-border rounded-lg p-4">

@@ -356,7 +356,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
                     How African Diaspora Communities Are Revolutionizing Remittances
                   </h4>
                   <p className="text-sm text-sand">
-                    Exploring how blockchain-powered savings circles reduce costs for the $48 billion African remittance market.
+                    The World Bank puts the average cost of sending $200 to Sub-Saharan Africa at 7.9%. What a rotating circle changes about that, and what it does not.
                   </p>
                 </div>
               </Link>
@@ -384,7 +384,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
                     Women-Led Savings Circles: The Backbone of African Finance
                   </h4>
                   <p className="text-sm text-sand">
-                    How 75% of traditional savings circles across Africa are led by women.
+                    Across chamas, stokvels and tontines the organiser is very often a woman. What that role actually involves.
                   </p>
                 </div>
               </Link>

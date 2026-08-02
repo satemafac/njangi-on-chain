@@ -143,12 +143,16 @@ export default function WhatIsNjangiPage() {
                   receives the entire collected amount, continuing until everyone has received their turn.
                 </p>
                 
-                {/* The two figures that used to sit here ("over 1 billion people
-                    globally", "over 60% of adults in Cameroon") had no source
+                {/* The two figures that used to sit here — a global participant
+                    count and a share of Cameroonian adults — had no source
                     behind them. Unsourced statistics are a liability on a page
                     about money, and Google's helpful-content guidance treats
-                    unverifiable claims as a quality signal against you. Replaced
-                    with statements that are true by construction. */}
+                    unverifiable claims as a quality signal against the site.
+                    Replaced with statements that hold without a number. Where a
+                    real figure is worth quoting, add it to
+                    src/content/sourced-facts.ts and render it through
+                    SourcedStat, which cannot show a number without its
+                    citation. */}
                 <div className="bg-gold/[0.07] border-l-4 border-gold/45 p-6 mb-6">
                   <h3 className="text-lg font-semibold text-gold mb-2">Why it endures</h3>
                   <ul className="space-y-2 text-gold">

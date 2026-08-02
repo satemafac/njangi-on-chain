@@ -27,7 +27,7 @@ export default function BlogIndexPage() {
     {
       id: 'african-diaspora-remittances',
       title: "How African Diaspora Communities Are Revolutionizing Remittances",
-      excerpt: "Exploring how blockchain-powered savings circles reduce costs and increase efficiency for the $48 billion African remittance market.",
+      excerpt: "The World Bank puts the average cost of sending $200 to Sub-Saharan Africa at 7.9%. What a rotating circle changes about that, and what it does not.",
       category: 'Diaspora',
       readTime: '12 min read',
       publishDate: '2024-01-12',
@@ -51,7 +51,7 @@ export default function BlogIndexPage() {
     {
       id: 'women-led-savings-circles-africa',
       title: "Women-Led Savings Circles: The Backbone of African Community Finance",
-      excerpt: "How 75% of traditional savings circles across Africa are led by women, and how blockchain technology empowers this leadership.",
+      excerpt: "Across chamas, stokvels and tontines, the organiser is very often a woman. What that role actually involves, and what a shared record changes about it.",
       category: 'Social Impact',
       readTime: '9 min read',
       publishDate: '2024-01-05',

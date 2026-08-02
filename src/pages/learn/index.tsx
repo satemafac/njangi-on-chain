@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { Seo } from '../../components/Seo';
 import { breadcrumbs } from '../../lib/structured-data';
 import { MarketingShell } from '../../components/marketing/ArticleLayout';
+import { SourcedStat, PlainStat } from '../../components/marketing/SourcedStat';
+import { REMITTANCES_AFRICA, REMITTANCE_COST_AFRICA, SAVINGS_CLUB_PARTICIPATION } from '../../content/sourced-facts';
 
 export default function LearnIndexPage() {
   const articles = [
@@ -125,26 +127,20 @@ export default function LearnIndexPage() {
           </div>
         </section>
 
-        {/* Quick Stats */}
-        <section className="bg-ink-surface border-b">
+        {/* Figures carry their source. The block this replaced showed four big
+            round numbers — a global participant count, an annual volume, and a
+            country count that exceeded the number of countries that exist —
+            with nothing behind any of them. */}
+        <section className="bg-ink-surface border-b border-ink-border">
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
-              <div>
-                <div className="text-3xl font-bold text-gold mb-2">1B+</div>
-                <div className="text-sm text-sand">People use traditional savings circles globally</div>
-              </div>
-              <div>
-                <div className="text-3xl font-bold text-gold mb-2">200+</div>
-                <div className="text-sm text-sand">Countries with active savings circle traditions</div>
-              </div>
-              <div>
-                <div className="text-3xl font-bold text-gold mb-2">$500B+</div>
-                <div className="text-sm text-sand">Annual volume through informal savings systems</div>
-              </div>
-              <div>
-                <div className="text-3xl font-bold text-gold mb-2">100%</div>
-                <div className="text-sm text-sand">Non-custodial: no operator can move member funds</div>
-              </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+              <SourcedStat fact={REMITTANCES_AFRICA} />
+              <SourcedStat fact={REMITTANCE_COST_AFRICA} />
+              <SourcedStat fact={SAVINGS_CLUB_PARTICIPATION} />
+              <PlainStat
+                value="Self-custodied"
+                label="No operator function can move member funds — the contract has no admin path to a circle's balance"
+              />
             </div>
           </div>
         </section>

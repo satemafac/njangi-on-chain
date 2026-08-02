@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { Seo } from '../../components/Seo';
 import { article, breadcrumbs } from '../../lib/structured-data';
 import { MarketingShell } from '../../components/marketing/ArticleLayout';
+import { SourcedStat, PlainStat } from '../../components/marketing/SourcedStat';
+import { REMITTANCE_COST_AFRICA, SAVINGS_CLUB_PARTICIPATION } from '../../content/sourced-facts';
 
 export default function BlockchainRoscaPage() {
   const [activeTab, setActiveTab] = useState('overview');
@@ -85,26 +87,20 @@ export default function BlockchainRoscaPage() {
           </div>
         </section>
 
-        {/* Quick Stats */}
-        <section className="bg-ink-surface border-b">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-center">
-              <div>
-                <div className="text-3xl font-bold text-gold">1B+</div>
-                <div className="text-sm text-sand">Global ROSCA participants</div>
-              </div>
-              <div>
-                <div className="text-3xl font-bold text-gold">200+</div>
-                <div className="text-sm text-sand">Countries with ROSCAs</div>
-              </div>
-              <div>
-                <div className="text-3xl font-bold text-gold">$500B+</div>
-                <div className="text-sm text-sand">Annual ROSCA volume</div>
-              </div>
-              <div>
-                <div className="text-3xl font-bold text-gold">100%</div>
-                <div className="text-sm text-sand">On-chain auditability</div>
-              </div>
+        {/* Every figure links to its source. The previous block asserted a
+            global participant count, a country count and an annual ROSCA
+            volume, none of them sourced. Nobody measures global ROSCA volume —
+            the whole point of a ROSCA is that it leaves no institutional
+            record — so there is no honest number to replace it with. */}
+        <section className="bg-ink-surface border-b border-ink-border">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-8">
+              <SourcedStat fact={SAVINGS_CLUB_PARTICIPATION} />
+              <SourcedStat fact={REMITTANCE_COST_AFRICA} />
+              <PlainStat
+                value="Every cycle"
+                label="Contributions, payout order and approvals stay visible to the whole circle for the life of the circle"
+              />
             </div>
           </div>
         </section>
@@ -174,11 +170,11 @@ export default function BlockchainRoscaPage() {
                   <div className="bg-gold/[0.07] p-6 rounded-lg">
                     <h3 className="text-xl font-semibold text-gold mb-4">Global Impact</h3>
                     <ul className="space-y-2 text-gold">
-                      <li>• Serving 1+ billion people worldwide</li>
-                      <li>• Critical for unbanked populations</li>
-                      <li>• Supporting microenterprise development</li>
-                      <li>• Empowering women&rsquo;s economic participation</li>
-                      <li>• Preserving cultural financial traditions</li>
+                      <li>• Found independently on every inhabited continent</li>
+                      <li>• Works without a bank, a credit history or paperwork</li>
+                      <li>• A common source of working capital for market traders</li>
+                      <li>• Frequently organised and led by women</li>
+                      <li>• Carried abroad intact by diaspora communities</li>
                     </ul>
                   </div>
                 </div>

@@ -146,13 +146,20 @@ export default function TontineBlockchainPage() {
                     </ul>
                   </div>
                   
+                  {/* This block previously asserted a participant count, an annual sum
+                      mobilised, a share of members who are women and a share of
+                      businesses funded — four precise-looking figures with no
+                      source behind any of them. Tontines are informal by
+                      definition and leave no institutional record, so there is
+                      no aggregate to cite; the claims below are qualitative and
+                      hold without a number. */}
                   <div className="bg-gold/[0.07] p-6 rounded-lg">
-                    <h3 className="text-xl font-semibold text-gold mb-4">Economic Impact</h3>
+                    <h3 className="text-xl font-semibold text-gold mb-4">Why it matters</h3>
                     <ul className="space-y-2 text-gold">
-                      <li>• Over 100 million Africans participate</li>
-                      <li>• $50+ billion mobilized annually</li>
-                      <li>• 75% of members are women</li>
-                      <li>• 40% of businesses funded through tontines</li>
+                      <li>• Reaches people no bank will underwrite</li>
+                      <li>• Turns a small regular income into a usable lump sum</li>
+                      <li>• Often organised and led by women</li>
+                      <li>• A common way to start or restock a small business</li>
                     </ul>
                   </div>
                 </div>
