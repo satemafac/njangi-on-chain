@@ -9,10 +9,16 @@ export default function WhatIsNjangiPage() {
 
   return (
     <>
+      {/* Tuned to the queries this page actually receives. "njangi meaning" is
+          229 impressions at 1.7% CTR and "njangi in english" is 36 with zero
+          clicks, so the title leads with "meaning" and the description answers
+          the question outright rather than describing the article. "njangui" is
+          in the description because it is a 47-impression query with no clicks,
+          and Google bolds matched terms in the snippet. */}
       <Seo
-        title="What is a Njangi? Cameroon's Savings Circle"
+        title="Njangi Meaning: Cameroon's Savings Circle Explained"
         titleAbsolute
-        description="Njangi (n-JAHN-gee) is Cameroon's rotating savings circle: members contribute on a shared schedule and each takes the whole pot in turn. Origins, mechanics, and how to run one."
+        description="Njangi (n-JAHN-gee), also spelled njangui, is Cameroon's rotating savings circle — in English, a savings club or ROSCA. Each member takes the pot in turn."
         path="/learn/what-is-njangi"
         ogType="article"
         image={{ url: '/og/learn-what-is-njangi.png', alt: 'What is a njangi?' }}
@@ -138,11 +144,78 @@ export default function WhatIsNjangiPage() {
               <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
                 <h2 className="text-3xl font-bold mb-6 text-cream">What is Njangi?</h2>
                 <p className="text-lg text-sand mb-6">
-                  <strong>Njangi</strong> (pronounced &ldquo;n-JAHN-gee&rdquo;) is a Cameroon-originated rotating savings and credit association 
-                  where a group of trusted individuals contribute fixed amounts regularly to a common pool. Each cycle, one member 
+                  <strong>Njangi</strong> (pronounced &ldquo;n-JAHN-gee&rdquo;) is a Cameroon-originated rotating savings and credit association
+                  where a group of trusted individuals contribute fixed amounts regularly to a common pool. Each cycle, one member
                   receives the entire collected amount, continuing until everyone has received their turn.
                 </p>
-                
+
+                {/* Answers the queries that bring people here and then lose
+                    them. Search Console, 3 months: "njangui" 47 impressions /
+                    0 clicks, "njangi in english" 36 / 0, "njangui meaning"
+                    12 / 0 — and "njangi meaning" 229 impressions at 1.7% CTR.
+                    Before this block the page contained the string "njangui"
+                    only inside its schema markup, and never used the words
+                    "pronunciation" or "in English" at all. People were asking a
+                    question the page never answered in words. */}
+                <dl className="mb-8 divide-y divide-ink-inner rounded-2xl border border-ink-border bg-ink-deep/60 px-6">
+                  <div className="py-5">
+                    <dt className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gold">
+                      Njangi meaning
+                    </dt>
+                    <dd className="mt-2 text-base leading-7 text-sand">
+                      A group savings arrangement in which everyone pays the same amount on the
+                      same schedule, and each member in turn takes the whole pot. Nobody lends and
+                      nobody borrows — you get back what you put in, just sooner or later than the
+                      others.
+                    </dd>
+                  </div>
+                  <div className="py-5">
+                    <dt className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gold">
+                      Njangi in English
+                    </dt>
+                    <dd className="mt-2 text-base leading-7 text-sand">
+                      There is no single English word for it. The closest everyday translation is
+                      &ldquo;savings circle&rdquo; or &ldquo;savings club&rdquo;; economists call
+                      the structure a{' '}
+                      <Link href="/learn/blockchain-rosca" className="text-gold-hi underline underline-offset-4 hover:text-gold">
+                        rotating savings and credit association (ROSCA)
+                      </Link>
+                      . British and American English borrowed no term for it because the practice
+                      arrived with the communities that already had their own names for it.
+                    </dd>
+                  </div>
+                  <div className="py-5">
+                    <dt className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gold">
+                      Pronunciation and spelling
+                    </dt>
+                    <dd className="mt-2 text-base leading-7 text-sand">
+                      Said <strong>n-JAHN-gee</strong>, with the stress on the middle syllable. It
+                      is also written <strong>njangui</strong>, and occasionally{' '}
+                      <strong>njange</strong> or <strong>jangi</strong> — all the same word, spelled
+                      as different people heard it. In francophone parts of Cameroon the same
+                      practice is usually called a{' '}
+                      <Link href="/learn/tontine-blockchain" className="text-gold-hi underline underline-offset-4 hover:text-gold">
+                        tontine
+                      </Link>
+                      .
+                    </dd>
+                  </div>
+                  <div className="py-5">
+                    <dt className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gold">
+                      Where the word comes from
+                    </dt>
+                    <dd className="mt-2 text-base leading-7 text-sand">
+                      Njangi belongs to the Grassfields of the North West and South West regions of
+                      Cameroon and travelled with Cameroonian English. The practice itself is far
+                      older and far wider than the word: the{' '}
+                      <Link href="/learn#glossary" className="text-gold-hi underline underline-offset-4 hover:text-gold">
+                        same arrangement runs on every inhabited continent
+                      </Link>{' '}
+                      under names like esusu, susu, chama, stokvel, tanda and chit fund.
+                    </dd>
+                  </div>
+                </dl>
+
                 {/* The two figures that used to sit here — a global participant
                     count and a share of Cameroonian adults — had no source
                     behind them. Unsourced statistics are a liability on a page

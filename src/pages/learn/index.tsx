@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { Seo } from '../../components/Seo';
-import { breadcrumbs } from '../../lib/structured-data';
+import { breadcrumbs, definedTermSet } from '../../lib/structured-data';
+import { ROSCA_TERMS } from '../../content/rosca-terms';
 import { MarketingShell } from '../../components/marketing/ArticleLayout';
 import { SourcedStat, PlainStat } from '../../components/marketing/SourcedStat';
 import { REMITTANCES_AFRICA, REMITTANCE_COST_AFRICA, SAVINGS_CLUB_PARTICIPATION } from '../../content/sourced-facts';
@@ -83,7 +84,23 @@ export default function LearnIndexPage() {
         description="Njangi, tontine, susu, esusu, chit fund, stokvel, chama, tanda — one rotating savings tradition under many names. How each one works, and where it comes from."
         path="/learn"
         image={{ url: '/og/learn.png', alt: 'Njangi On-Chain — rotating savings circles, explained' }}
-        jsonLd={[breadcrumbs([{ name: 'Home', path: '/' }, { name: 'Learn' }])]}
+        jsonLd={[
+          breadcrumbs([{ name: 'Home', path: '/' }, { name: 'Learn' }]),
+          // Each glossary page declares itself a DefinedTerm inDefinedTermSet
+          // "/learn". Until now nothing at /learn actually defined that set, so
+          // every one of those references dangled. This closes the graph and
+          // states, machine-readably, that these cultural names denote one
+          // practice — which is the whole entity argument this site rests on.
+          definedTermSet(
+            '/learn',
+            ROSCA_TERMS.map((term) => ({
+              name: term.term,
+              description: term.shortDefinition,
+              path: `/learn/${term.slug}`,
+              alternateNames: term.alsoKnownAs,
+            }))
+          ),
+        ]}
       />
 
       <MarketingShell>
@@ -192,6 +209,52 @@ export default function LearnIndexPage() {
                 </Link>
               );
             })}
+          </div>
+        </section>
+
+        {/* The glossary, linked from the hub.
+            This matters more than it looks. Search Console shows 50 URLs stuck
+            at "Discovered – currently not indexed" with Last crawled: N/A —
+            Google found them in the old sitemap, declined to fetch a single
+            one, and throttled the site. Every one of those was reachable ONLY
+            from the sitemap. Shipping 14 more sitemap-only URLs would repeat
+            exactly that. Internal links from an already-indexed page are how
+            crawl priority is actually allocated, and /learn is indexed. */}
+        <section id="glossary" className="bg-ink-deep border-t border-ink-border">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+            <div className="mb-10">
+              <h2 className="text-3xl font-bold text-cream mb-4">
+                One tradition, many names
+              </h2>
+              <p className="text-lg text-sand max-w-3xl">
+                The same rotating savings circle runs on every inhabited continent under a
+                different name. Each entry covers where it comes from, how the turn order gets
+                decided, and what makes that version distinct.
+              </p>
+            </div>
+
+            <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {ROSCA_TERMS.map((term) => (
+                <li key={term.slug}>
+                  <Link
+                    href={`/learn/${term.slug}`}
+                    className="group flex h-full flex-col rounded-2xl border border-ink-border bg-ink-surface/70 p-5 transition-colors duration-200 hover:border-gold/45"
+                  >
+                    <span className="flex items-baseline justify-between gap-3">
+                      <span className="text-lg font-semibold text-cream group-hover:text-gold-hi">
+                        {term.term}
+                      </span>
+                      <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-gold">
+                        {term.region.split(',')[0]}
+                      </span>
+                    </span>
+                    <span className="mt-2 text-sm leading-6 text-sand">
+                      {term.shortDefinition}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
           </div>
         </section>
 
