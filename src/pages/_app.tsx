@@ -1,7 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import '@/styles/globals.css';
 import type { AppProps } from 'next/app';
+import Head from 'next/head';
+import { useRouter } from 'next/router';
 import { AuthProvider } from '../contexts/AuthContext';
+import { Seo } from '@/components/Seo';
+import { isNoindexRoute } from '@/lib/seo-routes';
+import { organization } from '@/lib/structured-data';
 import { ActivityDetector } from '@/components/ActivityDetector';
 import { IdleWarningModal } from '@/components/IdleWarningModal';
 import { useAuth } from '@/contexts/AuthContext';
@@ -19,9 +24,26 @@ const MoonPayProvider = dynamic(
 
 function AppContent({ Component, pageProps }: AppProps) {
   const { isAuthenticated } = useAuth();
+  // router.pathname is the route *pattern* ("/circle/[id]/goals"), not asPath —
+  // stable during SSR and it never leaks a circle id into the decision.
+  const { pathname } = useRouter();
+  const blocked = isNoindexRoute(pathname);
 
   return (
     <ActivityDetector>
+      <Head>
+        {/* Deliberately UNKEYED. next/head's own defaultHead() ships an unkeyed
+            viewport tag; a keyed one here would bypass the name-category dedup
+            and render both. Unkeyed means ours collapses with theirs. */}
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+      </Head>
+      {/* Sitewide head defaults. This belongs in _app and NOT in _document:
+          _app's <Head> is next/head's, so it shares the dedup pass with each
+          page's <Seo> and page tags cleanly override it. _document's <Head> is
+          next/document's, which has no dedup against next/head output at all —
+          which is why SEO tags there duplicated every page's and had to be
+          removed. Any page rendering its own <Seo> overrides everything here. */}
+      <Seo noindex={blocked} nofollow={blocked} siteJsonLd={[organization()]} />
       <LocaleDirSync />
       {isAuthenticated && (
         <>
