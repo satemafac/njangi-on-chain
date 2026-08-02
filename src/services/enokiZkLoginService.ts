@@ -12,10 +12,8 @@ import {
   jwtToAddress,
 } from '@mysten/sui/zklogin';
 import { decodeJwt } from 'jose';
-import { EnokiClient } from '@mysten/enoki';
-import { toBase64, fromBase64 } from '@mysten/sui/utils';
+import { fromBase64 } from '@mysten/sui/utils';
 import { SuiTransactionBlockResponse, ExecuteTransactionRequestType } from '@mysten/sui/client';
-import { allowedMoveCallTargets } from '@/lib/gas-sponsorship';
 import {
   getCurrentEnokiConfig,
   getCurrentGraphqlUrl,

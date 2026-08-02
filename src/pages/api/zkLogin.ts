@@ -120,6 +120,18 @@ const LEGACY_RAIL_ACTIONS = new Set([
  *
  * The end state is that this set is empty and the actions are gone. Until
  * then, membership here means "not yet migrated to client-side signing".
+ *
+ * As of 2026-08-02 the only members still POSTed by any client are
+ * depositUsdcDirect, depositStablecoin and executeSwapOnly — all currently
+ * UNREACHABLE, and that is the trap. The two deposits are LEGACY_RAIL_ACTIONS,
+ * so they answer 503 before reaching this guard; executeSwapOnly lives in
+ * SimplifiedSwapUI, which renders only when NEXT_PUBLIC_ENABLE_SWAP_AND_DEPOSIT_FORM
+ * is set (it is not, in production).
+ *
+ * So enabling either flag resurrects a path that will 409 rather than work.
+ * If you turn one on, migrate its actions to the client signer first — the
+ * builders in src/lib/zklogin-tx-builders.ts and the signLocallyWithBuilder
+ * helper in src/services/zkLoginClient.ts are the pattern.
  */
 const SERVER_SIGNING_ACTIONS = new Set([
   'activateCircle', 'adminApproveMember', 'adminApproveMembers', 'adminRemoveMember',

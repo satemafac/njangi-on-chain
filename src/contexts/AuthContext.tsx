@@ -12,22 +12,6 @@ import {
   saveSignerSession,
 } from '@/lib/zklogin-client-signer';
 
-// Define CircleData interface based on required parameters
-interface CircleData {
-  name: string;
-  contribution_amount: string | number;
-  security_deposit: string | number;
-  cycle_length: number;
-  cycle_day: number;
-  circle_type: number;
-  max_members: number;
-  rotation_style: number;
-  penalty_rules: boolean[];
-  goal_type?: { some?: number };
-  target_amount?: { some?: string | number };
-  target_date?: { some?: string | number };
-  verification_required: boolean;
-}
 
 // Define the interface for the context
 interface AuthContextType {
