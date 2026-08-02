@@ -1,6 +1,7 @@
 import {
   DEFAULT_PROBE_LOOKBACK_MS,
-  isHourlyFullPassTick,
+  fullPassIntervalHours,
+  isForcedFullPassTick,
   probeForRecentEvents,
 } from '@/lib/cron-event-probe';
 
@@ -101,11 +102,44 @@ describe('probeForRecentEvents', () => {
   });
 });
 
-describe('isHourlyFullPassTick', () => {
+describe('isForcedFullPassTick', () => {
+  const original = process.env.CRON_FULL_PASS_INTERVAL_HOURS;
+  afterEach(() => {
+    if (original === undefined) delete process.env.CRON_FULL_PASS_INTERVAL_HOURS;
+    else process.env.CRON_FULL_PASS_INTERVAL_HOURS = original;
+  });
+
   it('is true only for the first quarter-hour tick', () => {
-    expect(isHourlyFullPassTick(new Date('2026-07-21T10:00:30Z'))).toBe(true);
-    expect(isHourlyFullPassTick(new Date('2026-07-21T10:14:59Z'))).toBe(true);
-    expect(isHourlyFullPassTick(new Date('2026-07-21T10:15:00Z'))).toBe(false);
-    expect(isHourlyFullPassTick(new Date('2026-07-21T10:45:00Z'))).toBe(false);
+    expect(isForcedFullPassTick(new Date('2026-07-21T10:00:30Z'))).toBe(true);
+    expect(isForcedFullPassTick(new Date('2026-07-21T10:14:59Z'))).toBe(true);
+    expect(isForcedFullPassTick(new Date('2026-07-21T10:15:00Z'))).toBe(false);
+    expect(isForcedFullPassTick(new Date('2026-07-21T10:45:00Z'))).toBe(false);
+  });
+
+  it('defaults to every hour, preserving the pre-existing cadence', () => {
+    delete process.env.CRON_FULL_PASS_INTERVAL_HOURS;
+    for (const hour of [0, 1, 7, 13, 23]) {
+      const d = new Date(Date.UTC(2026, 6, 21, hour, 5));
+      expect(isForcedFullPassTick(d)).toBe(true);
+    }
+  });
+
+  it('fires only on multiples of the configured interval', () => {
+    process.env.CRON_FULL_PASS_INTERVAL_HOURS = '4';
+    const at = (h: number) => isForcedFullPassTick(new Date(Date.UTC(2026, 6, 21, h, 5)));
+    expect([0, 4, 8, 12, 16, 20].every(at)).toBe(true);
+    expect([1, 2, 3, 5, 9, 13, 23].some(at)).toBe(false);
+  });
+
+  it('clamps out-of-range values rather than trusting them', () => {
+    // The ceiling is a correctness guard: a forced pass must comfortably
+    // beat the 24h nudge window or a cursor could stall past it.
+    process.env.CRON_FULL_PASS_INTERVAL_HOURS = '999';
+    expect(fullPassIntervalHours()).toBe(12);
+
+    for (const bad of ['0', '-3', 'abc', '']) {
+      process.env.CRON_FULL_PASS_INTERVAL_HOURS = bad;
+      expect(fullPassIntervalHours()).toBe(1);
+    }
   });
 });

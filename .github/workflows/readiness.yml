@@ -4,18 +4,25 @@ name: readiness
 # Probes /api/health?deep=1, which runs SELECT 1 and returns 503 when the DB
 # is unreachable.
 #
-# Cadence is deliberately SLOW (every 30 min, not every 5 like liveness).
-# Each deep probe wakes Neon, and Neon autosuspends after ~5 min idle — so a
-# 30-min cadence lets the database sleep ~25 of every 30 min (~17% duty cycle)
-# instead of being pinned awake 24/7, which is what exhausted the free-tier
-# compute quota on 2026-07-21. A Neon outage is still caught within 30 min,
-# while the app-level liveness (uptime.yml, every 5 min) catches app outages
-# fast. To trade quota for faster DB-outage detection, tighten to */15; to
-# save more quota, relax to hourly.
+# Cadence is deliberately SLOW (hourly, not every 5 min like liveness).
+# Each deep probe wakes Neon, and Neon autosuspends after ~5 min idle, so this
+# probe's cost is (wakes/day x suspend timeout), independent of how fast the
+# query itself is.
+#
+# Relaxed 30min -> hourly on 2026-08-02. At */30 this was the single largest
+# scheduled waker of the database: 48 wakes/day ~= 4 h/day awake ~= 30 CU-hrs
+# per month against a 100 CU-hr free-tier allowance. Hourly halves that. The
+# free plan has far less headroom than it appears — the 2026-07-21 outage
+# consumed the whole month's allowance and the app was still locked out
+# 12 days later, since a spent quota is not refunded by reducing usage.
+#
+# A DB outage is still caught within the hour, and app-level liveness
+# (uptime.yml, every 5 min, no DB) still catches app outages fast. On a paid
+# plan, tighten back to */30 or */15 for faster DB-outage detection.
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '0 * * * *'
   workflow_dispatch: # allow a manual "is the DB reachable?" run
 
 permissions:

@@ -59,7 +59,7 @@ import {
 import { getCurrentNetwork, getNetworkConfig } from '../../../services/network-config';
 import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
 import {
-  isHourlyFullPassTick,
+  isForcedFullPassTick,
   probeForRecentEvents,
 } from '../../../lib/cron-event-probe';
 import { appLogger } from '../../../utils/logger';
@@ -162,7 +162,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const probe = await probeForRecentEvents({
     client,
     eventType,
-    forceFullPass: isHourlyFullPassTick(),
+    forceFullPass: isForcedFullPassTick(),
   });
   if (!probe.runFullPass) {
     return res.status(200).json({

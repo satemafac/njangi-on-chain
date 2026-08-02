@@ -56,7 +56,7 @@ import {
 } from '../../../lib/whatsapp-bot/circle-phone';
 import { sendMemberNotification } from '../../../lib/whatsapp-notifier';
 import {
-  isHourlyFullPassTick,
+  isForcedFullPassTick,
   probeForRecentEvents,
 } from '../../../lib/cron-event-probe';
 import { getPublishedPackageMetadata } from '../../../lib/circle-chain';
@@ -157,7 +157,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Computed once per run: on the hourly tick every stream drains fully
   // (probe bypassed) so no cursor can stall behind the quiet-tick skip.
-  const forceFullPass = isHourlyFullPassTick();
+  const forceFullPass = isForcedFullPassTick();
 
   const summaries: StreamSummary[] = [];
 

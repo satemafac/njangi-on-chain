@@ -19,7 +19,7 @@
 //   (maxEventAgeMs, default 24h), so any event that could still produce
 //   a notification always triggers a full pass.
 // - Callers force a full pass on the first tick of each hour regardless
-//   of the probe (see isHourlyFullPassTick), so cursors can never stall
+//   of the probe (see isForcedFullPassTick), so cursors can never stall
 //   behind the early-exit — old events are drained and cursor-advanced
 //   within the hour even when nothing recent exists.
 // - A probe FAILURE runs the full pass (fail toward correctness, not
@@ -34,12 +34,39 @@ export function probeLookbackMs(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_LOOKBACK_MS;
 }
 
+export const DEFAULT_FULL_PASS_INTERVAL_HOURS = 1;
+const MAX_FULL_PASS_INTERVAL_HOURS = 12;
+
 /**
- * True on the first tick of each hour (cadence is 15-minute, so minute 0
- * is exactly one tick). Full passes on these ticks are unconditional.
+ * How many hours between unconditional full passes.
+ *
+ * Clamped to 1..12. The upper bound is a correctness guard, not a
+ * preference: a forced pass must comfortably beat the 24h
+ * nudge-worthiness window (`maxEventAgeMs`), or a cursor could stall
+ * behind the probe's early-exit long enough to drop a notification.
  */
-export function isHourlyFullPassTick(now: Date = new Date()): boolean {
-  return now.getUTCMinutes() < 15;
+export function fullPassIntervalHours(): number {
+  const parsed = Number(process.env.CRON_FULL_PASS_INTERVAL_HOURS ?? '');
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return DEFAULT_FULL_PASS_INTERVAL_HOURS;
+  }
+  return Math.min(Math.floor(parsed), MAX_FULL_PASS_INTERVAL_HOURS);
+}
+
+/**
+ * True on the first tick of a forced-full-pass hour (cadence is
+ * 15-minute, so minute 0 is exactly one tick).
+ *
+ * Every forced pass opens Postgres whether or not there is work, so this
+ * is a direct Neon-compute knob: at the default of 1 it is 24 database
+ * wakes/day across both event crons. Raising
+ * `CRON_FULL_PASS_INTERVAL_HOURS` to 4 in a dev/test deployment cuts that
+ * to 6/day, at the cost of cursors draining up to 4h later — which only
+ * delays notifications, never drops them, given the 24h window.
+ */
+export function isForcedFullPassTick(now: Date = new Date()): boolean {
+  if (now.getUTCMinutes() >= 15) return false;
+  return now.getUTCHours() % fullPassIntervalHours() === 0;
 }
 
 export interface EventProbeResult {

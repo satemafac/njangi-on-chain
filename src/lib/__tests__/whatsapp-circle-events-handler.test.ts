@@ -28,7 +28,7 @@ jest.mock('../cycle-finalized-cron', () => {
 // probe would otherwise short-circuit for streams with no recent events.
 // The probe-skip contract has its own test at the bottom of this file.
 jest.mock('../cron-event-probe', () => ({
-  isHourlyFullPassTick: jest.fn(() => false),
+  isForcedFullPassTick: jest.fn(() => false),
   probeForRecentEvents: jest.fn(async () => ({
     runFullPass: true,
     reason: 'recent_event',
