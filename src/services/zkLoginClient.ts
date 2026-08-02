@@ -500,67 +500,9 @@ export class ZkLoginClient {
     }
   }
 
-  public async sendTransaction(account: AccountData, circleData: CircleData): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      // Log key information for debugging
-      console.log('Sending transaction with account:', {
-        address: account.userAddr,
-        hasProofPoints: !!account.zkProofs?.proofPoints,
-        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
-        hasHeaderBase64: !!account.zkProofs?.headerBase64,
-        maxEpoch: account.maxEpoch
-      });
-
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          action: 'sendTransaction', 
-          account: withoutSigningKey(account),
-          circleData
-        })
-      });
-      
-      const responseData: ZkLoginResponse = await response.json();
-      
-      // Handle authentication errors (401)
-      if (response.status === 401) {
-        console.error('Authentication error:', responseData);
-        throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
-          true
-        );
-      }
-      
-      // Handle server errors (500)
-      if (!response.ok) {
-        console.error('Transaction failed:', responseData);
-        throw new ZkLoginError(
-          responseData.error || 'Transaction failed', 
-          !!responseData.requireRelogin
-        );
-      }
-      
-      // Even for successful response, check if we have a digest
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      
-      console.log('Transaction succeeded:', responseData);
-      return {
-        digest: responseData.digest,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      console.error('Transaction error in client:', error);
-      // Rethrow ZkLoginError as is
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      // Otherwise wrap in a new error
-      throw new ZkLoginError(String(error), false);
-    }
-  }
+  // Removed: `sendTransaction`. The legacy server-signed circle-creation
+  // action, with no remaining callers — `createCircle` above builds the
+  // same transaction and signs it in the browser.
 
   private assertTransactionAccount(account: AccountData): void {
     if (!account.zkProofs?.proofPoints ||
@@ -868,72 +810,9 @@ export class ZkLoginClient {
     return { digest };
   }
 
-  public async configureStablecoinSwap(
-    account: AccountData, 
-    walletId: string,
-    config: {
-      enabled: boolean;
-      targetCoinType: StablecoinTarget;
-      slippageTolerance: number; 
-      minimumSwapAmount: number;
-    }
-  ): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      console.log('Configuring stablecoin swap with account:', {
-        address: account.userAddr,
-        walletId,
-        config
-      });
-      
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'configureStablecoinSwap',
-          account: withoutSigningKey(account),
-          walletId,
-          config
-        })
-      });
-      
-      const responseData: ZkLoginResponse = await response.json();
-      
-      // Handle authentication errors
-      if (response.status === 401) {
-        console.error('Authentication error:', responseData);
-        throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`,
-          true
-        );
-      }
-      
-      // Handle server errors
-      if (!response.ok) {
-        console.error('Stablecoin configuration failed:', responseData);
-        throw new ZkLoginError(
-          responseData.error || 'Stablecoin configuration failed',
-          !!responseData.requireRelogin
-        );
-      }
-      
-      // Check digest
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      
-      console.log('Stablecoin configuration succeeded:', responseData);
-      return {
-        digest: responseData.digest,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      console.error('Stablecoin configuration error:', error);
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      throw new ZkLoginError(String(error), false);
-    }
-  }
+  // Removed: `configureStablecoinSwap`. No component reached it — the only
+  // caller was cetus-service, which nothing calls either. Left as a
+  // server-signed action it was a live signing path serving dead code.
 
   public async deployToEmberVault(
     account: AccountData,

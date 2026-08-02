@@ -51,7 +51,6 @@ interface AuthContextType {
   }>;
   withdrawWalletFunds: (walletId: string, amount?: string) => Promise<string>;
   handleCallback: (jwt: string) => Promise<AccountData>;
-  sendTransaction: (circleData: CircleData) => Promise<string>;
   setUserAddress: (address: string) => void;
   setIsAuthenticated: (value: boolean) => void;
   setError: (error: string | null) => void;
@@ -104,7 +103,6 @@ const AuthContext = createContext<AuthContextType>({
   deleteCircle: async () => ({ success: false, error: 'Not implemented' }),
   withdrawWalletFunds: async () => '',
   handleCallback: async () => ({} as AccountData),
-  sendTransaction: async () => '',
   setUserAddress: () => {},
   setIsAuthenticated: () => {},
   setError: () => {},
@@ -351,13 +349,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return accountData;
   };
 
-  const sendTransaction = async (circleData: CircleData) => {
-    if (!account) throw new Error('Not logged in');
-    // Reset idle timer on transaction
-    resetIdleTimerWithLogging();
-    const { digest } = await zkLogin.sendTransaction(account, circleData);
-    return digest;
-  };
+  // Removed: `sendTransaction`. It wrapped the legacy server-signed
+  // circle-creation action and had no callers — create-circle.tsx uses
+  // ZkLoginClient.createCircle, which builds and signs in the browser.
+  // Migrating a dead chain would have meant carrying it forever.
 
   const deleteCircle = async (circleId: string, walletId?: string, packageId?: string) => {
     if (!account) throw new Error('Not logged in');
@@ -586,7 +581,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       login,
       logout,
       handleCallback, 
-      sendTransaction,
       deleteCircle,
       setUserAddress,
       setIsAuthenticated,
