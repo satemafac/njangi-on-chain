@@ -198,6 +198,33 @@ Project-specific slash commands available in `.claude/skills/`:
 
 ### Operations
 
+**⚠️ Address-affecting environment variables (read before changing any)**:
+A zkLogin address is derived from `(issuer, audience, sub, salt)`. Three env
+values feed that, and changing any of them gives the same social login a
+DIFFERENT Sui address — silently, with no error and no migration path:
+- `ENOKI_API_KEY_{TESTNET,MAINNET}` — supplies the salt.
+- `NEXT_PUBLIC_{GOOGLE,FACEBOOK,APPLE}_CLIENT_ID` — becomes the JWT `aud`.
+- The Enoki app itself (not just its keys).
+
+The old address keeps its circles, security deposits and funds, and no future
+login reaches it. Recovery means restoring the previous salt source, which
+re-orphans anyone onboarded since. **On mainnet this is permanent user fund
+loss, not an inconvenience.**
+
+Observed on testnet 2026-08-02: circles created 2026-07-04 belong to
+`...92b680`, everything after to `...9de17d`, and new Enoki keys were issued
+that same day. The operator reports the Enoki *app* was unchanged and only the
+keys rotated — which per Enoki's model (salt derived per user per app) should
+NOT have moved the address. Root cause is **unconfirmed**, so treat any change
+to the above as address-affecting until a staging test proves otherwise:
+
+1. On a staging deploy with the NEW value, log in with a test account whose
+   address you already know. Confirm the derived address is unchanged.
+2. Keep the previous key/client id — it is the only route back.
+3. There is currently NO application-level guard that detects a user's address
+   changing between logins. Adding one (warn when a returning `sub` resolves to
+   a new address) is unbuilt work worth doing before mainnet.
+
 **Vercel deploy (web app)**:
 The app is hosted on **Vercel**; production Postgres is **Neon**. The Move
 publish runbook below is separate (it ships contracts, not the web app).
