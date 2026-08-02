@@ -2682,26 +2682,38 @@ export default function ContributeToCircle() {
         { id: 'pay-security-deposit' }
       );
       
-      // SUI path uses SUI amount in MIST; USDC path derives exact amount from CircleConfig in backend.
-      const depositAmount = isSuiFlow ? getSecurityDepositInSui() : 0;
-      
-      // Execute the transaction through the API
-      const response = await fetch(getZkLoginEndpointWithCurrency(selectedPaymentCurrency), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'paySecurityDeposit',
+      // Signed in the browser. The deposit amount is derived from the
+      // circle's on-chain config inside the builder, so the SUI figure below
+      // is only a fallback for circles with no configured amount.
+      const fallbackSui = isSuiFlow
+        ? BigInt(Math.floor(getSecurityDepositInSui() * 1e9))
+        : undefined;
+
+      let responseData: { digest?: string; error?: string };
+      try {
+        const result = await new ZkLoginClient().paySecurityDeposit(
           account,
-          circleId: circle.id,
-          walletId: circle.walletId,
-          depositAmount: Math.floor(depositAmount * 1e9),
-          currency: selectedPaymentCurrency,
-          useUSDC: selectedPaymentCurrency === 'USDC',
-          network: getCurrentNetwork() // Include current network selection
-        }),
-      });
-      
-      const responseData = await response.json();
+          circle.id,
+          circle.walletId,
+          {
+            currency: selectedPaymentCurrency === 'USDC' ? 'USDC' : 'SUI',
+            usdcCoinType: USDC_COIN_TYPE,
+            suiCoinType: getCoinType('SUI'),
+            fallbackSuiAmount: fallbackSui,
+            network: getCurrentNetwork(),
+          },
+        );
+        responseData = { digest: result.digest };
+      } catch (depositErr) {
+        responseData = {
+          error:
+            depositErr instanceof Error
+              ? depositErr.message
+              : 'Failed to process security deposit payment',
+        };
+      }
+      const response = { ok: !responseData.error } as { ok: boolean };
+
       
       if (!response.ok) {
         console.error('Security deposit payment failed:', responseData);

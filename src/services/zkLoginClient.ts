@@ -795,96 +795,78 @@ export class ZkLoginClient {
     });
   }
 
-  public async paySecurityDeposit(account: AccountData, walletId: string, depositAmount: number): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      // Log key information for debugging
-      console.log('ZkLoginClient: Paying security deposit with account:', {
-        address: account.userAddr,
-        walletId: walletId,
-        depositAmount: depositAmount,
-        hasProofPoints: !!account.zkProofs?.proofPoints,
-        hasIssBase64Details: !!account.zkProofs?.issBase64Details,
-        hasHeaderBase64: !!account.zkProofs?.headerBase64,
-        maxEpoch: account.maxEpoch
-      });
-
-      // Verify the account has valid proof data
-      if (!account.zkProofs?.proofPoints || 
-          !account.zkProofs.issBase64Details || 
-          !account.zkProofs.headerBase64) {
-        throw new ZkLoginError(
-          'Missing required authentication data. Please login again.',
-          true
-        );
-      }
-
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          action: 'paySecurityDeposit',
-          account: withoutSigningKey(account),
-          walletId,
-          depositAmount
-        })
-      });
-      
-      // Try to parse the response even if status is not OK
-      let responseData;
-      try {
-        responseData = await response.json();
-        console.log('ZkLoginClient: Security deposit payment response:', 
-          response.status, response.statusText, responseData);
-      } catch (parseError) {
-        console.error('Failed to parse response:', parseError);
-        throw new ZkLoginError(`Failed to parse server response: ${response.statusText}`, false);
-      }
-      
-      // Handle authentication errors (401)
-      if (response.status === 401) {
-        console.error('Authentication error:', responseData);
-        throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`, 
-          true
-        );
-      }
-      
-      // Handle server errors (500)
-      if (!response.ok) {
-        console.error('Security deposit payment failed:', responseData);
-        throw new ZkLoginError(
-          responseData.error || 'Security deposit payment failed', 
-          !!responseData.requireRelogin
-        );
-      }
-      
-      // Even for successful response, check if we have a digest
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      
-      console.log('Security deposit payment succeeded:', responseData);
-      return {
-        digest: responseData.digest,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      console.error('Security deposit payment error in client:', error);
-      // Rethrow ZkLoginError as is
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      // Otherwise wrap in a new error
-      throw new ZkLoginError(String(error), false);
+  /**
+   * Pay a member's security deposit — the transaction that joins a circle.
+   *
+   * Signed in the browser like everything else. The deposit AMOUNT is read
+   * from the circle's on-chain config inside the builder rather than taken
+   * from the caller, so a stale figure in the UI cannot under-pay.
+   *
+   * Tries sponsored gas first: this is the first action a brand-new member
+   * takes and they may hold no SUI at all. A declined sponsorship falls
+   * through to self-paid rather than blocking the join.
+   */
+  public async paySecurityDeposit(
+    account: AccountData,
+    circleId: string,
+    walletId: string,
+    opts: {
+      currency: 'USDC' | 'SUI';
+      usdcCoinType: string;
+      suiCoinType: string;
+      fallbackSuiAmount?: bigint;
+      network?: NetworkOverride;
+    },
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    if (!account?.zkProofs?.proofPoints) {
+      throw new ZkLoginError('Missing authentication data. Please login again.', true);
     }
+
+    const signer = await tryClientSideSigner(opts.network);
+    if (!signer) {
+      throw new ZkLoginError(
+        'Your signing session is unavailable. Please sign in again.',
+        true,
+      );
+    }
+
+    const packageId = await getCircleTransactionPackageId(circleId, account.userAddr);
+    const { buildSecurityDepositTx } = await import('@/lib/security-deposit-tx');
+
+    const build = (
+      txb: Transaction,
+      client: import('@mysten/sui/client').SuiClient,
+    ) =>
+      buildSecurityDepositTx(txb, client, {
+        packageId,
+        circleId,
+        walletId,
+        userAddress: account.userAddr,
+        currency: opts.currency,
+        usdcCoinType: opts.usdcCoinType,
+        suiCoinType: opts.suiCoinType,
+        fallbackSuiAmount: opts.fallbackSuiAmount,
+      });
+
+    const sponsored = await trySponsoredGas({
+      action: 'paySecurityDeposit',
+      build,
+      network: opts.network ?? getCurrentNetwork(),
+      context: {
+        circleId,
+        coinType: opts.currency === 'USDC' ? opts.usdcCoinType : opts.suiCoinType,
+        // The USDC path splits from an owned coin; the SUI path splits from
+        // txb.gas, which draws the sponsor's coin for value and must not be
+        // sponsored.
+        usesGasCoinForValue: opts.currency === 'SUI',
+      },
+    });
+    if (sponsored) return { digest: sponsored.digest };
+
+    const { digest } = await signer.signAndExecute({ build, gasBudget: 120_000_000 });
+    return { digest };
   }
 
-  /**
-   * Configure stablecoin swap settings for a custody wallet
-   * @param account ZkLogin account data
-   * @param walletId The custody wallet ID
-   * @param config Configuration settings for stablecoin swaps
-   */
   public async configureStablecoinSwap(
     account: AccountData, 
     walletId: string,
