@@ -11,6 +11,7 @@ import {
   hashForLogs,
 } from '@/lib/onramp-logging';
 import { isSanctionedCountry } from '@/lib/ramp-geo';
+import { screenAddress } from '@/lib/sanctions';
 import { getTrustedClientIp } from '@/lib/trusted-client-ip';
 import { isRampEnabled } from '@/config/feature-flags';
 
@@ -367,6 +368,32 @@ export default async function handler(
       retryAfterSeconds: walletPerDayLimitResult.retryAfterSeconds,
     });
     return respondRateLimited(res, walletPerDayLimitResult.retryAfterSeconds);
+  }
+
+  // Screen the DESTINATION WALLET, not just the country. Geo-blocking alone
+  // leaves the case this control exists for: a listed address funding itself
+  // from a permitted jurisdiction. Fail CLOSED — starting a ramp session is a
+  // new commitment, and an unscreened one cannot be undone once the partner
+  // has delivered funds on chain.
+  const walletScreen = await screenAddress(
+    parsedBody.data.walletAddress,
+    'ramp_session',
+    { failClosed: true },
+  );
+  if (walletScreen.blocked) {
+    logger.warn('session_sanctions_blocked', {
+      reason: walletScreen.reason ?? 'hit',
+      walletAddress: maskWalletAddress(parsedBody.data.walletAddress),
+    });
+    const unavailable = walletScreen.reason === 'unavailable';
+    return res.status(unavailable ? 503 : 403).json({
+      provider: 'coinbase',
+      error: unavailable ? 'SCREENING_UNAVAILABLE' : 'SANCTIONS_BLOCKED',
+      message: unavailable
+        ? 'We could not complete a required compliance check. Please try again shortly.'
+        : "This wallet can't use Njangi On-Chain.",
+      fallbackProvider: null,
+    });
   }
 
   try {

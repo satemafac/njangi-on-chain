@@ -9,6 +9,8 @@ import { getCurrentRpcUrl } from '../../../services/network-config';
 import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
 import { screenAddress, sanctionsErrorBody } from '../../../lib/sanctions';
 import { isEmbargoedHeaders, embargoErrorBody } from '../../../lib/embargo';
+import { getZkLoginSessionAccount } from '../../../lib/zklogin-session-registry';
+import { hasAcceptedAllLegalDocs } from '../../../lib/legal-acceptance-server';
 
 type ResponseData = {
   success: boolean;
@@ -104,10 +106,48 @@ export default async function handler(
       const body = embargoErrorBody();
       return res.status(403).json({ success: false, message: body.message, code: body.code, error: body.error });
     }
-    const screen = await screenAddress(userAddress, 'circle_join');
+    // Fail CLOSED: joining is a new commitment, so an unscreened join is
+    // not an acceptable outcome. Unlike claim/refund/recovery, nothing is
+    // stranded by making the member retry in a minute.
+    const screen = await screenAddress(userAddress, 'circle_join', { failClosed: true });
     if (screen.blocked) {
+      if (screen.reason === 'unavailable') {
+        // Not a match — screening could not run. Say so, so the member
+        // retries instead of believing they have been permanently refused.
+        return res.status(503).json({
+          success: false,
+          code: 'SCREENING_UNAVAILABLE',
+          error: 'SCREENING_UNAVAILABLE',
+          message: 'We could not complete a required compliance check. Please try again shortly.',
+        });
+      }
       const body = sanctionsErrorBody();
       return res.status(403).json({ success: false, message: body.message, code: body.code, error: body.error });
+    }
+
+    // Legal acceptance, enforced server-side for the first time. The gate
+    // existed only as a React modal (`LegalAcceptanceGate`), which a caller
+    // hitting this endpoint directly never sees — and `hasAcceptedAllLegalDocs`
+    // had zero callers, so the acceptance records were written but never
+    // checked. Joining a circle is exactly the commitment the terms cover.
+    // Identity comes from the session cookie, never the request body — a
+    // body-supplied sub/aud would let a caller assert someone else's
+    // acceptance. A caller with no session is left to the existing
+    // address-based checks rather than being hard-failed, since this
+    // endpoint has never required a session and doing so here would be a
+    // separate behavioural change.
+    const identity = await getZkLoginSessionAccount(req.cookies['session-id']);
+    if (identity) {
+      const legal = await hasAcceptedAllLegalDocs(identity.sub, identity.aud);
+      if (!legal.accepted) {
+        return res.status(403).json({
+          success: false,
+          code: 'LEGAL_ACCEPTANCE_REQUIRED',
+          error: 'LEGAL_ACCEPTANCE_REQUIRED',
+          message: 'Please accept the current terms before joining a circle.',
+          data: { missing: legal.missing },
+        });
+      }
     }
 
     const circleJoinWindow = await getCircleJoinWindow(circleId);

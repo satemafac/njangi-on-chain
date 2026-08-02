@@ -63,6 +63,18 @@ interface RPCError extends Error {
 }
 
 /**
+ * Raised when the proof-issuance screen blocks a login. Distinct from a
+ * generic failure so the handler can answer 403 rather than 500 — the
+ * request succeeded, the answer is no.
+ */
+class SanctionsBlockedAtLoginError extends Error {
+  constructor() {
+    super('Sanctions screen blocked this address at proof issuance');
+    this.name = 'SanctionsBlockedAtLoginError';
+  }
+}
+
+/**
  * Embedded Cetus swap routing, gated by SWAPS_ENABLED (default off).
  *
  * Nothing here holds user funds — a blocked swap leaves the member with the
@@ -1100,7 +1112,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Create a promise that will resolve with the account data
           const processPromise = (async () => {
             const result = await instance.handleCallback(jwt, savedSetup);
-            
+
+            // Sanctions screen at PROOF ISSUANCE.
+            //
+            // Once transactions are signed in the browser there is no
+            // server choke point left on the money paths — the old
+            // screens sat inside `sendTransaction`, which now 409s for
+            // every current session, so they enforce nothing. This is the
+            // replacement: refusing to hand back zkProofs. Without proofs
+            // the client cannot assemble a zkLogin signature, so nothing
+            // reaches the chain.
+            //
+            // Refusing to authenticate is not the same as seizing or
+            // freezing assets — we never gain the ability to move the
+            // user's funds, we simply decline to help. That distinction is
+            // what keeps this compatible with the non-custodial posture.
+            //
+            // Deliberately fail-OPEN: this gate covers claim, refund and
+            // recovery too, so failing it closed during an outage would
+            // strand members' committed funds. New commitments are screened
+            // separately with failClosed. Honest limitation: proofs live
+            // one Sui epoch (~24h), so a user listed immediately after
+            // login retains a usable proof until it expires. The weekly
+            // retro-sweep is what catches that window.
+            const screen = await screenAddress(result.address, 'proof_issuance');
+            if (screen.blocked) {
+              if (sessionId) await sessions.delete(sessionId);
+              clearSessionCookie(res);
+              throw new SanctionsBlockedAtLoginError();
+            }
+
             // Clean up any existing sessions for this user
             await cleanupUserSessions(result.address, sessionId);
             
@@ -1155,6 +1196,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             PROCESSING_SESSIONS.delete(sessionId);
           }
           
+          // A sanctions block is a policy decision, not a fault. Surface it
+          // as 403 with the standard body rather than letting it fall
+          // through to the generic 500 handler, which would read as an
+          // outage and invite a retry.
+          if (err instanceof SanctionsBlockedAtLoginError) {
+            return res.status(403).json(sanctionsErrorBody());
+          }
+
           console.error('HandleCallback error:', err);
           // If session validation failed, clear cookie and session
           if (err instanceof Error && err.message.includes('Session')) {

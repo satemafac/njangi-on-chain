@@ -18,14 +18,43 @@ Luhansk). We do not screen names — we do not collect any.
 
 ## Where (choke points)
 
-| Surface | Mechanism | Layer |
-|---------|-----------|-------|
-| Circle create | `screenAddress(addr,'circle_create')` in `api/zkLogin.ts` before the entitlement gate | Server (authoritative) |
-| Circle join | `screenAddress(addr,'circle_join')` in `api/join-requests/create.ts` before any DB write | Server (authoritative) |
-| WhatsApp link | `screenAddress(addr,'whatsapp_link')` in `api/whatsapp/admin-link-circle.ts` before the Walrus upload | Server (authoritative) |
-| Goal-pool create / escrow open | `preflightSanctionsCheck()` → `GET /api/sanctions/check` | Client preflight (UX only — these flows sign client-side straight to RPC; documented limitation of a non-custodial architecture) |
-| App routes (pages) | `src/middleware.ts` geo-block → `/restricted` | Edge |
-| API choke points | `isEmbargoedHeaders()` → 403 `EMBARGOED_REGION` | Server |
+**Proof issuance is now the primary choke point.** Transactions are signed in
+the browser, so the old per-action server screens no longer sit on the money
+paths — the `circle_create` screen lives inside `sendTransaction`, which
+returns 409 for every current session and therefore enforces nothing. What
+replaced it is refusing to mint zkProofs: without a proof the client cannot
+assemble a zkLogin signature, so nothing reaches the chain.
+
+Declining to authenticate is not seizing or freezing assets. We never gain
+the ability to move a user's funds; we decline to help. That is what keeps
+this compatible with the non-custodial posture.
+
+| Surface | Mechanism | Layer | Fail mode |
+|---------|-----------|-------|-----------|
+| **Login / proof issuance** | `screenAddress(addr,'proof_issuance')` in `api/zkLogin.ts` `handleCallback`, before proofs are returned → 403 | **Server (primary)** | open |
+| Circle join | `screenAddress(addr,'circle_join', {failClosed:true})` in `api/join-requests/create.ts` before any DB write | Server | **closed** |
+| Ramp session | `screenAddress(wallet,'ramp_session', {failClosed:true})` in `api/onramp/*/session.ts` | Server | **closed** |
+| WhatsApp link | `screenAddress(addr,'whatsapp_link')` in `api/whatsapp/admin-link-circle.ts` before the Walrus upload | Server | open |
+| Circle create | `screenAddress(addr,'circle_create')` in `api/zkLogin.ts` | **Vestigial** — inside `sendTransaction`, unreachable for current sessions. Covered by proof issuance. | n/a |
+| Goal-pool create / escrow open | `preflightSanctionsCheck()` → `GET /api/sanctions/check` | Client preflight (UX only — these sign client-side straight to RPC) | n/a |
+| App routes (pages) | `src/middleware.ts` geo-block → `/restricted` | Edge | n/a |
+| API choke points | `isEmbargoedHeaders()` → 403 `EMBARGOED_REGION` | Server | n/a |
+
+**Why the fail modes differ.** New commitments (join, ramp) fail CLOSED: an
+unscreened commitment cannot be undone, and nothing is stranded by asking the
+member to retry. Login, claim, refund and recovery fail OPEN, because those
+reach funds a member has *already* committed — failing them closed during an
+outage would trap money, which is a worse compliance outcome than a delayed
+screen. The 2026-07-21 Neon outage is the concrete case: a fail-closed login
+would have locked every user out of their own funds for twelve days.
+
+A caller blocked by fail-closed gets `SCREENING_UNAVAILABLE` (503), not
+`SANCTIONS_BLOCKED` (403) — an innocent user must not be told they are banned
+because Postgres blinked.
+
+**Known window:** proofs live one Sui epoch (~24h). A user listed immediately
+after logging in keeps a usable proof until it expires. The weekly retro-sweep
+is what catches that window; there is no way to revoke an issued proof.
 
 Blocked responses are deliberately neutral user-side ("This wallet can't
 use Njangi On-Chain.") with stable codes (`SANCTIONS_BLOCKED`,
