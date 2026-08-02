@@ -970,6 +970,7 @@ export default function Home() {
                           names={CULTURAL_NAMES}
                           className="text-gold-gradient"
                           interval={1900}
+                          settleOn="Njangi"
                         />
                         <span className="text-base font-normal tracking-[0.04em] text-[#8b8578] sm:text-lg">
                           one tradition, many names
