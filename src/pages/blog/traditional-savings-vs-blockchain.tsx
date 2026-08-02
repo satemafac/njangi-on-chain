@@ -113,13 +113,13 @@ export default function TraditionalSavingsVsBlockchainPost() {
                 <Link href="/learn/what-is-njangi" className="block text-gold hover:text-gold text-sm">
                   → What is Njangi? (Cameroon savings circles)
                 </Link>
-                <Link href="/learn/blockchain-rosca" className="block text-gold hover:text-gold text-sm">
+                <Link href="/learn/rosca" className="block text-gold hover:text-gold text-sm">
                   → Blockchain ROSCA overview
                 </Link>
-                <Link href="/learn/tontine-blockchain" className="block text-gold hover:text-gold text-sm">
+                <Link href="/learn/tontine" className="block text-gold hover:text-gold text-sm">
                   → Tontine blockchain transformation
                 </Link>
-                <Link href="/learn/sou-sou-crypto" className="block text-gold hover:text-gold text-sm">
+                <Link href="/learn/susu" className="block text-gold hover:text-gold text-sm">
                   → Sou Sou crypto integration
                 </Link>
               </div>
@@ -173,7 +173,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
             </p>
 
             <p className="text-lg text-sand leading-relaxed mb-8">
-              Blockchain systems break down geographic barriers entirely. A <Link href="/learn/sou-sou-crypto" className="text-gold hover:text-gold underline">digital Sou Sou circle</Link> 
+              Blockchain systems break down geographic barriers entirely. A <Link href="/learn/susu" className="text-gold hover:text-gold underline">digital Sou Sou circle</Link> 
               can include members from New York, London, Toronto, and Kingston simultaneously, all 
               participating in the same rotating savings system while maintaining cultural connections.
             </p>
@@ -235,7 +235,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
 
             <p className="text-lg text-sand leading-relaxed mb-6">
               One concern often raised about blockchain savings circles is the loss of cultural and 
-              social elements. Traditional <Link href="/learn/tontine-blockchain" className="text-gold hover:text-gold underline">African tontines</Link>, 
+              social elements. Traditional <Link href="/learn/tontine" className="text-gold hover:text-gold underline">African tontines</Link>, 
               for example, often include ceremonies, shared meals, and community support beyond just 
               financial transactions.
             </p>
@@ -310,10 +310,10 @@ export default function TraditionalSavingsVsBlockchainPost() {
                     <Link href="/learn/what-is-njangi" className="block text-gold hover:text-gold text-sm">
                       • Njangi (Cameroon)
                     </Link>
-                    <Link href="/learn/tontine-blockchain" className="block text-gold hover:text-gold text-sm">
+                    <Link href="/learn/tontine" className="block text-gold hover:text-gold text-sm">
                       • Tontines (French Africa)
                     </Link>
-                    <Link href="/learn/sou-sou-crypto" className="block text-gold hover:text-gold text-sm">
+                    <Link href="/learn/susu" className="block text-gold hover:text-gold text-sm">
                       • Sou Sou (Caribbean)
                     </Link>
                   </div>
@@ -321,7 +321,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
                 <div>
                   <h5 className="font-medium text-cream mb-2">Blockchain Innovation:</h5>
                   <div className="space-y-1">
-                    <Link href="/learn/blockchain-rosca" className="block text-gold hover:text-gold text-sm">
+                    <Link href="/learn/rosca" className="block text-gold hover:text-gold text-sm">
                       • Blockchain ROSCA overview
                     </Link>
                     <Link href="/create-circle" className="block text-gold hover:text-gold text-sm">
@@ -361,7 +361,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
                 </div>
               </Link>
               
-              <Link href="/learn/blockchain-rosca" className="group">
+              <Link href="/learn/rosca" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <span className="bg-gold/[0.07] text-gold text-xs font-semibold px-2 py-1 rounded-full">
                     Education

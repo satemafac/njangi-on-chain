@@ -15,9 +15,9 @@ export default function BlockchainRoscaPage() {
         title="What is a ROSCA? Rotating Savings, Explained"
         titleAbsolute
         description="A ROSCA — rotating savings and credit association — is the structure behind njangi, tontine, susu, chit funds and tanda. How the model works, and where it appears."
-        path="/learn/blockchain-rosca"
+        path="/learn/rosca"
         ogType="article"
-        image={{ url: '/og/learn-blockchain-rosca.png', alt: 'What is a ROSCA?' }}
+        image={{ url: '/og/learn-rosca.png', alt: 'What is a ROSCA?' }}
         article={{
           publishedTime: '2025-06-05T00:00:00.000Z',
           modifiedTime: '2026-08-02T00:00:00.000Z',
@@ -35,8 +35,8 @@ export default function BlockchainRoscaPage() {
             headline: 'What is a ROSCA? Rotating savings and credit associations, explained',
             description:
               'The rotating savings and credit association is the structure behind njangi, tontine, susu, chit funds and tanda.',
-            path: '/learn/blockchain-rosca',
-            image: '/og/learn-blockchain-rosca.png',
+            path: '/learn/rosca',
+            image: '/og/learn-rosca.png',
             datePublished: '2025-06-05',
             dateModified: '2026-08-02',
             section: 'Education',
@@ -63,7 +63,7 @@ export default function BlockchainRoscaPage() {
         <section className="relative bg-gradient-to-r from-ink-surface to-ink-deep text-cream py-20">
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
             <h1 className="text-4xl md:text-5xl font-bold mb-6">
-              Blockchain ROSCA: The Future of Community Savings
+              What is a ROSCA? Rotating Savings and Credit Associations Explained
             </h1>
             <p className="text-xl md:text-2xl mb-8 text-cream-muted">
               Transforming traditional <strong>Rotating Savings and Credit Associations (ROSCAs)</strong> through 
@@ -487,7 +487,7 @@ public fun make_contribution(
                 </div>
               </Link>
               
-              <Link href="/learn/tontine-blockchain" className="group">
+              <Link href="/learn/tontine" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
                     Tontine Blockchain: African Finance Revolution
@@ -498,7 +498,7 @@ public fun make_contribution(
                 </div>
               </Link>
               
-              <Link href="/learn/sou-sou-crypto" className="group">
+              <Link href="/learn/susu" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
                     Sou Sou Crypto: Caribbean Savings Circles

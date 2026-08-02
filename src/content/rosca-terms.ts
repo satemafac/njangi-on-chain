@@ -6,10 +6,11 @@
 // changes between entries is the culture, the ordering rule, and the degree of
 // formality — which is exactly what makes each page worth writing separately.
 //
-// SCOPE: these 14 terms deliberately exclude njangi, ROSCA, tontine and susu,
-// which already have their own long-form pages under /learn. Adding them here
-// too would split the ranking signal for the site's four best keywords across
-// two URLs apiece.
+// SCOPE: these terms deliberately exclude njangi, ROSCA, tontine and susu,
+// which already have their own long-form pages at /learn/what-is-njangi,
+// /learn/rosca, /learn/tontine and /learn/susu. Adding them here too would
+// split the ranking signal for the site's four best keywords across two URLs
+// apiece.
 //
 // COPY RULES (docs/compliance-roadmap-cex-dex-non-kyc.md §A3, enforced by
 // `npm run check:copy` — src/content is in its SCAN_DIRS):
@@ -89,7 +90,7 @@ export const ROSCA_TERMS: RoscaTerm[] = [
     ],
     regulatoryNote:
       'Chit funds are a regulated financial activity in India under the Chit Funds Act, 1982, and registered chit businesses are licensed and supervised by state governments. Njangi On-Chain is coordination software. It is not a chit fund company, it is not a registered chit fund, it does not act as a foreman, and it never holds or directs members\' money. This page is background on the tradition, not an offer to operate a chit.',
-    related: ['/learn/blockchain-rosca', 'paluwagan', 'hui', 'pandero'],
+    related: ['/learn/rosca', 'paluwagan', 'hui', 'pandero'],
     published: '2026-08-02',
     modified: '2026-08-02',
   },
@@ -124,7 +125,7 @@ export const ROSCA_TERMS: RoscaTerm[] = [
       'Tandas travelled north with Mexican migration and are widespread in Mexican-American communities, especially where members are undocumented or thin-filed and effectively locked out of ordinary credit. Community organisations in California, Texas and Illinois have run formal versions specifically so that participation can be recorded and used to build a credit file.',
       'Cross-border tandas — some members in Mexico, others in the United States — are common and are exactly where the informal structure strains. Contributions arrive through different channels in two currencies, and no member can see the whole picture except the organiser.',
     ],
-    related: ['cundina', 'pandero', '/learn/blockchain-rosca', 'paluwagan'],
+    related: ['cundina', 'pandero', '/learn/rosca', 'paluwagan'],
     published: '2026-08-02',
     modified: '2026-08-02',
   },
@@ -159,7 +160,7 @@ export const ROSCA_TERMS: RoscaTerm[] = [
       'South Africans abroad — in the United Kingdom, Australia and across the region — keep stokvels going, often to fund trips home or to support family. Related practices run under their own names across Southern Africa: motshelo in Botswana, chilemba in Zambia and Malawi, xitique in Mozambique.',
       'The constitutional habit travels well: a diaspora stokvel usually still has written rules and named office bearers. What breaks is the meeting. The rules assume everyone is in the room once a month, and once the group is spread across time zones the treasurer\'s notebook becomes the only record anyone has.',
     ],
-    related: ['chama', 'equb', '/learn/blockchain-rosca', 'esusu'],
+    related: ['chama', 'equb', '/learn/rosca', 'esusu'],
     published: '2026-08-02',
     modified: '2026-08-02',
   },
@@ -194,7 +195,7 @@ export const ROSCA_TERMS: RoscaTerm[] = [
       'Kenyan communities in the United Kingdom, the United States and the Gulf run chamas, commonly to fund a house or a business back home. Diaspora chamas often carry larger amounts than local ones, which raises the stakes on record-keeping considerably.',
       'Related groups run across the region under their own names — kikoba in Tanzania, and the various Ugandan and Rwandan village savings groups — sharing the same rotate-and-lend structure.',
     ],
-    related: ['stokvel', 'equb', 'esusu', '/learn/blockchain-rosca'],
+    related: ['stokvel', 'equb', 'esusu', '/learn/rosca'],
     published: '2026-08-02',
     modified: '2026-08-02',
   },
@@ -229,7 +230,7 @@ export const ROSCA_TERMS: RoscaTerm[] = [
       'Nigerian communities in the United Kingdom, the United States and Canada run esusu widely, and it is a common way to raise a deposit for a house, cover school fees, or send a lump sum home. Groups are frequently drawn from a single hometown association, so the social ties are as strong abroad as at home.',
       'The Caribbean descendants of the same practice are covered separately on the susu page, which goes into the Jamaican Partner system and the West Indian collector tradition in more detail.',
     ],
-    related: ['/learn/sou-sou-crypto', 'ajo', 'chama', '/learn/what-is-njangi'],
+    related: ['/learn/susu', 'ajo', 'chama', '/learn/what-is-njangi'],
     published: '2026-08-02',
     modified: '2026-08-02',
   },
@@ -264,7 +265,7 @@ export const ROSCA_TERMS: RoscaTerm[] = [
       'Overseas Filipino workers run paluwagan extensively — among nurses in the United States and the United Kingdom, domestic workers in Hong Kong and Singapore, and construction and service workers across the Gulf. For many, it is how a monthly wage abroad becomes a sum large enough to be worth sending home.',
       'These are the circles most exposed to distance. Members are frequently in three or four countries, contributions arrive through remittance services with their own fees and delays, and the organiser is reconciling several currencies from memory. It is a structure that assumed everyone shared a payday, now stretched across the world.',
     ],
-    related: ['hui', 'arisan', 'tanda', '/learn/blockchain-rosca'],
+    related: ['hui', 'arisan', 'tanda', '/learn/rosca'],
     published: '2026-08-02',
     modified: '2026-08-02',
   },
@@ -334,7 +335,7 @@ export const ROSCA_TERMS: RoscaTerm[] = [
       'Indonesian communities in the Netherlands, Australia, Singapore, Malaysia and the United States run arisan, often through student associations, mosque communities or embassy-adjacent social groups. Abroad they carry an additional weight as one of the few reliable reasons a dispersed community gathers regularly.',
       'Distance hits the arisan harder than most, precisely because the meeting is the institution. A diaspora arisan that moves to a video call keeps the money working but loses the shaken container and the shared meal, which is much of what the members were actually there for.',
     ],
-    related: ['paluwagan', 'hui', 'gameya', '/learn/blockchain-rosca'],
+    related: ['paluwagan', 'hui', 'gameya', '/learn/rosca'],
     published: '2026-08-02',
     modified: '2026-08-02',
   },
@@ -369,7 +370,7 @@ export const ROSCA_TERMS: RoscaTerm[] = [
       'Ethiopian and Eritrean communities in the United States — Washington DC especially — as well as in Israel, Sweden and the Gulf run equb actively. They fund business startups, property purchases, and support sent to family at home.',
       'Diaspora equbs often keep the committee structure, including the arbitrator, which travels better than a monthly meeting does. The record is still usually one treasurer\'s notebook, and that is the part that struggles once members are in several countries.',
     ],
-    related: ['chama', 'stokvel', 'esusu', '/learn/blockchain-rosca'],
+    related: ['chama', 'stokvel', 'esusu', '/learn/rosca'],
     published: '2026-08-02',
     modified: '2026-08-02',
   },
@@ -404,7 +405,7 @@ export const ROSCA_TERMS: RoscaTerm[] = [
       'The collector model is tied to physical markets and does not travel especially well, but Nigerian communities abroad continue to use ajo in its rotating sense, alongside esusu, for house deposits, school fees and support sent home.',
       'The Hausa "adashi" in northern Nigeria covers similar ground, and rotating groups under either name are common in Nigerian communities in the United Kingdom, the United States and Canada.',
     ],
-    related: ['esusu', '/learn/sou-sou-crypto', '/learn/what-is-njangi', 'chama'],
+    related: ['esusu', '/learn/susu', '/learn/what-is-njangi', 'chama'],
     published: '2026-08-02',
     modified: '2026-08-02',
   },
@@ -439,7 +440,7 @@ export const ROSCA_TERMS: RoscaTerm[] = [
       'Cundinas run throughout Mexican-American communities in California, Arizona and Texas, and often span the border directly — some members in Tijuana, others in San Diego, in what is really a single community with a fence through it.',
       'As with tandas, community organisations in the United States have run formalised versions so that participation can be documented and used to establish a credit record for members who otherwise have none.',
     ],
-    related: ['tanda', 'pandero', '/learn/blockchain-rosca', 'gameya'],
+    related: ['tanda', 'pandero', '/learn/rosca', 'gameya'],
     published: '2026-08-02',
     modified: '2026-08-02',
   },
@@ -474,7 +475,7 @@ export const ROSCA_TERMS: RoscaTerm[] = [
       'Egyptian and wider Arab communities in the Gulf, Europe and North America run gameyas, frequently among colleagues who migrated together. Related practices exist across the region under their own names, including the Sudanese and Levantine "sanduq" — literally, the box.',
       'The needs-based ordering is what suffers most at a distance. Deciding who goes first because someone spoke up at the office is hard to reproduce when the group has not been in the same room for a year.',
     ],
-    related: ['equb', 'arisan', 'paluwagan', '/learn/blockchain-rosca'],
+    related: ['equb', 'arisan', 'paluwagan', '/learn/rosca'],
     published: '2026-08-02',
     modified: '2026-08-02',
   },
@@ -509,7 +510,7 @@ export const ROSCA_TERMS: RoscaTerm[] = [
       'Kye remain active in Korean communities in the United States, Canada, Japan, Australia and Brazil, typically for business capital, property deposits, or a child\'s education.',
       'They are also, historically, the tradition with the best-documented failures. Large commercial kye in both Korea and the diaspora have collapsed when an organiser absconded or a chain of defaults ran through the group — a reminder that a rotating circle concentrates trust in a way that works beautifully until it does not, and that the record of who has paid is the thing worth protecting.',
     ],
-    related: ['hui', 'chit-fund', 'pandero', '/learn/blockchain-rosca'],
+    related: ['hui', 'chit-fund', 'pandero', '/learn/rosca'],
     published: '2026-08-02',
     modified: '2026-08-02',
   },
@@ -546,7 +547,112 @@ export const ROSCA_TERMS: RoscaTerm[] = [
     ],
     regulatoryNote:
       'Commercial pandero companies in Peru are supervised by the Superintendencia del Mercado de Valores. Njangi On-Chain is coordination software for groups running their own circle. It is not a pandero company, does not operate a supervised fund, and never holds or directs members\' money.',
-    related: ['tanda', 'cundina', 'chit-fund', '/learn/blockchain-rosca'],
+    related: ['tanda', 'cundina', 'chit-fund', '/learn/rosca'],
+    published: '2026-08-02',
+    modified: '2026-08-02',
+  },
+
+  {
+    slug: 'committee',
+    term: 'Committee',
+    pronunciation: 'kuh-MIT-ee',
+    alsoKnownAs: ['Kameti', 'Kametee', 'BC', 'Bachat committee'],
+    region: 'Pakistan and northern India, and South Asian communities abroad',
+    etymology:
+      'English, borrowed into Urdu and Punjabi as "kameti". People say "I am running a committee" the way an English speaker might say "I am in a savings club".',
+    shortDefinition:
+      'The Pakistani and North Indian rotating savings circle: a fixed monthly amount from every member, and one member takes the whole pool each month.',
+    typicalSize: '10 to 25 members',
+    typicalCycle: 'Monthly, for as many months as there are members',
+    orderingRule: 'Drawn by lot, or negotiated — an urgent need moves someone up by agreement',
+    origin: [
+      'Committee is so ordinary in Pakistan that the English word has simply become the local word for the practice. It runs in offices, in bazaars, among neighbours and — very commonly — among women within an extended family, where it is often the only money a household manages independently.',
+      'The borrowed name is worth pausing on. There is no indigenous term that displaced it, because the arrangement is understood as exactly what the word says: a group of people who have agreed to run something together.',
+    ],
+    howItRuns: [
+      'Members agree a monthly figure and a number of months matching the number of people. Everyone pays the same amount each month, and one member takes the entire pool. The organiser — often the person who assembled the group — collects, keeps the list, and carries the reputational risk if someone stops paying.',
+      'Order is usually drawn by lot at the start, but it is routinely renegotiated. Someone with a wedding, a medical bill or school fees due will say so, and the group moves them up. This is settled by conversation rather than by any auction or formal rule.',
+      'A committee is very often deliberately timed against a known expense — a wedding season, Eid, a school year — so the pool arrives when the money is needed rather than at an arbitrary point.',
+    ],
+    distinctive: [
+      'The vocabulary is the giveaway that this is a distinct social institution rather than an import: in Pakistani English and Urdu, "committee" as a noun means the savings circle itself. Someone who says they have "put money in the committee" is not describing a governing body.',
+      'It is also unusually tied to household wedding finance. Across much of Pakistan a daughter\'s wedding is the single largest expense a family will face, and committees are frequently formed and timed years in advance specifically against it.',
+    ],
+    diaspora: [
+      'Pakistani and Indian communities in the United Kingdom, the Gulf, the United States and Canada run committees widely, often among colleagues who migrated together or within a single extended family spread across three countries.',
+      'The Gulf corridor is where the strain shows. Members earn in dirhams or riyals, the organiser may be in Karachi or Lahore, and contributions arrive through several remittance services with their own fees and delays — while the record of who has paid lives in one person\'s notebook or phone.',
+    ],
+    related: ['chit-fund', 'hui', 'kye', '/learn/rosca'],
+    published: '2026-08-02',
+    modified: '2026-08-02',
+  },
+
+  {
+    slug: 'pardna',
+    term: 'Pardna',
+    pronunciation: 'PARD-nah',
+    alsoKnownAs: ['Partner', 'Partner hand', 'Pardner', 'Susu'],
+    region: 'Jamaica, and Jamaican communities in the UK, US and Canada',
+    etymology:
+      'Jamaican Patois for "partner". A turn at the pool is called a "hand", and the organiser who collects is the "banker".',
+    shortDefinition:
+      'The Jamaican rotating savings circle: members "throw a hand" each week or month, and each takes the full pool when their hand comes round.',
+    typicalSize: '10 to 20 members',
+    typicalCycle: 'Weekly or monthly, commonly matched to payday',
+    orderingRule: 'The banker assigns hands at the start; members trade positions by agreement',
+    origin: [
+      'Pardna came to Jamaica from West Africa, where the same practice runs as esusu, and it survived the Middle Passage in the way a great many West African institutions did — intact in function, renamed in the local language. It has been a fixture of Jamaican economic life for generations, particularly among women.',
+      'The vocabulary is entirely its own. You do not join and contribute; you "throw a hand". The person running it is the banker, and the reputation of a good banker is a real asset in a community.',
+    ],
+    howItRuns: [
+      'The banker assembles members, sets the size of a hand and the frequency, and assigns the order. Each round every member throws their hand, and one member draws the whole pool.',
+      'Bankers traditionally take one hand as payment for the work and the risk, and they are expected to cover a shortfall from their own pocket rather than let a draw fail. That expectation is why the role goes to someone with standing rather than simply someone organised.',
+      'Members frequently hold more than one hand in the same pardna, which is a way of scaling the payout without needing a larger group of people you trust.',
+    ],
+    distinctive: [
+      'Pardna is unusually well documented as a route into property. Caribbean migrants to post-war Britain were widely refused mortgages and bank credit, and pardna is how a great many households in London, Birmingham and Manchester assembled a deposit. That history is a substantial part of why the practice is still culturally load-bearing in the British-Jamaican community rather than a memory.',
+      'The banker taking a hand as payment is also a clearer, more openly acknowledged fee than most traditions on this list, which tend to treat organising as an unpaid duty.',
+    ],
+    diaspora: [
+      'Pardna runs in Jamaican communities across the United Kingdom, the United States — New York, Florida — and Canada, often within church congregations or hometown associations.',
+      'It is the same institution as the Caribbean susu and the West African esusu; the name changes with the island and the language. The susu page covers the wider family in more detail.',
+    ],
+    related: ['/learn/susu', 'esusu', 'ajo', '/learn/rosca'],
+    published: '2026-08-02',
+    modified: '2026-08-02',
+  },
+
+  {
+    slug: 'hagbad',
+    term: 'Hagbad',
+    pronunciation: 'HAG-bad',
+    alsoKnownAs: ['Ayuuto', 'Hagbed', 'Shalongo'],
+    region: 'Somalia and Somaliland, and Somali communities worldwide',
+    etymology:
+      'Somali. "Ayuuto" is the other common name, thought to come from the Italian "aiuto" — help — a trace of the colonial period in southern Somalia.',
+    shortDefinition:
+      'The Somali rotating savings circle, largely run by women, and one of the few financial institutions to survive the collapse of the Somali state.',
+    typicalSize: '10 to 30 members',
+    typicalCycle: 'Monthly',
+    orderingRule: 'Agreed by the group, with the greatest need placed first',
+    origin: [
+      'Hagbad is overwhelmingly a women\'s institution in Somali society, run among relatives, neighbours and market traders. Its significance is hard to overstate: through the decades of state collapse and civil war from 1991, when there was no functioning central bank and no formal banking system to speak of, hagbad and the hawala remittance networks were the financial system for most people.',
+      'That history changed what it is. In much of the world a rotating savings circle supplements a bank. In Somalia it substituted for one, for a generation.',
+    ],
+    howItRuns: [
+      'Members agree a monthly contribution and a group size. Everyone pays in, and one member takes the whole pool. The order is settled by discussion rather than by lot, and the group will generally put whoever has the sharpest need first — a business to restock, a medical cost, a relative to support.',
+      'The money is very often working capital rather than household smoothing. Somali women traders use hagbad to buy stock in bulk, and the cycle is timed against the trading rhythm of the market they work in.',
+      'Enforcement is entirely social and entirely effective, because the groups are drawn from clan and family networks in which a default is not a private matter.',
+    ],
+    distinctive: [
+      'Hagbad is the clearest case on this list of a rotating circle operating as a replacement for the formal financial system rather than an addition to it. It is also unusual in how tightly it interlocks with remittances: money arriving from relatives abroad is frequently what funds a member\'s monthly contribution.',
+      'The near-total participation of women, in a society where women\'s access to formal finance has been sharply limited, makes it a genuine parallel economy rather than a supplementary saving habit.',
+    ],
+    diaspora: [
+      'The Somali diaspora is one of the most widely dispersed in the world, and hagbad travelled with it — to Minneapolis, Columbus, Toronto, London, Birmingham, Cardiff, Oslo and Stockholm. It funds business startups, travel, and support sent home.',
+      'These are among the most distributed circles anywhere: a single hagbad can span four countries and three currencies, with contributions moving through hawala and the whole record held in one organiser\'s memory.',
+    ],
+    related: ['equb', 'chama', 'esusu', '/learn/rosca'],
     published: '2026-08-02',
     modified: '2026-08-02',
   },
@@ -561,9 +667,9 @@ export function relatedLink(ref: string): { href: string; label: string } {
   if (ref.startsWith('/')) {
     const pillar: Record<string, string> = {
       '/learn/what-is-njangi': 'Njangi',
-      '/learn/blockchain-rosca': 'ROSCA',
-      '/learn/tontine-blockchain': 'Tontine',
-      '/learn/sou-sou-crypto': 'Susu',
+      '/learn/rosca': 'ROSCA',
+      '/learn/tontine': 'Tontine',
+      '/learn/susu': 'Susu',
     };
     return { href: ref, label: pillar[ref] ?? ref };
   }

@@ -316,7 +316,7 @@ export default function BlogIndexPage() {
                 </div>
               </Link>
               
-              <Link href="/learn/blockchain-rosca" className="group">
+              <Link href="/learn/rosca" className="group">
                 <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
                     Blockchain ROSCA
@@ -327,7 +327,7 @@ export default function BlogIndexPage() {
                 </div>
               </Link>
               
-              <Link href="/learn/tontine-blockchain" className="group">
+              <Link href="/learn/tontine" className="group">
                 <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
                     Tontine Blockchain
@@ -338,7 +338,7 @@ export default function BlogIndexPage() {
                 </div>
               </Link>
               
-              <Link href="/learn/sou-sou-crypto" className="group">
+              <Link href="/learn/susu" className="group">
                 <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
                     Sou Sou Crypto

@@ -15,9 +15,9 @@ export default function SouSouCryptoPage() {
         title="What is a Susu? Caribbean & West African Circles"
         titleAbsolute
         description="Susu, sou-sou and Partner are the Caribbean and West African names for a rotating savings circle: everyone pays in, and each member takes the pot in turn."
-        path="/learn/sou-sou-crypto"
+        path="/learn/susu"
         ogType="article"
-        image={{ url: '/og/learn-sou-sou-crypto.png', alt: 'What is a susu?' }}
+        image={{ url: '/og/learn-susu.png', alt: 'What is a susu?' }}
         article={{
           publishedTime: '2025-06-05T00:00:00.000Z',
           modifiedTime: '2026-08-02T00:00:00.000Z',
@@ -35,8 +35,8 @@ export default function SouSouCryptoPage() {
             headline: 'What is a susu? Caribbean and West African rotating savings circles',
             description:
               'Susu, sou-sou and Partner are Caribbean and West African names for a rotating savings circle in which members contribute on a shared schedule and take the pot in turn.',
-            path: '/learn/sou-sou-crypto',
-            image: '/og/learn-sou-sou-crypto.png',
+            path: '/learn/susu',
+            image: '/og/learn-susu.png',
             datePublished: '2025-06-05',
             dateModified: '2026-08-02',
             section: 'Education',
@@ -46,7 +46,7 @@ export default function SouSouCryptoPage() {
             name: 'Susu',
             description:
               'The Caribbean and West African name for a rotating savings circle in which members contribute on a shared schedule and each takes the pooled amount in turn.',
-            path: '/learn/sou-sou-crypto',
+            path: '/learn/susu',
             alternateNames: ['Sou-sou', 'Sou Sou', 'Partner', 'Pardna', 'Esusu'],
             termSetPath: '/learn',
           }),
@@ -71,7 +71,7 @@ export default function SouSouCryptoPage() {
         <section className="bg-gradient-to-r from-ink-surface to-ink-deep text-cream py-20">
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
             <h1 className="text-4xl md:text-5xl font-bold mb-6">
-              Sou Sou Crypto: Caribbean Savings Circles Meet Blockchain
+              What is a Susu? Caribbean and West African Savings Circles
             </h1>
             <p className="text-xl md:text-2xl mb-8 text-cream-muted">
               Explore how traditional Caribbean <strong>Sou Sou</strong>, Jamaican <strong>Partner</strong>, and 
@@ -544,7 +544,7 @@ public fun make_contribution(
                 </div>
               </Link>
               
-              <Link href="/learn/blockchain-rosca" className="group">
+              <Link href="/learn/rosca" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
                     Blockchain ROSCA: The Future of Community Savings
@@ -555,7 +555,7 @@ public fun make_contribution(
                 </div>
               </Link>
               
-              <Link href="/learn/tontine-blockchain" className="group">
+              <Link href="/learn/tontine" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
                     Tontine Blockchain: African Finance Revolution

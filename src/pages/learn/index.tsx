@@ -21,7 +21,7 @@ export default function LearnIndexPage() {
       title: "Blockchain ROSCA",
       subtitle: "The Future of Community Savings",
       description: "Learn how blockchain technology transforms traditional ROSCAs worldwide with smart contracts and DeFi.",
-      href: "/learn/blockchain-rosca",
+      href: "/learn/rosca",
       tag: "Technology",
       readTime: "7 min read",
       color: "blue"
@@ -30,7 +30,7 @@ export default function LearnIndexPage() {
       title: "Tontine Blockchain",
       subtitle: "Revolutionizing African Finance",
       description: "Explore how French African tontine traditions are digitized through blockchain for modern communities.",
-      href: "/learn/tontine-blockchain",
+      href: "/learn/tontine",
       tag: "Regional Focus",
       readTime: "9 min read",
       color: "purple"
@@ -39,7 +39,7 @@ export default function LearnIndexPage() {
       title: "Sou Sou Crypto",
       subtitle: "Caribbean Savings Circles Meet Blockchain",
       description: "See how Caribbean and West African susu traditions embrace cryptocurrency and smart contracts.",
-      href: "/learn/sou-sou-crypto",
+      href: "/learn/susu",
       tag: "Cultural Traditions",
       readTime: "8 min read",
       color: "orange"

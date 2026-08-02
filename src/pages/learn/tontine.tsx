@@ -13,9 +13,9 @@ export default function TontineBlockchainPage() {
         title="What is a Tontine? African Savings Circles"
         titleAbsolute
         description="In francophone Africa a tontine is a rotating savings circle: members pay in on a shared schedule and each takes the pot in turn. How it works across West and Central Africa."
-        path="/learn/tontine-blockchain"
+        path="/learn/tontine"
         ogType="article"
-        image={{ url: '/og/learn-tontine-blockchain.png', alt: 'What is a tontine?' }}
+        image={{ url: '/og/learn-tontine.png', alt: 'What is a tontine?' }}
         article={{
           publishedTime: '2025-06-05T00:00:00.000Z',
           modifiedTime: '2026-08-02T00:00:00.000Z',
@@ -33,8 +33,8 @@ export default function TontineBlockchainPage() {
             headline: 'What is a tontine? Rotating savings circles in francophone Africa',
             description:
               'In francophone Africa a tontine is a rotating savings circle in which members contribute on a shared schedule and each takes the pooled amount in turn.',
-            path: '/learn/tontine-blockchain',
-            image: '/og/learn-tontine-blockchain.png',
+            path: '/learn/tontine',
+            image: '/og/learn-tontine.png',
             datePublished: '2025-06-05',
             dateModified: '2026-08-02',
             section: 'Education',
@@ -44,7 +44,7 @@ export default function TontineBlockchainPage() {
             name: 'Tontine',
             description:
               'The francophone African name for a rotating savings circle in which members contribute on a shared schedule and each takes the pooled amount in turn.',
-            path: '/learn/tontine-blockchain',
+            path: '/learn/tontine',
             alternateNames: ['Njangi', 'Esusu', 'Chilemba'],
             termSetPath: '/learn',
           }),
@@ -69,7 +69,7 @@ export default function TontineBlockchainPage() {
         <section className="bg-gradient-to-r from-ink-surface to-ink-deep text-cream py-20">
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
             <h1 className="text-4xl md:text-5xl font-bold mb-6">
-              Tontine Blockchain: Transforming African Community Finance
+              What is a Tontine? Rotating Savings Circles in Francophone Africa
             </h1>
             <p className="text-xl md:text-2xl mb-8 text-cream-muted">
               Discover how blockchain technology revolutionizes traditional African tontines—community 
@@ -468,7 +468,7 @@ public fun make_monthly_contribution(
                 </div>
               </Link>
               
-              <Link href="/learn/blockchain-rosca" className="group">
+              <Link href="/learn/rosca" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
                     Blockchain ROSCA: The Future of Community Savings
@@ -479,7 +479,7 @@ public fun make_monthly_contribution(
                 </div>
               </Link>
               
-              <Link href="/learn/sou-sou-crypto" className="group">
+              <Link href="/learn/susu" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
                     Sou Sou Crypto: Caribbean Savings Circles

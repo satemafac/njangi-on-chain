@@ -216,6 +216,14 @@ const nextConfig = {
       { source: '/privacy-policy.html', destination: '/legal/privacy', permanent: true },
       { source: '/terms-of-service.html', destination: '/legal/terms', permanent: true },
       { source: '/data-deletion.html', destination: '/legal/data-deletion', permanent: true },
+      // The three pillar pages moved to slugs that match the query, 2026-08-02.
+      // The old ones were named for the product angle rather than what people
+      // search: nobody types "blockchain rosca". /learn/blockchain-rosca was
+      // indexed and earning 475 impressions, so these redirects are what carries
+      // that history across — do not remove them.
+      { source: '/learn/blockchain-rosca', destination: '/learn/rosca', permanent: true },
+      { source: '/learn/tontine-blockchain', destination: '/learn/tontine', permanent: true },
+      { source: '/learn/sou-sou-crypto', destination: '/learn/susu', permanent: true },
       {
         source: '/:path*',
         has: [

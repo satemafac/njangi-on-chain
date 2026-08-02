@@ -64,17 +64,17 @@ const CARDS = [
     title: 'What is a njangi?',
   },
   {
-    slug: 'learn-blockchain-rosca',
+    slug: 'learn-rosca',
     eyebrow: 'Learn · ROSCA',
     title: 'What is a ROSCA?',
   },
   {
-    slug: 'learn-tontine-blockchain',
+    slug: 'learn-tontine',
     eyebrow: 'Learn · Tontine',
     title: 'What is a tontine?',
   },
   {
-    slug: 'learn-sou-sou-crypto',
+    slug: 'learn-susu',
     eyebrow: 'Learn · Susu',
     title: 'What is a susu?',
   },

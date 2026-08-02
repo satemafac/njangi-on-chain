@@ -177,7 +177,7 @@ export default function WhatIsNjangiPage() {
                       There is no single English word for it. The closest everyday translation is
                       &ldquo;savings circle&rdquo; or &ldquo;savings club&rdquo;; economists call
                       the structure a{' '}
-                      <Link href="/learn/blockchain-rosca" className="text-gold-hi underline underline-offset-4 hover:text-gold">
+                      <Link href="/learn/rosca" className="text-gold-hi underline underline-offset-4 hover:text-gold">
                         rotating savings and credit association (ROSCA)
                       </Link>
                       . British and American English borrowed no term for it because the practice
@@ -194,7 +194,7 @@ export default function WhatIsNjangiPage() {
                       <strong>njange</strong> or <strong>jangi</strong> — all the same word, spelled
                       as different people heard it. In francophone parts of Cameroon the same
                       practice is usually called a{' '}
-                      <Link href="/learn/tontine-blockchain" className="text-gold-hi underline underline-offset-4 hover:text-gold">
+                      <Link href="/learn/tontine" className="text-gold-hi underline underline-offset-4 hover:text-gold">
                         tontine
                       </Link>
                       .
@@ -480,7 +480,7 @@ export default function WhatIsNjangiPage() {
           <section className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8 mt-12">
             <h2 className="text-2xl font-bold mb-6 text-cream">Related Content</h2>
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-              <Link href="/learn/blockchain-rosca" className="group">
+              <Link href="/learn/rosca" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
                     Blockchain ROSCA: The Future of Community Savings
@@ -491,7 +491,7 @@ export default function WhatIsNjangiPage() {
                 </div>
               </Link>
               
-              <Link href="/learn/tontine-blockchain" className="group">
+              <Link href="/learn/tontine" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
                     Tontine Blockchain: Revolutionizing African Finance
@@ -502,7 +502,7 @@ export default function WhatIsNjangiPage() {
                 </div>
               </Link>
               
-              <Link href="/learn/sou-sou-crypto" className="group">
+              <Link href="/learn/susu" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
                     Sou Sou Crypto: Caribbean Savings Circles
