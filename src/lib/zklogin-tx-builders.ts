@@ -655,3 +655,36 @@ export function buildReorderRotationPositionsTx({
   });
   return tx;
 }
+
+/**
+ * Legacy-rail payout: releases the pooled contributions to the scheduled
+ * recipient.
+ *
+ * Migrated here for the same reason as the admin calls, but this one matters
+ * more: Phase 3 deliberately left payouts OUT of the legacy-rail kill switch
+ * so committed funds stay claimable after the rail stops accepting deposits.
+ * The Phase 1 409 guard undid that by blocking the only path to them, which is
+ * precisely the fund-trapping outcome the kill-switch design avoids. Building
+ * and signing in the browser restores it.
+ *
+ * `trigger_payout` is permissionless on chain — the recipient is read from the
+ * circle's rotation, not from the caller — so anyone may pay the gas.
+ */
+export function buildTriggerPayoutTx({
+  packageId,
+  circleId,
+  walletId,
+  coinType,
+}: CircleAdminBuilderInput & { walletId: string; coinType: string }): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::njangi_payments::trigger_payout`,
+    typeArguments: [coinType],
+    arguments: [
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.object(normalizeRequiredObjectId(walletId, 'Wallet ID')),
+      tx.object(CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}

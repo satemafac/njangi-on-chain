@@ -8,6 +8,7 @@ import {
   buildAdminRemoveMemberTx,
   buildAdminSetMaxMembersTx,
   buildToggleAutoSwapTx,
+  buildTriggerPayoutTx,
   buildAdminApproveMembersTx,
   buildClaimMembershipTx,
   buildDeleteCircleTx,
@@ -1138,44 +1139,28 @@ export class ZkLoginClient {
     });
   }
 
+  /**
+   * Release a legacy-rail payout to the scheduled recipient.
+   *
+   * Permissionless on chain — the recipient comes from the circle's rotation,
+   * not the caller — so anyone can pay the gas to settle a cycle. Kept
+   * reachable on purpose: the legacy kill switch blocks new contributions but
+   * must never block getting committed funds out.
+   */
   async adminTriggerPayout(
     account: AccountData,
     circleId: string,
     walletId: string,
-    network?: string
+    coinType: string,
+    network?: NetworkOverride,
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
-    try {
-      console.log(`ZkLoginClient: Triggering payout for circle ${circleId} with wallet ${walletId} on network ${network || 'default'}`);
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'adminTriggerPayout',
-          account: withoutSigningKey(account),
-          circleId,
-          walletId,
-          network,
-        }),
-      });
-      if (response.ok) {
-        const result = await response.json();
-        return { digest: result.digest, requireRelogin: result.requireRelogin };
-      }
-      const errorData = await response.json();
-      throw new ZkLoginError(
-        errorData.error || 'Failed to trigger payout',
-        errorData.requireRelogin || false,
-      );
-    } catch (error) {
-      if (!(error instanceof ZkLoginError)) {
-        console.error('Error in adminTriggerPayout:', error);
-        throw new ZkLoginError(
-          error instanceof Error ? error.message : 'Unknown error triggering payout',
-          false,
-        );
-      }
-      throw error;
-    }
+    return signLocallyWithBuilder({
+      account,
+      network,
+      resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
+      build: (packageId) =>
+        buildTriggerPayoutTx({ packageId, circleId, walletId, coinType }),
+    });
   }
 
   async resumeCycle(
@@ -1297,7 +1282,12 @@ export class ZkLoginClient {
     const response = await fetch('/api/zkLogin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, account, ...payload }),
+      // withoutSigningKey, not `account` — the Phase 1 sweep that stripped
+      // the ephemeral key from request bodies matched on a literal `account:`
+      // key and missed this shorthand, so this path kept posting the live
+      // signing key. Caught by the source-level invariant in
+      // zklogin-login-protocol.test.ts.
+      body: JSON.stringify({ action, account: withoutSigningKey(account), ...payload }),
     });
     const data = await response.json();
     if (!response.ok) {

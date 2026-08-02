@@ -9,6 +9,8 @@
 import { ZkLoginClient } from '@/services/zkLoginClient';
 import type { AccountData } from '@/services/zkLoginService';
 import { loadPendingLogin, savePendingLogin } from '@/lib/zklogin-ephemeral-key';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 jest.mock('../network-config', () => ({
   getCurrentNetwork: jest.fn(() => 'testnet'),
@@ -100,37 +102,39 @@ describe('zkLogin login protocol', () => {
   });
 
   describe('legacy server-signing actions', () => {
-    it('never puts the ephemeral private key in a request body', async () => {
-      // These actions have not been migrated to client-side signing yet, so
-      // they still POST an `account`. The server reads what it needs from its
-      // own session record, so the key must be stripped — otherwise a live
-      // signing key lands in edge, WAF, and APM logs.
-      const account = {
-        provider: 'Google',
-        userAddr: '0xaaa',
-        zkProofs: { proofPoints: { a: [], b: [], c: [] }, issBase64Details: {}, headerBase64: 'h' },
-        ephemeralPrivateKey: 'suiprivkey-MUST-NOT-LEAK',
-        userSalt: '1',
-        sub: 'sub',
-        aud: 'aud',
-        maxEpoch: 99,
-      } as unknown as AccountData;
+    it('never posts an account without stripping the signing key', () => {
+      // Asserted against the SOURCE rather than by calling one method,
+      // because the set of methods that still POST shrinks with every
+      // migration — a test pinned to one of them keeps breaking for the
+      // right reason and gets "fixed" by repointing it, which is how the
+      // guarantee quietly stops being checked.
+      //
+      // The rule: if a request body carries `account`, it must be
+      // `withoutSigningKey(account)`. A raw `account,` in a POST body would
+      // put a live ephemeral key into edge, WAF and APM logs.
+      const src = readFileSync(
+        join(process.cwd(), 'src/services/zkLoginClient.ts'),
+        'utf8',
+      );
 
-      global.fetch = jest.fn(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({ digest: '0xd' }),
-      } as Response)) as unknown as typeof fetch;
+      const bodies = [...src.matchAll(/JSON\.stringify\(\{([\s\S]*?)\}\)/g)].map(
+        (m) => m[1],
+      );
+      expect(bodies.length).toBeGreaterThan(0);
 
-      // Uses a method that STILL posts. As actions migrate to client-side
-      // signing this list shrinks; when it empties, the guarantee is
-      // structural (nothing posts an account at all) and this test can go.
-      await ZkLoginClient.getInstance().adminTriggerPayout(account, '0xcircle', '0xwallet');
+      const leaking = bodies.filter((b) => /(^|[\s,{])account\s*,/.test(b));
+      expect(leaking).toEqual([]);
+    });
 
-      const raw = (global.fetch as jest.Mock).mock.calls[0][1].body as string;
-      expect(raw).toContain('adminTriggerPayout');
-      expect(raw).not.toContain('suiprivkey-MUST-NOT-LEAK');
-      expect(raw).not.toContain('ephemeralPrivateKey');
+    it('never references the private key field in a request body', () => {
+      const src = readFileSync(
+        join(process.cwd(), 'src/services/zkLoginClient.ts'),
+        'utf8',
+      );
+      const bodies = [...src.matchAll(/JSON\.stringify\(\{([\s\S]*?)\}\)/g)].map(
+        (m) => m[1],
+      );
+      expect(bodies.filter((b) => b.includes('ephemeralPrivateKey'))).toEqual([]);
     });
   });
 

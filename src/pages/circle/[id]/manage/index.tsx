@@ -664,6 +664,39 @@ const getJsonRpcUrl = (): string => {
   return getCurrentRpcUrl();
 };
 
+/**
+ * Runs a client-signed transaction and shapes the outcome like the
+ * `fetch` + `response.json()` pair these call sites were written against.
+ *
+ * These actions used to POST to /api/zkLogin and be signed with the
+ * server-held ephemeral key. That key is gone, so they began returning 409
+ * and the whole manage page stopped working. Preserving the response/result
+ * shape keeps the surrounding error handling — including the 401 re-login
+ * branch — untouched, so this migration cannot quietly change how failures
+ * surface to the admin.
+ */
+async function runSignedTx(
+  fn: () => Promise<{ digest: string }>,
+): Promise<{
+  response: { ok: boolean; status: number };
+  // `status` and `details` appear on some server error bodies these sites
+  // already destructure; kept so their handling still compiles and reads.
+  result: { digest?: string; error?: string; status?: string; details?: string };
+}> {
+  try {
+    const r = await fn();
+    return { response: { ok: true, status: 200 }, result: { digest: r.digest } };
+  } catch (err) {
+    const requireRelogin = err instanceof ZkLoginError && err.requireRelogin;
+    return {
+      response: { ok: false, status: requireRelogin ? 401 : 500 },
+      result: {
+        error: err instanceof Error ? err.message : 'Transaction failed',
+      },
+    };
+  }
+}
+
 export default function ManageCircle() {
   const router = useRouter();
   const { id } = router.query;
@@ -1626,19 +1659,8 @@ export default function ManageCircle() {
       }
       
       // Call the API directly like in create-circle.tsx
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'adminApproveMember',
-          account,
-          circleId,
-          memberAddress,
-          network: getCurrentNetwork() // Include current network selection
-        }),
-      });
-      
-      const result = await response.json();
+      const { response: response, result: result } = await runSignedTx(() =>
+        new ZkLoginClient().adminApproveMember(account, circleId, memberAddress));
       
       if (!response.ok) {
         if (response.status === 401) {
@@ -1703,19 +1725,8 @@ export default function ManageCircle() {
       }
       
       // Call the API endpoint for bulk approval
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'adminApproveMembers',
-          account,
-          circleId,
-          memberAddresses,
-          network: getCurrentNetwork()
-        }),
-      });
-      
-      const result = await response.json();
+      const { response: response, result: result } = await runSignedTx(() =>
+        new ZkLoginClient().adminApproveMembers(account, circleId, memberAddresses));
       
       if (!response.ok) {
         if (response.status === 401) {
@@ -1775,20 +1786,9 @@ export default function ManageCircle() {
         throw new Error('Authentication required');
       }
 
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'adminRemoveMember',
-          account,
-          circleId,
-          memberAddress,
-          walletId: circle?.custody?.walletId,
-          network: getCurrentNetwork()
-        }),
-      });
-
-      const result = await response.json();
+      const { response: response, result: result } = await runSignedTx(() =>
+        new ZkLoginClient().adminRemoveMember(
+            account, circleId, memberAddress, circle?.custody?.walletId ?? ''));
 
       if (!response.ok) {
         throw new Error(result.error || 'Failed to remove member');
@@ -2199,19 +2199,8 @@ export default function ManageCircle() {
       toast.loading('Increasing maximum members...', { id: toastId });
       
       // First, increase the max members
-      const maxMembersResponse = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'adminSetMaxMembers',
-          account,
-          circleId: circle.id,
-          newMaxMembers,
-          network: getCurrentNetwork()
-        }),
-      });
-      
-      const maxMembersResult = await maxMembersResponse.json();
+      const { response: maxMembersResponse, result: maxMembersResult } = await runSignedTx(() =>
+        new ZkLoginClient().adminSetMaxMembers(account, circle.id, newMaxMembers));
       
       if (!maxMembersResponse.ok) {
         console.error('Failed to update max members:', maxMembersResult);
@@ -2945,19 +2934,8 @@ export default function ManageCircle() {
       toast.loading('Updating circle token mode...', { id: 'toggle-native-sui-optin' });
       
       // Reuse existing API action that persists the underlying config flag.
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'toggleAutoSwap',
-          account,
-          circleId: circle.id,
-          enabled,
-          network: getCurrentNetwork()
-        }),
-      });
-      
-      const result = await response.json();
+      const { response: response, result: result } = await runSignedTx(() =>
+        new ZkLoginClient().toggleAutoSwap(account, circle.id, enabled));
       
       if (!response.ok) {
         console.error('Failed to update circle token mode:', result);
@@ -3633,18 +3611,8 @@ export default function ManageCircle() {
           }
           
           // Call the backend API
-          const response = await fetch('/api/zkLogin', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'activateCircle',
-              account,
-              circleId: circle.id,
-              network: getCurrentNetwork()
-            }),
-          });
-          
-          const result = await response.json();
+          const { response: response, result: result } = await runSignedTx(() =>
+            new ZkLoginClient().activateCircle(account, circle.id));
           
           // Dismiss loading toast regardless of outcome
           toast.dismiss(toastId);
@@ -4086,19 +4054,8 @@ export default function ManageCircle() {
             return;
           }
           
-          const response = await fetch('/api/zkLogin', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'adminSetMaxMembers',
-              account,
-              circleId: circle.id,
-              newMaxMembers: maxMembersNum,
-              network: getCurrentNetwork()
-            }),
-          });
-          
-          const result = await response.json();
+          const { response: response, result: result } = await runSignedTx(() =>
+            new ZkLoginClient().adminSetMaxMembers(account, circle.id, maxMembersNum));
           
           if (!response.ok) {
             console.error('Failed to update max members:', result);
@@ -4973,18 +4930,8 @@ export default function ManageCircle() {
           }
           
           // Call the backend API
-          const response = await fetch('/api/zkLogin', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'resumeCycle',
-              account,
-              circleId: circle.id,
-              network: getCurrentNetwork()
-            }),
-          });
-          
-          const result = await response.json();
+          const { response: response, result: result } = await runSignedTx(() =>
+            new ZkLoginClient().resumeCycle(account, circle.id));
           
           if (!response.ok) {
             console.error('Failed to resume cycle:', result);
