@@ -21,7 +21,8 @@
     "lint": "next lint",
     "generate:icons": "node scripts/generate-icons.mjs",
     "test:seo": "jest src/__tests__/seo --runInBand",
-    "generate:og": "node scripts/generate-og.mjs"
+    "generate:og": "node scripts/generate-og.mjs",
+    "e2e:compliance": "node scripts/e2e-compliance-check.mjs"
   },
   "engines": {
     "node": "24.x",
