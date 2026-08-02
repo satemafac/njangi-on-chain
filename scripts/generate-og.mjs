@@ -84,6 +84,16 @@ const CARDS = [
     title: 'What is a chit fund?',
   },
   {
+    slug: 'learn-chama',
+    eyebrow: 'Learn · Chama',
+    title: 'What is a chama?',
+  },
+  {
+    slug: 'learn-esusu',
+    eyebrow: 'Learn · Esusu',
+    title: 'What is esusu?',
+  },
+  {
     slug: 'faq',
     eyebrow: 'Questions',
     title: 'A few things people ask first',

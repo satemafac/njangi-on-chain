@@ -208,9 +208,12 @@ export const ROSCA_TERMS: RoscaTerm[] = [
       'Kenyan communities in the United Kingdom, the United States and the Gulf run chamas, commonly to fund a house or a business back home. Diaspora chamas often carry larger amounts than local ones, which raises the stakes on record-keeping considerably.',
       'Related groups run across the region under their own names — kikoba in Tanzania, and the various Ugandan and Rwandan village savings groups — sharing the same rotate-and-lend structure.',
     ],
+    regulatoryNote:
+      'Many chamas run a lending pool alongside the rotating one — "table banking" — where money is lent to members at the meeting and repaid over following meetings, usually with a charge the group sets. Njangi On-Chain coordinates the rotation only. It has no lending feature, it is not a credit provider, and it never holds or directs members\' money.',
     related: ['stokvel', 'equb', 'esusu', '/learn/rosca'],
     published: '2026-08-02',
     modified: '2026-08-02',
+    hasPillarPage: true,
   },
 
   {
@@ -243,9 +246,10 @@ export const ROSCA_TERMS: RoscaTerm[] = [
       'Nigerian communities in the United Kingdom, the United States and Canada run esusu widely, and it is a common way to raise a deposit for a house, cover school fees, or send a lump sum home. Groups are frequently drawn from a single hometown association, so the social ties are as strong abroad as at home.',
       'The Caribbean descendants of the same practice are covered separately on the susu page, which goes into the Jamaican Partner system and the West Indian collector tradition in more detail.',
     ],
-    related: ['/learn/susu', 'ajo', 'chama', '/learn/what-is-njangi'],
+    related: ['/learn/susu', 'pardna', 'ajo', 'chama', '/learn/what-is-njangi'],
     published: '2026-08-02',
     modified: '2026-08-02',
+    hasPillarPage: true,
   },
 
   {

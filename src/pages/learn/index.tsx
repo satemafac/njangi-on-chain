@@ -62,6 +62,24 @@ export default function LearnIndexPage() {
       tag: "Fundamentals",
       readTime: "9 min read",
       color: "blue"
+    },
+    {
+      title: "What is a Chama?",
+      subtitle: "Kenya, and what happens after the pot",
+      description: "The one tradition that routinely outgrows its own rotation — table banking, group-owned land, and the meeting that holds it together.",
+      href: "/learn/chama",
+      tag: "Regional Focus",
+      readTime: "8 min read",
+      color: "green"
+    },
+    {
+      title: "What is Esusu?",
+      subtitle: "Nigeria, and the word that crossed the Atlantic",
+      description: "The Yoruba original, and the probable ancestor of the Caribbean susu and Jamaican pardna — an institution that survived the Middle Passage intact.",
+      href: "/learn/esusu",
+      tag: "Cultural Traditions",
+      readTime: "8 min read",
+      color: "orange"
     }
   ];
 
