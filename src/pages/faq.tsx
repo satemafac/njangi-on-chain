@@ -1,7 +1,9 @@
-import Head from 'next/head';
 import Link from 'next/link';
 import { useState } from 'react';
 import { SUPPORT_MAILTO } from '../lib/constants';
+import { Seo } from '../components/Seo';
+import { breadcrumbs, faqPage } from '../lib/structured-data';
+import { MarketingShell } from '../components/marketing/ArticleLayout';
 
 export default function FAQPage() {
   const [openFaqItems, setOpenFaqItems] = useState<{[key: string]: boolean}>({});
@@ -30,7 +32,7 @@ export default function FAQPage() {
         {
           id: "cost-to-use",
           question: "How much does it cost to use Njangi On-Chain?",
-          answer: "The platform itself is free to use. You only pay minimal blockchain transaction fees (usually a few cents) when making contributions or receiving payouts. These fees go to the Sui blockchain network, not to us. There are no monthly subscriptions, account maintenance fees, or hidden charges."
+          answer: "Running a circle is free. You pay only the small Sui network transaction fee (usually a few cents) when contributing or receiving a payout, and that goes to the network, not to us. We never take a cut of contributions or payouts. A Premium subscription unlocks coordination features — larger circles, WhatsApp notifications, smart goals, and analytics — and is paid by the circle admin; see the pricing page for what is included. Your circle's money is never behind a paywall."
         },
         {
           id: "currencies-supported",
@@ -55,7 +57,7 @@ export default function FAQPage() {
         {
           id: "payout-order",
           question: "How is the payout order determined?",
-          answer: "The payout order is determined by a provably fair random selection built into the smart contract. This ensures no one can manipulate who gets paid when. Once a member receives their payout, they're automatically moved to the end of the queue. The entire process is transparent and verifiable on the blockchain."
+          answer: "The circle admin sets the rotation order, the same way a njangi treasurer traditionally would — by arranging members into positions the group has agreed on. It is not random. What is different from a paper list is that the order is stored on-chain and visible to every member, and any change to it is recorded as an on-chain event, so nobody can quietly move themselves up the queue. Once the order is set, each cycle pays the member in the next position until everyone has had their turn."
         },
         {
           id: "what-happens-missed-payment",
@@ -105,7 +107,7 @@ export default function FAQPage() {
         {
           id: "circle-size-limits",
           question: "How many people can be in a circle?",
-          answer: "Circles can have anywhere from 3 to 50 members, though most work best with 8-20 people. Smaller circles mean faster payout cycles but smaller lump sums. Larger circles mean bigger payouts but longer waits between turns. The optimal size depends on your group's savings goals and preferences."
+          answer: "The contract allows 3 to 20 members. On the Free plan a circle can have up to 3 members; a Premium subscription raises that to the full 20. Smaller circles come round faster but pool a smaller amount each turn; larger circles pool more but mean a longer wait between your turns. Most groups land somewhere in the middle."
         },
         {
           id: "contribution-frequency",
@@ -148,58 +150,65 @@ export default function FAQPage() {
 
   return (
     <>
-      <Head>
-        <title>Frequently Asked Questions | Njangi On-Chain - Blockchain Savings Circles</title>
-        <meta name="description" content="Get answers to common questions about Njangi On-Chain, blockchain savings circles, security, how it works, and cultural traditions. Learn about zkLogin, smart contracts, and global community savings." />
-        <meta name="keywords" content="njangi faq, blockchain savings questions, rosca help, tontine guide, sou sou help, zkLogin security, smart contract savings" />
-        <link rel="canonical" href="https://njangionchain.com/faq" />
-        
-        {/* Open Graph / Facebook */}
-        <meta property="og:type" content="website" />
-        <meta property="og:title" content="FAQ - Njangi On-Chain Blockchain Savings Circles" />
-        <meta property="og:description" content="Get answers to common questions about blockchain savings circles and community finance." />
-        <meta property="og:url" content="https://njangionchain.com/faq" />
-        <meta property="og:image" content="https://njangionchain.com/images/faq-hero.jpg" />
+      <Seo
+        title="Frequently Asked Questions"
+        description="How a njangi works on-chain, who holds the money, what happens if someone stops contributing, and how the cultural traditions map onto the product. Answered plainly."
+        path="/faq"
+        image={{
+          url: '/og/faq.png',
+          alt: 'Njangi On-Chain — a few things people ask first',
+        }}
+        jsonLd={[
+          breadcrumbs([{ name: 'Home', path: '/' }, { name: 'FAQ' }]),
+          // FAQPage is emitted for entity understanding and for Bing, which
+          // still renders FAQ results. Google restricted FAQ rich results to
+          // government and health sites in Aug 2023 — do not expect visible
+          // accordions in a Google result from this markup.
+          // Built from the same array the page renders, so the markup and the
+          // visible answers cannot drift apart (Google requires they match).
+          faqPage(
+            faqCategories.flatMap((category) =>
+              category.faqs.map((item) => ({
+                question: item.question,
+                answer: item.answer,
+              }))
+            )
+          ),
+        ]}
+      />
 
-        {/* Twitter */}
-        <meta property="twitter:card" content="summary_large_image" />
-        <meta property="twitter:title" content="FAQ - Njangi On-Chain" />
-        <meta property="twitter:description" content="Get answers to common questions about blockchain savings circles." />
-        <meta property="twitter:image" content="https://njangionchain.com/images/faq-hero.jpg" />
-      </Head>
-
-      <div className="min-h-screen bg-gray-50">
+      <MarketingShell>
         {/* Navigation */}
-        <nav className="bg-white shadow-sm border-b">
+        <nav className="bg-ink-surface border-b">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center space-x-2 py-3 text-sm text-gray-600">
-              <Link href="/" className="hover:text-blue-600 transition-colors">Home</Link>
+            <div className="flex items-center space-x-2 py-3 text-sm text-sand">
+              <Link href="/" className="hover:text-gold transition-colors">Home</Link>
               <span>/</span>
-              <span className="text-gray-900 font-medium">FAQ</span>
+              <span className="text-cream font-medium">FAQ</span>
             </div>
           </div>
         </nav>
 
         {/* Hero Section */}
-        <section className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-16">
+        <section className="bg-gradient-to-r from-ink-surface to-ink-deep text-cream py-16">
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <h1 className="text-4xl md:text-5xl font-bold mb-6">
               Frequently Asked Questions
             </h1>
-            <p className="text-xl md:text-2xl mb-8 text-blue-100">
+            <p className="text-xl md:text-2xl mb-8 text-cream-muted">
               Everything you need to know about Njangi On-Chain, blockchain savings circles, 
               and community finance on the Sui blockchain.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link 
                 href="/learn" 
-                className="bg-white text-blue-600 px-8 py-3 rounded-lg font-semibold hover:bg-gray-100 transition-colors"
+                className="bg-ink-surface text-gold px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface transition-colors"
               >
                 Learn the Basics →
               </Link>
               <Link 
                 href="/" 
-                className="border-2 border-white text-white px-8 py-3 rounded-lg font-semibold hover:bg-white hover:text-blue-600 transition-colors"
+                className="border border-gold-deep/55 text-cream px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface hover:text-gold transition-colors"
               >
                 Get Started
               </Link>
@@ -208,7 +217,7 @@ export default function FAQPage() {
         </section>
 
         {/* Quick Links */}
-        <section className="bg-white border-b">
+        <section className="bg-ink-surface border-b">
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             <h2 className="text-xl font-semibold mb-4 text-center">Jump to Section</h2>
             <div className="flex flex-wrap justify-center gap-4">
@@ -216,7 +225,7 @@ export default function FAQPage() {
                 <a
                   key={index}
                   href={`#${category.title.toLowerCase().replace(/\s+/g, '-')}`}
-                  className="bg-blue-50 text-blue-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-100 transition-colors"
+                  className="bg-gold/[0.07] text-gold px-4 py-2 rounded-lg text-sm font-medium hover:bg-gold/[0.07] transition-colors"
                 >
                   {category.title}
                 </a>
@@ -233,24 +242,24 @@ export default function FAQPage() {
               id={category.title.toLowerCase().replace(/\s+/g, '-')}
               className="mb-12"
             >
-              <h2 className="text-3xl font-bold text-gray-900 mb-8 pb-4 border-b border-gray-200">
+              <h2 className="text-3xl font-bold text-cream mb-8 pb-4 border-b border-ink-border border-ink-border">
                 {category.title}
               </h2>
               
               <div className="space-y-4">
                 {category.faqs.map((faq) => (
-                  <div key={faq.id} className="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
+                  <div key={faq.id} className="bg-ink-surface border border-ink-border rounded-lg overflow-hidden">
                     <button 
-                      className="w-full px-6 py-4 text-left hover:bg-gray-50 transition-colors"
+                      className="w-full px-6 py-4 text-left hover:bg-ink-deep transition-colors"
                       onClick={() => toggleFaqItem(faq.id)}
                       aria-expanded={openFaqItems[faq.id]}
                     >
                       <div className="flex justify-between items-center">
-                        <span className="text-lg font-semibold text-gray-900 pr-4">
+                        <span className="text-lg font-semibold text-cream pr-4">
                           {faq.question}
                         </span>
                         <svg 
-                          className={`h-5 w-5 text-gray-500 transform ${
+                          className={`h-5 w-5 text-sand-dim transform ${
                             openFaqItems[faq.id] ? 'rotate-180' : ''
                           } transition-transform duration-200 flex-shrink-0`} 
                           fill="none" 
@@ -264,7 +273,7 @@ export default function FAQPage() {
                     <div 
                       className={`px-6 pb-4 ${openFaqItems[faq.id] ? 'block' : 'hidden'}`}
                     >
-                      <div className="text-gray-700 leading-relaxed whitespace-pre-line">
+                      <div className="text-sand leading-relaxed whitespace-pre-line">
                         {faq.answer}
                       </div>
                     </div>
@@ -276,25 +285,25 @@ export default function FAQPage() {
         </main>
 
         {/* Still Have Questions */}
-        <section className="bg-blue-50">
+        <section className="bg-gold/[0.07]">
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-center">
-            <h2 className="text-3xl font-bold text-gray-900 mb-4">
+            <h2 className="text-3xl font-bold text-cream mb-4">
               Still Have Questions?
             </h2>
-            <p className="text-lg text-gray-600 mb-8 max-w-2xl mx-auto">
+            <p className="text-lg text-sand mb-8 max-w-2xl mx-auto">
               Can&rsquo;t find what you&rsquo;re looking for? We&rsquo;re here to help! 
               Reach out to our community or learn more about blockchain savings circles.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link 
                 href="/learn"
-                className="bg-blue-600 text-white px-8 py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors"
+                className="bg-gold text-cream px-8 py-3 rounded-lg font-semibold hover:bg-gold transition-colors"
               >
                 Educational Resources
               </Link>
               <a
                 href={SUPPORT_MAILTO}
-                className="border-2 border-blue-600 text-blue-600 px-8 py-3 rounded-lg font-semibold hover:bg-blue-600 hover:text-white transition-colors"
+                className="border-2 border-gold/45 text-gold px-8 py-3 rounded-lg font-semibold hover:bg-gold hover:text-cream transition-colors"
               >
                 Contact Support
               </a>
@@ -302,7 +311,7 @@ export default function FAQPage() {
                 href="https://x.com/njangi_on_chain"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="border-2 border-gray-300 text-gray-700 px-8 py-3 rounded-lg font-semibold hover:bg-gray-100 transition-colors"
+                className="border-2 border-ink-border text-sand px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface transition-colors"
               >
                 Join Community
               </a>
@@ -311,51 +320,51 @@ export default function FAQPage() {
         </section>
 
         {/* Related Resources */}
-        <section className="bg-white">
+        <section className="bg-ink-surface">
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-            <h2 className="text-3xl font-bold text-gray-900 text-center mb-8">
+            <h2 className="text-3xl font-bold text-cream text-center mb-8">
               Learn More About Savings Circles
             </h2>
             <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
               <Link href="/learn/what-is-njangi" className="group">
-                <div className="bg-green-50 border border-green-200 rounded-lg p-6 hover:border-green-300 hover:shadow-md transition-all">
-                  <h3 className="font-semibold text-green-800 group-hover:text-green-900 mb-2">
+                <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
+                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
                     What is Njangi?
                   </h3>
-                  <p className="text-sm text-green-600">
+                  <p className="text-sm text-gold">
                     Learn about Cameroon&rsquo;s traditional savings circles.
                   </p>
                 </div>
               </Link>
               
               <Link href="/learn/blockchain-rosca" className="group">
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-6 hover:border-blue-300 hover:shadow-md transition-all">
-                  <h3 className="font-semibold text-blue-800 group-hover:text-blue-900 mb-2">
+                <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
+                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
                     Blockchain ROSCA
                   </h3>
-                  <p className="text-sm text-blue-600">
+                  <p className="text-sm text-gold">
                     Discover the future of community savings.
                   </p>
                 </div>
               </Link>
               
               <Link href="/learn/tontine-blockchain" className="group">
-                <div className="bg-purple-50 border border-purple-200 rounded-lg p-6 hover:border-purple-300 hover:shadow-md transition-all">
-                  <h3 className="font-semibold text-purple-800 group-hover:text-purple-900 mb-2">
+                <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
+                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
                     Tontine Blockchain
                   </h3>
-                  <p className="text-sm text-purple-600">
+                  <p className="text-sm text-gold">
                     African finance meets blockchain technology.
                   </p>
                 </div>
               </Link>
               
               <Link href="/learn/sou-sou-crypto" className="group">
-                <div className="bg-orange-50 border border-orange-200 rounded-lg p-6 hover:border-orange-300 hover:shadow-md transition-all">
-                  <h3 className="font-semibold text-orange-800 group-hover:text-orange-900 mb-2">
+                <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
+                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
                     Sou Sou Crypto
                   </h3>
-                  <p className="text-sm text-orange-600">
+                  <p className="text-sm text-gold">
                     Caribbean savings circles go digital.
                   </p>
                 </div>
@@ -365,15 +374,15 @@ export default function FAQPage() {
         </section>
 
         {/* Footer */}
-        <footer className="bg-gray-100">
+        <footer className="bg-ink-surface">
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <p className="text-sm text-gray-600 text-center">
+            <p className="text-sm text-sand text-center">
               <strong>Disclaimer:</strong> This content is for educational purposes only and does not constitute financial advice. 
               Cryptocurrency investments carry risks. Always consult with qualified financial advisors before making investment decisions.
             </p>
           </div>
         </footer>
-      </div>
+      </MarketingShell>
     </>
   );
 } 
