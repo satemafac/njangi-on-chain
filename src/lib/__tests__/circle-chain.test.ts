@@ -74,7 +74,7 @@ describe('circle-chain helpers', () => {
         }),
       ).toEqual([
         '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
-        '0x5578b73bd2a00eeb6d2bcdd791f4288202f6b10744536554db4868188c68302f',
+        '0x1a5fd4877f940f637cf4ac95fcd75cb352065de8b9e0acb9dbd29daa09b7846e',
       ]);
 
       // An app still configured with the retired package id is treated as
@@ -90,7 +90,7 @@ describe('circle-chain helpers', () => {
         }),
       ).toEqual([
         '0xc5aed33e4da2530d0f9b36a64d96d662b109ba2962bb6918bc3fa21be1622465',
-        '0x5578b73bd2a00eeb6d2bcdd791f4288202f6b10744536554db4868188c68302f',
+        '0x1a5fd4877f940f637cf4ac95fcd75cb352065de8b9e0acb9dbd29daa09b7846e',
         '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
       ]);
     });

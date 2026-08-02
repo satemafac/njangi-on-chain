@@ -133,26 +133,19 @@ module njangi::njangi_cycle_escrow {
         claim_expires_at_ms: u64,
     }
 
-    /// `key` only — deliberately NOT `store`.
+    /// Abilities are deliberately UNCHANGED (`key, store`).
     ///
-    /// `finalize` is permissionless and hands the Claim back to the caller's
-    /// PTB. With `store`, anyone could finalize a fully-funded cycle and
-    /// `public_transfer` the Claim to an address nobody controls: the funds
-    /// are not stealable (redeem_claim still checks `sender == recipient`),
-    /// but the payout is stranded until `refund_expired_claim` returns it to
-    /// contributors 30 days later. A denial-of-payout available to any
-    /// passer-by, for the price of gas.
+    /// Removing `store` would also close the payout-denial grief described on
+    /// `finalize`, and more elegantly — a Claim that cannot be transferred
+    /// cannot be stranded. But altering a public struct's abilities is an
+    /// upgrade-INCOMPATIBLE change in Sui: it would force a fresh publish,
+    /// mint a new package id, and orphan every circle on the existing
+    /// lineage, since Move type identity is anchored to the original package.
     ///
-    /// Without `store` the Claim cannot be transferred, wrapped, or stored by
-    /// anyone outside this module, so a PTB that mints one has no way to get
-    /// rid of it except by passing it straight to `redeem_claim` — which only
-    /// the recipient can satisfy. A griefer's transaction therefore cannot be
-    /// built at all, rather than succeeding and stranding the pot.
-    ///
-    /// `transfer::transfer` inside this module still works (that needs `key`
-    /// and same-module definition, not `store`), so `finalize_to_recipient`
-    /// is unaffected.
-    public struct Claim<phantom T> has key {
+    /// Stranding users' circles to fix a griefing vector is a bad trade, so
+    /// the fix lives in `finalize` instead, where an added assert is
+    /// upgrade-compatible.
+    public struct Claim<phantom T> has key, store {
         id: UID,
         escrow_id: ID,
         cycle_no: u64,
@@ -557,15 +550,28 @@ module njangi::njangi_cycle_escrow {
     }
 
     /// Same as `finalize_to_recipient`, but returns the `Claim<T>` to the
-    /// caller's PTB instead of transferring it. Useful when a script
-    /// wants to atomically finalize and redeem within a single tx (the
-    /// scheduled recipient calling on their own behalf, for example).
+    /// caller's PTB instead of transferring it — for atomically finalizing
+    /// and redeeming in one tx.
+    ///
+    /// RECIPIENT-ONLY, unlike `finalize_to_recipient`. `Claim` has `store`,
+    /// so a caller who receives one can `public_transfer` it anywhere. While
+    /// this was permissionless, any passer-by could finalize a funded cycle
+    /// and send the Claim to an address nobody controls: funds not stealable
+    /// (`redeem_claim` still checks `sender == recipient`), but the payout
+    /// stranded until `refund_expired_claim` returns it to contributors 30
+    /// days later — a denial-of-payout for the price of gas.
+    ///
+    /// This costs nothing in permissionlessness: `finalize_to_recipient` is
+    /// still callable by anyone and always delivers to the frozen snapshot
+    /// recipient, so a third party can still pay the gas to settle a cycle.
+    /// They simply cannot take custody of the claim while doing it.
     public fun finalize<T>(
         escrow: &mut CycleEscrow<T>,
         clock: &Clock,
         ctx: &mut TxContext
     ): Claim<T> {
         assert!(!escrow.requires_attestation, E_COMPLIANCE_ATTESTATION_REQUIRED);
+        assert!(tx_context::sender(ctx) == escrow.snapshot.recipient, E_NOT_RECIPIENT);
         mint_claim<T>(escrow, clock, ctx)
     }
 
@@ -1211,35 +1217,41 @@ module njangi::njangi_cycle_escrow {
     }
 
     #[test]
-    fun test_finalize_claim_cannot_be_transferred_away() {
-        // Regression for the payout-denial griefing vector.
-        //
-        // `finalize` is permissionless, so before Claim lost `store` any
-        // passer-by could finalize a funded cycle and public_transfer the
-        // Claim somewhere unreachable — funds unstealable, but the payout
-        // stranded until the 30-day expiry refund.
-        //
-        // The fix is structural rather than an assert: without `store`, no
-        // code outside this module can transfer or wrap a Claim, so the
-        // griefing transaction cannot be constructed. This test documents
-        // the guarantee and pins the finalize -> recipient path that
-        // replaces it. If someone re-adds `store`, the compile-time
-        // guarantee silently disappears with nothing failing here, so the
-        // ability list on the struct is the thing to guard in review.
+    #[expected_failure(abort_code = E_NOT_RECIPIENT)]
+    fun test_finalize_by_non_recipient_aborts() {
+        // Regression for the payout-denial grief. `finalize` hands back a
+        // Claim, and Claim has `store`, so a non-recipient caller could
+        // public_transfer it somewhere unreachable and strand the payout for
+        // 30 days. Only the recipient may take custody of their own claim.
         let mut scenario = ts::begin(TEST_ADMIN);
         let clock = setup_circle_and_escrow(&mut scenario);
         contribute_as(&mut scenario, TEST_BOB);
         contribute_as(&mut scenario, TEST_CAROL);
 
-        // A non-recipient finalizes (allowed, and desirable — anyone may pay
-        // the gas). The Claim goes to the snapshot recipient regardless of
-        // who called.
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        let claim = finalize(&mut escrow, &clock, ts::ctx(&mut scenario));
+        transfer::public_transfer(claim, @0xDEAD);
+        abort 0
+    }
+
+    #[test]
+    fun test_finalize_to_recipient_stays_permissionless() {
+        // The counterpart guarantee: locking `finalize` must NOT make cycle
+        // settlement require the recipient to be online. A third party can
+        // still pay the gas — they just cannot hold the claim.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_CAROL);
+
+        // Carol (not the recipient) settles the cycle.
         ts::next_tx(&mut scenario, TEST_CAROL);
         let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
         finalize_to_recipient(&mut escrow, &clock, ts::ctx(&mut scenario));
         ts::return_shared(escrow);
 
-        // It landed with the recipient, not the caller.
+        // It landed with the snapshot recipient, not the caller.
         ts::next_tx(&mut scenario, TEST_ADMIN);
         let claim = ts::take_from_sender<Claim<SUI>>(&scenario);
         let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
