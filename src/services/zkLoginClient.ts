@@ -157,18 +157,10 @@ function withoutSigningKey(account: AccountData): AccountData {
   return rest as AccountData;
 }
 
-export interface EmberOperationLifecycle {
-  status: string;
-  partialCompletion: boolean;
-  pendingRedemption: boolean;
-  processing: string;
-}
-
 interface ZkLoginErrorMetadata {
   code?: string;
   stage?: string;
   operation?: string;
-  lifecycle?: EmberOperationLifecycle;
 }
 
 // Custom error class for zkLogin errors that includes requireRelogin property
@@ -177,8 +169,7 @@ export class ZkLoginError extends Error {
   code?: string;
   stage?: string;
   operation?: string;
-  lifecycle?: EmberOperationLifecycle;
-  
+
   constructor(
     message: string,
     requireRelogin: boolean = false,
@@ -190,26 +181,7 @@ export class ZkLoginError extends Error {
     this.code = metadata.code;
     this.stage = metadata.stage;
     this.operation = metadata.operation;
-    this.lifecycle = metadata.lifecycle;
   }
-}
-
-interface ZkLoginResponse {
-  error?: string;
-  details?: string;
-  code?: string;
-  stage?: string;
-  operation?: string;
-  lifecycle?: EmberOperationLifecycle;
-  requireRelogin?: boolean;
-  digest?: string;
-  status?: 'success' | 'failure';
-  gasUsed?: {
-    computationCost: string;
-    storageCost: string;
-    storageRebate: string;
-  };
-  [key: string]: unknown;
 }
 
 export interface CircleData extends CreateCircleTransactionData {
@@ -260,81 +232,6 @@ export interface UpdateNextInCommandRequest extends RecoveryActionRequest {
 }
 
 export type StablecoinTarget = 'USDC' | 'USDT' | 'SUI_USDE';
-export type EmberSourceAsset = 'SUI' | 'USDC' | 'USDT' | 'SUI_USDE';
-
-export interface EmberDeployRequest {
-  circleId: string;
-  walletId: string;
-  sourceAsset: EmberSourceAsset;
-  sourceAmount: string;
-  targetCoinType: 'SUI_USDE';
-  slippageBps?: number;
-  emberVaultId?: string;
-  emberVaultPackageId?: string;
-  emberProtocolConfigId?: string;
-}
-
-export interface EmberRedeemRequest {
-  circleId: string;
-  walletId: string;
-  receiptAmount: string;
-  receiptCoinType?: string;
-  emberVaultId?: string;
-  emberVaultPackageId?: string;
-  emberProtocolConfigId?: string;
-  receiver?: string;
-}
-
-export interface EmberDeployResponse {
-  operation: 'deployToEmberVault';
-  digest: string;
-  status: string;
-  gasUsed?: {
-    computationCost: string;
-    storageCost: string;
-    storageRebate: string;
-  };
-  circleId: string;
-  walletId: string;
-  network: string;
-  sourceAsset: EmberSourceAsset;
-  sourceCoinType: string;
-  targetCoinType: 'SUI_USDE';
-  sourceAmount: string;
-  swapExecuted: boolean;
-  estimatedSuiUsdeOut: string;
-  slippageBps?: number;
-  vaultId: string;
-  vaultPackageId: string;
-  protocolConfigId: string;
-  receiptCoinType: string;
-  lifecycle: EmberOperationLifecycle;
-  requireRelogin?: boolean;
-}
-
-export interface EmberRedemptionResponse {
-  operation: 'requestEmberRedemption';
-  digest: string;
-  status: string;
-  gasUsed?: {
-    computationCost: string;
-    storageCost: string;
-    storageRebate: string;
-  };
-  circleId: string;
-  walletId: string;
-  network: string;
-  receiptAmount: string;
-  receiptCoinType: string;
-  vaultId: string;
-  vaultPackageId: string;
-  protocolConfigId: string;
-  receiver: string;
-  lifecycle: EmberOperationLifecycle;
-  message: string;
-  requireRelogin?: boolean;
-}
-
 export class ZkLoginClient {
   private static instance: ZkLoginClient;
 
@@ -814,115 +711,11 @@ export class ZkLoginClient {
   // caller was cetus-service, which nothing calls either. Left as a
   // server-signed action it was a live signing path serving dead code.
 
-  public async deployToEmberVault(
-    account: AccountData,
-    payload: EmberDeployRequest
-  ): Promise<EmberDeployResponse> {
-    try {
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'deployToEmberVault',
-          account: withoutSigningKey(account),
-          payload
-        })
-      });
-
-      const responseData = await response.json() as EmberDeployResponse & ZkLoginResponse;
-      if (response.status === 401) {
-        throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`,
-          true,
-          {
-            code: responseData.code,
-            stage: responseData.stage,
-            operation: responseData.operation,
-            lifecycle: responseData.lifecycle
-          }
-        );
-      }
-      if (!response.ok) {
-        throw new ZkLoginError(
-          responseData.error || 'Failed to deploy to Ember vault',
-          !!responseData.requireRelogin,
-          {
-            code: responseData.code,
-            stage: responseData.stage,
-            operation: responseData.operation,
-            lifecycle: responseData.lifecycle
-          }
-        );
-      }
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      return {
-        ...responseData,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      throw new ZkLoginError(String(error), false);
-    }
-  }
-
-  public async requestEmberRedemption(
-    account: AccountData,
-    payload: EmberRedeemRequest
-  ): Promise<EmberRedemptionResponse> {
-    try {
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'requestEmberRedemption',
-          account: withoutSigningKey(account),
-          payload
-        })
-      });
-
-      const responseData = await response.json() as EmberRedemptionResponse & ZkLoginResponse;
-      if (response.status === 401) {
-        throw new ZkLoginError(
-          `Authentication error: ${responseData.error || 'Session expired'}. Please login again.`,
-          true,
-          {
-            code: responseData.code,
-            stage: responseData.stage,
-            operation: responseData.operation,
-            lifecycle: responseData.lifecycle
-          }
-        );
-      }
-      if (!response.ok) {
-        throw new ZkLoginError(
-          responseData.error || 'Failed to request Ember redemption',
-          !!responseData.requireRelogin,
-          {
-            code: responseData.code,
-            stage: responseData.stage,
-            operation: responseData.operation,
-            lifecycle: responseData.lifecycle
-          }
-        );
-      }
-      if (!responseData.digest) {
-        throw new ZkLoginError('No transaction digest received from server', false);
-      }
-      return {
-        ...responseData,
-        requireRelogin: responseData.requireRelogin
-      };
-    } catch (error) {
-      if (error instanceof ZkLoginError) {
-        throw error;
-      }
-      throw new ZkLoginError(String(error), false);
-    }
-  }
+  // Removed: `deployToEmberVault` / `requestEmberRedemption`. The yield vault
+  // was retired backend-first — both actions have returned 410
+  // EMBER_FLOW_REMOVED since the Phase 1 redesign — and the manage-page panel
+  // that called them came down with the compliance fix. The 410 dispatch cases
+  // in /api/zkLogin stay, so a stale client still gets a real answer.
 
   public async setRotationPosition(
     account: AccountData,
