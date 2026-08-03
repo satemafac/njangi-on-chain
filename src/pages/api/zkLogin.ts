@@ -121,17 +121,26 @@ const LEGACY_RAIL_ACTIONS = new Set([
  * The end state is that this set is empty and the actions are gone. Until
  * then, membership here means "not yet migrated to client-side signing".
  *
- * As of 2026-08-02 the only members still POSTed by any client are
- * depositUsdcDirect, depositStablecoin and executeSwapOnly — all currently
- * UNREACHABLE, and that is the trap. The two deposits are LEGACY_RAIL_ACTIONS,
- * so they answer 503 before reaching this guard; executeSwapOnly lives in
- * SimplifiedSwapUI, which renders only when NEXT_PUBLIC_ENABLE_SWAP_AND_DEPOSIT_FORM
- * is set (it is not, in production).
+ * As of 2026-08-03 the only members still POSTed by any client are
+ * depositStablecoin and executeSwapOnly, both in SimplifiedSwapUI, which
+ * renders only when NEXT_PUBLIC_ENABLE_SWAP_AND_DEPOSIT_FORM is set (it is
+ * not, in production). So enabling that flag resurrects a path that will 409
+ * rather than work. If you turn it on, migrate its actions to the client
+ * signer first — the builders in src/lib/zklogin-tx-builders.ts and the
+ * signLocallyWithBuilder helper in src/services/zkLoginClient.ts are the
+ * pattern.
  *
- * So enabling either flag resurrects a path that will 409 rather than work.
- * If you turn one on, migrate its actions to the client signer first — the
- * builders in src/lib/zklogin-tx-builders.ts and the signLocallyWithBuilder
- * helper in src/services/zkLoginClient.ts are the pattern.
+ * This comment previously also listed depositUsdcDirect as unreachable. It
+ * was not: the contribute page reached it for every USDC security deposit,
+ * and the legacy-rail gate answered 503 — so USDC deposits were dead in
+ * production while this file asserted they could not be. A live browser run
+ * caught it; no unauthenticated probe could have, because the gate fires
+ * before the account check that shapes an anonymous response.
+ *
+ * The lesson is narrower than "audit harder": reachability claims about
+ * CLIENT code do not belong in a server file, where nothing recomputes them.
+ * src/__tests__/api/capability-gate-partitioning.test.ts now asserts that no
+ * gated action is POSTed from an ungated component.
  */
 const SERVER_SIGNING_ACTIONS = new Set([
   'activateCircle', 'adminApproveMember', 'adminApproveMembers', 'adminRemoveMember',

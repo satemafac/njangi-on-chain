@@ -2452,31 +2452,32 @@ export default function ContributeToCircle() {
         id: 'one-click-swap-deposit',
       });
 
-      const requiredAmountInCents = userDepositPaid
-        ? circle.contributionAmountUsd || 0
-        : circle.securityDepositUsd || 0;
-
-      const depositResponse = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'depositUsdcDirect',
-          account,
-          circleId: circle.id,
-          walletId: circle.walletId,
-          usdcAmount: requiredAmountInCents,
-          isSecurityDeposit: !userDepositPaid,
-          network: getCurrentNetwork(),
-        }),
-      });
-
-      const depositResponseData = await depositResponse.json();
-      if (!depositResponse.ok) {
+      // Same fix as handleDirectUsdcDeposit: the follow-up leg used to POST
+      // the legacy-rail `depositUsdcDirect` and 503 once that rail is gated
+      // off. Worse here than there — the swap has already settled, so the
+      // member has converted their SUI and is left holding USDC with the
+      // payment un-made.
+      //
+      // Cycle contributions do not belong on this path at all: the legacy
+      // contribution rail was retired deliberately, leaving the per-cycle
+      // escrow as the single auditable money path.
+      if (userDepositPaid) {
         throw new Error(
-          depositResponseData.error ||
-            'Swap succeeded, but the follow-up USDC payment could not be submitted.'
+          'Your SUI was converted to USDC. Cycle contributions are paid in the round panel above — pay your share there.',
         );
       }
+
+      await new ZkLoginClient().paySecurityDeposit(
+        account,
+        circle.id,
+        circle.walletId,
+        {
+          currency: 'USDC',
+          usdcCoinType: USDC_COIN_TYPE,
+          suiCoinType: getCoinType('SUI'),
+          network: getCurrentNetwork(),
+        },
+      );
 
       toast.success(
         userDepositPaid
@@ -3059,28 +3060,46 @@ export default function ContributeToCircle() {
         isSecurityDeposit
       });
       
-      const response = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'depositUsdcDirect',
+      // Signed in the browser via the same builder as the SUI path.
+      //
+      // This used to POST `depositUsdcDirect`, which is a LEGACY_RAIL_ACTION
+      // and so answers 503 once the legacy rail is gated off (its default).
+      // That took USDC security deposits down entirely: the button rendered,
+      // the click went nowhere, and because the gate fires before the
+      // signing guard it never surfaced as the 409 the migration audit was
+      // watching for. The handler above already returns early for
+      // contributions, so everything reaching here is a deposit — which is
+      // the join transaction, not a legacy contribution, and was always
+      // meant to keep working.
+      let responseData: { digest?: string; error?: string };
+      try {
+        const result = await new ZkLoginClient().paySecurityDeposit(
           account,
-          circleId: circle.id,
-          walletId: circle.walletId,
-          usdcAmount: requiredAmountInCents, // Send amount in CENTS
-          isSecurityDeposit,
-          network: getCurrentNetwork() // Include current network selection
-        }),
-      });
-      
-      const responseData = await response.json();
-      
-      if (!response.ok) {
+          circle.id,
+          circle.walletId,
+          {
+            currency: 'USDC',
+            usdcCoinType: USDC_COIN_TYPE,
+            suiCoinType: getCoinType('SUI'),
+            network: getCurrentNetwork(),
+          },
+        );
+        responseData = { digest: result.digest };
+      } catch (depositErr) {
+        responseData = {
+          error:
+            depositErr instanceof Error
+              ? depositErr.message
+              : 'Failed to process USDC deposit',
+        };
+      }
+
+      if (responseData.error) {
         console.error('Direct USDC deposit failed:', responseData);
-        toast.error(responseData.error || 'Failed to process USDC deposit', { id: toastId });
+        toast.error(responseData.error, { id: toastId });
         return;
       }
-      
+
       // Success message
       if (isSecurityDeposit) {
         toast.success('Security deposit paid successfully with your USDC!', { id: toastId });
