@@ -4812,6 +4812,11 @@ export default function ManageCircle() {
   const canManageRecoveryDelegate = Boolean(
     recoveryStatus?.autoReleaseEnabled && recoveryStatus.rawState === 0,
   );
+  // `activate_circle` only enforces the next-in-command when the circle was
+  // created with auto-release enabled (njangi_circles.move). Circles without
+  // it activate with no delegate at all — and the delegate form is disabled on
+  // exactly those circles, so never tell that admin a delegate is required.
+  const recoveryDelegateRequired = Boolean(recoveryStatus?.autoReleaseEnabled);
   const recoveryDelegateValidationError = getRecoveryDelegateValidationError({
     value: recoveryDelegateDraft,
     adminAddress: circle?.admin,
@@ -6638,7 +6643,9 @@ export default function ManageCircle() {
                               <p className="mt-2 text-sm font-semibold text-slate-950">
                                 {autoReleaseUi.configuredDelegate
                                   ? shortenAddress(autoReleaseUi.configuredDelegate)
-                                  : 'Delegate required'}
+                                  : recoveryDelegateRequired
+                                    ? 'Delegate required'
+                                    : 'Not applicable'}
                               </p>
                               <p className="mt-1 text-xs text-slate-500">
                                 {recoveryDelegateFormDisabledReason
@@ -6746,14 +6753,18 @@ export default function ManageCircle() {
                                   ? autoReleaseUi.delegateStatus === 'valid'
                                     ? 'Delegate is healthy.'
                                     : 'Delegate needs attention.'
-                                  : 'Delegate required.'}
+                                  : recoveryDelegateRequired
+                                    ? 'Delegate required.'
+                                    : 'No delegate needed.'}
                               </p>
                               <p className="mt-2 leading-6">
                                 {autoReleaseUi.configuredDelegate
                                   ? autoReleaseUi.delegateStatus === 'valid'
                                     ? 'If your heartbeat expires, this wallet gets a 24-hour exclusive recovery window before eligible active members can trigger.'
                                     : 'Because this delegate is no longer eligible, active non-admin members will become the fallback once the heartbeat expires.'
-                                  : 'Set a valid delegate before activating this circle so the admin-liveness fallback path is fully armed.'}
+                                  : recoveryDelegateRequired
+                                    ? 'Set a valid delegate before activating this circle so the admin-liveness fallback path is fully armed.'
+                                    : 'This circle was created without auto-release, so activation does not require a next in command. Emergency recovery here goes through the member vote above.'}
                               </p>
                             </div>
                           )}
@@ -7541,6 +7552,7 @@ export default function ManageCircle() {
                       memberNames={memberNameMap}
                       showAdminOpenButton
                       circleIsActive={circle.isActive && allDepositsPaid}
+                      requiresRecoveryDelegate={recoveryDelegateRequired}
                       autoOpenWhenReady={autoOpenFirstRound}
                       onAutoOpenFired={() => setAutoOpenFirstRound(false)}
                       {...resolveCircleSettlementCoin(circle.autoSwapEnabled)}
