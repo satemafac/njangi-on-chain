@@ -29,8 +29,11 @@ rules are enforced by code instead of a treasurer:
 - **Member-initiated recovery.** Stuck or abandoned circles are recovered by
   members through on-chain liveness flows — again, no operator discretion.
 - **Social login.** zkLogin (Google / Facebook / Apple) maps a social identity
-  to a deterministic Sui address. The server holds no persistent ephemeral key
-  material.
+  to a deterministic Sui address. The ephemeral signing key is generated in the
+  browser and never transmitted: the server mints the salt and the zkProof —
+  which is authentication — but assembles no signature. Enforced by
+  `src/__tests__/no-key-transmission.test.ts`, which fails the build if client
+  code so much as names the key while building a request.
 - **WhatsApp coordination.** Opt-in "it's your turn" nudges via WhatsApp. Routing
   data (phone number) is AES-256-GCM encrypted off-chain on Sui Walrus; only an
   opaque blob pointer is anchored on chain — never plaintext PII.

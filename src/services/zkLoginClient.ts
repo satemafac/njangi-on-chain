@@ -10,6 +10,8 @@ import {
   buildToggleAutoSwapTx,
   buildTriggerPayoutTx,
   buildAdminApproveMembersTx,
+  buildLinkCircleTx,
+  buildUnlinkCircleTx,
   buildClaimMembershipTx,
   buildDeleteCircleTx,
   buildReorderRotationPositionsTx,
@@ -795,6 +797,55 @@ export class ZkLoginClient {
       account,
       resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
       build: (packageId) => buildToggleAutoSwapTx({ packageId, circleId, enabled }),
+    });
+  }
+
+  /**
+   * Anchor a WhatsApp link on chain, signed in the browser.
+   *
+   * The server encrypts the phone number into Walrus and returns the blob id
+   * and nonce; only this anchor needs a signature, and it is produced here.
+   * Previously the manage page shipped the ephemeral private key to the API
+   * so the SERVER could sign — see buildLinkCircleTx for why that was worse
+   * than it looked.
+   *
+   * `registryObjectId` and `packageId` come from the same server response, so
+   * the browser never has to guess which registry generation is live.
+   */
+  public async linkCircleToWhatsApp(
+    account: AccountData,
+    args: {
+      packageId: string;
+      registryObjectId: string;
+      circleId: string;
+      linkType: number;
+      walrusBlobId: string;
+      linkNonce: Uint8Array | number[];
+      network?: NetworkOverride;
+    },
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    return signLocallyWithBuilder({
+      account,
+      network: args.network,
+      resolvePackageId: () => args.packageId,
+      build: (packageId) => buildLinkCircleTx({ ...args, packageId }),
+    });
+  }
+
+  public async unlinkCircleFromWhatsApp(
+    account: AccountData,
+    args: {
+      packageId: string;
+      registryObjectId: string;
+      circleId: string;
+      network?: NetworkOverride;
+    },
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    return signLocallyWithBuilder({
+      account,
+      network: args.network,
+      resolvePackageId: () => args.packageId,
+      build: (packageId) => buildUnlinkCircleTx({ ...args, packageId }),
     });
   }
 

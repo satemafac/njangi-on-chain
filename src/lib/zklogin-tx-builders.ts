@@ -688,3 +688,70 @@ export function buildTriggerPayoutTx({
   });
   return tx;
 }
+
+/**
+ * WhatsApp link anchors.
+ *
+ * These two used to be signed on the SERVER: the manage page POSTed the
+ * user's `ephemeralPrivateKey` (with zkProofs, salt, sub, aud and maxEpoch)
+ * to /api/whatsapp/admin-{link,unlink}-circle, which rebuilt the keypair and
+ * signed as the user. That is the whole set needed to sign ANY transaction
+ * for that address until the epoch rolls, so it reproduced the arbitrary
+ * signing oracle Phase 0 removed — just through a different route.
+ *
+ * The server's remaining job is the part only it can do: encrypt the phone
+ * number and put it in Walrus. It hands back a blob id and nonce; the anchor
+ * is signed here, in the browser.
+ *
+ * Both Move entry points take the Circle BY REFERENCE and assert the sender
+ * is its on-chain admin, so there is no caller-supplied address to forge —
+ * moving the signature client-side loses no authorization.
+ */
+export function buildLinkCircleTx({
+  packageId,
+  registryObjectId,
+  circleId,
+  linkType,
+  walrusBlobId,
+  linkNonce,
+}: {
+  packageId: string;
+  registryObjectId: string;
+  circleId: string;
+  linkType: number;
+  walrusBlobId: string;
+  linkNonce: Uint8Array | number[];
+}): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::whatsapp_integration::link_circle`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(registryObjectId, 'WhatsApp registry ID')),
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.pure.u8(linkType),
+      tx.pure.vector('u8', Array.from(new TextEncoder().encode(walrusBlobId))),
+      tx.pure.vector('u8', Array.from(linkNonce)),
+    ],
+  });
+  return tx;
+}
+
+export function buildUnlinkCircleTx({
+  packageId,
+  registryObjectId,
+  circleId,
+}: {
+  packageId: string;
+  registryObjectId: string;
+  circleId: string;
+}): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::whatsapp_integration::unlink_circle`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(registryObjectId, 'WhatsApp registry ID')),
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+    ],
+  });
+  return tx;
+}
