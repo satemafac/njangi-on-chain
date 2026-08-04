@@ -72,6 +72,14 @@ interface CycleEscrowPanelProps {
   autoOpenWhenReady?: boolean;
   /** Callback fired once the panel kicks off an auto-open. */
   onAutoOpenFired?: () => void;
+  /**
+   * True only when the circle was created with auto-release enabled.
+   * `activate_circle` enforces the non-admin recovery delegate exclusively in
+   * that case (njangi_circles.move), so the activation checklist must not
+   * mention a delegate for circles without auto-release — those admins cannot
+   * set one at all. Defaults to false to match the plain-circle contract path.
+   */
+  requiresRecoveryDelegate?: boolean;
 }
 
 const DEFAULT_COIN_TYPE =
@@ -123,6 +131,7 @@ export function CycleEscrowPanel({
   circleIsActive = true,
   autoOpenWhenReady = false,
   onAutoOpenFired,
+  requiresRecoveryDelegate = false,
 }: CycleEscrowPanelProps) {
   const { isReady, userAddress, signAndExecute } = useZkLoginSigner();
   const { t } = useTranslation();
@@ -559,7 +568,8 @@ export function CycleEscrowPanel({
                 <p className="mt-2 text-xs text-amber-700">
                   Activate the circle first. Use the <span className="font-semibold">Activate Circle</span> action
                   in the Circle Management section below — it requires every member&rsquo;s
-                  security deposit, the rotation order set, and a non-admin recovery delegate.
+                  security deposit and the rotation order set
+                  {requiresRecoveryDelegate ? ', plus a non-admin recovery delegate' : ''}.
                 </p>
               ) : null}
             </>
