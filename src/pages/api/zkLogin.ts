@@ -35,6 +35,7 @@ import {
 import { getCircleConfigFields } from '@/lib/circle-config';
 import { getMinimumAutoReleaseDelayMsForMoveCycleLength } from '@/lib/auto-release';
 import { normalizeRecoveryDelegateAddress } from '@/lib/recovery-delegate';
+import { isResolvedSuiObjectId } from '@/lib/sui-object-id';
 import {
   countZkLoginSessions,
   deleteZkLoginSession,
@@ -3347,6 +3348,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res.status(400).json({ error: 'Missing required parameters: walletId, circleId' });
         }
 
+        // Same zeroed-id trap as depositUsdcDirect: fail here rather than
+        // letting the all-zero object id reach the RPC.
+        if (!isResolvedSuiObjectId(req.body.circleId) || !isResolvedSuiObjectId(req.body.walletId)) {
+          return res.status(400).json({
+            error: 'Circle details have not finished loading. Refresh the page and retry the deposit.'
+          });
+        }
+
         try {
           // Ensure parameters are of the correct type
           const circleId = String(req.body.circleId); // Get circleId
@@ -4995,8 +5004,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Validate required parameters
           const { circleId, walletId, usdcAmount, isSecurityDeposit } = req.body;
           if (!circleId || !walletId || !usdcAmount) {
-            return res.status(400).json({ 
+            return res.status(400).json({
               error: 'Missing required parameters: circleId, walletId, usdcAmount'
+            });
+          }
+
+          // An unresolved id ('', '0x0') normalizes into the all-zero object id
+          // rather than failing, and the RPC then rejects the whole transaction
+          // with an opaque "input objects are invalid". Reject it here instead.
+          if (!isResolvedSuiObjectId(circleId) || !isResolvedSuiObjectId(walletId)) {
+            return res.status(400).json({
+              error: 'Circle details have not finished loading. Refresh the page and retry the deposit.'
             });
           }
 

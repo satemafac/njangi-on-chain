@@ -33,6 +33,7 @@ import {
 import { RAMP_PROVIDER_LABELS, type RampProviderId } from '@/lib/ramp-geo';
 import { getCircleConfigFieldsFromDynamicFields } from '@/lib/circle-config';
 import { resolveCircleLifecycleState } from '@/lib/circle-chain';
+import { isResolvedSuiObjectId } from '@/lib/sui-object-id';
 import type { CoinbaseAssetIntent } from '@/types/coinbase-onramp';
 
 // Add this helper function at the top level
@@ -524,6 +525,14 @@ export default function ContributeToCircle() {
 
   const requiredContributionUsdc = (circle?.contributionAmountUsd || 0) / 100;
   const requiredSecurityDepositUsdc = (circle?.securityDepositUsd || 0) / 100;
+
+  // The custody wallet id comes from a separate CustodyWalletCreated event
+  // lookup, so `circle` can be fully populated while `walletId` is still an
+  // empty string — an RPC 429 on that one query is enough. An empty id
+  // normalizes into the all-zero object id downstream, and the payment lands as
+  // `The following input objects are invalid: {"code":"0x000...000"}`. Every
+  // control that spends the wallet id stays disabled until this reads true.
+  const circleWalletReady = isResolvedSuiObjectId(circle?.walletId);
 
   const closeInlineOnrampLauncher = () => {
     setShowInlineOnrampLauncher(false);
@@ -2324,7 +2333,7 @@ export default function ContributeToCircle() {
       return;
     }
 
-    if (!circle.walletId) {
+    if (!isResolvedSuiObjectId(circle.walletId)) {
       toast.error('Circle wallet is unavailable. Refresh the page and try again.');
       return;
     }
@@ -2624,7 +2633,7 @@ export default function ContributeToCircle() {
 
   // Modify the handlePaySecurityDeposit function to check if deposit was returned during pause
   const handlePaySecurityDeposit = async () => {
-    if (!circle || !userAddress || !circle.walletId) {
+    if (!circle || !userAddress || !isResolvedSuiObjectId(circle.walletId)) {
       toast.error('Circle information incomplete. Cannot process deposit.');
       return;
     }
@@ -2990,6 +2999,11 @@ export default function ContributeToCircle() {
   // New function to handle direct USDC deposit
   const handleDirectUsdcDeposit = async () => {
     if (!circle || !userAddress || !userUsdcBalance) return;
+
+    if (!isResolvedSuiObjectId(circle.walletId)) {
+      toast.error('Circle wallet is still loading. Wait for the circle details to finish loading and try again.');
+      return;
+    }
 
     const isSecurityDeposit = !userDepositPaid;
     // Legacy contribute path retired 2026-04-28: route members to the
@@ -3382,6 +3396,27 @@ export default function ContributeToCircle() {
           </div>
         </div>
 
+        {/* The custody wallet id resolves separately from the rest of the circle
+            read, so it can still be missing here after a transient RPC failure.
+            Say so rather than leaving every payment button inert with no reason. */}
+        {!circleWalletReady && (
+          <div className={`${warningPanelClass} mb-4`}>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700">Circle Wallet</p>
+            <h4 className="mt-2 font-semibold text-amber-950">Still loading this circle&apos;s wallet</h4>
+            <p className="mt-2 text-sm leading-6 text-amber-900/80">
+              Payments stay disabled until the circle&apos;s custody wallet finishes loading. This usually clears in a
+              moment; if it persists, refresh the status below.
+            </p>
+            <button
+              type="button"
+              onClick={handleRefreshContributionStatus}
+              className={`${secondaryActionClass} mt-3 px-3 py-2 text-xs sm:text-sm`}
+            >
+              Retry loading circle details
+            </button>
+          </div>
+        )}
+
         {/* Add prominent message for cycle paused state */}
         {circle?.pausedAfterCycle && (
           <div className={`${warningPanelClass} mb-4`}>
@@ -3475,6 +3510,7 @@ export default function ContributeToCircle() {
                   <button
                     onClick={userDepositPaid ? handleContribute : handlePaySecurityDeposit}
                     disabled={
+                      !circleWalletReady ||
                       (userDepositPaid && (!circle?.isActive || circle?.pausedAfterCycle || userHasContributed || isCurrentRecipient)) ||
                       (!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause) ||
                       (!userDepositPaid && (circle?.securityDepositUsd || 0) <= 0) ||
@@ -3492,6 +3528,8 @@ export default function ContributeToCircle() {
                         </svg>
                         Processing...
                       </span>
+                    ) : !circleWalletReady ? (
+                      'Loading circle details...'
                     ) : !userDepositPaid ? (
                       `Pay ${currentSuiBasePaymentAmount.toFixed(4)} SUI as Security Deposit`
                     ) : userHasContributed ? (
@@ -3536,8 +3574,9 @@ export default function ContributeToCircle() {
                 <div className="mt-3">
                   <button
                     onClick={handleDirectUsdcDeposit}
-                    disabled={userDepositPaid && (!circle?.isActive || circle?.pausedAfterCycle || userHasContributed || isCurrentRecipient) ||
-                            (!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause) || 
+                    disabled={!circleWalletReady ||
+                            (userDepositPaid && (!circle?.isActive || circle?.pausedAfterCycle || userHasContributed || isCurrentRecipient)) ||
+                            (!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause) ||
                             (!userDepositPaid && (circle?.securityDepositUsd || 0) <= 0)}
                     className={`${primaryActionClass} w-full sm:w-auto`}
                   >
@@ -3549,6 +3588,8 @@ export default function ContributeToCircle() {
                         </svg>
                         Processing...
                       </span>
+                    ) : !circleWalletReady ? (
+                      `Loading circle details...`
                     ) : !userDepositPaid ? (
                       `Deposit ${formatUsdCentsAsUsdc(circle?.securityDepositUsd || 0)} as Security Deposit`
                     ) : userHasContributed ? (
@@ -3601,6 +3642,7 @@ export default function ContributeToCircle() {
                     type="button"
                     onClick={handleOneClickSwapAndDeposit}
                     disabled={
+                      !circleWalletReady ||
                       isOneClickSwapProcessing ||
                       isOneClickSwapQuoteLoading ||
                       !!oneClickSwapQuoteError ||
@@ -3609,7 +3651,11 @@ export default function ContributeToCircle() {
                     }
                     className={`${primaryActionClass} mt-3 w-full sm:w-auto`}
                   >
-                    {isOneClickSwapProcessing ? 'Converting & Paying...' : `Convert SUI to USDC, Then Pay ${paymentLabel}`}
+                    {isOneClickSwapProcessing
+                      ? 'Converting & Paying...'
+                      : !circleWalletReady
+                        ? 'Loading circle details...'
+                        : `Convert SUI to USDC, Then Pay ${paymentLabel}`}
                   </button>
 
                   {!hasSufficientSuiForOneClickSwap() && (
@@ -3921,7 +3967,7 @@ export default function ContributeToCircle() {
                   
                   <button
                     onClick={handlePaySecurityDeposit}
-                    disabled={isPayingDeposit || !circle || (circle.securityDepositUsd || 0) <= 0 || 
+                    disabled={isPayingDeposit || !circle || !circleWalletReady || (circle.securityDepositUsd || 0) <= 0 ||
                              (selectedPaymentCurrency === 'SUI' && !isSuiCircleModeEnabled) ||
                              (selectedPaymentCurrency === 'SUI' && userBalance !== null && userBalance < getRequiredDepositAmount()) ||
                              (selectedPaymentCurrency === 'USDC' && userUsdcBalance !== null && userUsdcBalance < requiredSecurityDepositUsdc) ||
@@ -3936,6 +3982,8 @@ export default function ContributeToCircle() {
                         </svg>
                         Processing...
                       </span>
+                    ) : !circleWalletReady ? (
+                      'Loading circle details...'
                     ) : (
                       `Pay Security Deposit in ${selectedPaymentCurrency}`
                     )}
