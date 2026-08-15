@@ -151,7 +151,7 @@ export interface UsageCounts {
  * not a security control, and failing closed here would break onboarding on a
  * misconfigured deploy. (The Enoki portal budget cap is the hard backstop.)
  */
-export async function getSponsorshipUsage(sub: string): Promise<UsageCounts> {
+export async function getSponsorshipUsage(sub: string): Promise<UsageCounts | null> {
   if (!isPostgresConfigured()) {
     return { userToday: 0, globalThisMonth: 0 };
   }
@@ -187,8 +187,12 @@ export async function getSponsorshipUsage(sub: string): Promise<UsageCounts> {
       globalThisMonth: Number(globalRes.rows[0]?.n ?? '0'),
     };
   } catch (err) {
-    console.error('[gas-sponsorship] usage read failed; allowing', err);
-    return { userToday: 0, globalThisMonth: 0 };
+    // Deliberately NOT failing open. Once prepare requires a working
+    // reservation (it must, or Enoki commits gas coins that nothing records),
+    // a DB outage fails the reservation seconds later anyway — allowing here
+    // only buys a burned Enoki call and an unmetered spend.
+    console.error('[gas-sponsorship] usage read failed; declining', err);
+    return null;
   }
 }
 
@@ -211,11 +215,11 @@ export async function reservePendingSponsorship(args: {
   userAddress: string;
   circleId?: string | null;
   action: string;
-}): Promise<void> {
-  if (!isPostgresConfigured()) return;
+}): Promise<boolean> {
+  if (!isPostgresConfigured()) return false;
   try {
     const pool = getSharedPgPool();
-    await pool.query(
+    const result = await pool.query(
       `INSERT INTO gas_sponsorship_pending
          (digest, zklogin_sub, user_address, circle_id, action, expires_at)
        VALUES ($1, $2, $3, $4, $5, NOW() + ($6 || ' milliseconds')::interval)
@@ -229,8 +233,12 @@ export async function reservePendingSponsorship(args: {
         String(PENDING_SPONSORSHIP_TTL_MS),
       ],
     );
+    // rowCount 0 means ON CONFLICT DO NOTHING fired: this call did not hold
+    // the slot, so it must not be reported as a successful reservation.
+    return (result.rowCount ?? 0) > 0;
   } catch (err) {
-    console.error('[gas-sponsorship] pending reservation failed; allowing', err);
+    console.error('[gas-sponsorship] pending reservation failed; declining', err);
+    return false;
   }
 }
 
@@ -299,6 +307,9 @@ export async function shouldSponsor(
   if (!base.sponsor) return base;
 
   const usage = await getSponsorshipUsage(input.sub);
+  if (!usage) {
+    return { sponsor: false, reason: 'usage_unavailable' };
+  }
   if (usage.userToday >= perUserDailyCap()) {
     return { sponsor: false, reason: 'user_daily_cap' };
   }

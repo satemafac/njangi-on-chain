@@ -118,6 +118,14 @@ export async function trySponsoredExecute(args: {
     if (!prepareRes.ok) return null;
     const prepared: SponsorPrepareResponse = await prepareRes.json();
     if (!prepared.sponsored || !prepared.bytes || !prepared.digest) {
+      // Say why. This path returned null in silence, so "sponsorship is
+      // switched off" and "sponsorship is broken for this action" looked
+      // identical from the browser — which is how deposits stayed
+      // unsponsorable without anyone noticing.
+      console.info(
+        '[sponsored-tx] sponsorship declined, paying own gas:',
+        prepared.reason ?? 'unknown',
+      );
       return null;
     }
 

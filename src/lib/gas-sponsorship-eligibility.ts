@@ -22,6 +22,14 @@ import type { NetworkType } from '../services/whatsapp-registry-service';
  * Reads the `circle_id` recorded on a CycleEscrow object so we can find its
  * circle (and thus its admin). Returns null on any miss; callers treat null
  * as "cannot confirm admin -> do not sponsor".
+ *
+ * MUST only be handed a CycleEscrow id. The Move `Circle` struct
+ * (njangi_circles.move:110-129) has no `circle_id` field — only CycleEscrow
+ * does (njangi_cycle_escrow.move:101-103) — so passing a Circle id here reads
+ * `undefined` and returns null. That is exactly how security-deposit
+ * sponsorship came to be impossible: the broker passed a Circle id as
+ * `escrowId`, every deposit resolved `no_circle_id`, and the client silently
+ * paid its own gas. Pass `circleId` directly when you already have one.
  */
 export async function circleIdForEscrow(
   escrowId: string,
@@ -75,14 +83,24 @@ export interface EscrowSponsorshipInput {
  * Full go/no-go for sponsoring an escrow-related action. Resolves the circle
  * admin (via the escrow's circle_id when circleId isn't supplied), checks the
  * admin's premium status, then applies the pure policy + fair-use caps.
+ *
+ * Returns the resolved `circleId` alongside the decision so callers attribute
+ * metering to the circle actually being billed, rather than to whichever id
+ * the client happened to send.
  */
 export async function resolveEscrowSponsorship(
   input: EscrowSponsorshipInput,
-): Promise<SponsorshipDecision> {
+): Promise<SponsorshipDecision & { circleId: string | null }> {
+  // Nothing to resolve from: fail before spending an RPC round-trip on a
+  // getObject('') that can only miss.
+  if (!input.circleId && !input.escrowId) {
+    return { sponsor: false, reason: 'no_circle_id', circleId: null };
+  }
+
   const circleId =
     input.circleId ?? (await circleIdForEscrow(input.escrowId, input.network));
   if (!circleId) {
-    return { sponsor: false, reason: 'no_circle_id' };
+    return { sponsor: false, reason: 'no_circle_id', circleId: null };
   }
 
   let adminAddress: string | null = null;
@@ -90,15 +108,17 @@ export async function resolveEscrowSponsorship(
     adminAddress = await fetchCircleAdminAddress(circleId, input.network);
   } catch (err) {
     console.error('[gas-sponsorship] admin lookup failed; not sponsoring', err);
-    return { sponsor: false, reason: 'admin_lookup_failed' };
+    return { sponsor: false, reason: 'admin_lookup_failed', circleId };
   }
 
   const adminIsPremium = await isAdminPremium(adminAddress);
 
-  return shouldSponsor({
+  const decision = await shouldSponsor({
     sub: input.sub,
     adminIsPremium,
     usesGasCoinForValue: input.usesGasCoinForValue ?? false,
     packageId: input.packageId,
   });
+
+  return { ...decision, circleId };
 }

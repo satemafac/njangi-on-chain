@@ -12,13 +12,14 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { EnokiClient } from '@mysten/enoki';
 import { Transaction } from '@mysten/sui/transactions';
-import { fromBase64 } from '@mysten/sui/utils';
+import { fromBase64, normalizeSuiObjectId } from '@mysten/sui/utils';
 import { getZkLoginSessionAccount } from '@/lib/zklogin-session-registry';
 import {
   allowedMoveCallTargets,
   reservePendingSponsorship,
   purgeExpiredSponsorships,
 } from '@/lib/gas-sponsorship';
+import { isPostgresConfigured } from '@/lib/pg-pool';
 import { resolveEscrowSponsorship } from '@/lib/gas-sponsorship-eligibility';
 import { getCurrentNetwork, getNetworkConfig } from '@/services/network-config';
 
@@ -40,11 +41,11 @@ interface PrepareBody {
  * but doing it here is what makes the decision auditable on our side, and it
  * fails a disallowed target before we have spent an Enoki call on it.
  */
-function assertKindIsSponsorable(kindBytes: Uint8Array, allowed: string[]): void {
+function assertKindIsSponsorable(kindBytes: Uint8Array, allowed: string[]): Set<string> {
   const allowedSet = new Set(allowed);
-  const commands = Transaction.fromKind(kindBytes).getData().commands;
+  const data = Transaction.fromKind(kindBytes).getData();
 
-  for (const command of commands) {
+  for (const command of data.commands) {
     if (!('MoveCall' in command) || !command.MoveCall) continue;
     const { package: pkg, module, function: fn } = command.MoveCall;
     const target = `${pkg}::${module}::${fn}`;
@@ -52,6 +53,22 @@ function assertKindIsSponsorable(kindBytes: Uint8Array, allowed: string[]): void
       throw new Error(`Move call target is not sponsorable: ${target}`);
     }
   }
+
+  // Every object this kind actually touches, so the caller can prove the
+  // circle it wants billed is one of them (see the binding check below).
+  const objectIds = new Set<string>();
+  for (const input of data.inputs) {
+    if (input.$kind !== 'Object' || !input.Object) continue;
+    const obj = input.Object as {
+      SharedObject?: { objectId: string };
+      ImmOrOwnedObject?: { objectId: string };
+      Receiving?: { objectId: string };
+    };
+    const objectId =
+      obj.SharedObject?.objectId ?? obj.ImmOrOwnedObject?.objectId ?? obj.Receiving?.objectId;
+    if (objectId) objectIds.add(normalizeSuiObjectId(objectId));
+  }
+  return objectIds;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -72,8 +89,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // Declining is always a valid, non-fatal answer: the client pays its own gas.
-  // Only genuine faults should surface as non-200.
-  const decline = (reason: string) => res.status(200).json({ sponsored: false, reason });
+  // Only genuine faults should surface as non-200. Logged because a silent
+  // decline is indistinguishable from "sponsorship is off" from the outside —
+  // which is how a deterministic deposit failure went unnoticed. Action and
+  // reason only; no sub, no address.
+  const decline = (reason: string) => {
+    console.info('[sponsor/prepare] declined', { action, reason });
+    return res.status(200).json({ sponsored: false, reason });
+  };
 
   try {
     const network = getCurrentNetwork();
@@ -81,20 +104,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const apiKey = networkConfig.enoki?.apiKey;
     if (!apiKey) return decline('enoki_not_configured');
 
+    // Metering is a precondition, not an afterthought. Without Postgres the
+    // reservation below silently no-ops and execute then 409s forever, so
+    // every attempt would burn an Enoki gas coin and still self-pay. Check
+    // before spending the call rather than after.
+    if (!isPostgresConfigured()) return decline('metering_unavailable');
+
     const allowedTargets = allowedMoveCallTargets(networkConfig.packageId);
     if (allowedTargets.length === 0) return decline('no_package_id');
 
     const decoded = fromBase64(kindBytes);
+    let kindObjectIds: Set<string>;
     try {
-      assertKindIsSponsorable(decoded, allowedTargets);
+      kindObjectIds = assertKindIsSponsorable(decoded, allowedTargets);
     } catch (err) {
       console.warn('[sponsor/prepare] rejected non-sponsorable kind:', err);
       return decline('target_not_allowed');
     }
 
+    // Bind the circle being BILLED to the transaction being sponsored.
+    //
+    // The session cookie proves who the caller is, but the circle whose
+    // admin's benefit gets consumed came from the request body and was never
+    // checked against the transaction. Any caller could name a premium
+    // circle's id and draw on that admin's sponsored gas for a transaction
+    // touching a different circle. Requiring the id to appear among the
+    // kind's object inputs closes that without needing to understand the
+    // call's shape.
+    const billedId = context.circleId ?? context.escrowId;
+    if (!billedId) return decline('no_circle_id');
+    if (!kindObjectIds.has(normalizeSuiObjectId(billedId))) {
+      return decline('circle_not_in_transaction');
+    }
+
     const decision = await resolveEscrowSponsorship({
       sub: account.sub,
-      escrowId: context.escrowId ?? context.circleId ?? '',
+      // Keep these distinct. Passing a Circle id as `escrowId` sent the
+      // resolver looking for a `circle_id` field that only CycleEscrow has,
+      // so every security deposit resolved `no_circle_id` and could never be
+      // sponsored — the flag looked on and did nothing.
+      escrowId: context.escrowId ?? '',
+      circleId: context.circleId ?? null,
       coinType: context.coinType ?? '',
       packageId: networkConfig.packageId,
       network,
@@ -113,13 +163,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Hold a slot so an abandoned prepare cannot burn quota invisibly, and so
     // execute can attribute usage from server state rather than the request.
-    await reservePendingSponsorship({
+    // Attributed to the RESOLVED circle — the column is named circle_id and
+    // previously received an escrow id on the contribute path.
+    const reserved = await reservePendingSponsorship({
       digest: sponsored.digest,
       sub: account.sub,
       userAddress: account.userAddr,
-      circleId: context.escrowId ?? context.circleId ?? null,
+      circleId: decision.circleId,
       action,
     });
+    if (!reserved) {
+      // One Enoki call is already spent here — the digest does not exist until
+      // Enoki responds, so reserving first is not possible. Declining at least
+      // stops the client signing against a slot nothing is holding, which
+      // execute would reject with 409 anyway.
+      return decline('reservation_failed');
+    }
     void purgeExpiredSponsorships();
 
     return res.status(200).json({
