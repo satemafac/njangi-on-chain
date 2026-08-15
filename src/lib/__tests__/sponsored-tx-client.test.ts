@@ -34,6 +34,34 @@ function contributeCall(txb: Transaction) {
   });
 }
 
+/**
+ * The security-deposit shape, which is structurally different from a
+ * contribution: coins are merged and split from an OWNED coin (never txb.gas,
+ * which is what keeps it sponsorable at all), and the move call carries four
+ * arguments including the Clock.
+ *
+ * Worth its own fixture because the comparator round-trips the sponsored bytes
+ * back through `build({ onlyTransactionKind: true })` and demands byte
+ * identity. If that is not stable for merge/split command shapes, every
+ * sponsored deposit falls back to self-paid gas in silence — which looks
+ * exactly like sponsorship never having been fixed.
+ */
+function depositCall(txb: Transaction) {
+  const primary = txb.objectRef(objRef('0x' + '3'.repeat(64)));
+  txb.mergeCoins(primary, [txb.objectRef(objRef('0x' + '4'.repeat(64)))]);
+  const depositCoin = txb.splitCoins(primary, [txb.pure.u64(300000)]);
+  txb.moveCall({
+    target: `${PKG}::njangi_circles::member_deposit_security_deposit`,
+    typeArguments: [`${PKG}::usdc::USDC`],
+    arguments: [
+      txb.objectRef(objRef('0x' + 'e'.repeat(64))),
+      txb.objectRef(objRef('0x' + 'd'.repeat(64))),
+      depositCoin,
+      txb.objectRef(objRef('0x0000000000000000000000000000000000000000000000000000000000000006')),
+    ],
+  });
+}
+
 function withSponsorGas(txb: Transaction, sender: string) {
   txb.setSender(sender);
   txb.setGasOwner(SPONSOR);
@@ -139,5 +167,41 @@ describe('assertSponsoredMatchesKind', () => {
     await expect(
       assertSponsoredMatchesKind(sponsored, kind, USER, client),
     ).resolves.toBeUndefined();
+  });
+
+  it('accepts a security-deposit kind, whose merge/split shape differs from a contribution', async () => {
+    // The test that decides whether sponsored deposits work at all.
+    const kind = await buildKind(depositCall);
+    const sponsored = await buildSponsored(depositCall);
+
+    await expect(
+      assertSponsoredMatchesKind(sponsored, kind, USER, client),
+    ).resolves.toBeUndefined();
+  });
+
+  it('still refuses a tampered security-deposit kind', async () => {
+    // Acceptance above must not come from the comparator going slack on this
+    // shape: the same fixture with one argument altered has to fail.
+    const kind = await buildKind(depositCall);
+    const tampered = await buildSponsored((txb) => {
+      const primary = txb.objectRef(objRef('0x' + '3'.repeat(64)));
+      txb.mergeCoins(primary, [txb.objectRef(objRef('0x' + '4'.repeat(64)))]);
+      const depositCoin = txb.splitCoins(primary, [txb.pure.u64(300000)]);
+      txb.moveCall({
+        target: `${PKG}::njangi_circles::member_deposit_security_deposit`,
+        typeArguments: [`${PKG}::usdc::USDC`],
+        arguments: [
+          // circle swapped for one the member did not agree to fund
+          txb.objectRef(objRef('0x' + 'b'.repeat(64))),
+          txb.objectRef(objRef('0x' + 'd'.repeat(64))),
+          depositCoin,
+          txb.objectRef(objRef('0x0000000000000000000000000000000000000000000000000000000000000006')),
+        ],
+      });
+    });
+
+    await expect(
+      assertSponsoredMatchesKind(tampered, kind, USER, client),
+    ).rejects.toThrow();
   });
 });
