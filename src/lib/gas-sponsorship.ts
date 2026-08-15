@@ -219,10 +219,33 @@ export async function reservePendingSponsorship(args: {
   if (!isPostgresConfigured()) return false;
   try {
     const pool = getSharedPgPool();
+    // The caps are enforced HERE, in the same statement that takes the slot,
+    // not by the earlier read in shouldSponsor. That read happens before Enoki
+    // is called and is a useful early-out, but it is a separate round trip:
+    // N concurrent prepares all observe the same count, all pass, and all
+    // reserve. Re-checking inside the INSERT closes that window, because
+    // Postgres evaluates the SELECT and the write atomically.
+    //
+    // INSERT ... SELECT with a WHERE that fails yields rowCount 0, which the
+    // caller already treats as "slot not held" and declines on.
     const result = await pool.query(
       `INSERT INTO gas_sponsorship_pending
          (digest, zklogin_sub, user_address, circle_id, action, expires_at)
-       VALUES ($1, $2, $3, $4, $5, NOW() + ($6 || ' milliseconds')::interval)
+       SELECT $1, $2, $3, $4, $5, NOW() + ($6 || ' milliseconds')::interval
+       WHERE (
+               (SELECT COUNT(*) FROM gas_sponsorship_usage
+                 WHERE zklogin_sub = $2 AND sponsored_at > NOW() - INTERVAL '24 hours')
+               +
+               (SELECT COUNT(*) FROM gas_sponsorship_pending
+                 WHERE zklogin_sub = $2 AND expires_at > NOW())
+             ) < $7
+         AND (
+               (SELECT COUNT(*) FROM gas_sponsorship_usage
+                 WHERE sponsored_at >= date_trunc('month', NOW()))
+               +
+               (SELECT COUNT(*) FROM gas_sponsorship_pending
+                 WHERE expires_at > NOW())
+             ) < $8
        ON CONFLICT (digest) DO NOTHING`,
       [
         args.digest,
@@ -231,10 +254,13 @@ export async function reservePendingSponsorship(args: {
         args.circleId ?? null,
         args.action,
         String(PENDING_SPONSORSHIP_TTL_MS),
+        perUserDailyCap(),
+        globalMonthlyCap(),
       ],
     );
-    // rowCount 0 means ON CONFLICT DO NOTHING fired: this call did not hold
-    // the slot, so it must not be reported as a successful reservation.
+    // rowCount 0 means either the digest was already reserved or a cap was
+    // reached between shouldSponsor and here. Both mean this call does not
+    // hold the slot, and neither may be reported as a successful reservation.
     return (result.rowCount ?? 0) > 0;
   } catch (err) {
     console.error('[gas-sponsorship] pending reservation failed; declining', err);
@@ -297,8 +323,14 @@ export async function purgeExpiredSponsorships(): Promise<void> {
 }
 
 /**
- * Combines the pure policy decision with cap enforcement. Returns the final
- * go/no-go the caller uses to choose the sponsored vs self-paid path.
+ * Combines the pure policy decision with a cap CHECK. Returns the go/no-go the
+ * caller uses to choose the sponsored vs self-paid path.
+ *
+ * Note the asymmetry: this read runs before Enoki is called, so it is what
+ * stops an over-cap request from costing a gas coin — but it is not where the
+ * cap is enforced. Two prepares racing here both see the same count and both
+ * pass. Enforcement lives in reservePendingSponsorship, whose INSERT re-checks
+ * the caps in the same statement that takes the slot.
  */
 export async function shouldSponsor(
   input: SponsorshipAssessmentInput & { sub: string },
