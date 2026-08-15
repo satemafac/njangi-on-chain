@@ -49,9 +49,53 @@ const SERVER_SIGNING_BAN = {
   },
 };
 
+// The same ban, one directory over.
+//
+// The rule above covers src/pages/api/**. It was never enough: the signing
+// primitives lived in src/services/enokiZkLoginService.ts, which the API
+// routes import — so "zero hits under src/pages/api" was true and proved
+// nothing. That gap is how the WhatsApp routes kept a working server-side
+// signer long after Phase 1 was believed complete.
+//
+// Narrower than the API rule because this tree has one legitimate use:
+// Ed25519PublicKey, needed to request a zkProof. A public key authorizes
+// nothing. The KEYPAIR, the private-key decoder and the signature assembler
+// are what must not come back.
+const SERVICE_SIGNING_BAN = {
+  files: ["src/services/**/*.ts", "src/services/**/*.tsx"],
+  rules: {
+    "no-restricted-imports": [
+      "error",
+      {
+        paths: [
+          {
+            name: "@mysten/sui/keypairs/ed25519",
+            importNames: ["Ed25519Keypair"],
+            message:
+              "Services must not construct keypairs. Ed25519PublicKey is fine — a public key cannot sign. If you need a signature, it belongs in the browser: src/lib/zklogin-client-signer.ts.",
+          },
+          {
+            name: "@mysten/sui/cryptography",
+            importNames: ["decodeSuiPrivateKey"],
+            message:
+              "Decoding a private key server-side reconstructs the user's signer. This is exactly what enokiZkLoginService.sendTransaction used to do.",
+          },
+          {
+            name: "@mysten/sui/zklogin",
+            importNames: ["getZkLoginSignature"],
+            message:
+              "Assembling a zkLogin signature is signing as the user. Minting the salt and the zkProof is a legitimate server role; producing the signature is not.",
+          },
+        ],
+      },
+    ],
+  },
+};
+
 const eslintConfig = [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   SERVER_SIGNING_BAN,
+  SERVICE_SIGNING_BAN,
 ];
 
 export default eslintConfig;

@@ -79,6 +79,30 @@ describe('ephemeral key never leaves the browser', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('no server-side module can build a signer at all', () => {
+    // The other half of the property, and the half that was missing. The
+    // eslint ban originally covered src/pages/api/** only, while the
+    // primitives lived in src/services/enokiZkLoginService.ts — imported BY
+    // those routes. "Zero hits under src/pages/api" was true and meaningless.
+    //
+    // Asserted here as well as in eslint because a lint rule can be disabled
+    // inline; this cannot.
+    const trees = [join(process.cwd(), 'src/pages/api'), join(process.cwd(), 'src/services')];
+    const offenders: string[] = [];
+
+    for (const file of trees.flatMap((t) => walk(t))) {
+      const code = stripComments(readFileSync(file, 'utf8'));
+      for (const primitive of ['Ed25519Keypair', 'decodeSuiPrivateKey', 'getZkLoginSignature']) {
+        // Ed25519PublicKey is legitimate — a public key cannot sign — so match
+        // the keypair name on a word boundary rather than a bare substring.
+        const re = new RegExp(`\\b${primitive}\\b`);
+        if (re.test(code)) offenders.push(`${relative(process.cwd(), file)} -> ${primitive}`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
   it('no server route reads a caller-supplied signing key', () => {
     // The mirror of the rule above: even if a client were to send one, no
     // route may consume it. Together these make the property double-sided.

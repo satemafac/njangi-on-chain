@@ -1,14 +1,14 @@
 import { SuiClient } from '@mysten/sui/client';
-import { Ed25519Keypair, Ed25519PublicKey } from '@mysten/sui/keypairs/ed25519';
-import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
+// Ed25519PublicKey only. Constructing a KEYPAIR, decoding a private key, or
+// assembling a zkLogin signature are all absent from this server by design —
+// the eslint rule in eslint.config.mjs now fails the build if they return.
+import { Ed25519PublicKey } from '@mysten/sui/keypairs/ed25519';
 import { Transaction as TransactionBlock } from '@mysten/sui/transactions';
 import {
-  genAddressSeed,
   // `generateRandomness` is intentionally absent: JWT randomness is minted in
   // the browser alongside the ephemeral key and arrives with the request.
   generateNonce,
   getExtendedEphemeralPublicKey,
-  getZkLoginSignature,
   jwtToAddress,
 } from '@mysten/sui/zklogin';
 import { decodeJwt } from 'jose';
@@ -23,7 +23,7 @@ import {
   getNetworkConfig,
   NetworkType,
 } from './network-config';
-import { getHealthySuiClient, withSuiRpcFailover } from './sui-rpc-failover';
+import { withSuiRpcFailover } from './sui-rpc-failover';
 import { getCanonicalBaseOrigin, preferCanonicalOrigin } from '@/lib/canonical-host';
 
 // Dynamic RPC URL based on network configuration
@@ -476,51 +476,6 @@ export class EnokiZkLoginService {
   /**
    * Validate account data and proof expiration
    */
-  /**
-   * Validates a legacy v1 account and returns its server-held signing key.
-   *
-   * Returning the key (rather than just validating) is deliberate: it is the
-   * only way callers get a non-optional `string` across the async boundary, so
-   * the compiler enforces that every server-side signing path went through
-   * this check. There is no other supported way to obtain the key.
-   */
-  private async validateAccountData(account: AccountData): Promise<string> {
-    // v2 sessions carry no server-held secret, so there is nothing here that
-    // could sign. Surface that as a distinct, typed condition rather than a
-    // generic "missing fields" error — the API route turns it into a 409 that
-    // tells the client to sign locally.
-    if (!account.ephemeralPrivateKey) {
-      throw new ClientSigningRequiredError();
-    }
-    if (!account.zkProofs || !account.userSalt || !account.sub || !account.aud) {
-      throw new Error('Invalid account data: missing required fields');
-    }
-
-    // Validate current epoch
-    const { epoch } = await withSuiRpcFailover(
-      this.resolveEffectiveNetwork(),
-      'enoki.validateAccountData.getLatestSuiSystemState',
-      async (suiClient) => suiClient.getLatestSuiSystemState(),
-    );
-    if (Number(epoch) >= account.maxEpoch) {
-      throw new Error('Proof has expired. Please re-authenticate to get a new proof.');
-    }
-
-    // Validate proof structure
-    const { proofPoints } = account.zkProofs;
-    if (!proofPoints || !proofPoints.a || !proofPoints.b || !proofPoints.c) {
-      throw new Error('Invalid proof structure: missing proof points');
-    }
-
-    // Validate salt
-    try {
-      BigInt(account.userSalt);
-    } catch {
-      throw new Error('Invalid user salt format');
-    }
-
-    return account.ephemeralPrivateKey;
-  }
 
   public async handleCallback(token: string, setupData: SetupData): Promise<{ 
     address: string;
@@ -572,11 +527,13 @@ export class EnokiZkLoginService {
     // browser at beginLogin; on legacy v1 sessions it is derived from the
     // server-held secret. Either way only the public half is needed to request
     // a proof — proofs authorize nothing without the corresponding secret.
+    // v1 sessions could derive this from a server-held secret. That branch is
+    // gone with the secret itself; MAX_EPOCH = 1 means every such session
+    // expired within a day of the Phase 1 deploy, so the only remaining source
+    // is the public half the browser sent at beginLogin.
     const publicKey = setupData.ephemeralPublicKey
       ? new Ed25519PublicKey(fromBase64(setupData.ephemeralPublicKey))
-      : setupData.ephemeralPrivateKey
-        ? this.keypairFromSecretKey(setupData.ephemeralPrivateKey).getPublicKey()
-        : null;
+      : null;
 
     if (!publicKey) {
       throw new Error('Session is missing an ephemeral public key. Please sign in again.');
@@ -645,10 +602,7 @@ export class EnokiZkLoginService {
     }
   }
 
-  private keypairFromSecretKey(privateKeyBase64: string): Ed25519Keypair {
-    const keyPair = decodeSuiPrivateKey(privateKeyBase64);
-    return Ed25519Keypair.fromSecretKey(keyPair.secretKey);
-  }
+
 
   // Removed: `getPublicKeyFromPrivate` existed only to derive a public key for
   // log lines, which meant passing a secret around for a debug string. The
@@ -868,227 +822,29 @@ export class EnokiZkLoginService {
   // `executeSponsoredTransaction` is inert without a user signature, and this
   // server has no key that can produce one. See src/lib/sponsored-tx-client.ts.
 
+  /**
+   * Removed. This method WAS the server's ability to sign as a user.
+   *
+   * It pulled an ephemeral private key out of the request body via
+   * `validateAccountData`, rebuilt the keypair, and assembled a zkLogin
+   * signature. Every legacy /api/zkLogin dispatch case reached the chain
+   * through here. Because no v2 client sends a key it had already stopped
+   * firing in practice — but "no client currently sends one" is a property of
+   * the callers, not of this server, and that exact assumption is what let the
+   * WhatsApp route ship a key over the wire unnoticed.
+   *
+   * Kept as a throwing stub rather than deleted so the ~30 legacy dispatch
+   * cases keep compiling and keep answering 409 CLIENT_SIGNING_REQUIRED. What
+   * changes is that the capability is now absent rather than merely unused:
+   * there is no path from a request body to a signature, whatever it contains.
+   */
   public async sendTransaction(
-    account: AccountData,
-    prepareBlock: ((txb: TransactionBlock) => void) | TransactionBlock,
-    options: TransactionOptions = {},
-    targetNetwork?: 'testnet' | 'mainnet'
+    _account: AccountData,
+    _prepareBlock: ((txb: TransactionBlock) => void) | TransactionBlock,
+    _options: TransactionOptions = {},
+    _targetNetwork?: 'testnet' | 'mainnet'
   ): Promise<TransactionResult> {
-    try {
-      // Validate account data and check epoch expiration
-      const ephemeralPrivateKey = await this.validateAccountData(account);
-
-      // Get ephemeral keypair from stored private key
-      const ephemeralKeyPair = this.keypairFromSecretKey(ephemeralPrivateKey);
-
-      const effectiveNetwork = this.resolveEffectiveNetwork(targetNetwork);
-      const { client: suiClient, rpcUrl, isFallback } = await getHealthySuiClient(
-        effectiveNetwork,
-        'enoki.sendTransaction',
-      );
-      console.log('Using Sui RPC for transaction submission:', {
-        network: effectiveNetwork,
-        rpcUrl,
-        isFallback,
-      });
-
-      // Validate current epoch against maxEpoch
-      // Note: Sui accepts transactions where currentEpoch < maxEpoch (strictly less than)
-      // So if currentEpoch === maxEpoch, the transaction will be rejected
-      const { epoch } = await suiClient.getLatestSuiSystemState();
-      const currentEpoch = Number(epoch);
-      const epochsRemaining = account.maxEpoch - currentEpoch;
-      console.log(`Current epoch: ${currentEpoch}, maxEpoch: ${account.maxEpoch}, epochs remaining: ${epochsRemaining}`);
-      
-      if (currentEpoch >= account.maxEpoch) {
-        throw new Error('Session has expired. Please re-authenticate to get a new proof.');
-      }
-      
-      // Warn if proof is expiring soon (less than 1 epoch remaining)
-      if (epochsRemaining < 1) {
-        console.warn(`⚠️  WARNING: Proof expiring very soon! Only ${epochsRemaining} epochs remaining. Consider re-authenticating.`);
-      }
-
-      // Check all proof fields are present
-      if (!account.zkProofs.proofPoints || !account.zkProofs.issBase64Details || !account.zkProofs.headerBase64) {
-        throw new Error('Invalid proof data: Missing required proof components');
-      }
-
-      // Generate address seed for verification
-      const addressSeed = genAddressSeed(
-        BigInt(account.userSalt),
-        'sub',
-        account.sub,
-        account.aud
-      ).toString();
-      console.log(`Generated address seed: ${addressSeed}`);
-
-      // Create a new transaction block or use the prebuilt one directly.
-      const txb =
-        typeof prepareBlock === 'function'
-          ? (() => {
-              const nextTxb = new TransactionBlock();
-              nextTxb.setSender(account.userAddr);
-              prepareBlock(nextTxb);
-              return nextTxb;
-            })()
-          : TransactionBlock.from(prepareBlock);
-
-      txb.setSenderIfNotSet(account.userAddr);
-
-      // Set gas budget with validation - increase default gas for zkLogin transactions
-      const DEFAULT_GAS_BUDGET = 50000000;
-      const gasBudget = options.gasBudget || DEFAULT_GAS_BUDGET;
-      if (gasBudget < 1000000) {
-        console.warn(`Gas budget ${gasBudget} may be too low for zkLogin transactions`);
-      }
-      if (options.gasBudget) {
-        txb.setGasBudget(options.gasBudget);
-      } else {
-        txb.setGasBudgetIfNotSet(DEFAULT_GAS_BUDGET);
-      }
-
-      // Build transaction to get bytes for signing
-      const { bytes, signature: userSignature } = await txb.sign({
-        client: suiClient,
-        signer: ephemeralKeyPair,
-      });
-
-      // Validate userSignature
-      if (!userSignature) {
-        throw new Error('Failed to generate ephemeral signature');
-      }
-
-      try {
-        // Deep clone the proof points to ensure we don't modify the original
-        const proofPointsClone = JSON.parse(JSON.stringify(account.zkProofs.proofPoints));
-        
-        // Verify all required proof point components exist
-        if (!proofPointsClone.a || !proofPointsClone.b || !proofPointsClone.c ||
-            !Array.isArray(proofPointsClone.a) || !Array.isArray(proofPointsClone.b) || !Array.isArray(proofPointsClone.c)) {
-          throw new Error('Proof points missing required components');
-        }
-        
-        // Format the proof points according to Sui zkLogin requirements
-        const formattedProofPoints = {
-          a: proofPointsClone.a.map((point: string | number) => BigInt(point).toString()),
-          b: proofPointsClone.b.map((pair: string | number | Array<string | number>) => {
-            // Handle b points correctly - must be pairs
-            if (Array.isArray(pair) && pair.length === 2) {
-              return pair.map((point: string | number) => BigInt(point).toString());
-            } else if (!Array.isArray(pair)) {
-              // If not an array, create a pair with [point, 0]
-              return [BigInt(pair).toString(), "0"];
-            } else {
-              // If array but not length 2, log and throw error
-              console.error('Invalid b point format:', pair);
-              throw new Error(`Invalid b point format: expected pair but got array of length ${pair.length}`);
-            }
-          }),
-          c: proofPointsClone.c.map((point: string | number) => BigInt(point).toString()),
-        };
-        
-        console.log('Proof points formatted successfully');
-        
-        // Create zkLogin signature with the exact format required by Sui
-        console.log('Creating zkLogin signature with components:', {
-          hasAddressSeed: !!addressSeed,
-          userSignatureLength: userSignature?.length,
-          maxEpoch: account.maxEpoch,
-          proofPointsA: formattedProofPoints.a?.length,
-          proofPointsB: formattedProofPoints.b?.length,
-          proofPointsC: formattedProofPoints.c?.length,
-          hasHeaderBase64: !!account.zkProofs.headerBase64,
-          hasIssBase64Details: !!account.zkProofs.issBase64Details?.value
-        });
-
-        // Ensure we have all the required inputs
-        if (!addressSeed || !userSignature || !account.zkProofs.headerBase64 ||
-            !account.zkProofs.issBase64Details || !account.zkProofs.issBase64Details.value) {
-          throw new Error('Missing required zkLogin signature components');
-        }
-
-        // Create the zkLogin signature
-        const zkLoginSignature = getZkLoginSignature({
-          inputs: {
-            ...account.zkProofs,
-            proofPoints: formattedProofPoints,
-            addressSeed,
-          },
-          maxEpoch: account.maxEpoch,
-          userSignature,
-        });
-        
-        console.log('Generated zkLogin signature:', zkLoginSignature.substring(0, 20) + '...');
-        
-        // Execute transaction
-        console.log('Executing transaction with zkLogin signature...');
-        const result = await suiClient.executeTransactionBlock({
-          transactionBlock: bytes,
-          signature: zkLoginSignature,
-          options: {
-            showEffects: true,
-            showEvents: true,
-            showInput: true,
-            showObjectChanges: true,
-          },
-          requestType: options.requestType || 'WaitForLocalExecution'
-        });
-
-        if (!result.digest) {
-          throw new Error('Transaction execution failed: No digest returned');
-        }
-
-        console.log('Transaction executed successfully:', {
-          digest: result.digest,
-          status: result.effects?.status?.status || 'unknown',
-          gasUsed: result.effects?.gasUsed || 'unknown'
-        });
-
-        // Verify the signature using GraphQL (optional - for debugging)
-        if (process.env.NODE_ENV === 'development') {
-          const verified = await this.verifyZkLoginSignature(bytes, zkLoginSignature, account.userAddr);
-          if (verified) {
-            console.log('zkLogin signature verified successfully');
-          } else {
-            console.warn('zkLogin signature verification could not be confirmed.');
-          }
-        }
-
-        // Return the transaction result with proper typing
-        return {
-          digest: result.digest,
-          status: result.effects?.status?.status === 'success' ? 'success' : 'failure',
-          error: result.effects?.status?.error || undefined,
-          gasUsed: result.effects?.gasUsed || undefined,
-          confirmedLocalExecution: result.confirmedLocalExecution || undefined,
-          timestampMs: result.timestampMs || undefined,
-          checkpoint: result.checkpoint || undefined
-        };
-
-      } catch (formattingError) {
-        console.error('Error during proof formatting or signature creation:', formattingError);
-        throw new Error(`Failed to create zkLogin signature: ${formattingError instanceof Error ? formattingError.message : 'Unknown error'}`);
-      }
-
-    } catch (err) {
-      console.error('Transaction error:', err);
-      
-      // Check for common error patterns and provide better messages
-      if (err instanceof Error) {
-        if (err.message.includes('epoch')) {
-          throw new Error('Session has expired. Please re-authenticate to get a new proof.');
-        }
-        if (err.message.includes('Invalid signature')) {
-          throw new Error('Invalid zkLogin signature. Please try re-authenticating.');
-        }
-        if (err.message.includes('InsufficientGas')) {
-          throw new Error('Insufficient gas for transaction. Please ensure you have enough SUI for gas fees.');
-        }
-      }
-      
-      throw err;
-    }
+    throw new ClientSigningRequiredError();
   }
 
   /**
