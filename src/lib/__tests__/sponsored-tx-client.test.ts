@@ -8,7 +8,15 @@
  */
 import { Transaction } from '@mysten/sui/transactions';
 import type { SuiClient } from '@mysten/sui/client';
-import { assertSponsoredMatchesKind } from '@/lib/sponsored-tx-client';
+import { assertSponsoredMatchesKind, trySponsoredExecute } from '@/lib/sponsored-tx-client';
+
+// The submit/confirm tests below exercise the boundary after signing, so the
+// signer itself is stubbed. Signature production is covered by the comparator
+// cases above.
+jest.mock('@/lib/zklogin-client-signer', () => ({
+  loadSignerSession: jest.fn(() => null),
+  signTransactionBytes: jest.fn(async () => 'stub-signature'),
+}));
 
 const USER = '0x' + 'a'.repeat(64);
 const ATTACKER = '0x' + 'b'.repeat(64);
@@ -203,5 +211,102 @@ describe('assertSponsoredMatchesKind', () => {
     await expect(
       assertSponsoredMatchesKind(tampered, kind, USER, client),
     ).rejects.toThrow();
+  });
+});
+
+/**
+ * Returning null after the sponsor has broadcast is not a wasted subsidy — the
+ * caller reads null as "pay your own gas" and signs a SECOND transaction, so
+ * the member pays the same contribution twice. These pin the boundary: before
+ * submission null is correct; after it, never.
+ */
+describe('trySponsoredExecute — never re-sign something already submitted', () => {
+  const DIGEST = 'sponsored-digest-1';
+  const session = {
+    userAddress: USER,
+    ephemeralPrivateKey: 'k',
+    zkProofs: {},
+    userSalt: '1',
+    maxEpoch: 99,
+  } as never;
+
+  const buildKind = (txb: Transaction) => contributeCall(txb);
+
+  function mockFetch(prepareOk: boolean, execute: () => Promise<Response> | Response) {
+    global.fetch = jest.fn(async (url: RequestInfo | URL) => {
+      if (String(url).includes('/api/sponsor/prepare')) {
+        return {
+          ok: true,
+          json: async () =>
+            prepareOk
+              ? { sponsored: true, bytes: PREPARED_BYTES, digest: DIGEST }
+              : { sponsored: false, reason: 'disabled' },
+        } as Response;
+      }
+      return execute();
+    }) as unknown as typeof fetch;
+  }
+
+  let PREPARED_BYTES = '';
+
+  beforeAll(async () => {
+    const { toBase64: b64 } = await import('@mysten/sui/utils');
+    PREPARED_BYTES = b64(await buildSponsored(contributeCall));
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('reports the digest when the transaction landed but confirmation failed', async () => {
+    // The regression: waitForTransaction throwing AFTER a successful execute
+    // used to return null, sending the caller off to self-pay a duplicate.
+    mockFetch(true, () => ({ ok: true, json: async () => ({ digest: DIGEST }) }) as Response);
+    const client = {
+      waitForTransaction: jest.fn().mockRejectedValue(new Error('rpc timeout')),
+    } as unknown as SuiClient;
+
+    const result = await trySponsoredExecute({
+      action: 'contributeToCycleEscrow',
+      buildKind,
+      client,
+      session,
+    });
+
+    expect(result).toEqual({ digest: DIGEST, sponsored: true });
+  });
+
+  it('checks the chain before falling back when execute fails ambiguously', async () => {
+    mockFetch(true, () => ({ ok: false, status: 502, json: async () => ({}) }) as Response);
+    const client = {
+      // The sponsor did broadcast it despite the 502.
+      waitForTransaction: jest.fn().mockResolvedValue({ digest: DIGEST }),
+    } as unknown as SuiClient;
+
+    const result = await trySponsoredExecute({
+      action: 'contributeToCycleEscrow',
+      buildKind,
+      client,
+      session,
+    });
+
+    expect(result).toEqual({ digest: DIGEST, sponsored: true });
+  });
+
+  it('falls back to self-paid when the reservation was never held', async () => {
+    // 409 is unambiguous: nothing was submitted, so re-signing is safe.
+    mockFetch(true, () => ({ ok: false, status: 409, json: async () => ({}) }) as Response);
+    const waitForTransaction = jest.fn();
+    const client = { waitForTransaction } as unknown as SuiClient;
+
+    const result = await trySponsoredExecute({
+      action: 'contributeToCycleEscrow',
+      buildKind,
+      client,
+      session,
+    });
+
+    expect(result).toBeNull();
+    expect(waitForTransaction).not.toHaveBeenCalled();
   });
 });

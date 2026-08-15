@@ -76,6 +76,35 @@ export async function assertSponsoredMatchesKind(
 }
 
 /**
+ * Ask the chain whether a digest already landed.
+ *
+ * Used only on ambiguous execute failures. The sponsored digest is fixed when
+ * Enoki builds the transaction, so "did this get submitted?" is answerable
+ * rather than a guess — and the answer decides between reporting success and
+ * letting the caller sign a duplicate that would charge the member twice.
+ *
+ * Returns null when it did not land (or cannot be confirmed), which sends the
+ * caller down the self-paid path as before.
+ */
+async function landedAlready(
+  client: SuiClient,
+  digest: string,
+  cause: unknown,
+): Promise<SponsoredExecuteResult | null> {
+  try {
+    await client.waitForTransaction({ digest, options: { showEffects: true } });
+    console.warn(
+      '[sponsored-tx] execute reported a failure but the transaction landed; not re-signing:',
+      digest,
+      cause,
+    );
+    return { digest, sponsored: true };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Run the sponsored path end to end, or report that it is unavailable.
  *
  * Returns null when sponsorship was declined for any reason — disabled, over
@@ -142,22 +171,51 @@ export async function trySponsoredExecute(args: {
     const signature = await signTransactionBytes(session, sponsoredBytes);
 
     // 5. Submit through the sponsor, which holds the Enoki key.
-    const executeRes = await fetch('/api/sponsor/execute', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ digest: prepared.digest, signature }),
-    });
-    if (!executeRes.ok) return null;
+    //
+    // Past this point returning null is dangerous, not merely wasteful.
+    // Callers treat null as "sponsorship unavailable" and immediately sign a
+    // SELF-PAID transaction — so if the transaction already landed, the member
+    // pays the same contribution twice. The digest is fixed at prepare time,
+    // which means we can always ask the chain instead of guessing.
+    let executeRes: Response;
+    try {
+      executeRes = await fetch('/api/sponsor/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ digest: prepared.digest, signature }),
+      });
+    } catch (err) {
+      // The request may have reached the sponsor before the connection died.
+      return (await landedAlready(args.client, prepared.digest, err)) ?? null;
+    }
+
+    if (!executeRes.ok) {
+      // A 409 means the reservation was never held, so nothing was submitted;
+      // anything else is ambiguous and must be checked before re-signing.
+      if (executeRes.status === 409) return null;
+      return (await landedAlready(args.client, prepared.digest, executeRes.status)) ?? null;
+    }
 
     const executed = await executeRes.json();
     if (!executed?.digest) return null;
 
     // Wait here rather than server-side: the effects belong to the caller, and
-    // the server has no reason to hold a request open for them.
-    await args.client.waitForTransaction({
-      digest: executed.digest,
-      options: { showEffects: true },
-    });
+    // the server has no reason to hold a request open for them. A failure to
+    // OBSERVE the transaction is not a failure to SEND it — the sponsor has
+    // already broadcast it, so report the digest either way and let the caller
+    // reconcile. Returning null here is what would double-charge the member.
+    try {
+      await args.client.waitForTransaction({
+        digest: executed.digest,
+        options: { showEffects: true },
+      });
+    } catch (err) {
+      console.warn(
+        '[sponsored-tx] submitted but not confirmed; not re-signing:',
+        executed.digest,
+        err,
+      );
+    }
 
     return { digest: executed.digest, sponsored: true };
   } catch (err) {
