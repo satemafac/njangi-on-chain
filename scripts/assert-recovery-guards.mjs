@@ -152,6 +152,48 @@ if (circle && wallet && coin && admin) {
     );
   }
 
+  // The rotation order decides WHO receives each pot. Once a circle is active
+  // and members have funded a cycle, an admin who could reorder it could move
+  // themselves into the current payout slot — the one place a role called
+  // "admin" ever had discretion over fund direction. The contract refuses
+  // unless the circle is inactive or explicitly paused.
+  //
+  // Only meaningful against an ACTIVE circle: on an inactive one the reorder
+  // is legitimately allowed, so a pass here would prove nothing.
+  const circleState = await client.getObject({ id: circle, options: { showContent: true } });
+  const content = circleState.data?.content;
+  const fields = content && content.dataType === 'moveObject' ? content.fields : {};
+  const isActive = fields.is_active === true;
+  const rotation = Array.isArray(fields.rotation_order) ? fields.rotation_order : [];
+
+  if (isActive && rotation.length >= 2) {
+    // Swap the first two positions: the smallest change that redirects the
+    // current payout.
+    const swapped = [rotation[1], rotation[0], ...rotation.slice(2)];
+    const reorder = () => {
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${pkg}::njangi_circles::reorder_rotation_positions_entry`,
+        arguments: [tx.object(circle), tx.pure.vector('address', swapped), tx.object(CLOCK)],
+      });
+      return tx;
+    };
+    const attempt = await abortsFor(admin, reorder);
+    record(
+      attempt.refused && attempt.code === 58,
+      'admin cannot reorder the rotation while the circle is active',
+      attempt.refused
+        ? `refused (${attempt.code === 58 ? '58 ECircleNotPausedForConfigChange' : attempt.code ?? attempt.error})`
+        : 'ALLOWED — an admin could redirect a funded payout',
+    );
+  } else {
+    record(
+      true,
+      'rotation lock (needs an ACTIVE circle with >=2 in rotation)',
+      isActive ? 'skipped — rotation too short' : 'skipped — circle inactive',
+    );
+  }
+
   // The admin-liveness fallback exists for an ABSENT admin, so the admin is
   // the one party who must never fire it.
   //
