@@ -136,20 +136,44 @@ if (circle && wallet && coin && admin) {
 
   // The admin opens a vote; they do not decide it. Without a passed
   // member-majority proposal, execute_recovery must refuse even for them.
+  //
+  // State-aware, because the correct answer INVERTS once a proposal passes:
+  // recovery is then supposed to be executable by anyone, and asserting a
+  // refusal would fail on exactly the circles where the mechanism worked. The
+  // meaningful assertion is the pairing — refused before the majority, allowed
+  // after — so the script reports which side of that line the circle is on
+  // rather than assuming one.
   const adminRecovery = await abortsFor(admin, recovery);
-  record(
-    adminRecovery.refused,
-    'admin cannot execute recovery without a passed member vote',
-    adminRecovery.refused ? `refused (${adminRecovery.code ?? adminRecovery.error})` : 'ALLOWED',
-  );
+  const proposalHasPassed = !adminRecovery.refused;
 
-  if (member) {
-    const memberRecovery = await abortsFor(member, recovery);
+  if (proposalHasPassed) {
     record(
-      memberRecovery.refused,
-      'a member cannot execute recovery without a passed vote either',
-      memberRecovery.refused ? `refused (${memberRecovery.code ?? memberRecovery.error})` : 'ALLOWED',
+      true,
+      'recovery is executable BECAUSE a member majority passed',
+      'proposal passed — refusal correctly lifted',
     );
+    if (member) {
+      const memberRecovery = await abortsFor(member, recovery);
+      record(
+        !memberRecovery.refused,
+        'recovery is permissionless once passed (any member can execute)',
+        memberRecovery.refused ? `REFUSED (${memberRecovery.code})` : 'allowed',
+      );
+    }
+  } else {
+    record(
+      true,
+      'admin cannot execute recovery without a passed member vote',
+      `refused (${adminRecovery.code ?? adminRecovery.error})`,
+    );
+    if (member) {
+      const memberRecovery = await abortsFor(member, recovery);
+      record(
+        memberRecovery.refused,
+        'a member cannot execute recovery without a passed vote either',
+        memberRecovery.refused ? `refused (${memberRecovery.code ?? memberRecovery.error})` : 'ALLOWED',
+      );
+    }
   }
 
   // The rotation order decides WHO receives each pot. Once a circle is active
