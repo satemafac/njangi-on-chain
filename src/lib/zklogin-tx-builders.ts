@@ -1,8 +1,8 @@
-import { normalizeSuiObjectId } from '@mysten/sui/utils';
 import { Transaction } from '@mysten/sui/transactions';
 import { getMinimumAutoReleaseDelayMsForMoveCycleLength } from '@/lib/auto-release';
 import { normalizePackageId } from '@/lib/circle-chain';
 import { normalizeRecoveryDelegateAddress } from '@/lib/recovery-delegate';
+import { normalizeRequiredObjectId } from '@/lib/sui-object-id';
 
 const CLOCK_OBJECT_ID = '0x6';
 const CREATE_CIRCLE_GAS_BUDGET = 50_000_000;
@@ -68,18 +68,6 @@ export interface BuildCreateCircleTxInput {
   packageId: string;
   circleData: CreateCircleTransactionData;
 }
-
-const normalizeRequiredObjectId = (value: string, label: string): string => {
-  if (!value || typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`${label} is required.`);
-  }
-
-  try {
-    return normalizeSuiObjectId(value);
-  } catch {
-    throw new Error(`${label} is invalid.`);
-  }
-};
 
 const normalizeRequiredPackageId = (value: string): string => {
   const normalized = normalizePackageId(value);
