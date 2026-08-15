@@ -147,3 +147,24 @@ describe('routing stays member-initiated', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe('swap reads survive a rate-limited endpoint', () => {
+  it('builds through the pooled failover client, not a raw single-URL one', () => {
+    // Found by trying to execute a real swap: the quote succeeded, then
+    // building the transaction failed with "Unable to prepare the swap
+    // transaction" because it constructed `new SuiClient({ url:
+    // getCurrentRpcUrl() })` — one endpoint, no failover — while blockvision
+    // was returning 429. Every other read path in the app fails over.
+    //
+    // A swap that cannot build is not a compliance failure, but it is the
+    // difference between invariant #5 being exercisable and being theoretical.
+    const src = readFileSync(join(process.cwd(), 'src/services/cetus-service.ts'), 'utf8');
+    const code = stripComments(src);
+
+    expect(code).not.toMatch(/new SuiClient\(/);
+    expect(code).toContain('getPooledSuiClient()');
+    // The SDK takes a URL rather than a client, so it gets the first
+    // CANDIDATE — the ordering that deprioritises rate-limited hosts.
+    expect(code).toContain('getRpcCandidateUrls(');
+  });
+});

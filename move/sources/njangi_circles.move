@@ -4178,6 +4178,36 @@ module njangi::njangi_circles {
         assert!(can_active_member_trigger_auto_release_internal(false, true), 9041);
     }
 
+    // The tests above pin the PREDICATES. This one pins the ENFORCEMENT: that
+    // the role resolver actually aborts for a caller the predicates reject,
+    // rather than falling through to a permitted role.
+    //
+    // It matters because the admin exclusion cannot be observed on a live
+    // circle within a test session. The minimum auto-release delay is longer
+    // than one cycle (7 days for a weekly circle) and every signed admin
+    // action refreshes the heartbeat, so reaching an armed fallback means a
+    // week of admin silence. Simulating trigger_auto_release before then
+    // returns ERecoveryExecutionNotReady — "nothing is armed" — which is a
+    // correct refusal for the wrong reason and proves nothing about identity.
+    // This test is therefore the authority for that claim.
+    #[test]
+    #[expected_failure(abort_code = ERecoveryAutoReleaseUnauthorized)]
+    fun test_auto_release_rejects_admin_even_when_member_fallback_is_open() {
+        // has_valid_delegate = false, caller_is_delegate = false,
+        // caller_can_fallback = false (this is the admin — see
+        // can_active_member_trigger_auto_release_internal(true, true) above),
+        // member_fallback_open = true: everything armed, admin still refused.
+        resolve_auto_release_trigger_role_internal(false, false, false, true);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = ERecoveryAutoReleaseUnauthorized)]
+    fun test_auto_release_rejects_non_delegate_during_the_delegate_window() {
+        // A valid delegate exists and the member-fallback window has not
+        // opened yet, so an eligible member is still too early to act.
+        resolve_auto_release_trigger_role_internal(true, false, true, false);
+    }
+
     #[test]
     fun test_auto_release_delegate_priority_and_member_fallback_matrix() {
         assert!(can_trigger_auto_release_internal(true, true, true, false), 9042);
