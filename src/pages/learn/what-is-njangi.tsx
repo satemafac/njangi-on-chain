@@ -366,7 +366,7 @@ export default function WhatIsNjangiPage() {
                       <ul className="space-y-2 text-gold text-sm">
                         <li>• Contribution tracking happens automatically on-chain</li>
                         <li>• Payout distribution follows predetermined rules</li>
-                        <li>• No single point of failure or fraud risk</li>
+                        <li>• No treasurer holds the pooled cash</li>
                         <li>• Complete transaction history immutably recorded</li>
                       </ul>
                     </div>
@@ -378,7 +378,7 @@ export default function WhatIsNjangiPage() {
                   <div className="grid md:grid-cols-3 gap-4 text-sm">
                     <div>
                       <h4 className="font-medium text-gold">Trust vulnerabilities</h4>
-                      <p className="text-gold">→ Cryptographic guarantees</p>
+                      <p className="text-gold">→ Rules enforced by contract, not by one person</p>
                     </div>
                     <div>
                       <h4 className="font-medium text-gold">Geographic constraints</h4>

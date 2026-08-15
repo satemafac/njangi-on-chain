@@ -381,7 +381,7 @@ public fun make_contribution(
                     </div>
                     <div>
                       <h4 className="font-medium">Automation</h4>
-                      <p>Smart contracts eliminate human error and bias</p>
+                      <p>Contribution tracking and payout order run from contract rules, not memory</p>
                     </div>
                     <div>
                       <h4 className="font-medium">Scalability</h4>

@@ -391,7 +391,7 @@ public fun make_contribution(
                         <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
                         <div>
                           <h4 className="font-semibold text-cream">Automated Trust</h4>
-                          <p className="text-sm text-sand">Smart contracts ensure fairness</p>
+                          <p className="text-sm text-sand">Contract rules apply equally to every member</p>
                         </div>
                       </div>
                     </div>

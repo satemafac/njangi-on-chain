@@ -159,8 +159,8 @@ export default function TraditionalSavingsVsBlockchainPost() {
 
             <p className="text-lg text-sand leading-relaxed mb-8">
               Blockchain systems, by contrast, embed trust directly into the technology. Smart contracts 
-              automatically execute agreements without human intervention, removing the risk of coordinator 
-              fraud or mismanagement. This enables participation by people who don&rsquo;t know each other 
+              automatically execute agreements without human intervention, so no coordinator holds the pooled 
+              cash or decides where it goes. This enables participation by people who don&rsquo;t know each other 
               personally but want to benefit from collective savings.
             </p>
 
@@ -224,8 +224,8 @@ export default function TraditionalSavingsVsBlockchainPost() {
                   <div>• Monthly pool: $2,000</div>
                   <div>• Each member receives: $2,000 (on a verifiable schedule)</div>
                   <div>• Total program value: $40,000</div>
-                  <div>• Custody risk: None (smart-contract escrow)</div>
-                  <div>• Coordinator risk: None</div>
+                  <div>• Custody: smart-contract escrow, not a treasurer</div>
+                  <div>• Coordinator discretion over funds: none</div>
                   <div>• Time investment: 15 minutes/month</div>
                 </div>
               </div>
