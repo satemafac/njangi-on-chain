@@ -556,10 +556,22 @@ export function CycleEscrowPanel({
                 {busy === 'open' ? t('escrow.openingRound') : t('escrow.openRound')}
               </button>
               {!circleIsActive ? (
+                // Deliberately does NOT enumerate the activation requirements.
+                // It used to, and got them wrong: it claimed a non-admin
+                // recovery delegate was always needed, when activate_circle
+                // only requires one if auto-release is enabled — and a circle
+                // created without auto-release can never have a delegate at
+                // all. The manage page owns that truth via
+                // getActivationRequirementMessage(), which is gated correctly
+                // and lists what is actually outstanding for THIS circle.
+                //
+                // Kept as raw English to match the neighbouring WhatsApp
+                // warning; adding a t() key would oblige EN+FR parity updates
+                // for a string only the admin manage page renders.
                 <p className="mt-2 text-xs text-amber-700">
                   Activate the circle first. Use the <span className="font-semibold">Activate Circle</span> action
-                  in the Circle Management section below — it requires every member&rsquo;s
-                  security deposit, the rotation order set, and a non-admin recovery delegate.
+                  in the Circle Management section below — it lists exactly what is still
+                  outstanding for this circle.
                 </p>
               ) : null}
             </>

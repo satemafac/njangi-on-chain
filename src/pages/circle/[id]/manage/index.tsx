@@ -22,7 +22,7 @@ import {
   loadRecoveryExecutionStatus,
   type RecoveryExecutionStatus,
 } from '@/lib/recovery-execution';
-import { getRecoveryProposalUiState } from '@/lib/recovery-ui';
+import { getRecoveryProposalUiState, getRecoveryDelegateCardCopy } from '@/lib/recovery-ui';
 import { resolveStablecoinMetadata } from '@/lib/stablecoin-metadata';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
@@ -632,7 +632,15 @@ export default function ManageCircle() {
   const [circle, setCircle] = useState<Circle | null>(null);
   const [circlePackageId, setCirclePackageId] = useState<string | null>(null);
   const [recoveryStatus, setRecoveryStatus] = useState<RecoveryStatusSnapshot | null>(null);
-  const [loadingRecoveryStatus, setLoadingRecoveryStatus] = useState(false);
+  // Starts true. A null snapshot is indistinguishable from "auto-release is
+  // disabled" once it reaches getRecoveryAutoReleaseUiState, so treating the
+  // pre-fetch frame as loaded made the page announce a settled state it had
+  // not read yet — and after the delegate-copy fix that would have been a
+  // false all-clear on a safety control rather than a harmless over-warning.
+  const [loadingRecoveryStatus, setLoadingRecoveryStatus] = useState(true);
+  // Distinguishes "read failed" from "still loading"; the catch below used to
+  // leave both looking identical to a successfully-loaded disabled circle.
+  const [recoveryStatusError, setRecoveryStatusError] = useState(false);
   const [recoveryExecution, setRecoveryExecution] = useState<RecoveryExecutionStatus | null>(null);
   const [loadingRecoveryExecution, setLoadingRecoveryExecution] = useState(false);
   const [isSubmittingRecoveryAction, setIsSubmittingRecoveryAction] = useState(false);
@@ -4013,13 +4021,19 @@ export default function ManageCircle() {
     }
 
     setLoadingRecoveryStatus(true);
+    setRecoveryStatusError(false);
     try {
       const client = getSuiClientFromPool(getJsonRpcUrl());
       const dynamicFieldsResult = await client.getDynamicFields({ parentId: id as string });
       const configFields = await getCircleConfigFieldsFromDynamicFields(client, dynamicFieldsResult.data);
       setRecoveryStatus(parseRecoveryStatus(configFields));
+      setRecoveryStatusError(false);
     } catch (error) {
       logSuiReadError('Failed to refresh recovery status:', error);
+      // Record the failure. Previously this branch left state untouched, so a
+      // failed read was permanently indistinguishable from a loaded circle
+      // with auto-release off.
+      setRecoveryStatusError(true);
     } finally {
       setLoadingRecoveryStatus(false);
     }
@@ -4373,7 +4387,9 @@ export default function ManageCircle() {
     const validationError = getRecoveryDelegateValidationError({
       value: recoveryDelegateDraft,
       adminAddress: circle.admin,
-      required: true,
+      // A delegate is only mandatory where the contract makes it mandatory:
+      // activate_circle enforces one solely when auto-release is enabled.
+      required: recoveryStatus?.autoReleaseEnabled === true,
     });
     if (validationError) {
       toast.error(validationError);
@@ -4503,6 +4519,19 @@ export default function ManageCircle() {
   });
   const autoReleaseRemainingMs = autoReleaseUi.remainingMs;
   const autoReleaseReady = autoReleaseUi.ready;
+  // Single source of truth for the admin-liveness card's wording. `statusKnown`
+  // is what stops an unread snapshot from being reported as a settled state —
+  // see getRecoveryDelegateCardCopy for why that mattered more after the fix
+  // than before it.
+  const recoveryStatusKnown = recoveryStatus !== null;
+  const delegateCopy = getRecoveryDelegateCardCopy({
+    statusKnown: recoveryStatusKnown,
+    loadError: recoveryStatusError,
+    autoReleaseEnabled: autoReleaseUi.enabled,
+    delegateStatus: autoReleaseUi.delegateStatus,
+    authorityMode: autoReleaseUi.authorityMode,
+    circleIsActive: Boolean(circle?.isActive),
+  });
   const canExecuteRecovery = Boolean(
     recoveryProposalPassed
       && recoveryStatus
@@ -4515,7 +4544,7 @@ export default function ManageCircle() {
   const recoveryDelegateValidationError = getRecoveryDelegateValidationError({
     value: recoveryDelegateDraft,
     adminAddress: circle?.admin,
-    required: true,
+    required: recoveryStatus?.autoReleaseEnabled === true,
   });
   const normalizedRecoveryDelegateDraft = normalizeRecoveryDelegateAddress(recoveryDelegateDraft);
   const recoveryDelegateDraftIsEligibleMember = Boolean(
@@ -4530,11 +4559,16 @@ export default function ManageCircle() {
   const hasRecoveryDelegateDraftChanges =
     (normalizedRecoveryDelegateDraft ?? null) !== (autoReleaseUi.configuredDelegate ?? null);
   const recoveryDelegateFormDisabledReason =
-    !recoveryStatus?.autoReleaseEnabled
-      ? 'Auto-release was not configured for this circle at creation.'
-      : recoveryStatus.rawState !== 0
-        ? 'Delegate updates are locked once emergency recovery leaves the active state.'
-        : null;
+    // `!recoveryStatus?.autoReleaseEnabled` is also true while the snapshot is
+    // still null, so this used to assert "not configured at creation" about a
+    // circle it had not read yet. Check that the status is known first.
+    !recoveryStatus
+      ? delegateCopy.delegateHint
+      : !recoveryStatus.autoReleaseEnabled
+        ? 'Auto-release was not configured for this circle at creation.'
+        : recoveryStatus.rawState !== 0
+          ? 'Delegate updates are locked once emergency recovery leaves the active state.'
+          : null;
   const recoveryExecutionStarted = Boolean(recoveryExecution?.startedAt);
   const recoveryExecutionCompleted = Boolean(recoveryExecution?.completedAt) || recoveryStatus?.rawState === 3;
   const recoveryExecutionProgress = recoveryExecution
@@ -6092,7 +6126,7 @@ export default function ManageCircle() {
                         <div className={mutedPanelClass}>
                           <p className={sectionEyebrowClass}>Trigger authority</p>
                           <p className="mt-2 text-sm font-semibold text-slate-950">
-                            {autoReleaseUi.authorityMode === 'delegate_grace' ? '24h delegate window' : 'Active-member fallback'}
+                            {delegateCopy.authorityModeLabel}
                           </p>
                           <p className="mt-1 text-xs text-slate-500">
                             {autoReleaseUi.delegateStatus === 'valid'
@@ -6101,7 +6135,7 @@ export default function ManageCircle() {
                                 : `Next in command ${shortenAddress(autoReleaseUi.validDelegate || '')} has exclusive trigger rights until ${autoReleaseUi.memberFallbackUnlockTime ? formatDate(autoReleaseUi.memberFallbackUnlockTime) : 'the 24-hour grace deadline'}.`
                               : autoReleaseUi.delegateStatus === 'invalid'
                                 ? 'The configured delegate is no longer an eligible active member, so active members become the fallback as soon as the heartbeat expires.'
-                                : 'Auto-release now requires a valid delegate address before this fallback should be relied on.'}
+                                : delegateCopy.authorityModeHint}
                           </p>
                         </div>
                         <div className={mutedPanelClass}>
@@ -6143,7 +6177,7 @@ export default function ManageCircle() {
                               <p className="mt-2 text-sm font-semibold text-slate-950">
                                 {autoReleaseUi.configuredDelegate
                                   ? shortenAddress(autoReleaseUi.configuredDelegate)
-                                  : 'Delegate required'}
+                                  : delegateCopy.delegateValueFallback}
                               </p>
                               <p className="mt-1 text-xs text-slate-500">
                                 {recoveryDelegateFormDisabledReason
@@ -6213,7 +6247,7 @@ export default function ManageCircle() {
                                         : `Currently configured wallet: ${normalizedRecoveryDelegateDraft}`
                                       : circle?.isActive
                                         ? 'Required: active auto-release circles must keep a valid next-in-command wallet configured.'
-                                        : 'Required before activation: choose an active non-admin member as next in command.'}
+                                        : delegateCopy.formHint}
                                 </p>
                               </div>
 
@@ -6247,18 +6281,14 @@ export default function ManageCircle() {
                           ) : (
                             <div className="mt-4 rounded-[18px] border border-stone-200 bg-stone-50/80 p-4 text-sm text-slate-600">
                               <p className="font-medium text-slate-900">
-                                {autoReleaseUi.configuredDelegate
-                                  ? autoReleaseUi.delegateStatus === 'valid'
-                                    ? 'Delegate is healthy.'
-                                    : 'Delegate needs attention.'
-                                  : 'Delegate required.'}
+                                {delegateCopy.summaryTitle}
                               </p>
                               <p className="mt-2 leading-6">
                                 {autoReleaseUi.configuredDelegate
                                   ? autoReleaseUi.delegateStatus === 'valid'
                                     ? 'If your heartbeat expires, this wallet gets a 24-hour exclusive recovery window before eligible active members can trigger.'
                                     : 'Because this delegate is no longer eligible, active non-admin members will become the fallback once the heartbeat expires.'
-                                  : 'Set a valid delegate before activating this circle so the admin-liveness fallback path is fully armed.'}
+                                  : delegateCopy.summaryBody}
                               </p>
                             </div>
                           )}
