@@ -13,6 +13,7 @@ import { ArrowLeft, RefreshCw, Sparkles, Target } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMilestones } from '@/hooks/useMilestones';
 import { useZkLoginSigner } from '@/hooks/useZkLoginSigner';
+import type { TransactionBuilder } from '@/lib/zklogin-client-signer';
 import MilestoneTimeline, {
   type MilestoneTimelineBusyAction,
 } from '@/components/milestones/MilestoneTimeline';
@@ -211,7 +212,7 @@ export default function CircleGoalsPage() {
   const runAction = useCallback(
     async (
       action: NonNullable<MilestoneTimelineBusyAction>,
-      build: Parameters<typeof signAndExecute>[0]['build'],
+      build: TransactionBuilder,
       gasBudget: number,
       successMessage: string,
     ) => {

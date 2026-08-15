@@ -83,11 +83,23 @@ const nextConfig = {
     NEXT_PUBLIC_APP_VERSION: packageJson.version,
   },
   images: {
-    domains: [
-      'lh3.googleusercontent.com',  // Google profile pictures
-      'platform-lookaside.fbsbx.com', // Facebook profile pictures
-      'graph.facebook.com'  // Alternative Facebook CDN
+    // `domains` is deprecated in Next 15 in favour of remotePatterns.
+    remotePatterns: [
+      { protocol: 'https', hostname: 'lh3.googleusercontent.com' },  // Google profile pictures
+      { protocol: 'https', hostname: 'platform-lookaside.fbsbx.com' }, // Facebook profile pictures
+      { protocol: 'https', hostname: 'graph.facebook.com' },  // Alternative Facebook CDN
     ],
+    // Next defaults to webp only; avif first, and the browser's Accept header
+    // picks the first it supports.
+    formats: ['image/avif', 'image/webp'],
+    minimumCacheTTL: 31536000,
+    // NOTE: this is load-bearing — src/pages/dashboard.tsx serves
+    // public/images/{sui-sui,usd-coin-usdc}-logo.svg through next/image. It is
+    // a global exception for two local icons, and it also lets SVGs from the
+    // three remote avatar hosts above through the optimizer. The mitigations
+    // below (script-src 'none', sandbox, attachment) are the documented ones.
+    // Worth revisiting by marking those two icons `unoptimized` and turning
+    // this off — out of scope here, flagged deliberately.
     dangerouslyAllowSVG: true,
     contentDispositionType: 'attachment',
     contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
@@ -144,7 +156,43 @@ const nextConfig = {
             value: contentSecurityPolicyReportOnly
           }
         ]
-      }
+      },
+      // Vercel serves public/ with `max-age=0, must-revalidate` by default, so
+      // every icon is revalidated on every request. Icons and brand assets have
+      // stable names AND stable content — bust them with a ?v= query, as the
+      // landing already does for og.png.
+      {
+        source: '/icons/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
+      },
+      {
+        source: '/brand/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
+      },
+      {
+        // Share cards are regenerated when marketing copy changes. Deliberately
+        // NOT immutable: combined with Facebook's aggressive scraper cache, a
+        // copy fix would otherwise stay invisible for a very long time.
+        source: '/og/:path*',
+        headers: [
+          { key: 'Cache-Control', value: 'public, max-age=604800, stale-while-revalidate=2592000' },
+        ],
+      },
+      // Belt and braces alongside the meta robots tag from <Seo>: an
+      // X-Robots-Tag header survives a 500 or a failed client render, and
+      // covers non-HTML responses.
+      ...['/dashboard', '/create-circle', '/restricted'].map((source) => ({
+        source,
+        headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow' }],
+      })),
+      ...['/circle', '/pool', '/auth', '/admin', '/automation'].map((prefix) => ({
+        source: `${prefix}/:path*`,
+        headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow' }],
+      })),
+      {
+        source: '/api/:path*',
+        headers: [{ key: 'X-Robots-Tag', value: 'noindex' }],
+      },
     ]
   },
   // Add redirects to force HTTPS
@@ -159,6 +207,23 @@ const nextConfig = {
         destination: '/auth/callback',
         permanent: true,
       },
+      // Legacy static legal stubs, removed 2026-08-02. They duplicated the real
+      // /legal/* routes, were listed in the old sitemap, and — because Next
+      // resolves public/ before page routes — a request for one served the
+      // stale copy rather than the current document. Facebook app settings and
+      // Play Store data-safety forms commonly point at exactly these URLs, so
+      // they redirect rather than 404.
+      { source: '/privacy-policy.html', destination: '/legal/privacy', permanent: true },
+      { source: '/terms-of-service.html', destination: '/legal/terms', permanent: true },
+      { source: '/data-deletion.html', destination: '/legal/data-deletion', permanent: true },
+      // The three pillar pages moved to slugs that match the query, 2026-08-02.
+      // The old ones were named for the product angle rather than what people
+      // search: nobody types "blockchain rosca". /learn/blockchain-rosca was
+      // indexed and earning 475 impressions, so these redirects are what carries
+      // that history across — do not remove them.
+      { source: '/learn/blockchain-rosca', destination: '/learn/rosca', permanent: true },
+      { source: '/learn/tontine-blockchain', destination: '/learn/tontine', permanent: true },
+      { source: '/learn/sou-sou-crypto', destination: '/learn/susu', permanent: true },
       {
         source: '/:path*',
         has: [

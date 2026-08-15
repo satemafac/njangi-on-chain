@@ -306,7 +306,7 @@ export const Navbar: React.FC = () => {
                     alt="Njangi On-Chain"
                     width={80}
                     height={80}
-                    className="h-full w-full scale-[2.2] object-contain transition-transform duration-300 group-hover:scale-[2.28]"
+                    className="h-full w-full object-contain transition-transform duration-300 group-hover:scale-105"
                     priority
                     unoptimized
                     onError={(e) => {

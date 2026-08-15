@@ -59,6 +59,7 @@ import {
   getPooledSuiClient,
   getRpcCandidateUrls,
   getRpcCandidateUrlsForRpcUrl,
+  isCapabilityGapError,
   isRateLimitedSuiRpcError,
   isRetriableSuiRpcError,
   logSuiReadError,
@@ -83,16 +84,19 @@ describe('sui-rpc-failover', () => {
     warnSpy.mockRestore();
   });
 
-  it('returns unique valid RPC candidates in priority order', () => {
+  it('returns unique valid RPC candidates, rate-limited hosts last', () => {
     mockGetNetworkConfig.mockReturnValue({
       rpcUrl: 'https://primary.rpc',
       rpcAltUrl: 'not-a-url',
     });
 
+    // blockvision is the only endpoint serving event history, and it rations
+    // requests. Spending its budget on ordinary object reads starves the one
+    // thing only it can do — so it sorts last regardless of list position.
     expect(getRpcCandidateUrls('testnet')).toEqual([
       'https://primary.rpc',
-      'https://sui-testnet-endpoint.blockvision.org',
       'https://sui-testnet-rpc.publicnode.com',
+      'https://sui-testnet-endpoint.blockvision.org',
     ]);
   });
 
@@ -106,15 +110,58 @@ describe('sui-rpc-failover', () => {
       'https://preferred.rpc',
       'https://primary.rpc',
       'https://alt.rpc',
-      'https://sui-testnet-endpoint.blockvision.org',
       'https://sui-testnet-rpc.publicnode.com',
+      'https://sui-testnet-endpoint.blockvision.org',
     ]);
+  });
+
+  it('sinks a rate-limited host even when configured as the primary alt', () => {
+    // Regression for production 2026-08-02: blockvision sat second in the
+    // candidate order via NEXT_PUBLIC_TESTNET_RPC_ALT, so every dashboard load
+    // hit it, 429s followed, and an address holding 4.15 SUI and two
+    // membership receipts rendered as 0 circles / $0. Operator config decides
+    // WHICH endpoints are used; ordering decides which budget gets spent.
+    mockGetNetworkConfig.mockReturnValue({
+      rpcUrl: 'https://primary.rpc',
+      rpcAltUrl: 'https://sui-testnet-endpoint.blockvision.org',
+    });
+
+    const candidates = getRpcCandidateUrls('testnet');
+    expect(candidates[0]).toBe('https://primary.rpc');
+    expect(candidates[candidates.length - 1]).toBe(
+      'https://sui-testnet-endpoint.blockvision.org',
+    );
+    expect(candidates.indexOf('https://sui-testnet-rpc.publicnode.com')).toBeLessThan(
+      candidates.indexOf('https://sui-testnet-endpoint.blockvision.org'),
+    );
   });
 
   it('classifies 5xx and transport errors as retriable', () => {
     expect(isRetriableSuiRpcError(new Error('Unexpected status code: 503'))).toBe(true);
     expect(isRetriableSuiRpcError(new Error('fetch failed'))).toBe(true);
     expect(isRetriableSuiRpcError(new Error('Unexpected status code: 400'))).toBe(false);
+    expect(isRetriableSuiRpcError(new Error('Permission denied'))).toBe(false);
+  });
+
+  it('fails over when an endpoint withdraws its JSON-RPC surface', () => {
+    // Sui deprecated JSON-RPC on public fullnodes and serves the refusal as
+    // HTTP 200 with a JSON-RPC error body, so it arrives as an application
+    // error rather than a transport failure. Before this was classified, a
+    // healthy alternate was never tried and the app lost all chain access
+    // behind one retired primary (2026-08-02).
+    expect(
+      isRetriableSuiRpcError(
+        new Error(
+          'Method not found. JSON-RPC on public fullnodes has been deprecated. ' +
+            'Please migrate to gRPC or GraphQL endpoints.',
+        ),
+      ),
+    ).toBe(true);
+    expect(isRetriableSuiRpcError(new Error('Method not found'))).toBe(true);
+
+    // Still not a blanket "retry everything": unrelated application errors
+    // must stay terminal so a real failure is not masked by N host attempts.
+    expect(isRetriableSuiRpcError(new Error('Invalid params'))).toBe(false);
     expect(isRetriableSuiRpcError(new Error('Permission denied'))).toBe(false);
   });
 
@@ -176,10 +223,13 @@ describe('sui-rpc-failover', () => {
     });
 
     expect(result).toBe('ok');
+    // The third candidate is now publicnode, not blockvision — rate-limited
+    // hosts sort to the back, so the rotation reaches an unmetered endpoint
+    // before spending blockvision's budget.
     expect(attemptedUrls).toEqual([
       'https://primary.rpc',
       'https://alt.rpc',
-      'https://sui-testnet-endpoint.blockvision.org',
+      'https://sui-testnet-rpc.publicnode.com',
     ]);
   });
 
@@ -295,5 +345,51 @@ describe('sui-rpc-failover', () => {
       expect(errorSpy).toHaveBeenCalled();
       errorSpy.mockRestore();
     });
+  });
+});
+
+describe('capability gaps vs ill health', () => {
+  // The distinction this suite defends: an endpoint that cannot serve a
+  // METHOD must not be benched for the methods it serves fine.
+  //
+  // Production 2026-08-02: every queryEvents against publicnode failed
+  // ("Could not find the referenced transaction events") because it prunes
+  // event history. Each failure cooled publicnode down for 10s — removing the
+  // one endpoint that answers the app's most common call. blockvision then
+  // 429'd, everything entered cooldown, and a funded account rendered as
+  // 0 circles / $0.
+
+  it('classifies pruned event history and withdrawn JSON-RPC as capability gaps', () => {
+    expect(
+      isCapabilityGapError(
+        'Could not find the referenced transaction events [TransactionDigest(abc)].',
+      ),
+    ).toBe(true);
+    expect(
+      isCapabilityGapError(
+        'Method not found. JSON-RPC on public fullnodes has been deprecated.',
+      ),
+    ).toBe(true);
+  });
+
+  it('does not treat genuine ill health as a capability gap', () => {
+    // These SHOULD cool the endpoint down — retrying the same host soon is
+    // exactly the wrong move when it is rate-limited or falling over.
+    for (const msg of [
+      'Unexpected status code: 429',
+      'Unexpected status code: 503',
+      'fetch failed',
+      'socket hang up',
+    ]) {
+      expect(isCapabilityGapError(msg)).toBe(false);
+    }
+  });
+
+  it('keeps capability gaps retriable so the request still fails over', () => {
+    // Failing over is right; penalising the endpoint is not. Both properties
+    // have to hold at once.
+    const msg = 'Could not find the referenced transaction events [TransactionDigest(x)].';
+    expect(isCapabilityGapError(msg)).toBe(true);
+    expect(isRetriableSuiRpcError(new Error(msg))).toBe(true);
   });
 });

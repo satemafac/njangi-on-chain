@@ -8,13 +8,14 @@
 // permanent and unaffected.
 
 import { useEffect, useState } from 'react';
-import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { Manrope } from 'next/font/google';
 import { getLocale, setLocale } from '../../lib/i18n';
 import { isLegalLocale, type LegalLocale } from '../../lib/legal-acceptance';
 import { LegalFooter } from '../../components/LegalFooter';
+import { Seo } from '../../components/Seo';
+import { breadcrumbs } from '../../lib/structured-data';
 
 const bodyFont = Manrope({ subsets: ['latin'], display: 'swap' });
 
@@ -177,14 +178,15 @@ export default function DataDeletionPage() {
 
   return (
     <>
-      <Head>
-        <title>Data Deletion Request | Njangi On-Chain</title>
-        <meta
-          name="description"
-          content="Request deletion of the personal data Njangi On-Chain holds about you off-chain. On-chain data is permanent and cannot be deleted."
-        />
-        <link rel="canonical" href="https://njangionchain.com/legal/data-deletion" />
-      </Head>
+      <Seo
+        title="Data Deletion Request"
+        description="Request deletion of the personal data Njangi On-Chain holds about you off-chain. On-chain data is permanent and cannot be deleted."
+        path="/legal/data-deletion"
+        image={{ url: '/og/legal.png', alt: 'Njangi On-Chain — terms, privacy, and risk disclosure' }}
+        jsonLd={[
+          breadcrumbs([{ name: 'Home', path: '/' }, { name: 'Data Deletion Request' }]),
+        ]}
+      />
 
       <div className={`${bodyFont.className} min-h-screen bg-[#f6f2ea] text-[#374151]`}>
         <header className="border-b border-[#e6ddd1] bg-[#f1ece4]/80">

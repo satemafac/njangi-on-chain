@@ -1,20 +1,19 @@
 import { SuiClient } from '@mysten/sui/client';
-import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
+import { Ed25519Keypair, Ed25519PublicKey } from '@mysten/sui/keypairs/ed25519';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 import { Transaction as TransactionBlock } from '@mysten/sui/transactions';
 import {
   genAddressSeed,
+  // `generateRandomness` is intentionally absent: JWT randomness is minted in
+  // the browser alongside the ephemeral key and arrives with the request.
   generateNonce,
-  generateRandomness,
   getExtendedEphemeralPublicKey,
   getZkLoginSignature,
   jwtToAddress,
 } from '@mysten/sui/zklogin';
 import { decodeJwt } from 'jose';
-import { EnokiClient } from '@mysten/enoki';
-import { toBase64, fromBase64 } from '@mysten/sui/utils';
+import { fromBase64 } from '@mysten/sui/utils';
 import { SuiTransactionBlockResponse, ExecuteTransactionRequestType } from '@mysten/sui/client';
-import { allowedMoveCallTargets } from '@/lib/gas-sponsorship';
 import {
   getCurrentEnokiConfig,
   getCurrentGraphqlUrl,
@@ -86,11 +85,33 @@ export interface ZkLoginProofs {
   headerBase64: string;
 }
 
+/**
+ * Session protocol version.
+ *
+ * v1 — the server generated the ephemeral keypair and persisted the secret,
+ *      so it could sign on the user's behalf.
+ * v2 — the browser generates the keypair; the server only ever sees the
+ *      public half and cannot produce a user signature.
+ *
+ * New logins are always v2. v1 sessions are not migrated: they simply expire.
+ * Because maxEpoch is one Sui epoch (~24h) and the session cookie matches,
+ * every v1 session drains within a day of deploy, so no flag day is needed.
+ */
+export type ZkLoginProtocolVersion = 1 | 2;
+
 export interface SetupData {
   provider: string;
   maxEpoch: number;
   randomness: string;
-  ephemeralPrivateKey: string;
+  /**
+   * v1 sessions only. Never populated for new logins — the server no longer
+   * generates or receives ephemeral private keys. Present solely so
+   * already-issued sessions keep working until they expire.
+   */
+  ephemeralPrivateKey?: string;
+  /** v2: base64 Ed25519 public key minted in the user's browser. */
+  ephemeralPublicKey?: string;
+  protocolVersion?: ZkLoginProtocolVersion;
   network?: 'testnet' | 'mainnet';  // Network selected on the frontend
   origin?: string;
   redirectUri?: string;
@@ -100,13 +121,33 @@ export interface AccountData {
   provider: string;
   userAddr: string;
   zkProofs: ZkLoginProofs;
-  ephemeralPrivateKey: string;
+  /**
+   * Optional because the server-held copy is gone on v2 sessions. The browser
+   * populates this from its own pending-login record after the callback
+   * returns, so client-side signing sees a fully-formed account while the
+   * server never does.
+   */
+  ephemeralPrivateKey?: string;
   userSalt: string;
   sub: string;
   aud: string;
   maxEpoch: number;
   picture?: string;
   name?: string;
+}
+
+/**
+ * Thrown when a server-side signing path is reached with a v2 session. The API
+ * route maps this to 409 so the client knows to sign locally instead.
+ */
+export class ClientSigningRequiredError extends Error {
+  public readonly code = 'CLIENT_SIGNING_REQUIRED';
+  constructor() {
+    super(
+      'This session has no server-held signing key. Transactions must be signed in the browser.',
+    );
+    this.name = 'ClientSigningRequiredError';
+  }
 }
 
 interface TransactionOptions {
@@ -180,11 +221,26 @@ export class EnokiZkLoginService {
     return targetNetwork ?? networkOverride ?? getCurrentNetwork();
   }
 
+  /**
+   * Start an OAuth login for a browser-generated ephemeral key.
+   *
+   * `clientKey` carries the public half of a keypair the browser just minted,
+   * plus its JWT randomness. The server derives `maxEpoch` from the live chain
+   * epoch and computes the nonce itself — a client-supplied nonce is never
+   * accepted, since that would let a caller bind the OAuth challenge to a key
+   * the server never validated.
+   */
   public async beginLogin(
     provider: OAuthProvider = 'Google',
     targetNetwork?: NetworkType,
     requestOrigin?: string,
+    clientKey?: { ephemeralPublicKey: string; randomness: string },
   ): Promise<{ loginUrl: string, setupData: SetupData }> {
+    if (!clientKey?.ephemeralPublicKey || !clientKey?.randomness) {
+      throw new Error(
+        'A browser-generated ephemeral public key and randomness are required. Refresh the page and try signing in again.',
+      );
+    }
     if (
       !GOOGLE_CLIENT_ID || 
       !FACEBOOK_CLIENT_ID || 
@@ -214,16 +270,23 @@ export class EnokiZkLoginService {
       async (suiClient) => suiClient.getLatestSuiSystemState(),
     );
     const maxEpoch = Number(epoch) + MAX_EPOCH;
-    const ephemeralKeyPair = new Ed25519Keypair();
-    const randomness = generateRandomness();
-    const nonce = generateNonce(ephemeralKeyPair.getPublicKey(), maxEpoch, randomness);
+
+    // The public key arrives from the browser; the private half never leaves
+    // it. `generateNonce` needs only the public key, so nothing here requires
+    // the server to hold signing material.
+    const ephemeralPublicKey = new Ed25519PublicKey(
+      fromBase64(clientKey.ephemeralPublicKey),
+    );
+    const randomness = clientKey.randomness;
+    const nonce = generateNonce(ephemeralPublicKey, maxEpoch, randomness);
 
     // Create setup data
-    const setupData = {
+    const setupData: SetupData = {
       provider,
       maxEpoch,
-      randomness: randomness.toString(),
-      ephemeralPrivateKey: ephemeralKeyPair.getSecretKey(),
+      randomness,
+      ephemeralPublicKey: clientKey.ephemeralPublicKey,
+      protocolVersion: 2,
       network: effectiveNetwork,
       origin: resolvedOrigin,
       redirectUri: resolvedRedirectUri,
@@ -413,8 +476,23 @@ export class EnokiZkLoginService {
   /**
    * Validate account data and proof expiration
    */
-  private async validateAccountData(account: AccountData): Promise<void> {
-    if (!account.ephemeralPrivateKey || !account.zkProofs || !account.userSalt || !account.sub || !account.aud) {
+  /**
+   * Validates a legacy v1 account and returns its server-held signing key.
+   *
+   * Returning the key (rather than just validating) is deliberate: it is the
+   * only way callers get a non-optional `string` across the async boundary, so
+   * the compiler enforces that every server-side signing path went through
+   * this check. There is no other supported way to obtain the key.
+   */
+  private async validateAccountData(account: AccountData): Promise<string> {
+    // v2 sessions carry no server-held secret, so there is nothing here that
+    // could sign. Surface that as a distinct, typed condition rather than a
+    // generic "missing fields" error — the API route turns it into a 409 that
+    // tells the client to sign locally.
+    if (!account.ephemeralPrivateKey) {
+      throw new ClientSigningRequiredError();
+    }
+    if (!account.zkProofs || !account.userSalt || !account.sub || !account.aud) {
       throw new Error('Invalid account data: missing required fields');
     }
 
@@ -440,6 +518,8 @@ export class EnokiZkLoginService {
     } catch {
       throw new Error('Invalid user salt format');
     }
+
+    return account.ephemeralPrivateKey;
   }
 
   public async handleCallback(token: string, setupData: SetupData): Promise<{ 
@@ -488,9 +568,21 @@ export class EnokiZkLoginService {
     // Generate user address
     const userAddr = await this.generateUserAddress(jwt, userSalt);
 
-    // Get ephemeral keypair and validate
-    const ephemeralKeyPair = this.keypairFromSecretKey(setupData.ephemeralPrivateKey);
-    const extendedEphemeralPublicKey = getExtendedEphemeralPublicKey(ephemeralKeyPair.getPublicKey());
+    // Resolve the ephemeral PUBLIC key. On v2 sessions it was supplied by the
+    // browser at beginLogin; on legacy v1 sessions it is derived from the
+    // server-held secret. Either way only the public half is needed to request
+    // a proof — proofs authorize nothing without the corresponding secret.
+    const publicKey = setupData.ephemeralPublicKey
+      ? new Ed25519PublicKey(fromBase64(setupData.ephemeralPublicKey))
+      : setupData.ephemeralPrivateKey
+        ? this.keypairFromSecretKey(setupData.ephemeralPrivateKey).getPublicKey()
+        : null;
+
+    if (!publicKey) {
+      throw new Error('Session is missing an ephemeral public key. Please sign in again.');
+    }
+
+    const extendedEphemeralPublicKey = getExtendedEphemeralPublicKey(publicKey);
 
     // Prepare proof request
     const proofRequest = {
@@ -558,15 +650,10 @@ export class EnokiZkLoginService {
     return Ed25519Keypair.fromSecretKey(keyPair.secretKey);
   }
 
-  /**
-   * Get public key from private key
-   * @param privateKeyBase64 Base64 encoded private key
-   * @returns Base64 encoded public key
-   */
-  public getPublicKeyFromPrivate(privateKeyBase64: string): string {
-    const keyPair = this.keypairFromSecretKey(privateKeyBase64);
-    return keyPair.getPublicKey().toBase64();
-  }
+  // Removed: `getPublicKeyFromPrivate` existed only to derive a public key for
+  // log lines, which meant passing a secret around for a debug string. The
+  // public key is now stored on the session directly (`ephemeralPublicKey`),
+  // so nothing needs the secret to produce it.
 
   /**
    * Generate a consistent color based on a name for avatar generation
@@ -766,117 +853,20 @@ export class EnokiZkLoginService {
    * @param options Transaction options
    * @returns Transaction result
    */
-  /**
-   * Builds, sponsors, and executes a transaction via Enoki so the user pays
-   * NO gas. The user still authorizes with their own zkLogin signature — the
-   * sponsor only provides (and pays for) the gas coin, so this is not
-   * custodial: we cannot move funds the user didn't sign for.
-   *
-   * Flow (Enoki sponsored-transaction protocol):
-   *   1. Build a gas-less transaction KIND (onlyTransactionKind) — no gas coin,
-   *      no gas budget set by us.
-   *   2. Enoki `createSponsoredTransaction` returns full tx bytes (with the
-   *      sponsor's gas) + a digest, restricted to `allowedMoveCallTargets`.
-   *   3. User signs those bytes with the ephemeral key -> zkLogin signature.
-   *   4. Enoki `executeSponsoredTransaction(digest, signature)` submits it.
-   *
-   * The caller is responsible for the eligibility decision (see
-   * `src/lib/gas-sponsorship.ts`); this method just performs a sponsored
-   * execution and throws on failure so the caller can fall back to self-paid
-   * `sendTransaction`.
-   */
-  public async sendSponsoredTransaction(
-    account: AccountData,
-    prepareBlock: (txb: TransactionBlock) => void,
-    targetNetwork?: 'testnet' | 'mainnet',
-  ): Promise<SponsoredExecutionResult> {
-    await this.validateAccountData(account);
-
-    const effectiveNetwork = this.resolveEffectiveNetwork(targetNetwork);
-    const networkConfig = getNetworkConfig(effectiveNetwork);
-    const apiKey = networkConfig.enoki?.apiKey;
-    if (!apiKey) {
-      throw new Error('Enoki API key not configured for sponsorship');
-    }
-    const allowedTargets = allowedMoveCallTargets(networkConfig.packageId);
-    if (allowedTargets.length === 0) {
-      throw new Error('No package id available for sponsored move-call allowlist');
-    }
-
-    const { client: suiClient } = await getHealthySuiClient(
-      effectiveNetwork,
-      'enoki.sendSponsoredTransaction',
-    );
-
-    // 1. Build the gas-LESS transaction kind. We must NOT set a sender or gas
-    //    here — the sponsor owns the gas; sender is passed to Enoki separately.
-    const txb = new TransactionBlock();
-    prepareBlock(txb);
-    const kindBytes = await txb.build({ client: suiClient, onlyTransactionKind: true });
-
-    const enoki = new EnokiClient({ apiKey });
-
-    // 2. Ask Enoki to sponsor, pinned to our entry functions only.
-    const sponsored = await enoki.createSponsoredTransaction({
-      network: effectiveNetwork,
-      transactionKindBytes: toBase64(kindBytes),
-      sender: account.userAddr,
-      allowedMoveCallTargets: allowedTargets,
-      allowedAddresses: [account.userAddr],
-    });
-
-    // 3. User authorizes the sponsored bytes with their zkLogin signature.
-    const ephemeralKeyPair = this.keypairFromSecretKey(account.ephemeralPrivateKey);
-    const sponsoredBytes = fromBase64(sponsored.bytes);
-    const { signature: userSignature } = await ephemeralKeyPair.signTransaction(sponsoredBytes);
-
-    const addressSeed = genAddressSeed(
-      BigInt(account.userSalt),
-      'sub',
-      account.sub,
-      account.aud,
-    ).toString();
-
-    const zkLoginSignature = getZkLoginSignature({
-      inputs: {
-        ...account.zkProofs,
-        proofPoints: this.formatProofPoints(account.zkProofs.proofPoints),
-        addressSeed,
-      },
-      maxEpoch: account.maxEpoch,
-      userSignature,
-    });
-
-    // 4. Submit through Enoki.
-    const { digest } = await enoki.executeSponsoredTransaction({
-      digest: sponsored.digest,
-      signature: zkLoginSignature,
-    });
-
-    // Enoki returns only the digest; fetch effects for a consistent result
-    // shape and to surface on-chain execution failures to the caller.
-    const receipt = await suiClient.waitForTransaction({
-      digest,
-      options: { showEffects: true, showEvents: true },
-    });
-
-    const status = receipt.effects?.status?.status === 'success' ? 'success' : 'failure';
-    if (status !== 'success') {
-      throw new Error(
-        `Sponsored transaction failed on-chain: ${receipt.effects?.status?.error || 'unknown'}`,
-      );
-    }
-
-    return {
-      digest,
-      status,
-      sponsored: true,
-      error: receipt.effects?.status?.error || undefined,
-      gasUsed: receipt.effects?.gasUsed || undefined,
-      timestampMs: receipt.timestampMs || undefined,
-      checkpoint: receipt.checkpoint || undefined,
-    };
-  }
+  // Removed: `sendSponsoredTransaction`.
+  //
+  // It read as non-custodial ("the sponsor only provides the gas coin") but
+  // was not: after Enoki returned the sponsored bytes, this method minted the
+  // USER's zkLogin signature from the ephemeral key the server held. Enoki
+  // supplied gas; we supplied the authorization. The sponsored path was
+  // therefore exactly as custodial as the self-paid one.
+  //
+  // Sponsorship is now a two-call protocol the browser drives:
+  //   /api/sponsor/prepare  -> policy + Enoki createSponsoredTransaction
+  //   (browser verifies the returned bytes, then signs them locally)
+  //   /api/sponsor/execute  -> Enoki executeSponsoredTransaction
+  // `executeSponsoredTransaction` is inert without a user signature, and this
+  // server has no key that can produce one. See src/lib/sponsored-tx-client.ts.
 
   public async sendTransaction(
     account: AccountData,
@@ -886,10 +876,10 @@ export class EnokiZkLoginService {
   ): Promise<TransactionResult> {
     try {
       // Validate account data and check epoch expiration
-      await this.validateAccountData(account);
+      const ephemeralPrivateKey = await this.validateAccountData(account);
 
       // Get ephemeral keypair from stored private key
-      const ephemeralKeyPair = this.keypairFromSecretKey(account.ephemeralPrivateKey);
+      const ephemeralKeyPair = this.keypairFromSecretKey(ephemeralPrivateKey);
 
       const effectiveNetwork = this.resolveEffectiveNetwork(targetNetwork);
       const { client: suiClient, rpcUrl, isFallback } = await getHealthySuiClient(

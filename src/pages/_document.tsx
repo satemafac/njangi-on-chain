@@ -4,13 +4,18 @@ export default function Document() {
   return (
     <Html lang="en">
       <Head>
-        {/* Favicon */}
-        <link rel="icon" href="/icons/favicon.ico" />
+        {/* Favicons. All generated from public/brand/icon-source.png (the brand
+            mandala, trimmed to its bounding box) by scripts/generate-icons.mjs —
+            replace the source and re-run it, never hand-edit the rasters.
+            Google only considers a favicon whose dimensions are a square
+            multiple of 48px, which is why the PNGs stop at 192 and the 512
+            lives in the manifest instead. */}
+        <link rel="icon" href="/favicon.ico" sizes="32x32" />
+        <link rel="icon" type="image/png" sizes="48x48" href="/icons/icon-48.png" />
+        <link rel="icon" type="image/png" sizes="96x96" href="/icons/icon-96.png" />
+        <link rel="icon" type="image/png" sizes="144x144" href="/icons/icon-144.png" />
+        <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
         <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
-        <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32x32.png" />
-        <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16x16.png" />
-        <link rel="icon" type="image/png" sizes="192x192" href="/icons/android-chrome-192x192.png" />
-        <link rel="icon" type="image/png" sizes="512x512" href="/icons/android-chrome-512x512.png" />
         <link rel="manifest" href="/site.webmanifest" />
         
         {/* SEO + Open Graph + Twitter are defined PER PAGE via next/head (the

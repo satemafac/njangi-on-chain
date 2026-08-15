@@ -8,7 +8,6 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { GetStaticPaths, GetStaticProps } from 'next';
-import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { Manrope } from 'next/font/google';
@@ -28,6 +27,8 @@ import {
 } from '../../lib/legal-acceptance';
 import { getLocale, setLocale } from '../../lib/i18n';
 import { LegalFooter } from '../../components/LegalFooter';
+import { Seo } from '../../components/Seo';
+import { breadcrumbs } from '../../lib/structured-data';
 
 const bodyFont = Manrope({ subsets: ['latin'], display: 'swap' });
 
@@ -129,14 +130,18 @@ export default function LegalDocPage({ doc, renders }: LegalDocPageProps) {
 
   return (
     <>
-      <Head>
-        <title>{`${LEGAL_DOC_LABELS.en[doc]} | Njangi On-Chain`}</title>
-        <meta
-          name="description"
-          content={`${LEGAL_DOC_LABELS.en[doc]} for Njangi On-Chain (version ${currentVersion}, draft pending counsel review). Available in English and French.`}
-        />
-        <link rel="canonical" href={`https://njangionchain.com${LEGAL_DOC_ROUTES[doc]}`} />
-      </Head>
+      <Seo
+        title={LEGAL_DOC_LABELS.en[doc]}
+        description={`${LEGAL_DOC_LABELS.en[doc]} for Njangi On-Chain (version ${currentVersion}, draft pending counsel review). Available in English and French.`}
+        path={LEGAL_DOC_ROUTES[doc] as `/${string}`}
+        image={{ url: '/og/legal.png', alt: 'Njangi On-Chain — terms, privacy, and risk disclosure' }}
+        jsonLd={[
+          breadcrumbs([
+            { name: 'Home', path: '/' },
+            { name: LEGAL_DOC_LABELS.en[doc] },
+          ]),
+        ]}
+      />
       <style dangerouslySetInnerHTML={{ __html: LEGAL_DOC_CSS }} />
 
       <div className={`${bodyFont.className} min-h-screen bg-[#f6f2ea] text-[#374151]`}>

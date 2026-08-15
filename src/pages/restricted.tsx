@@ -4,15 +4,14 @@
 // visitor without touching auth, RPC, or the database.
 
 import React from 'react';
-import Head from 'next/head';
+import { Seo } from '../components/Seo';
 
 export default function Restricted() {
   return (
     <>
-      <Head>
-        <title>Not available in your region - Njangi On-Chain</title>
-        <meta name="robots" content="noindex" />
-      </Head>
+      {/* noindex/nofollow already applied by _app via isNoindexRoute(); stated
+          here too so the intent is visible at the page that needs it. */}
+      <Seo title="Not available in your region" noindex nofollow />
       <main className="flex min-h-screen items-center justify-center bg-[#fbfaf7] px-6">
         <div className="max-w-md rounded-[28px] border border-[#dfd6ca] bg-white p-8 text-center shadow-[0_28px_80px_-40px_rgba(15,23,42,0.35)]">
           <h1 className="text-xl font-semibold tracking-[-0.03em] text-[#171923]">

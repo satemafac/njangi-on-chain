@@ -21,14 +21,37 @@ const TRANSIENT_FAILURE_COOLDOWN_MS = 10_000;
 const rpcCooldowns = new Map<string, { until: number; reason: string }>();
 const SHARED_RPC_FALLBACK_URLS: Record<NetworkType, string[]> = {
   testnet: [
-    'https://sui-testnet-endpoint.blockvision.org',
     'https://sui-testnet-rpc.publicnode.com',
+    'https://sui-testnet-endpoint.blockvision.org',
   ],
   mainnet: [
-    'https://sui-mainnet-endpoint.blockvision.org',
     'https://sui-rpc.publicnode.com',
+    'https://sui-mainnet-endpoint.blockvision.org',
   ],
 };
+
+/**
+ * Endpoints that answer correctly but ration requests, so they are tried LAST
+ * for general traffic no matter where the configuration puts them.
+ *
+ * The providers are not interchangeable, which is the whole reason this exists.
+ * After Sui retired JSON-RPC on its public fullnodes: publicnode and suiscan
+ * serve object reads but refuse event history, while blockvision serves both
+ * and rate-limits. Since object reads are the overwhelming majority of traffic
+ * and event scans are rare, spending blockvision's budget on reads starves the
+ * one thing only it can do.
+ *
+ * Observed on production 2026-08-02: blockvision sat second in the candidate
+ * order, so ordinary dashboard loads hit it constantly — 3 of 17 calls came
+ * back 429 and the dashboard rendered 0 circles and $0 for an address holding
+ * 4.15 SUI and two membership receipts. Correct endpoints, wrong order.
+ */
+const RATE_LIMITED_RPC_HOSTS = ['blockvision.org'];
+
+function deprioritizeRateLimited(urls: string[]): string[] {
+  const limited = (u: string) => RATE_LIMITED_RPC_HOSTS.some((h) => u.includes(h));
+  return [...urls.filter((u) => !limited(u)), ...urls.filter(limited)];
+}
 
 export interface SuiRpcAttemptContext {
   attempt: number;
@@ -124,11 +147,12 @@ export function isRateLimitedSuiRpcError(error: unknown): boolean {
 
 export function getRpcCandidateUrls(network: NetworkType): string[] {
   const { rpcUrl, rpcAltUrl } = getNetworkConfig(network);
-  const candidates = dedupeRpcUrls([
-    rpcUrl,
-    rpcAltUrl,
-    ...SHARED_RPC_FALLBACK_URLS[network],
-  ]);
+  // Deprioritize AFTER dedupe, so a rate-limited host sinks to the back even
+  // when it is what NEXT_PUBLIC_*_RPC_ALT points at. Operator config decides
+  // WHICH endpoints are used; this decides the order they are spent in.
+  const candidates = deprioritizeRateLimited(
+    dedupeRpcUrls([rpcUrl, rpcAltUrl, ...SHARED_RPC_FALLBACK_URLS[network]]),
+  );
 
   if (candidates.length === 0) {
     throw new Error(`No valid RPC URLs configured for ${network}.`);
@@ -239,6 +263,24 @@ class SuiFailoverTransport implements SuiTransport {
 
   private markCooldown(rpcUrl: string, error: unknown): void {
     const message = getSuiRpcErrorMessage(error);
+
+    // A capability gap is not ill health. publicnode serves object reads
+    // perfectly but has no event history, so every queryEvents against it
+    // fails — benching it for 10s over that took the ONE endpoint that
+    // answers the app's most common call out of rotation, cascading into
+    // "all endpoints cooling down" and a dashboard showing 0 circles and $0
+    // for a funded account (observed in production 2026-08-02).
+    //
+    // These failures still fail OVER — the request moves to the next
+    // candidate — they just do not penalise the endpoint for the methods it
+    // does serve.
+    if (isCapabilityGapError(message)) {
+      console.warn(
+        `[sui.transport] ${rpcUrl} does not serve this method; failing over without cooldown: ${message}`,
+      );
+      return;
+    }
+
     const statusCode = extractStatusCode(message);
     const durationMs =
       statusCode === 429 ? RATE_LIMIT_COOLDOWN_MS : TRANSIENT_FAILURE_COOLDOWN_MS;
@@ -378,6 +420,27 @@ export function clearSuiRpcClientPool(): void {
   rpcCooldowns.clear();
 }
 
+/**
+ * True when the endpoint is healthy but does not serve THIS method or data.
+ *
+ * Distinct from a transient failure: retrying later against the same endpoint
+ * will never work, and taking it out of rotation punishes it for calls it
+ * handles fine. Sui's public fullnodes withdrew JSON-RPC entirely; publicnode
+ * and suiscan serve object reads but prune event history. Both present as
+ * application errors on an otherwise healthy connection.
+ *
+ * Callers should fail OVER on these, and must NOT cool the endpoint down.
+ */
+export function isCapabilityGapError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('could not find the referenced transaction') ||
+    normalized.includes('method not found') ||
+    normalized.includes('json-rpc on public fullnodes has been deprecated') ||
+    normalized.includes('jsonrpc has been deprecated')
+  );
+}
+
 export function isRetriableSuiRpcError(error: unknown): boolean {
   const message = getSuiRpcErrorMessage(error);
   if (!message) {
@@ -408,7 +471,21 @@ export function isRetriableSuiRpcError(error: unknown): boolean {
     // can ask the alternate node.
     normalized.includes('could not find the referenced transaction') ||
     normalized.includes('could not find object') ||
-    normalized.includes('transaction not found')
+    normalized.includes('transaction not found') ||
+    // An endpoint that has withdrawn its JSON-RPC surface. Sui deprecated
+    // JSON-RPC on its public fullnodes, which `fullnode.*.sui.io` serves as
+    // HTTP 200 carrying a JSON-RPC error body — so it reaches us as an
+    // application error, not a transport failure, and every check above
+    // misses it. The endpoint is permanently dead rather than blipping, but
+    // "try the next host" is exactly the right response and is what failover
+    // exists for: without this, a healthy alternate is never attempted and
+    // the whole app loses chain access behind one retired primary.
+    //
+    // Cost when the method is genuinely absent everywhere: we walk the host
+    // list before failing. That is a slower failure, not a wrong one.
+    normalized.includes('method not found') ||
+    normalized.includes('json-rpc on public fullnodes has been deprecated') ||
+    normalized.includes('jsonrpc has been deprecated')
   );
 }
 

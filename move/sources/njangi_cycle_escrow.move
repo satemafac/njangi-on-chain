@@ -133,6 +133,18 @@ module njangi::njangi_cycle_escrow {
         claim_expires_at_ms: u64,
     }
 
+    /// Abilities are deliberately UNCHANGED (`key, store`).
+    ///
+    /// Removing `store` would also close the payout-denial grief described on
+    /// `finalize`, and more elegantly — a Claim that cannot be transferred
+    /// cannot be stranded. But altering a public struct's abilities is an
+    /// upgrade-INCOMPATIBLE change in Sui: it would force a fresh publish,
+    /// mint a new package id, and orphan every circle on the existing
+    /// lineage, since Move type identity is anchored to the original package.
+    ///
+    /// Stranding users' circles to fix a griefing vector is a bad trade, so
+    /// the fix lives in `finalize` instead, where an added assert is
+    /// upgrade-compatible.
     public struct Claim<phantom T> has key, store {
         id: UID,
         escrow_id: ID,
@@ -538,15 +550,28 @@ module njangi::njangi_cycle_escrow {
     }
 
     /// Same as `finalize_to_recipient`, but returns the `Claim<T>` to the
-    /// caller's PTB instead of transferring it. Useful when a script
-    /// wants to atomically finalize and redeem within a single tx (the
-    /// scheduled recipient calling on their own behalf, for example).
+    /// caller's PTB instead of transferring it — for atomically finalizing
+    /// and redeeming in one tx.
+    ///
+    /// RECIPIENT-ONLY, unlike `finalize_to_recipient`. `Claim` has `store`,
+    /// so a caller who receives one can `public_transfer` it anywhere. While
+    /// this was permissionless, any passer-by could finalize a funded cycle
+    /// and send the Claim to an address nobody controls: funds not stealable
+    /// (`redeem_claim` still checks `sender == recipient`), but the payout
+    /// stranded until `refund_expired_claim` returns it to contributors 30
+    /// days later — a denial-of-payout for the price of gas.
+    ///
+    /// This costs nothing in permissionlessness: `finalize_to_recipient` is
+    /// still callable by anyone and always delivers to the frozen snapshot
+    /// recipient, so a third party can still pay the gas to settle a cycle.
+    /// They simply cannot take custody of the claim while doing it.
     public fun finalize<T>(
         escrow: &mut CycleEscrow<T>,
         clock: &Clock,
         ctx: &mut TxContext
     ): Claim<T> {
         assert!(!escrow.requires_attestation, E_COMPLIANCE_ATTESTATION_REQUIRED);
+        assert!(tx_context::sender(ctx) == escrow.snapshot.recipient, E_NOT_RECIPIENT);
         mint_claim<T>(escrow, clock, ctx)
     }
 
@@ -1189,6 +1214,159 @@ module njangi::njangi_cycle_escrow {
 
         clock::destroy_for_testing(clock);
         ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_NOT_RECIPIENT)]
+    fun test_finalize_by_non_recipient_aborts() {
+        // Regression for the payout-denial grief. `finalize` hands back a
+        // Claim, and Claim has `store`, so a non-recipient caller could
+        // public_transfer it somewhere unreachable and strand the payout for
+        // 30 days. Only the recipient may take custody of their own claim.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_CAROL);
+
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        let claim = finalize(&mut escrow, &clock, ts::ctx(&mut scenario));
+        transfer::public_transfer(claim, @0xDEAD);
+        abort 0
+    }
+
+    #[test]
+    fun test_finalize_to_recipient_stays_permissionless() {
+        // The counterpart guarantee: locking `finalize` must NOT make cycle
+        // settlement require the recipient to be online. A third party can
+        // still pay the gas — they just cannot hold the claim.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_CAROL);
+
+        // Carol (not the recipient) settles the cycle.
+        ts::next_tx(&mut scenario, TEST_CAROL);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        finalize_to_recipient(&mut escrow, &clock, ts::ctx(&mut scenario));
+        ts::return_shared(escrow);
+
+        // It landed with the snapshot recipient, not the caller.
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let claim = ts::take_from_sender<Claim<SUI>>(&scenario);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        let payout = redeem_claim(&mut escrow, claim, &clock, ts::ctx(&mut scenario));
+        assert!(coin::value(&payout) == TEST_CONTRIBUTION * 2, 0);
+        transfer::public_transfer(payout, TEST_ADMIN);
+        ts::return_shared(escrow);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    // ------------------------------------------------------------------
+    // Contribution-rule enforcement.
+    //
+    // The escrow's compliance argument rests on the snapshot being binding:
+    // fixed amount, fixed member set, one contribution each, recipient
+    // excluded. Refunds were already well covered; these are the rules half,
+    // which had no tests at all.
+    // ------------------------------------------------------------------
+
+    #[test]
+    #[expected_failure(abort_code = E_BAD_AMOUNT)]
+    fun test_contribute_with_wrong_amount_aborts() {
+        // Exact equality, not >=. An over-payment is as invalid as an
+        // under-payment: the snapshot fixes the amount, and accepting a
+        // different one would make the payout total unpredictable.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        let payment = coin::mint_for_testing<SUI>(TEST_CONTRIBUTION + 1, ts::ctx(&mut scenario));
+        contribute(&mut escrow, payment, ts::ctx(&mut scenario));
+        ts::return_shared(escrow);
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_BAD_AMOUNT)]
+    fun test_contribute_with_short_amount_aborts() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        let payment = coin::mint_for_testing<SUI>(TEST_CONTRIBUTION - 1, ts::ctx(&mut scenario));
+        contribute(&mut escrow, payment, ts::ctx(&mut scenario));
+        ts::return_shared(escrow);
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_ALREADY_CONTRIBUTED)]
+    fun test_double_contribution_aborts() {
+        // Without this a single member could fund the whole pot and the
+        // refund table would owe them more than one share.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_BOB);
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_NOT_MEMBER)]
+    fun test_non_member_contribution_aborts() {
+        // The member set is frozen at open. An outsider paying in would be
+        // owed a refund the snapshot has no record of.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, @0xDEAD);
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_RECIPIENT_CANNOT_CONTRIBUTE)]
+    fun test_recipient_contribution_aborts() {
+        // required_contributors is member_count - 1 precisely because the
+        // recipient does not pay into their own payout. Letting them
+        // contribute would inflate the count and finalize the cycle a
+        // contributor short.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_ADMIN);
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_NOT_RECIPIENT)]
+    fun test_redeem_by_non_recipient_aborts() {
+        // The single most important assert in the module: the payout is
+        // redeemable only by the address frozen into the snapshot at open.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        contribute_as(&mut scenario, TEST_CAROL);
+
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        finalize_to_recipient(&mut escrow, &clock, ts::ctx(&mut scenario));
+        ts::return_shared(escrow);
+
+        // Bob gets hold of the recipient's Claim and tries to cash it.
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&scenario);
+        let claim = ts::take_from_address<Claim<SUI>>(&scenario, TEST_ADMIN);
+        let payout = redeem_claim(&mut escrow, claim, &clock, ts::ctx(&mut scenario));
+        transfer::public_transfer(payout, TEST_BOB);
+        abort 0
     }
 
     #[test]

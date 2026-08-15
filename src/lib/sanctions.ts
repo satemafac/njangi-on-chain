@@ -10,16 +10,30 @@
 // read-only cross-check — it is never ingested; a large divergence just
 // logs loudly so parser drift is noticed.
 //
-// Fail mode: screening fails OPEN on infrastructure errors, matching the
-// house precedent (entitlement gate, rate limiter) — an infra blip must
-// not lock members away from coordinating their own pooled funds, and if
-// Postgres is down the surrounding actions fail anyway. Compensations
-// that make this defensible: every fail-open logs loudly (Vercel log
-// drain is the evidence trail), pass/fail-open decisions are recorded in
-// sanctions_screen_log, and the weekly cron retro-sweeps recent rows
-// against the fresh list so anything that slipped through an outage or a
-// between-refresh listing is detected and handled per
-// docs/incident-playbook.md. A positive hit is NEVER fail-open.
+// Fail mode: the CALLER chooses, because the right answer differs by what
+// is at stake (see ScreenOptions.failClosed).
+//
+//   NEW COMMITMENTS (create, join, escrow open, ramp session) pass
+//   `failClosed: true`. If screening cannot run, the action is refused. A
+//   new commitment can wait for the screen to come back; letting one
+//   through unscreened cannot be undone.
+//
+//   EXISTING EXPOSURE (claim, refund, recovery) and LOGIN fail OPEN, as
+//   before. Failing those closed during an outage would strand a member's
+//   already-committed funds — a worse compliance outcome than a delayed
+//   screen, and precisely the "kill switch that traps money" this codebase
+//   avoids elsewhere. The 2026-07-21 Neon outage is the concrete case: a
+//   fail-closed login would have locked every user out of their own funds
+//   for twelve days.
+//
+// A positive hit is ALWAYS blocking, in both modes.
+//
+// Compensations for the remaining fail-open surface: every one logs
+// loudly (Vercel log drain is the evidence trail), pass/fail-open
+// decisions are recorded in sanctions_screen_log, and the weekly cron
+// retro-sweeps recent rows against the fresh list so anything that slipped
+// through an outage or a between-refresh listing is detected and handled
+// per docs/incident-playbook.md.
 
 import { createHash } from 'crypto';
 import { getSharedPgPool, isPostgresConfigured } from './pg-pool';
@@ -29,11 +43,42 @@ export type ScreenContext =
   | 'circle_join'
   | 'whatsapp_link'
   | 'client_preflight'
-  | 'retro_sweep';
+  | 'retro_sweep'
+  // Proof issuance — the one server-controlled step every user must pass.
+  // Once transactions are signed in the browser there is no server choke
+  // point left on the money paths, so refusing to mint zkProofs is the
+  // enforcement of last resort: no proof, no signature, nothing on chain.
+  | 'proof_issuance'
+  | 'ramp_session';
 
 export interface ScreenResult {
   blocked: boolean;
   listVersion: string | null;
+  /**
+   * Why the caller was blocked. 'hit' is a real SDN match; 'unavailable'
+   * means screening could not be performed and the caller asked to fail
+   * closed. Callers surface these differently — a match is final, an
+   * outage is "try again shortly".
+   */
+  reason?: 'hit' | 'unavailable';
+}
+
+export interface ScreenOptions {
+  /**
+   * Block when screening CANNOT be performed (flag off, no Postgres, list
+   * not loaded, query error) instead of allowing.
+   *
+   * Use for NEW COMMITMENTS — creating or joining a circle, opening an
+   * escrow, starting a ramp session. Those can wait for the screen to come
+   * back; letting one through unscreened cannot be undone.
+   *
+   * Do NOT use for claim, refund, recovery, or login. Those move funds that
+   * are already committed, and failing them closed during an outage would
+   * trap a member's money — a worse compliance outcome than a delayed
+   * screen. That asymmetry is the whole design: block new exposure, never
+   * strand existing exposure.
+   */
+  failClosed?: boolean;
 }
 
 const SDN_CSV_URL_DEFAULT = 'https://www.treasury.gov/ofac/downloads/sdn.csv';
@@ -126,9 +171,27 @@ function logScreenRow(
 export async function screenAddress(
   address: string,
   context: ScreenContext,
+  options: ScreenOptions = {},
 ): Promise<ScreenResult> {
-  if (!isSanctionsScreeningEnabled()) {
+  const failClosed = options.failClosed === true;
+  // One place decides what "screening could not run" means, so the four
+  // unavailability branches below can never drift apart.
+  // `loud` marks the cases that belong in the evidence trail: an outage or a
+  // missing list is an incident. A deliberately-off flag or a malformed
+  // address is not, and logging those on every call would bury the real ones.
+  const unavailable = (why: string, loud = true): ScreenResult => {
+    if (failClosed) {
+      console.error(`[sanctions] FAIL-CLOSED at ${context}: ${why}`);
+      return { blocked: true, listVersion: null, reason: 'unavailable' };
+    }
+    if (loud) {
+      console.error(`[sanctions] FAIL-OPEN at ${context}: ${why}`);
+    }
     return { blocked: false, listVersion: null };
+  };
+
+  if (!isSanctionsScreeningEnabled()) {
+    return unavailable('screening disabled by flag', false);
   }
   if (!isPostgresConfigured()) {
     if (!warnedNotConfigured) {
@@ -137,12 +200,14 @@ export async function screenAddress(
         '[sanctions] Postgres not configured — screening skipped (local dev only; production must set DATABASE_URL)',
       );
     }
-    return { blocked: false, listVersion: null };
+    return unavailable('Postgres not configured', false);
   }
 
   const candidates = normalizeScreeningAddress(address);
   if (candidates.length === 0) {
-    return { blocked: false, listVersion: null };
+    // An unparseable address is not a pass. Under failClosed this is a
+    // malformed request, not a screened one.
+    return unavailable('address could not be normalized', false);
   }
   const normalized = candidates[0];
 
@@ -163,7 +228,7 @@ export async function screenAddress(
       console.error(
         `[sanctions] BLOCKED address at ${context} (list ${listVersion}) — see docs/incident-playbook.md`,
       );
-      return { blocked: true, listVersion };
+      return { blocked: true, listVersion, reason: 'hit' };
     }
 
     const meta = await getSharedPgPool().query<{ list_version: string }>(
@@ -171,8 +236,10 @@ export async function screenAddress(
     );
     const listVersion = meta.rows[0]?.list_version ?? null;
     if (!listVersion) {
-      console.error(
-        '[sanctions] FAIL-OPEN: list not loaded yet — run the bootstrap step in docs/sanctions-program.md',
+      // An empty list matches nothing, so "no hit" here means "not screened".
+      void logScreenRow(normalized, context, 'error_fail_open', null).catch(() => {});
+      return unavailable(
+        'list not loaded yet — run the bootstrap step in docs/sanctions-program.md',
       );
     }
     // Pass rows feed the weekly retro-sweep; never fail the user action
@@ -182,9 +249,14 @@ export async function screenAddress(
     );
     return { blocked: false, listVersion };
   } catch (err) {
-    console.error(`[sanctions] FAIL-OPEN at ${context}: screening query failed`, err);
+    // Logged here rather than in `unavailable` so the error object rides
+    // along with the message.
+    console.error(
+      `[sanctions] ${failClosed ? 'FAIL-CLOSED' : 'FAIL-OPEN'} at ${context}: screening query failed`,
+      err,
+    );
     void logScreenRow(normalized, context, 'error_fail_open', null).catch(() => {});
-    return { blocked: false, listVersion: null };
+    return unavailable('screening query failed', false);
   }
 }
 

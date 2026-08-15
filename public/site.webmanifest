@@ -1,29 +1,29 @@
 {
   "name": "Njangi On-Chain",
   "short_name": "Njangi",
+  "description": "Coordination software for rotating savings circles — njangi, tontine, susu, esusu — with every contribution and payout turn visible to the whole circle.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#0a0a0c",
+  "background_color": "#0a0a0c",
   "icons": [
     {
-      "src": "/icons/favicon-16x16.png",
-      "sizes": "16x16",
-      "type": "image/png"
-    },
-    {
-      "src": "/icons/favicon-32x32.png",
-      "sizes": "32x32",
-      "type": "image/png"
-    },
-    {
-      "src": "/icons/android-chrome-192x192.png",
+      "src": "/icons/icon-192.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "/icons/android-chrome-512x512.png",
+      "src": "/icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
-  ],
-  "theme_color": "#3B82F6",
-  "background_color": "#ffffff",
-  "display": "standalone"
-} 
+  ]
+}

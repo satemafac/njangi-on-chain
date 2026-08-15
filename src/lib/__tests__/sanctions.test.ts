@@ -68,7 +68,13 @@ describe('screenAddress', () => {
 
     const result = await screenAddress('0xBAD', 'circle_join');
 
-    expect(result).toEqual({ blocked: true, listVersion: '2026-07-05:abc' });
+    // `reason: 'hit'` distinguishes a real match from a fail-closed outage,
+    // so callers can say "refused" vs "try again shortly".
+    expect(result).toEqual({
+      blocked: true,
+      listVersion: '2026-07-05:abc',
+      reason: 'hit',
+    });
     const logCall = calls.find((c) => c.sql.includes('INSERT INTO sanctions_screen_log'));
     expect(logCall?.params).toEqual([
       '0xbad',
@@ -250,5 +256,80 @@ describe('sanctionsErrorBody', () => {
       code: 'SANCTIONS_BLOCKED',
       message: "This wallet can't use Njangi On-Chain.",
     });
+  });
+});
+
+describe('screenAddress fail mode', () => {
+  // The asymmetry this suite defends: a new commitment must never proceed
+  // unscreened, but an outage must never block a member from reaching funds
+  // they have already committed. Getting this backwards is how a compliance
+  // control becomes a fund freeze — the 2026-07-21 Neon outage would have
+  // locked every user out for twelve days had login failed closed.
+
+  it('fails OPEN on infrastructure errors by default (login, claim, refund)', async () => {
+    installPool(() => {
+      throw new Error('connection terminated');
+    });
+
+    const result = await screenAddress('0xANY', 'proof_issuance');
+    expect(result.blocked).toBe(false);
+  });
+
+  it('fails CLOSED on the same error when the caller opts in', async () => {
+    installPool(() => {
+      throw new Error('connection terminated');
+    });
+
+    const result = await screenAddress('0xANY', 'circle_join', { failClosed: true });
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe('unavailable');
+  });
+
+  it('fails CLOSED when the list has never been loaded', async () => {
+    // An empty list matches nothing, so a "pass" here means "not screened".
+    installPool((sql) => {
+      if (sql.includes('sanctioned_addresses')) return { rows: [], rowCount: 0 };
+      if (sql.includes('sanctions_list_meta')) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 0 };
+    });
+
+    const strict = await screenAddress('0xANY', 'circle_join', { failClosed: true });
+    expect(strict).toMatchObject({ blocked: true, reason: 'unavailable' });
+
+    const lenient = await screenAddress('0xANY', 'proof_issuance');
+    expect(lenient.blocked).toBe(false);
+  });
+
+  it('fails CLOSED when Postgres is not configured', async () => {
+    mockedConfigured.mockReturnValueOnce(false);
+    const strict = await screenAddress('0xANY', 'ramp_session', { failClosed: true });
+    expect(strict).toMatchObject({ blocked: true, reason: 'unavailable' });
+  });
+
+  it('fails CLOSED when screening is disabled by flag', async () => {
+    // A disabled flag is not a pass. If an operator turns screening off,
+    // new commitments stop rather than flowing through unchecked.
+    process.env.SANCTIONS_SCREENING_ENABLED = 'false';
+    const strict = await screenAddress('0xANY', 'circle_join', { failClosed: true });
+    expect(strict.blocked).toBe(true);
+
+    const lenient = await screenAddress('0xANY', 'proof_issuance');
+    expect(lenient.blocked).toBe(false);
+  });
+
+  it('blocks a positive hit in BOTH modes, and marks it a hit not an outage', async () => {
+    installPool((sql) => {
+      if (sql.includes('sanctioned_addresses')) {
+        return { rows: [{ list_version: '2026-08-01' }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    for (const opts of [{}, { failClosed: true }]) {
+      const result = await screenAddress('0xBAD', 'circle_join', opts);
+      expect(result.blocked).toBe(true);
+      // Callers distinguish these: a hit is final, an outage says "retry".
+      expect(result.reason).toBe('hit');
+    }
   });
 });

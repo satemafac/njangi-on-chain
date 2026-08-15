@@ -107,3 +107,12 @@ jobs:
           NEXT_PUBLIC_SUI_NETWORK: testnet
           NEXT_PUBLIC_TESTNET_PACKAGE_ID: '0x0'
           NEXT_PUBLIC_MAINNET_PACKAGE_ID: '0x0'
+
+      # Move tests were never run by CI at all — `preflight` only does
+      # `sui move build`, so the contracts compiled on every merge but their
+      # 149 assertions never executed. The whole non-custodial argument is
+      # made of those assertions (recipient-only redemption, frozen
+      # contribution rules, refunds to recorded contributors), so a merge that
+      # breaks one must fail here rather than at publish time.
+      - name: Run Move tests
+        run: cd move && sui move test

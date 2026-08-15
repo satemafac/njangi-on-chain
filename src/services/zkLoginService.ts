@@ -5,43 +5,19 @@ import { enokiZkLoginService } from './enokiZkLoginService';
 
 import { getCurrentRpcUrl, NetworkType } from './network-config';
 
-export type OAuthProvider = 'Google' | 'Facebook' | 'Apple';
+// This module is a thin delegating wrapper over `enokiZkLoginService`. These
+// types are re-exported rather than redeclared: a second copy would drift, and
+// a copy that still marks `ephemeralPrivateKey` as required would quietly
+// reassert that the server always holds a signing key.
+export type {
+  OAuthProvider,
+  ZkLoginProofs,
+  SetupData,
+  AccountData,
+  ZkLoginProtocolVersion,
+} from './enokiZkLoginService';
 
-export interface ZkLoginProofs {
-  proofPoints: {
-    a: string[];
-    b: string[][];
-    c: string[];
-  };
-  issBase64Details: {
-    value: string;
-    indexMod4: number;
-  };
-  headerBase64: string;
-}
-
-export interface SetupData {
-  provider: string;
-  maxEpoch: number;
-  randomness: string;
-  ephemeralPrivateKey: string;
-  network?: 'testnet' | 'mainnet';  // Network selected on the frontend
-  origin?: string;
-  redirectUri?: string;
-}
-
-export interface AccountData {
-  provider: string;
-  userAddr: string;
-  zkProofs: ZkLoginProofs;
-  ephemeralPrivateKey: string;
-  userSalt: string;
-  sub: string;
-  aud: string;
-  maxEpoch: number;
-  picture?: string;
-  name?: string;
-}
+import type { SetupData, AccountData, ZkLoginProofs, OAuthProvider } from './enokiZkLoginService';
 
 export interface TransactionOptions {
   gasBudget?: number;
@@ -90,8 +66,9 @@ export class ZkLoginService {
     provider: OAuthProvider = 'Google',
     network?: NetworkType,
     origin?: string,
+    clientKey?: { ephemeralPublicKey: string; randomness: string },
   ): Promise<{ loginUrl: string, setupData: SetupData }> {
-    return enokiZkLoginService.beginLogin(provider, network, origin);
+    return enokiZkLoginService.beginLogin(provider, network, origin, clientKey);
   }
 
   public async handleCallback(token: string, setupData: SetupData): Promise<{ 
@@ -104,10 +81,6 @@ export class ZkLoginService {
     name?: string;
   }> {
     return enokiZkLoginService.handleCallback(token, setupData);
-  }
-
-  public getPublicKeyFromPrivate(privateKeyBase64: string): string {
-    return enokiZkLoginService.getPublicKeyFromPrivate(privateKeyBase64);
   }
 
   public async sendTransaction(

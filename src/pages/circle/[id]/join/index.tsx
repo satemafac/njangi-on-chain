@@ -14,9 +14,10 @@ import { logSuiReadError } from '@/services/sui-rpc-failover';
 import { priceService } from '@/services/price-service';
 import { getCirclePackageId, getSuiClientFromPool } from '../../../../services/circle-service';
 import { getCurrentRpcUrl } from '../../../../services/network-config';
-import Head from 'next/head';
 import { LoginButton } from '@/components/LoginButton';
 import { useTranslation } from '@/hooks/useTranslation';
+import { Seo } from '@/components/Seo';
+import { SITE_URL } from '@/lib/structured-data';
 
 // Define Circle type
 interface Circle {
@@ -864,30 +865,23 @@ export default function JoinCircle() {
 
   return (
     <>
-      <Head>
-        {/* Page title and description */}
-        <title>{pageTitle}</title>
-        <meta name="description" content={pageDescription} />
-        
-        {/* Facebook & Open Graph */}
-        <meta property="og:title" content={pageTitle} />
-        <meta property="og:description" content={pageDescription} />
-        <meta property="og:type" content="website" />
-        <meta property="og:url" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/circle/${id}/join`} />
-        <meta property="og:image" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/og-image.png`} />
-        <meta property="og:site_name" content="Njangi On-Chain" />
-        
-        {/* Twitter Card */}
-        <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content={`Join ${circle?.name || 'Circle'} - Njangi On-Chain`} />
-        <meta name="twitter:description" content={`Join this secure savings circle with ${circle?.maxMembers || 'multiple'} members. Built on Sui blockchain for maximum transparency and security.`} />
-        <meta name="twitter:image" content={`${process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com'}/og-image.png`} />
-        
-        {/* WhatsApp specific - improves preview on WhatsApp */}
-        <meta property="og:image:width" content="1200" />
-        <meta property="og:image:height" content="630" />
-        <meta property="og:image:alt" content={`Join ${circle?.name || 'a Njangi'} Circle`} />
-      </Head>
+      {/* This is the most-shared URL in the product — invite links land here
+          from WhatsApp. It stays noindex (inherited from _app: /circle is an
+          app route) but keeps a full share card, since robots directives and
+          Open Graph are orthogonal.
+
+          The image was /og-image.png, a stale blue-brand card left over from
+          the previous visual identity. */}
+      <Seo
+        title={pageTitle}
+        titleAbsolute
+        description={pageDescription}
+        canonical={`${SITE_URL}/circle/${id}/join`}
+        image={{
+          url: '/og/join.png',
+          alt: `Join ${circle?.name || 'a njangi'} circle on Njangi On-Chain`,
+        }}
+      />
       
       <div className={pageShellClass}>
         <div className="pointer-events-none absolute inset-x-0 top-0 h-[360px] bg-[radial-gradient(circle_at_top,rgba(112,129,155,0.18),transparent_68%)]" />

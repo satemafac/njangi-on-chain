@@ -1086,6 +1086,16 @@ module njangi::njangi_circles {
         members::set_payout_position(member, option::some(position));
     }
 
+    // Rotation order determines WHO RECEIVES THE NEXT PAYOUT
+    // (get_next_payout_recipient reads rotation_order[current_position]), so
+    // it is locked while a cycle is running for the same reason token mode is:
+    // an admin must not be able to redirect a payout mid-cycle. Changes are
+    // allowed pre-activation or while paused between cycles, when no cycle is
+    // in flight and members can see the new order before contributing.
+    //
+    // Without this an admin could move themselves into the current position
+    // after members had already contributed — discretion over fund direction,
+    // which compliance invariant #1 says no operator role may have.
     public fun set_rotation_position(
         circle: &mut Circle,
         member_addr: address,
@@ -1094,6 +1104,10 @@ module njangi::njangi_circles {
         ctx: &mut TxContext
     ) {
         assert!(tx_context::sender(ctx) == circle.admin, 7);
+        assert!(
+            !circle.is_active || circle.paused_after_cycle,
+            ECircleNotPausedForConfigChange
+        );
         set_rotation_position_internal(circle, member_addr, position);
         touch_admin_heartbeat(circle, clock);
     }
@@ -1149,6 +1163,12 @@ module njangi::njangi_circles {
     ) {
         let sender = tx_context::sender(ctx);
         assert!(sender == circle.admin, 7);
+        // Same lock as set_rotation_position — this replaces the whole order,
+        // so it is the wider version of the same power.
+        assert!(
+            !circle.is_active || circle.paused_after_cycle,
+            ECircleNotPausedForConfigChange
+        );
         reorder_rotation_positions_internal(
             circle,
             new_order,
@@ -3838,6 +3858,85 @@ module njangi::njangi_circles {
             goal_type,
             target_amount
         );
+    }
+
+    #[test_only]
+    public fun set_paused_after_cycle_for_testing(circle: &mut Circle, paused: bool) {
+        circle.paused_after_cycle = paused;
+    }
+
+    // ----------------------------------------------------------
+    // Rotation-order lifecycle lock
+    //
+    // rotation_order[current_position] IS the next payout recipient, so an
+    // admin who can reorder mid-cycle can redirect a payout members have
+    // already funded. These pin the lock that removes that discretion.
+    // ----------------------------------------------------------
+
+    #[test]
+    #[expected_failure(abort_code = ECircleNotPausedForConfigChange)]
+    fun test_reorder_rotation_blocked_while_cycle_running() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(vector[admin, bob], 1_000_000_000, 100, &clock, sui::test_scenario::ctx(&mut scenario));
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        // Circle is active and not paused: the admin must not be able to put
+        // themselves in front of the queue now.
+        reorder_rotation_positions(
+            &mut circle,
+            vector[bob, admin],
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = ECircleNotPausedForConfigChange)]
+    fun test_set_rotation_position_blocked_while_cycle_running() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(vector[admin, bob], 1_000_000_000, 100, &clock, sui::test_scenario::ctx(&mut scenario));
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        set_rotation_position(&mut circle, admin, 0, &clock, sui::test_scenario::ctx(&mut scenario));
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    fun test_reorder_rotation_allowed_while_paused_between_cycles() {
+        // The lock is a timing constraint, not a ban: members can still agree
+        // a new order between cycles, when nobody has funded the next payout.
+        let admin = @0xA;
+        let bob = @0xB;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(vector[admin, bob], 1_000_000_000, 100, &clock, sui::test_scenario::ctx(&mut scenario));
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        set_paused_after_cycle_for_testing(&mut circle, true);
+        reorder_rotation_positions(
+            &mut circle,
+            vector[bob, admin],
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        assert!(*vector::borrow(&circle.rotation_order, 0) == bob, 0);
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
     }
 
     // ----------------------------------------------------------

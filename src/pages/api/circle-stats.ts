@@ -99,8 +99,8 @@ export default async function handler(
     const currentNetwork = getCurrentNetwork();
     const networkConfig = getCurrentNetworkConfig();
     const officialRpcUrl = currentNetwork === 'mainnet'
-      ? 'https://fullnode.mainnet.sui.io:443'
-      : 'https://fullnode.testnet.sui.io:443';
+      ? 'https://sui-rpc.publicnode.com'
+      : 'https://sui-testnet-rpc.publicnode.com';
     const rpcUrls = Array.from(new Set([
       networkConfig.rpcUrl,
       officialRpcUrl,

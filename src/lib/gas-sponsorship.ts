@@ -157,15 +157,29 @@ export async function getSponsorshipUsage(sub: string): Promise<UsageCounts> {
   }
   try {
     const pool = getSharedPgPool();
+    // Unexpired reservations count too. Enoki has already committed a gas coin
+    // for a prepared transaction, so counting only completed ones would let a
+    // caller loop prepare-without-execute and burn quota against caps that
+    // never move.
     const [userRes, globalRes] = await Promise.all([
       pool.query<{ n: string }>(
-        `SELECT COUNT(*)::text AS n FROM gas_sponsorship_usage
-         WHERE zklogin_sub = $1 AND sponsored_at > NOW() - INTERVAL '24 hours'`,
+        `SELECT (
+           (SELECT COUNT(*) FROM gas_sponsorship_usage
+             WHERE zklogin_sub = $1 AND sponsored_at > NOW() - INTERVAL '24 hours')
+           +
+           (SELECT COUNT(*) FROM gas_sponsorship_pending
+             WHERE zklogin_sub = $1 AND expires_at > NOW())
+         )::text AS n`,
         [sub],
       ),
       pool.query<{ n: string }>(
-        `SELECT COUNT(*)::text AS n FROM gas_sponsorship_usage
-         WHERE sponsored_at >= date_trunc('month', NOW())`,
+        `SELECT (
+           (SELECT COUNT(*) FROM gas_sponsorship_usage
+             WHERE sponsored_at >= date_trunc('month', NOW()))
+           +
+           (SELECT COUNT(*) FROM gas_sponsorship_pending
+             WHERE expires_at > NOW())
+         )::text AS n`,
       ),
     ]);
     return {
@@ -175,6 +189,102 @@ export async function getSponsorshipUsage(sub: string): Promise<UsageCounts> {
   } catch (err) {
     console.error('[gas-sponsorship] usage read failed; allowing', err);
     return { userToday: 0, globalThisMonth: 0 };
+  }
+}
+
+/** How long a prepared-but-unexecuted sponsorship holds a slot. */
+export const PENDING_SPONSORSHIP_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Reserve a sponsorship slot for a prepared-but-unsigned transaction.
+ *
+ * The two-call protocol means a caller can request sponsorship and simply
+ * never come back to execute. Enoki has already committed a gas coin at that
+ * point, but `gas_sponsorship_usage` only records completed transactions — so
+ * without this, repeated prepares burn real quota while every cap still reads
+ * zero. Reservations are counted alongside usage and expire on their own, so
+ * an abandoned prepare costs one slot for TTL rather than forever.
+ */
+export async function reservePendingSponsorship(args: {
+  digest: string;
+  sub: string;
+  userAddress: string;
+  circleId?: string | null;
+  action: string;
+}): Promise<void> {
+  if (!isPostgresConfigured()) return;
+  try {
+    const pool = getSharedPgPool();
+    await pool.query(
+      `INSERT INTO gas_sponsorship_pending
+         (digest, zklogin_sub, user_address, circle_id, action, expires_at)
+       VALUES ($1, $2, $3, $4, $5, NOW() + ($6 || ' milliseconds')::interval)
+       ON CONFLICT (digest) DO NOTHING`,
+      [
+        args.digest,
+        args.sub,
+        args.userAddress,
+        args.circleId ?? null,
+        args.action,
+        String(PENDING_SPONSORSHIP_TTL_MS),
+      ],
+    );
+  } catch (err) {
+    console.error('[gas-sponsorship] pending reservation failed; allowing', err);
+  }
+}
+
+/**
+ * Claims a reservation, returning the attribution recorded at prepare time.
+ *
+ * Execute deliberately trusts this row rather than anything in the request
+ * body: the caller supplies only a digest and a signature, so usage is
+ * attributed to whoever actually passed the policy check, and a digest can be
+ * claimed at most once.
+ */
+export async function claimPendingSponsorship(digest: string): Promise<{
+  sub: string;
+  userAddress: string;
+  circleId: string | null;
+  action: string;
+} | null> {
+  if (!isPostgresConfigured()) return null;
+  try {
+    const pool = getSharedPgPool();
+    const res = await pool.query<{
+      zklogin_sub: string;
+      user_address: string;
+      circle_id: string | null;
+      action: string;
+    }>(
+      `DELETE FROM gas_sponsorship_pending
+        WHERE digest = $1 AND expires_at > NOW()
+        RETURNING zklogin_sub, user_address, circle_id, action`,
+      [digest],
+    );
+    const row = res.rows[0];
+    if (!row) return null;
+    return {
+      sub: row.zklogin_sub,
+      userAddress: row.user_address,
+      circleId: row.circle_id,
+      action: row.action,
+    };
+  } catch (err) {
+    console.error('[gas-sponsorship] pending claim failed', err);
+    return null;
+  }
+}
+
+/** Opportunistic GC so abandoned reservations cannot accumulate. */
+export async function purgeExpiredSponsorships(): Promise<void> {
+  if (!isPostgresConfigured()) return;
+  try {
+    await getSharedPgPool().query(
+      `DELETE FROM gas_sponsorship_pending WHERE expires_at <= NOW()`,
+    );
+  } catch {
+    // Best effort — expired rows are already excluded from every read.
   }
 }
 

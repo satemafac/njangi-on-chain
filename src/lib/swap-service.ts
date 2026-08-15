@@ -2,29 +2,8 @@ import { SuiClient } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
 import { suiSwapRouter } from '../services/sui-swap-router';
 
-const SUI_TYPE = '0x2::sui::SUI';
-
-// Define zkLogin account interface to match what's used in the application
-interface ZkLoginAccount {
-  userAddr: string;
-  ephemeralPrivateKey: string;
-  zkProofs: {
-    proofPoints: {
-      a: string[];
-      b: string[][] | string[];
-      c: string[];
-    };
-    issBase64Details: {
-      value: string;
-      indexMod4: number;
-    } | string;
-    headerBase64: string | {
-      value: string;
-      indexMod4: number;
-    };
-  };
-  [key: string]: unknown;
-}
+// `SUI_TYPE` and the local `ZkLoginAccount` shape were only used by
+// `swapAndContributeViaZkLogin`, removed below.
 
 /**
  * Service for SUI token swaps and aggregation
@@ -38,7 +17,7 @@ class SwapService {
 
   constructor() {
     // Initialize with default values
-    this.suiClient = new SuiClient({ url: 'https://fullnode.testnet.sui.io:443' });
+    this.suiClient = new SuiClient({ url: 'https://sui-testnet-rpc.publicnode.com' });
   }
 
   /**
@@ -142,64 +121,9 @@ class SwapService {
     );
   }
 
-  /**
-   * Perform a swap and contribute in a single transaction using zkLogin
-   */
-  async swapAndContributeViaZkLogin(
-    account: ZkLoginAccount,
-    fromCoinType: string,
-    amountIn: number | string,
-    circleId: string,
-    walletId: string,
-    slippage = 0.5
-  ): Promise<{ success: boolean; digest?: string; error?: string }> {
-    try {
-      // First generate swap transaction payload
-      const swapPayload = await this.getSwapTransactionPayload(
-        fromCoinType, 
-        SUI_TYPE, // Always swap to SUI
-        amountIn, 
-        slippage
-      );
-
-      if (!swapPayload) {
-        return { success: false, error: 'Failed to generate swap transaction' };
-      }
-
-      // Execute the swap through zkLogin API
-      const result = await fetch('/api/zkLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'swapAndContribute',
-          account,
-          circleId,
-          walletId,
-          swapPayload
-        }),
-      });
-
-      const data = await result.json();
-      
-      if (!result.ok) {
-        return { 
-          success: false, 
-          error: data.error || 'Failed to execute swap and contribution' 
-        };
-      }
-
-      return { 
-        success: true, 
-        digest: data.digest 
-      };
-    } catch (error) {
-      console.error('Error performing swap and contribution:', error);
-      return { 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Unknown error' 
-      };
-    }
-  }
+  // Removed: `swapAndContributeViaZkLogin` POSTed `action: 'swapAndContribute'`
+  // to /api/zkLogin, which has had no such case for some time — every call
+  // fell through to the dispatcher default and returned 400. It had no callers.
 
   /**
    * List all available tokens that can be swapped

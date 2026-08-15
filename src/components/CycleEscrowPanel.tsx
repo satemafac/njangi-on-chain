@@ -7,9 +7,9 @@ import {
   buildFinalizeAndRedeemWithAttestationTx,
   buildOpenCycleTx,
 } from '@/services/cycle-escrow-service';
-import type { Transaction } from '@mysten/sui/transactions';
 import { preparePaymentCoin } from '@/lib/payment-coin-builder';
 import { useZkLoginSigner } from '@/hooks/useZkLoginSigner';
+import type { TransactionBuilder } from '@/lib/zklogin-client-signer';
 import { useTranslation } from '@/hooks/useTranslation';
 import {
   findCurrentCycleEscrow,
@@ -271,7 +271,7 @@ export function CycleEscrowPanel({
   const runWithSigner = useCallback(
     async (
       action: Stage | 'open' | 'pay' | 'claim' | 'advance',
-      build: Parameters<typeof signAndExecute>[0]['build'],
+      build: TransactionBuilder,
       gasBudget: number,
     ) => {
       if (!isReady) {
@@ -435,7 +435,7 @@ export function CycleEscrowPanel({
       const contributionAmount = BigInt(contributionAmountBase);
       const escrowId = summary.escrowId;
       const ownerAddress = userAddress;
-      const build = async (txb: Transaction, client: Parameters<Parameters<typeof signAndExecute>[0]['build']>[1]) => {
+      const build: TransactionBuilder = async (txb, client) => {
         const { coinArg } = await preparePaymentCoin({
           txb,
           client,

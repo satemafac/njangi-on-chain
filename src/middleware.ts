@@ -1,20 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCanonicalBaseOrigin, preferCanonicalOrigin } from '@/lib/canonical-host';
 import { isEmbargoedHeaders } from '@/lib/embargo';
-
 // App-route prefixes blocked for embargoed jurisdictions
 // (docs/sanctions-program.md). Marketing/legal/learn pages stay visible —
 // the block covers the routes where circles are created, joined, funded,
-// and managed. /restricted itself must never appear here (redirect loop).
-const GEO_BLOCKED_PREFIXES = [
-  '/dashboard',
-  '/create-circle',
-  '/circle',
-  '/pool',
-  '/auth',
-  '/admin',
-  '/automation',
-];
+// and managed. /restricted itself must never appear in the list (redirect loop).
+//
+// Shared with the sitemap, robots.txt, and the noindex decision so the four
+// cannot disagree about which routes are app surfaces.
+import { APP_ROUTE_PREFIXES as GEO_BLOCKED_PREFIXES } from '@/lib/seo-routes';
 
 function addSecurityHeaders(response: NextResponse): NextResponse {
   response.headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');

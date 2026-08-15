@@ -52,16 +52,115 @@ import {
 } from '@/lib/entitlement-gate';
 import { screenAddress, sanctionsErrorBody } from '@/lib/sanctions';
 import { isEmbargoedHeaders, embargoErrorBody } from '@/lib/embargo';
-import { resolveEscrowSponsorship } from '@/lib/gas-sponsorship-eligibility';
-import { recordSponsoredUsage } from '@/lib/gas-sponsorship';
+import {
+  disabledResponse,
+  isLegacyRailEnabled,
+  isSwapsEnabled,
+} from '@/config/feature-flags';
 
 // Add at the top with other imports
 interface RPCError extends Error {
   code?: number;
 }
 
+/**
+ * Raised when the proof-issuance screen blocks a login. Distinct from a
+ * generic failure so the handler can answer 403 rather than 500 — the
+ * request succeeded, the answer is no.
+ */
+class SanctionsBlockedAtLoginError extends Error {
+  constructor() {
+    super('Sanctions screen blocked this address at proof issuance');
+    this.name = 'SanctionsBlockedAtLoginError';
+  }
+}
+
+/**
+ * Member-initiated swap routing, gated by NEXT_PUBLIC_SWAPS_ENABLED.
+ *
+ * Swaps are a supported feature (production enables them) — this switch is
+ * for disabling routing per environment, e.g. a venue outage or an
+ * unvetted new integration, not for retiring the capability.
+ *
+ * Safe to flip either way: nothing here holds user funds, so a blocked swap
+ * just leaves the member with the coins they already had.
+ */
+const SWAP_ACTIONS = new Set([
+  'executeStablecoinSwap',
+  'swapAndDepositCetus',
+  'swapAndDepositDeepBook',
+  'configureStablecoinSwap',
+  'toggleAutoSwap',
+  'executeSwapOnly',
+]);
+
+/**
+ * Legacy custody/payments rail, gated by LEGACY_RAIL_ENABLED (default off).
+ *
+ * Deliberately CONTRIBUTIONS ONLY. Payouts (adminTriggerPayout) and the
+ * recovery paths (executeRecovery, triggerAutoRelease, emergency stop voting)
+ * are NOT listed and must never be: money already committed to a legacy
+ * circle has to remain claimable after the rail stops accepting new deposits.
+ * A kill switch that traps funds is a worse compliance outcome than the
+ * feature it was meant to retire.
+ */
+const LEGACY_RAIL_ACTIONS = new Set([
+  'contributeFromCustody',
+  'depositUsdcDirect',
+  'depositStablecoin',
+]);
+
+/**
+ * Every dispatcher action that signs a transaction with a server-held key.
+ *
+ * Deliberately an explicit denylist rather than "everything except beginLogin
+ * and handleCallback": adding a new signing action should be a conscious act,
+ * and an omission here fails safe (the action runs and hits the typed
+ * ClientSigningRequiredError from `validateAccountData`) rather than silently
+ * signing for a session that should not be signable.
+ *
+ * The end state is that this set is empty and the actions are gone. Until
+ * then, membership here means "not yet migrated to client-side signing".
+ *
+ * As of 2026-08-03 the only members still POSTed by any client are
+ * depositStablecoin and executeSwapOnly, both in SimplifiedSwapUI, which
+ * renders only when NEXT_PUBLIC_ENABLE_SWAP_AND_DEPOSIT_FORM is set (it is
+ * not, in production). So enabling that flag resurrects a path that will 409
+ * rather than work. If you turn it on, migrate its actions to the client
+ * signer first — the builders in src/lib/zklogin-tx-builders.ts and the
+ * signLocallyWithBuilder helper in src/services/zkLoginClient.ts are the
+ * pattern.
+ *
+ * This comment previously also listed depositUsdcDirect as unreachable. It
+ * was not: the contribute page reached it for every USDC security deposit,
+ * and the legacy-rail gate answered 503 — so USDC deposits were dead in
+ * production while this file asserted they could not be. A live browser run
+ * caught it; no unauthenticated probe could have, because the gate fires
+ * before the account check that shapes an anonymous response.
+ *
+ * The lesson is narrower than "audit harder": reachability claims about
+ * CLIENT code do not belong in a server file, where nothing recomputes them.
+ * src/__tests__/api/capability-gate-partitioning.test.ts now asserts that no
+ * gated action is POSTed from an ungated component.
+ */
+const SERVER_SIGNING_ACTIONS = new Set([
+  'activateCircle', 'adminApproveMember', 'adminApproveMembers', 'adminRemoveMember',
+  'adminSetMaxMembers', 'adminTriggerPayout', 'configureStablecoinSwap',
+  'contributeFromCustody', 'contributeToCycleEscrow', 'deleteCircle',
+  'depositStablecoin', 'depositUsdcDirect', 'executeRecovery',
+  'executeStablecoinSwap', 'executeSwapOnly', 'finalizeAndRedeemCycleEscrow',
+  'openCycleEscrow', 'paySecurityDeposit', 'proposeEmergencyStop',
+  'reorderRotationPositions', 'resumeCycle', 'sendTokens',
+  'sendTransaction', 'setRotationPosition', 'swapAndDepositCetus',
+  'swapAndDepositDeepBook', 'toggleAutoSwap', 'triggerAutoRelease',
+  'voteEmergencyStop',
+]);
+
 // Constants
-const MAX_EPOCH = 2; // Number of epochs to keep session alive (1 epoch ~= 24h)
+// (A `MAX_EPOCH = 2` constant lived here to support the proof-expiry check in
+// `validateSession`. That check never fired and has been removed; the real
+// epoch check lives in `EnokiZkLoginService.validateAccountData`, which uses
+// its own MAX_EPOCH. Two disagreeing copies of this constant was itself a bug.)
 const PROCESSING_COOLDOWN = 30000; // 30 seconds between processing attempts for the same session
 
 // Minimum slippage for aggregator transactions
@@ -173,16 +272,12 @@ async function validateSession(sessionId: string | undefined, action: string): P
       throw new Error('Invalid session: missing account data');
     }
     
-    // Validate proof expiration
-    if (session.maxEpoch) {
-      const currentEpoch = Math.floor(Number(session.maxEpoch) - MAX_EPOCH);
-      const maxEpoch = Number(session.maxEpoch);
-      
-      if (currentEpoch >= maxEpoch) {
-        if (sessionId) await sessions.delete(sessionId);
-        throw new Error('Session has expired. Please login again.');
-      }
-    }
+    // Proof expiry is NOT checked here. A previous check in this spot compared
+    // `maxEpoch - 2 >= maxEpoch`, which is never true, so it expired
+    // nothing while reading like a control. The real check needs the live chain
+    // epoch and runs in `EnokiZkLoginService.validateAccountData` immediately
+    // before signing; the session registry separately enforces its own TTL.
+    // Do not add a lookalike check here without an RPC epoch read.
 
     // Validate proof components
     if (!session.account.zkProofs?.proofPoints?.a?.length ||
@@ -310,75 +405,10 @@ async function createSuiClient(targetNetwork?: NetworkType): Promise<SuiClient> 
   }
 }
 
-function normalizeSerializedTransactionBytes(input: unknown): Uint8Array {
-  const isByte = (value: unknown): value is number =>
-    typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 255;
-
-  if (input instanceof Uint8Array) {
-    return input;
-  }
-
-  if (input instanceof ArrayBuffer) {
-    return new Uint8Array(input);
-  }
-
-  if (ArrayBuffer.isView(input)) {
-    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
-  }
-
-  if (Array.isArray(input)) {
-    if (!input.every(isByte)) {
-      throw new Error('Serialized transaction array must contain only byte values.');
-    }
-    return Uint8Array.from(input);
-  }
-
-  if (typeof input === 'string') {
-    const trimmed = input.trim();
-    if (!trimmed) {
-      throw new Error('Serialized transaction payload is empty.');
-    }
-
-    if (/^0x[0-9a-fA-F]+$/.test(trimmed)) {
-      return Uint8Array.from(Buffer.from(trimmed.slice(2), 'hex'));
-    }
-
-    if (/^[0-9a-fA-F]+$/.test(trimmed) && trimmed.length % 2 === 0) {
-      return Uint8Array.from(Buffer.from(trimmed, 'hex'));
-    }
-
-    return Uint8Array.from(Buffer.from(trimmed, 'base64'));
-  }
-
-  if (input && typeof input === 'object') {
-    const candidate = input as Record<string, unknown>;
-
-    if (candidate.type === 'Buffer' && Array.isArray(candidate.data)) {
-      if (!candidate.data.every(isByte)) {
-        throw new Error('Serialized Buffer payload must contain only byte values.');
-      }
-      return Uint8Array.from(candidate.data);
-    }
-
-    if (typeof candidate.length === 'number' && Number.isInteger(candidate.length) && candidate.length >= 0) {
-      const values = Array.from({ length: candidate.length }, (_, index) => candidate[String(index)]);
-      if (!values.every(isByte)) {
-        throw new Error('Serialized transaction object must contain only byte values.');
-      }
-      return Uint8Array.from(values);
-    }
-  }
-
-  throw new Error('Unsupported serialized transaction payload.');
-}
-
-function deserializeTransactionPayload(input: unknown): Transaction {
-  if (typeof input === 'string' && input.trim().startsWith('{')) {
-    return Transaction.from(input.trim());
-  }
-
-  return Transaction.from(normalizeSerializedTransactionBytes(input));
-}
+// Removed with the `sendSerializedTransaction` action: these parsed
+// caller-supplied transaction payloads so the server could sign them. Nothing
+// server-side accepts a client-built transaction any more — clients sign their
+// own. Do not reintroduce without reading the note on that case.
 
 // When using swapAndDepositCetus, replace accessing the private suiClient directly with the proper API
 const getEpochData = async (): Promise<{ epoch: string }> => {
@@ -956,8 +986,70 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const instance = enokiZkLoginService;
     // Do not initialize Cetus SDK here since we're not using it directly
 
+    // Capability gates. Enforced here, ahead of the dispatcher, so a disabled
+    // feature is unreachable by direct API call and not merely hidden in the
+    // UI — which is how the Coinbase ramp stayed open while appearing off.
+    if (SWAP_ACTIONS.has(action) && !isSwapsEnabled()) {
+      return res.status(503).json(
+        disabledResponse(
+          'swaps',
+          'Token swaps are disabled. Fund your circle with the contribution currency directly.',
+        ),
+      );
+    }
+    if (LEGACY_RAIL_ACTIONS.has(action) && !isLegacyRailEnabled()) {
+      return res.status(503).json(
+        disabledResponse(
+          'legacy_rail',
+          'This contribution route has been retired. Please use the current round escrow.',
+        ),
+      );
+    }
+
+    // Sessions created after the ephemeral key moved into the browser carry no
+    // server-held secret, so every server-signing action below is structurally
+    // unable to run for them. Reject once, up front, with a code the client can
+    // act on — rather than letting 30-odd handlers each fail late with a
+    // generic 500 from deep inside the signing path.
+    //
+    // Legacy v1 sessions still have a key and keep working until they expire.
+    // maxEpoch is one Sui epoch (~24h) and the cookie matches, so this branch
+    // stops being reachable roughly a day after deploy.
+    if (sessionId && SERVER_SIGNING_ACTIONS.has(action)) {
+      const existing = await sessions.get(sessionId);
+      if (existing && !existing.ephemeralPrivateKey) {
+        console.log('Rejecting server-signing action for client-signing session:', {
+          action,
+          protocolVersion: existing.protocolVersion ?? 2,
+        });
+        return res.status(409).json({
+          error:
+            'This action must be signed in your browser. Please refresh the page and try again.',
+          code: 'CLIENT_SIGNING_REQUIRED',
+        });
+      }
+    }
+
     switch (action) {
       case 'beginLogin':
+        // Validate the browser-supplied key material at the boundary. The
+        // service guards this too, but throwing from there surfaces as a 500
+        // via the outer catch — and a malformed request is the caller's fault,
+        // not a server fault. Returning 500 would page on client errors and
+        // bury real faults in monitoring noise.
+        if (
+          typeof req.body.ephemeralPublicKey !== 'string' ||
+          !req.body.ephemeralPublicKey ||
+          typeof req.body.randomness !== 'string' ||
+          !req.body.randomness
+        ) {
+          return res.status(400).json({
+            error:
+              'A browser-generated ephemeral public key and randomness are required. Refresh the page and try signing in again.',
+            code: 'EPHEMERAL_KEY_REQUIRED',
+          });
+        }
+
         // Generate new session ID and clear any existing sessions
         sessionId = crypto.randomUUID();
         setSessionCookie(res, sessionId);
@@ -965,23 +1057,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           network === 'testnet' || network === 'mainnet' ? network : getCurrentNetwork();
         const requestOrigin = resolveRequestOrigin(req, origin);
 
+        // The ephemeral keypair is generated in the browser; we receive only
+        // the public half. Nothing stored against this session can produce a
+        // user signature.
         const { loginUrl, setupData: initialSetup } = await instance.beginLogin(
           provider as OAuthProvider,
           requestedNetwork,
           requestOrigin,
+          {
+            ephemeralPublicKey: req.body.ephemeralPublicKey,
+            randomness: req.body.randomness,
+          },
         );
-        
+
         // Log the setup data being stored
         console.log('Storing initial setup:', {
           sessionId,
           provider: initialSetup.provider,
           maxEpoch: initialSetup.maxEpoch,
           network: initialSetup.network,
-          ephemeralPublicKey: instance.getPublicKeyFromPrivate(initialSetup.ephemeralPrivateKey)
+          protocolVersion: initialSetup.protocolVersion,
+          ephemeralPublicKey: initialSetup.ephemeralPublicKey,
         });
-        
+
         await sessions.set(sessionId, initialSetup);
-        return res.status(200).json({ loginUrl });
+        return res.status(200).json({ loginUrl, maxEpoch: initialSetup.maxEpoch });
 
       case 'handleCallback':
         if (!jwt) {
@@ -1037,11 +1137,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Create a promise that will resolve with the account data
           const processPromise = (async () => {
             const result = await instance.handleCallback(jwt, savedSetup);
-            
+
+            // Sanctions screen at PROOF ISSUANCE.
+            //
+            // Once transactions are signed in the browser there is no
+            // server choke point left on the money paths — the old
+            // screens sat inside `sendTransaction`, which now 409s for
+            // every current session, so they enforce nothing. This is the
+            // replacement: refusing to hand back zkProofs. Without proofs
+            // the client cannot assemble a zkLogin signature, so nothing
+            // reaches the chain.
+            //
+            // Refusing to authenticate is not the same as seizing or
+            // freezing assets — we never gain the ability to move the
+            // user's funds, we simply decline to help. That distinction is
+            // what keeps this compatible with the non-custodial posture.
+            //
+            // Deliberately fail-OPEN: this gate covers claim, refund and
+            // recovery too, so failing it closed during an outage would
+            // strand members' committed funds. New commitments are screened
+            // separately with failClosed. Honest limitation: proofs live
+            // one Sui epoch (~24h), so a user listed immediately after
+            // login retains a usable proof until it expires. The weekly
+            // retro-sweep is what catches that window.
+            const screen = await screenAddress(result.address, 'proof_issuance');
+            if (screen.blocked) {
+              if (sessionId) await sessions.delete(sessionId);
+              clearSessionCookie(res);
+              throw new SanctionsBlockedAtLoginError();
+            }
+
             // Clean up any existing sessions for this user
             await cleanupUserSessions(result.address, sessionId);
             
-            // Create the account data object
+            // Create the account data object.
+            // `ephemeralPrivateKey` is carried only for legacy v1 sessions,
+            // where the server generated it. On v2 it is undefined here and in
+            // the response — the browser merges in its own key. Do not
+            // reintroduce a server-side source for this field.
             const accountData: AccountData = {
               provider: savedSetup.provider,
               userAddr: result.address,
@@ -1077,7 +1210,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             sessionId,
             address: accountData.userAddr,
             maxEpoch: savedSetup.maxEpoch,
-            ephemeralPublicKey: instance.getPublicKeyFromPrivate(savedSetup.ephemeralPrivateKey)
+            protocolVersion: savedSetup.protocolVersion ?? 1,
+            ephemeralPublicKey: savedSetup.ephemeralPublicKey,
           });
           
           return res.status(200).json(accountData);
@@ -1087,6 +1221,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             PROCESSING_SESSIONS.delete(sessionId);
           }
           
+          // A sanctions block is a policy decision, not a fault. Surface it
+          // as 403 with the standard body rather than letting it fall
+          // through to the generic 500 handler, which would read as an
+          // outage and invite a retry.
+          if (err instanceof SanctionsBlockedAtLoginError) {
+            return res.status(403).json(sanctionsErrorBody());
+          }
+
           console.error('HandleCallback error:', err);
           // If session validation failed, clear cookie and session
           if (err instanceof Error && err.message.includes('Session')) {
@@ -1111,7 +1253,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             sessionId,
             address: account.userAddr,
             hasSession: await sessions.has(sessionId),
-            ephemeralPublicKey: instance.getPublicKeyFromPrivate(account.ephemeralPrivateKey)
           });
 
           // Validate session with action context
@@ -1126,8 +1267,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           // Verify session matches account data
-          if (session.account.userAddr !== account.userAddr || 
-              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+          if (session.account.userAddr !== account.userAddr) {
             await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
@@ -1472,7 +1612,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             address: account.userAddr,
             circleId: req.body.circleId,
             hasSession: await sessions.has(sessionId),
-            ephemeralPublicKey: instance.getPublicKeyFromPrivate(account.ephemeralPrivateKey)
           });
 
           // Validate session with action context
@@ -3084,8 +3223,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           // Verify session matches account data
-          if (session.account.userAddr !== account.userAddr || 
-              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+          if (session.account.userAddr !== account.userAddr) {
             if (sessionId) await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
@@ -3243,8 +3381,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           // Verify session matches account data
-          if (session.account.userAddr !== account.userAddr || 
-              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+          if (session.account.userAddr !== account.userAddr) {
             if (sessionId) await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
@@ -3354,42 +3491,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 });
               };
 
-              // Gas sponsorship (Premium admin benefit) for the join deposit —
-              // the first action a brand-new, zero-SUI member takes. Falls back
-              // to self-paid gas on any failure; join is never blocked.
+              // Self-paid only. Sponsorship moved to the client protocol
+              // (/api/sponsor/prepare + execute) because the server-side
+              // version minted the USER's signature from a server-held key —
+              // Enoki supplied only the gas coin, so that path was exactly as
+              // custodial as the unsponsored one.
+              //
+              // This branch is reachable only by pre-Phase-1 sessions, which
+              // SERVER_SIGNING_ACTIONS already rejects for anything newer and
+              // which expire within a Sui epoch. Those sessions pay their own
+              // gas for the short remainder of their life rather than keeping a
+              // server-signing path alive for a subsidy.
               try {
-                const decision = await resolveEscrowSponsorship({
-                  sub: session.account.sub,
-                  escrowId: circleId, // circleId supplied directly below
-                  circleId,
-                  coinType: USDC_COIN_TYPE,
-                  packageId: packageIdToUse,
-                  network: getCurrentNetwork(),
-                  usesGasCoinForValue: false,
-                });
-                if (decision.sponsor) {
-                  const sponsoredResult = await instance.sendSponsoredTransaction(
-                    session.account,
-                    buildSecurityDeposit,
-                  );
-                  txResult = sponsoredResult;
-                  await recordSponsoredUsage({
-                    sub: session.account.sub,
-                    userAddress: session.account.userAddr,
-                    circleId,
-                    action: 'paySecurityDeposit',
-                    digest: sponsoredResult.digest,
-                  });
-                } else {
-                  txResult = await instance.sendTransaction(
-                    session.account,
-                    buildSecurityDeposit,
-                    { gasBudget: 120000000 }
-                  );
-                }
+                txResult = await instance.sendTransaction(
+                  session.account,
+                  buildSecurityDeposit,
+                  { gasBudget: 120000000 }
+                );
               } catch (sponsorErr) {
                 console.error(
-                  'paySecurityDeposit: sponsored path failed, falling back to self-paid gas',
+                  'paySecurityDeposit: transaction failed',
                   sponsorErr,
                 );
                 txResult = await instance.sendTransaction(
@@ -3767,101 +3888,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       case 'executeSwap':
       case 'sendSerializedTransaction':
-        if (!account) {
-          return res.status(400).json({ error: 'Account data is required' });
-        }
-
-        if (!req.body.txb) {
-          return res.status(400).json({ error: 'Missing required parameter: txb (serialized transaction)' });
-        }
-
-        try {
-          const requestedNetwork =
-            req.body.network === 'testnet' || req.body.network === 'mainnet'
-              ? (req.body.network as NetworkType)
-              : undefined;
-
-          // Validate session with action context
-          const session = await validateSession(sessionId, 'sendTransaction');
-          
-          if (!session.account) {
-            if (sessionId) await sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              error: 'Authentication error: Your session has expired. Please login again.',
-              requireRelogin: true
-            });
-          }
-
-          // Verify session matches account data
-          if (session.account.userAddr !== account.userAddr || 
-              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
-            if (sessionId) await sessions.delete(sessionId);
-            clearSessionCookie(res);
-            return res.status(401).json({ 
-              error: 'Session mismatch: Please refresh your authentication',
-              requireRelogin: true
-            });
-          }
-          
-          // Deserialize the transaction
-          const tx = deserializeTransactionPayload(req.body.txb);
-          tx.setSender(session.account.userAddr);
-          
-          // Execute the transaction
-          const txResult = await instance.sendTransaction(
-            session.account,
-            tx,
-            {},
-            requestedNetwork
-          );
-          
-          return res.status(200).json({ 
-            digest: txResult.digest,
-            status: txResult.status,
-            gasUsed: txResult.gasUsed
-          });
-        } catch (error) {
-          const serializedActionLabel = action === 'executeSwap' ? 'DEX swap' : 'serialized transaction';
-          console.error(`Error executing ${serializedActionLabel}:`, error);
-          
-          if (error instanceof Error && 
-              (error.message.includes('proof verify failed') ||
-               error.message.includes('Session expired') ||
-               error.message.includes('re-authenticate'))) {
-            
-            if (sessionId) await sessions.delete(sessionId);
-            clearSessionCookie(res);
-            
-            return res.status(401).json({
-              error: 'Authentication error: Your session has expired. Please login again.',
-              requireRelogin: true
-            });
-          }
-          
-          // Check for common DEX errors
-          if (action === 'executeSwap' && error instanceof Error) {
-            if (error.message.includes('insufficient liquidity')) {
-              return res.status(400).json({ 
-                error: 'Insufficient liquidity in DEX pool. Try a smaller amount.'
-              });
-            }
-            
-            if (error.message.includes('slippage')) {
-              return res.status(400).json({ 
-                error: 'Price movement exceeded slippage tolerance. Try increasing slippage or try again.'
-              });
-            }
-          }
-          
-          return res.status(500).json({ 
-            error: error instanceof Error
-              ? error.message
-              : action === 'executeSwap'
-                ? 'Failed to execute swap'
-                : 'Failed to execute serialized transaction'
-          });
-        }
+        // Removed: this endpoint signed arbitrary caller-supplied transaction
+        // bytes with the session's ephemeral key, gated only by possession of
+        // the session cookie. That made it an unconditional signing oracle
+        // over the user's entire wallet — no Move-target allowlist, no
+        // recipient constraint — so cookie theft was equivalent to wallet
+        // theft.
+        //
+        // Every caller already builds its transaction in the browser, so they
+        // now sign locally via `src/lib/zklogin-client-signer.ts`. An
+        // allowlisted server signer was considered and rejected: Cetus routing
+        // is mostly non-MoveCall commands into packages we do not control, so
+        // any allowlist permissive enough to admit it would also admit
+        // transfers to an attacker.
+        return res.status(410).json({
+          error:
+            'Server-side transaction signing has been removed. Please refresh the page so your client can sign locally.',
+          code: 'SERIALIZED_TX_REMOVED',
+          requireRelogin: true,
+        });
 
       case 'toggleAutoSwap': {
         try {
@@ -4675,8 +4720,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           // Verify session matches account data
-          if (session.account.userAddr !== account.userAddr || 
-            session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+          if (session.account.userAddr !== account.userAddr) {
             await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 
@@ -5775,52 +5819,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           };
 
-          // Gas sponsorship (Premium admin benefit). Non-custodial: the user
-          // still signs; the sponsor only pays gas. Any failure falls back to
-          // self-paid gas so a member is NEVER blocked from contributing.
-          let txResult: { digest: string; status: string; gasUsed?: unknown };
-          let sponsored = false;
-          try {
-            const decision = await resolveEscrowSponsorship({
-              sub: session.account.sub,
-              escrowId,
-              coinType,
-              packageId: packageIdToUse,
-              network: getCurrentNetwork(),
-              usesGasCoinForValue: false, // explicit payment coin object, not txb.gas
-            });
-            if (decision.sponsor) {
-              const sponsoredResult = await instance.sendSponsoredTransaction(
-                session.account,
-                buildContribute,
-              );
-              txResult = sponsoredResult;
-              sponsored = true;
-              await recordSponsoredUsage({
-                sub: session.account.sub,
-                userAddress: session.account.userAddr,
-                circleId: escrowId,
-                action: 'contributeToCycleEscrow',
-                digest: sponsoredResult.digest,
-              });
-            } else {
-              txResult = await instance.sendTransaction(
-                session.account,
-                buildContribute,
-                { gasBudget: 80_000_000 },
-              );
-            }
-          } catch (sponsorErr) {
-            console.error(
-              'contributeToCycleEscrow: sponsored path failed, falling back to self-paid gas',
-              sponsorErr,
-            );
-            txResult = await instance.sendTransaction(
+          // Self-paid only — see the note on paySecurityDeposit above.
+          // Sponsorship now runs entirely client-side so the user's signature
+          // is never minted here.
+          const sponsored = false;
+          const txResult: { digest: string; status: string; gasUsed?: unknown } =
+            await instance.sendTransaction(
               session.account,
               buildContribute,
               { gasBudget: 80_000_000 },
             );
-          }
 
           return res.status(200).json({
             digest: txResult.digest,
@@ -6353,8 +6361,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           // Verify session matches account data
-          if (session.account.userAddr !== account.userAddr || 
-              session.ephemeralPrivateKey !== account.ephemeralPrivateKey) {
+          if (session.account.userAddr !== account.userAddr) {
             await sessions.delete(sessionId);
             clearSessionCookie(res);
             return res.status(401).json({ 

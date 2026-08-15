@@ -27,7 +27,6 @@
 // (EN/FR) should be added there in the i18n pass.
 
 import React, { useCallback, useEffect, useState } from 'react';
-import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import type { GetStaticProps } from 'next';
@@ -46,6 +45,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { LocaleSwitcher } from '@/components/ui/LocaleSwitcher';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { Entitlements } from '@/lib/entitlement-gate';
+import { Seo } from '../components/Seo';
+import { breadcrumbs } from '../lib/structured-data';
 
 const wordmarkFont = Instrument_Serif({
   subsets: ['latin'],
@@ -214,7 +215,6 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
     t('pricing.premium.feature.everything'),
   ];
 
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com';
 
   // Premium CTA: coming soon (flag off) → sign in → upgrade / manage.
   let premiumCta: React.ReactNode;
@@ -277,23 +277,19 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
 
   return (
     <>
-      <Head>
-        <title>Pricing | Njangi On-Chain — Free and Premium Savings Circles</title>
-        <meta
-          name="description"
-          content="Njangi On-Chain pricing: a free plan for small circles and a Premium plan with bigger circles, WhatsApp notifications, smart goals, and analytics. Your funds are never behind a paywall."
-        />
-        <link rel="canonical" href={`${baseUrl}/pricing`} />
-        <meta property="og:type" content="website" />
-        <meta property="og:url" content={`${baseUrl}/pricing`} />
-        <meta property="og:title" content="Pricing — Njangi On-Chain" />
-        <meta
-          property="og:description"
-          content="Start free. Upgrade for bigger circles, WhatsApp notifications, smart goals, and analytics."
-        />
-        <meta property="og:image" content={`${baseUrl}/njangi-on-chain-logo.png`} />
-        <meta name="theme-color" content="#f6f3ee" />
-      </Head>
+      <Seo
+        title="Pricing"
+        description="A free plan for small circles, and Premium for bigger circles, WhatsApp notifications, smart goals, and analytics. We never take a cut of contributions or payouts."
+        path="/pricing"
+        ogTitle="Pricing — Njangi On-Chain"
+        ogDescription="Start free. Upgrade for bigger circles, WhatsApp notifications, smart goals, and analytics."
+        image={{
+          url: '/og/pricing.png',
+          alt: 'Njangi On-Chain pricing — free to run a circle, pay only for coordination',
+        }}
+        themeColor="#f6f3ee"
+        jsonLd={[breadcrumbs([{ name: 'Home', path: '/' }, { name: 'Pricing' }])]}
+      />
 
       <div
         className={`${bodyFont.className} relative min-h-screen overflow-hidden bg-[#f6f3ee] text-[#171923]`}

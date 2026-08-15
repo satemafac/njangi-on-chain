@@ -25,6 +25,10 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
 const SCAN_DIRS = [
   'src/pages',
   'src/components',
+  // Marketing copy moved out of the page components and into data modules
+  // (src/content/rosca-terms.ts). Without this line the glossary's ~6,500 words
+  // of user-facing prose would sit outside the guard entirely.
+  'src/content',
   'whatsapp-bot-backend/src/services',
 ];
 const SCAN_FILES = ['src/lib/i18n.ts'];
@@ -41,6 +45,34 @@ const BANNED_PATTERNS = [
   { re: /guaranteed?\s+returns?/i, why: 'financial guarantee language' },
   { re: /savings\s+account/i, why: 'deposit-taking characterization' },
   { re: /interest[-\s]bearing/i, why: 'banking terminology' },
+
+  // --- Product-noun patterns -------------------------------------------
+  //
+  // Added 2026-08-02 after a live E2E found a full "YIELD ROUTING / Ember
+  // Vault Operations" panel rendering on /circle/[id]/manage in production.
+  // Every pattern above matches a CLAIM OF RETURN ("earn yield", "8%
+  // returns"). That panel made no such claim — it simply NAMED a yield
+  // product and its operations, so it sailed through a green check:copy.
+  //
+  // The backend already 410'd the actions, which is exactly why nobody
+  // noticed: the feature was dead, the copy was not. Advertising an
+  // investment product you do not offer is the same disclosure problem as
+  // offering one, so these match product nouns, not promises.
+  { re: /yield\s+routing/i, why: 'names a yield product (retired module)' },
+  { re: /\bember\s+vault/i, why: 'retired Ember yield vault' },
+  // Negative lookahead spares `suiUsdEquivalent`, a legitimate SUI->USD
+  // price variable that /suiusde/i would otherwise flag on every page.
+  { re: /suiusde(?![a-z])/i, why: 'retired yield-vault asset' },
+  { re: /\brequest\s+redemption\b/i, why: 'vault redemption operation' },
+  {
+    re: /\bvault\s+(?:operations?|routing|deposits?|exposure|active)\b/i,
+    why: 'names a vault product',
+  },
+  { re: /\bAPR\b/, why: 'annualized rate vocabulary' },
+  // Invariant #1, not #4: "Withdrawal processing stays external/
+  // operator-driven" describes the operator moving user funds — the exact
+  // capability the CLARITY non-controlling test asks about.
+  { re: /operator[-\s]driven/i, why: 'implies operator control of user funds' },
 ];
 
 // Line-level whitelist: disclaimers and denials are the GOOD kind of

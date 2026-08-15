@@ -508,7 +508,16 @@ export function LegalAcceptanceGate({ active }: LegalAcceptanceGateProps) {
         const docs = Array.isArray(data.missing) ? data.missing.filter(isLegalDocId) : [];
         setMissing(docs);
       } catch {
-        // Network hiccup: fail open for reads; server-side gates still hold.
+        // Network hiccup: fail open for this read.
+        //
+        // This used to claim "server-side gates still hold". They did not —
+        // `hasAcceptedAllLegalDocs` had zero callers, so acceptance was
+        // recorded and never checked, and this modal was the only thing
+        // standing between a user and a circle. A server gate now exists on
+        // /api/join-requests/create, but it is one endpoint, not a general
+        // backstop: client-signed on-chain actions still bypass it entirely.
+        // Enforcing those needs the on-chain attestation gate
+        // (njangi_compliance), not a server route.
       }
     })();
     return () => {

@@ -393,3 +393,353 @@ export function buildBatchHeartbeatAdminLivenessTx({
 
   return tx;
 }
+
+export interface ClaimMembershipBuilderInput {
+  /** One entry per circle whose receipt is missing. */
+  circles: Array<{ packageId: string; circleId: string }>;
+}
+
+/**
+ * Mints the caller's own `CircleMembership` receipts.
+ *
+ * Receipts make a circle discoverable through `getOwnedObjects`, which is
+ * server-side filtered and works on any RPC endpoint. Circles predating the
+ * receipt upgrade have none, so they are only findable by scanning the
+ * `CircleCreated` / `MemberJoined` event streams — and event history is the
+ * one thing replacement RPC providers do NOT reliably serve (publicnode and
+ * suiscan both fail with "Could not find the referenced transaction events";
+ * only blockvision answers, and it rate-limits). A circle without a receipt is
+ * therefore one rate-limit away from vanishing from the dashboard.
+ *
+ * `claim_membership` is permissionless for a current member and aborts with
+ * ENotMember otherwise, so this can only ever mint the caller's own receipts.
+ * Duplicates are harmless — discovery dedups by circle_id and re-verifies
+ * against the circle's live members table.
+ *
+ * Batched into one transaction so restoring N circles costs one signature.
+ */
+export function buildClaimMembershipTx({
+  circles,
+}: ClaimMembershipBuilderInput): Transaction {
+  if (!Array.isArray(circles) || circles.length === 0) {
+    throw new Error('At least one circle target is required.');
+  }
+
+  const tx = new Transaction();
+  tx.setGasBudget(RECOVERY_VOTE_GAS_BUDGET * circles.length);
+
+  circles.forEach(({ packageId, circleId }) => {
+    tx.moveCall({
+      target: `${normalizeRequiredPackageId(packageId)}::njangi_circles::claim_membership`,
+      arguments: [
+        tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+        tx.object(CLOCK_OBJECT_ID),
+      ],
+    });
+  });
+
+  return tx;
+}
+
+// ---------------------------------------------------------------------------
+// Circle administration.
+//
+// These moved here when server-side signing was removed. Each previously ran
+// as an /api/zkLogin action that built the transaction on the server and
+// signed it with the ephemeral key held there; after Phase 1 those sessions
+// carry no server key, so the actions returned 409 and the features broke.
+// Building here lets the browser sign them like everything else.
+//
+// The Clock is `0x6`; every circle mutation touches it to refresh the admin
+// liveness heartbeat.
+// ---------------------------------------------------------------------------
+
+export interface CircleAdminBuilderInput {
+  packageId: string;
+  circleId: string;
+}
+
+export function buildActivateCircleTx({
+  packageId,
+  circleId,
+}: CircleAdminBuilderInput): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::njangi_circles::activate_circle`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.object(CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export function buildResumeCycleTx({
+  packageId,
+  circleId,
+}: CircleAdminBuilderInput): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::njangi_circles::resume_cycle`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.object(CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export function buildToggleAutoSwapTx({
+  packageId,
+  circleId,
+  enabled,
+}: CircleAdminBuilderInput & { enabled: boolean }): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::njangi_circles::toggle_auto_swap`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.pure.bool(enabled),
+      tx.object(CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export function buildAdminSetMaxMembersTx({
+  packageId,
+  circleId,
+  newMaxMembers,
+}: CircleAdminBuilderInput & { newMaxMembers: number }): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::njangi_circles::admin_set_max_members`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.pure.u64(newMaxMembers),
+      tx.object(CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export function buildAdminApproveMemberTx({
+  packageId,
+  circleId,
+  memberAddress,
+}: CircleAdminBuilderInput & { memberAddress: string }): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::njangi_circles::admin_approve_member`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.pure.address(normalizeRequiredObjectId(memberAddress, 'Member address')),
+      tx.object(CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export function buildAdminApproveMembersTx({
+  packageId,
+  circleId,
+  memberAddresses,
+}: CircleAdminBuilderInput & { memberAddresses: string[] }): Transaction {
+  if (!Array.isArray(memberAddresses) || memberAddresses.length === 0) {
+    throw new Error('At least one member address is required.');
+  }
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::njangi_circles::admin_approve_members`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.makeMoveVec({
+        elements: memberAddresses.map((a) =>
+          tx.pure.address(normalizeRequiredObjectId(a, 'Member address')),
+        ),
+        type: 'address',
+      }),
+      tx.object(CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export function buildAdminRemoveMemberTx({
+  packageId,
+  circleId,
+  memberAddress,
+  walletId,
+}: CircleAdminBuilderInput & { memberAddress: string; walletId: string }): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::njangi_circles::admin_remove_member`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.pure.address(normalizeRequiredObjectId(memberAddress, 'Member address')),
+      tx.object(normalizeRequiredObjectId(walletId, 'Wallet ID')),
+      tx.object(CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export function buildDeleteCircleTx({
+  packageId,
+  circleId,
+  walletId,
+}: CircleAdminBuilderInput & { walletId: string }): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::njangi_circles::delete_circle`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.object(normalizeRequiredObjectId(walletId, 'Wallet ID')),
+    ],
+  });
+  return tx;
+}
+
+export function buildSetRotationPositionTx({
+  packageId,
+  circleId,
+  memberAddress,
+  position,
+}: CircleAdminBuilderInput & { memberAddress: string; position: number }): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::njangi_circles::set_rotation_position`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.pure.address(normalizeRequiredObjectId(memberAddress, 'Member address')),
+      tx.pure.u64(position),
+      tx.object(CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export function buildReorderRotationPositionsTx({
+  packageId,
+  circleId,
+  newOrder,
+}: CircleAdminBuilderInput & { newOrder: string[] }): Transaction {
+  if (!Array.isArray(newOrder) || newOrder.length === 0) {
+    throw new Error('A non-empty rotation order is required.');
+  }
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::njangi_circles::reorder_rotation_positions_entry`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.makeMoveVec({
+        elements: newOrder.map((a) =>
+          tx.pure.address(normalizeRequiredObjectId(a, 'Member address')),
+        ),
+        type: 'address',
+      }),
+      tx.object(CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+/**
+ * Legacy-rail payout: releases the pooled contributions to the scheduled
+ * recipient.
+ *
+ * Migrated here for the same reason as the admin calls, but this one matters
+ * more: Phase 3 deliberately left payouts OUT of the legacy-rail kill switch
+ * so committed funds stay claimable after the rail stops accepting deposits.
+ * The Phase 1 409 guard undid that by blocking the only path to them, which is
+ * precisely the fund-trapping outcome the kill-switch design avoids. Building
+ * and signing in the browser restores it.
+ *
+ * `trigger_payout` is permissionless on chain — the recipient is read from the
+ * circle's rotation, not from the caller — so anyone may pay the gas.
+ */
+export function buildTriggerPayoutTx({
+  packageId,
+  circleId,
+  walletId,
+  coinType,
+}: CircleAdminBuilderInput & { walletId: string; coinType: string }): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::njangi_payments::trigger_payout`,
+    typeArguments: [coinType],
+    arguments: [
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.object(normalizeRequiredObjectId(walletId, 'Wallet ID')),
+      tx.object(CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+/**
+ * WhatsApp link anchors.
+ *
+ * These two used to be signed on the SERVER: the manage page POSTed the
+ * user's `ephemeralPrivateKey` (with zkProofs, salt, sub, aud and maxEpoch)
+ * to /api/whatsapp/admin-{link,unlink}-circle, which rebuilt the keypair and
+ * signed as the user. That is the whole set needed to sign ANY transaction
+ * for that address until the epoch rolls, so it reproduced the arbitrary
+ * signing oracle Phase 0 removed — just through a different route.
+ *
+ * The server's remaining job is the part only it can do: encrypt the phone
+ * number and put it in Walrus. It hands back a blob id and nonce; the anchor
+ * is signed here, in the browser.
+ *
+ * Both Move entry points take the Circle BY REFERENCE and assert the sender
+ * is its on-chain admin, so there is no caller-supplied address to forge —
+ * moving the signature client-side loses no authorization.
+ */
+export function buildLinkCircleTx({
+  packageId,
+  registryObjectId,
+  circleId,
+  linkType,
+  walrusBlobId,
+  linkNonce,
+}: {
+  packageId: string;
+  registryObjectId: string;
+  circleId: string;
+  linkType: number;
+  walrusBlobId: string;
+  linkNonce: Uint8Array | number[];
+}): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::whatsapp_integration::link_circle`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(registryObjectId, 'WhatsApp registry ID')),
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.pure.u8(linkType),
+      tx.pure.vector('u8', Array.from(new TextEncoder().encode(walrusBlobId))),
+      tx.pure.vector('u8', Array.from(linkNonce)),
+    ],
+  });
+  return tx;
+}
+
+export function buildUnlinkCircleTx({
+  packageId,
+  registryObjectId,
+  circleId,
+}: {
+  packageId: string;
+  registryObjectId: string;
+  circleId: string;
+}): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::whatsapp_integration::unlink_circle`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(registryObjectId, 'WhatsApp registry ID')),
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+    ],
+  });
+  return tx;
+}

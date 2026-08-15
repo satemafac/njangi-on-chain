@@ -40,12 +40,6 @@ export interface NetworkConfig {
     USDT?: string;
     SUI_USDE?: string;
   };
-  ember: {
-    vaultPackage?: string;
-    suiUsdeVaultId?: string;
-    receiptCoinType?: string;
-    protocolConfigId?: string;
-  };
   whatsapp: {
     packageId: string;
     registryObjectId: string;
@@ -89,12 +83,6 @@ function buildNetworkConfig(network: NetworkType): NetworkConfig {
         USDC: '0x9e89965f542887a8f0383451ba553fedf62c04e4dc68f60dec5b8d7ad1436bd6::usdc::USDC',
         USDT: '0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08::usdt::USDT',
         SUI_USDE: process.env.NEXT_PUBLIC_TESTNET_SUI_USDE || '',
-      },
-      ember: {
-        vaultPackage: process.env.NEXT_PUBLIC_TESTNET_EMBER_VAULT_PACKAGE || '',
-        suiUsdeVaultId: process.env.NEXT_PUBLIC_TESTNET_EMBER_SUI_USDE_VAULT_ID || '',
-        receiptCoinType: process.env.NEXT_PUBLIC_TESTNET_EMBER_ESUIUSDE_RECEIPT || '',
-        protocolConfigId: process.env.NEXT_PUBLIC_TESTNET_EMBER_PROTOCOL_CONFIG || '',
       },
       whatsapp: {
         packageId: env.whatsappPackageId,
@@ -141,18 +129,6 @@ function buildNetworkConfig(network: NetworkType): NetworkConfig {
       // Native suiUSDT (Sui Bridge Tether) — what CEXes deliver for USDT on Sui
       USDT: process.env.NEXT_PUBLIC_MAINNET_USDT || '0x375f70cf2ae4c00bf37117d0c85a2c71545e6ee05c4a5c7d282cd66a4504b068::usdt::USDT',
       SUI_USDE: process.env.NEXT_PUBLIC_MAINNET_SUI_USDE || '0x41d587e5336f1c86cad50d38a7136db99333bb9bda91cea4ba69115defeb1402::sui_usde::SUI_USDE',
-    },
-    ember: {
-      vaultPackage: process.env.NEXT_PUBLIC_MAINNET_EMBER_VAULT_PACKAGE || '0xc83d5406fd355f34d3ce87b35ab2c0b099af9d309ba96c17e40309502a49976f',
-      suiUsdeVaultId:
-        process.env.NEXT_PUBLIC_MAINNET_EMBER_SUI_USDE_VAULT_ID ||
-        '0x2a906b7633db9fca6c2f16c1efe73c7e289dfce8ed64a98ec5a5be10a9fb9aa1',
-      receiptCoinType:
-        process.env.NEXT_PUBLIC_MAINNET_EMBER_ESUIUSDE_RECEIPT ||
-        '0xc360f622a9e77bb774061c44c11915e3cfc4242488cd668652dbff39cf0cdd58::esuiusde::ESUIUSDE',
-      protocolConfigId:
-        process.env.NEXT_PUBLIC_MAINNET_EMBER_PROTOCOL_CONFIG ||
-        '0x3a515233ab817af082ef31454cee5eb8122b8b7cd586bf6b26ae9b879ee1e565',
     },
     whatsapp: {
       packageId: env.whatsappPackageId,
@@ -243,10 +219,6 @@ export function getCurrentTokens() {
   return getCurrentNetworkConfig().tokens;
 }
 
-export function getCurrentEmberConfig() {
-  return getCurrentNetworkConfig().ember;
-}
-
 export function getCurrentWhatsAppConfig() {
   return getCurrentNetworkConfig().whatsapp;
 }
@@ -280,18 +252,6 @@ export function validateNetworkConfig(network: NetworkType): { isValid: boolean;
   if (network === 'mainnet') {
     if (!config.coinTypes.SUI_USDE) {
       errors.push('Missing mainnet suiUSDe coin type');
-    }
-    if (!config.ember.vaultPackage) {
-      errors.push('Missing mainnet Ember vault package ID');
-    }
-    if (!config.ember.suiUsdeVaultId) {
-      errors.push('Missing mainnet Ember suiUSDe vault ID');
-    }
-    if (!config.ember.receiptCoinType) {
-      errors.push('Missing mainnet Ember receipt coin type');
-    }
-    if (!config.ember.protocolConfigId) {
-      errors.push('Missing mainnet Ember protocol config ID');
     }
   }
 

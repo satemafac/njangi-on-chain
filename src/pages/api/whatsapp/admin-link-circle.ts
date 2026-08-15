@@ -35,7 +35,6 @@ import {
   withCircleAdminAuth,
   type AuthenticatedRequest,
 } from '../../../middleware/admin-auth.middleware';
-import { enokiZkLoginService } from '../../../services/enokiZkLoginService';
 import { AccountData } from '../../../services/zkLoginService';
 import { getNetworkConfig } from '../../../services/network-config';
 import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry-service';
@@ -221,7 +220,8 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
     const adminAddr = req.admin!.suiAddress;
     const circleId = req.admin!.circleId;
     const network = req.admin!.network;
-    const account = req.body?.account as AccountData | undefined;
+    // NB: `account` is deliberately not read. The client used to send its
+    // ephemeral private key here; nothing in this route may depend on it.
 
     const { linkType, phoneOrGroup, groupName } = req.body as LinkCircleRequest;
 
@@ -249,10 +249,11 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
       return res.status(403).json(sanctionsErrorBody());
     }
 
-    // Premium gate (ENFORCEABLE): the WhatsApp suite is fully
-    // server-mediated — Walrus PII encryption + the on-chain anchor run
-    // here with server keys, so this gate cannot be bypassed by calling
-    // the contract directly. Runs after admin auth but BEFORE any side
+    // Premium gate (ENFORCEABLE): the Walrus PII encryption runs here, and
+    // a link is useless without it — the webhook resolves inbound messages
+    // through the blob, so anchoring a blob id the server never issued buys
+    // nothing. The anchor itself is now signed client-side, so the gate
+    // rests on the encryption step alone rather than on holding the key. Runs after admin auth but BEFORE any side
     // effect. No-op while NEXT_PUBLIC_BILLING_ENABLED is off; on billing
     // infra errors it fails open (this is a paid convenience, never an
     // access control on funds).
@@ -279,6 +280,60 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
       network,
     });
 
+    // Confirm step. The browser calls back once the anchor has landed so the
+    // webhook index records only links that actually exist on chain — the
+    // on-chain link stays the source of truth, and an abandoned signature
+    // leaves no phantom route behind.
+    //
+    // Re-runs admin auth, the sanctions screen and the entitlement gate above
+    // (all cheap) but deliberately skips the Walrus upload: the blob was
+    // already stored and paid for in the prepare call.
+    const { anchoredDigest, walrusBlobId: confirmedBlobId, walrusEndEpoch: confirmedEndEpoch } =
+      req.body as {
+        anchoredDigest?: string;
+        walrusBlobId?: string;
+        walrusEndEpoch?: number;
+      };
+    if (anchoredDigest) {
+      if (!confirmedBlobId) {
+        return res.status(400).json({
+          success: false,
+          error: 'anchoredDigest requires the walrusBlobId returned by the prepare call',
+        });
+      }
+      try {
+        await indexWhatsAppLink({
+          phoneOrGroup,
+          circleId,
+          walrusBlobId: confirmedBlobId,
+          linkType,
+          walrusEndEpoch: confirmedEndEpoch,
+        });
+      } catch (indexError) {
+        console.warn('[admin-link-circle] Failed to populate WhatsApp link index', indexError);
+      }
+
+      logAdminAction('LINK_CIRCLE_SUCCESS', adminAddr, {
+        circleId,
+        linkType,
+        walrusBlobId: confirmedBlobId,
+        txDigest: anchoredDigest,
+        status: 'confirmed_on_blockchain',
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          message: 'Circle successfully linked to WhatsApp.',
+          circleId,
+          linkType,
+          walrusBlobId: confirmedBlobId,
+          txDigest: anchoredDigest,
+          status: 'confirmed',
+        },
+      });
+    }
+
     const activeRegistries = getActiveWhatsAppRegistries(network);
     if (!activeRegistries || activeRegistries.length === 0) {
       throw new Error(`No active WhatsApp registry configured for ${network} network`);
@@ -297,93 +352,40 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
     const payload = buildPayload(linkType, phoneOrGroup, groupName);
     const { walrusBlobId, linkNonce, walrusEndEpoch } = await encryptAndStorePII(payload);
 
-    if (!account || !account.zkProofs) {
-      logAdminAction('LINK_CIRCLE_SUCCESS', adminAddr, {
-        circleId,
-        linkType,
-        walrusBlobId,
-        linkNonceHex: nonceToHex(linkNonce),
-        status: 'pending_blockchain_confirmation',
-      });
-
-      return res.status(200).json({
-        success: true,
-        data: {
-          message: 'PII encrypted and stored in Walrus. Submit the on-chain anchor from a signed session.',
-          circleId,
-          linkType,
-          walrusBlobId,
-          linkNonceHex: nonceToHex(linkNonce),
-          status: 'pending',
-        },
-      });
-    }
-
-    const networkConfig = getNetworkConfig(network);
-    console.log(`[admin-link-circle] Anchoring blob ${walrusBlobId} for circle ${circleId} on ${network} (${networkConfig.rpcUrl})`);
-
-    const blobIdBytes = Array.from(new TextEncoder().encode(walrusBlobId));
-    const nonceBytes = Array.from(linkNonce);
-
-    const result = await enokiZkLoginService.sendTransaction(
-      account,
-      (txb) => {
-        txb.moveCall({
-          target: `${packageId}::whatsapp_integration::link_circle`,
-          arguments: [
-            txb.object(registryObjectId),
-            // The contract takes the Circle by reference and asserts the
-            // sender is its on-chain admin — no caller-supplied admin
-            // address anymore.
-            txb.object(circleId),
-            txb.pure.u8(linkType),
-            txb.pure.vector('u8', blobIdBytes),
-            txb.pure.vector('u8', nonceBytes),
-          ],
-        });
-      },
-      { gasBudget: 10_000_000 },
-      network as 'testnet' | 'mainnet',
-    );
-
-    // Phase 2: index the (HMAC(phone), circle_id, blob_id) tuple so the
-    // webhook can resolve incoming messages in O(1). Failures are logged
-    // but non-fatal — the on-chain link is the source of truth, and the
-    // webhook will fall back to the legacy O(N) Walrus scan if the index
-    // is missing or stale.
-    try {
-      await indexWhatsAppLink({
-        phoneOrGroup,
-        circleId,
-        walrusBlobId,
-        linkType,
-        // Track expiry so /api/cron/walrus-renewal can re-store the blob
-        // before its storage lease lapses.
-        walrusEndEpoch,
-      });
-    } catch (indexError) {
-      console.warn('[admin-link-circle] Failed to populate WhatsApp link index', indexError);
-    }
-
-    logAdminAction('LINK_CIRCLE_SUCCESS', adminAddr, {
+    // The server's job ends at the Walrus upload. The anchor is signed in
+    // the browser (ZkLoginClient.linkCircleToWhatsApp), so the response
+    // carries the inputs that transaction needs and nothing else.
+    //
+    // This used to have a second branch that signed here, using an
+    // `ephemeralPrivateKey` the manage page put in the request body. The
+    // browser holds that key precisely so the server cannot sign as the
+    // user; shipping it back over the wire handed the capability straight
+    // back, and with zkProofs + salt + sub + aud alongside it the server
+    // could have signed ANY transaction for that address until the epoch
+    // rolled. Deleted, not gated.
+    logAdminAction('LINK_CIRCLE_PREPARED', adminAddr, {
       circleId,
       linkType,
       walrusBlobId,
       linkNonceHex: nonceToHex(linkNonce),
-      txDigest: result.digest,
-      status: 'confirmed_on_blockchain',
+      status: 'awaiting_client_signature',
     });
 
     return res.status(200).json({
       success: true,
       data: {
-        message: 'Circle successfully linked to WhatsApp; PII stored encrypted in Walrus.',
+        message:
+          'PII encrypted and stored in Walrus. Sign the on-chain anchor to finish linking.',
         circleId,
         linkType,
         walrusBlobId,
         linkNonceHex: nonceToHex(linkNonce),
-        txDigest: result.digest,
-        status: 'confirmed',
+        walrusEndEpoch,
+        // Anchor inputs — the browser must not have to guess which registry
+        // generation is live.
+        packageId,
+        registryObjectId,
+        status: 'pending',
       },
     });
   } catch (error) {

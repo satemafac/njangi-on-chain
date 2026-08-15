@@ -3,6 +3,14 @@ import handler from '@/pages/api/onramp/coinbase/session';
 import { CoinbaseOnrampError } from '@/services/coinbase-onramp-service';
 
 const mockCreateSessionToken = jest.fn();
+const mockScreenAddress = jest.fn();
+
+// The endpoint screens the destination wallet and fails CLOSED, so without a
+// stub every test here would 503 on "Postgres not configured" rather than
+// exercising the path it cares about.
+jest.mock('@/lib/sanctions', () => ({
+  screenAddress: (...args: unknown[]) => mockScreenAddress(...args),
+}));
 
 jest.mock('@/services/coinbase-onramp-service', () => {
   class MockCoinbaseOnrampError extends Error {
@@ -93,6 +101,46 @@ describe('POST /api/onramp/coinbase/session', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     delete process.env.COINBASE_ONRAMP_ALLOWED_ORIGINS;
+    // The provider flag now gates this endpoint server-side. It defaults OFF,
+    // so every test exercising real behaviour must opt in explicitly — the
+    // disabled path is covered separately below.
+    process.env.NEXT_PUBLIC_COINBASE_ONRAMP_ENABLED = 'true';
+    mockScreenAddress.mockResolvedValue({ blocked: false, listVersion: '2026-08-01' });
+  });
+
+  afterEach(() => {
+    delete process.env.NEXT_PUBLIC_COINBASE_ONRAMP_ENABLED;
+  });
+
+  it('refuses when the provider flag is off, even on a valid request', async () => {
+    // Regression: this endpoint used to ignore its own flag entirely. The flag
+    // hid the launcher in RampPicker while the route stayed callable directly,
+    // so the ramp was reachable in an environment that reported it disabled.
+    delete process.env.NEXT_PUBLIC_COINBASE_ONRAMP_ENABLED;
+    mockCreateSessionToken.mockResolvedValue({
+      token: 'session-token',
+      channelId: 'channel-1',
+      assetIntent: 'USDC_ON_SUI',
+    });
+
+    const req = createMockRequest({
+      body: {
+        walletAddress:
+          '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd',
+        preferredAssetIntent: 'USDC_ON_SUI',
+        country: 'US',
+      },
+    });
+    const res = createMockResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toEqual(
+      expect.objectContaining({ error: 'COINBASE_DISABLED' }),
+    );
+    // The point of a server-side gate: no session token is ever minted.
+    expect(mockCreateSessionToken).not.toHaveBeenCalled();
   });
 
   it('creates session on happy path', async () => {
@@ -249,6 +297,82 @@ describe('POST /api/onramp/coinbase/session', () => {
       expect.objectContaining({
         clientIp: '198.51.100.77',
       }),
+    );
+  });
+});
+
+describe('POST /api/onramp/coinbase/session — wallet sanctions screen', () => {
+  const validBody = {
+    walletAddress: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd',
+    preferredAssetIntent: 'USDC_ON_SUI',
+    country: 'US',
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    delete process.env.COINBASE_ONRAMP_ALLOWED_ORIGINS;
+    process.env.NEXT_PUBLIC_COINBASE_ONRAMP_ENABLED = 'true';
+    mockCreateSessionToken.mockResolvedValue({
+      token: 'session-token',
+      channelId: 'channel-1',
+      assetIntent: 'USDC_ON_SUI',
+    });
+  });
+
+  afterEach(() => {
+    delete process.env.NEXT_PUBLIC_COINBASE_ONRAMP_ENABLED;
+  });
+
+  it('refuses a listed destination wallet and mints no session token', async () => {
+    // Geo-blocking alone misses this: a listed address funding itself from a
+    // permitted jurisdiction. The wallet is the thing receiving funds, so the
+    // wallet is what has to be screened.
+    mockScreenAddress.mockResolvedValue({
+      blocked: true,
+      listVersion: '2026-08-01',
+      reason: 'hit',
+    });
+
+    const req = createMockRequest({ body: validBody });
+    const res = createMockResponse();
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toEqual(
+      expect.objectContaining({ error: 'SANCTIONS_BLOCKED' }),
+    );
+    expect(mockCreateSessionToken).not.toHaveBeenCalled();
+  });
+
+  it('fails CLOSED with a retryable 503 when screening is unavailable', async () => {
+    // Distinct from a match: the user is not refused, the check could not
+    // run. Saying 403 here would tell an innocent user they are banned.
+    mockScreenAddress.mockResolvedValue({
+      blocked: true,
+      listVersion: null,
+      reason: 'unavailable',
+    });
+
+    const req = createMockRequest({ body: validBody });
+    const res = createMockResponse();
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toEqual(
+      expect.objectContaining({ error: 'SCREENING_UNAVAILABLE' }),
+    );
+    expect(mockCreateSessionToken).not.toHaveBeenCalled();
+  });
+
+  it('screens the wallet as a new commitment (failClosed)', async () => {
+    const req = createMockRequest({ body: validBody });
+    const res = createMockResponse();
+    await handler(req, res);
+
+    expect(mockScreenAddress).toHaveBeenCalledWith(
+      validBody.walletAddress,
+      'ramp_session',
+      { failClosed: true },
     );
   });
 });

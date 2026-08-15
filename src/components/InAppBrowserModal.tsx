@@ -3,32 +3,48 @@ import React, { useState } from 'react';
 interface InAppBrowserModalProps {
   isOpen: boolean;
   onClose: () => void;
-  loginUrl: string;
   browserName: string;
   provider: string;
 }
 
-export function InAppBrowserModal({ 
-  isOpen, 
-  onClose, 
-  loginUrl, 
-  browserName, 
-  provider 
+/**
+ * Prompts the user to leave an in-app webview (Instagram, Facebook, …) and
+ * finish signing in from a real browser.
+ *
+ * This deliberately hands off a link to OUR OWN app, not a pre-generated OAuth
+ * URL. The OAuth nonce is bound to an ephemeral key that lives in the
+ * originating context's sessionStorage; sending the user to that URL in a
+ * different browser would leave the key stranded in the webview and the login
+ * could never complete. The destination browser must run `beginLogin` itself,
+ * so it mints its own key.
+ *
+ * Do not reintroduce a `loginUrl` prop.
+ */
+export function InAppBrowserModal({
+  isOpen,
+  onClose,
+  browserName,
+  provider,
 }: InAppBrowserModalProps) {
   const [copyFeedback, setCopyFeedback] = useState(false);
 
   if (!isOpen) return null;
 
+  // Land on the app itself; the user taps sign-in again in the real browser,
+  // which starts a fresh login in that context.
+  const handoffUrl =
+    typeof window !== 'undefined' ? window.location.origin : '';
+
   const handleCopyUrl = async () => {
     try {
-      await navigator.clipboard.writeText(loginUrl);
+      await navigator.clipboard.writeText(handoffUrl);
       setCopyFeedback(true);
       setTimeout(() => setCopyFeedback(false), 2000);
     } catch (error) {
       console.error('Failed to copy URL:', error);
       // Fallback for older browsers
       const textArea = document.createElement('textarea');
-      textArea.value = loginUrl;
+      textArea.value = handoffUrl;
       document.body.appendChild(textArea);
       textArea.select();
       document.execCommand('copy');
@@ -50,7 +66,7 @@ export function InAppBrowserModal({
           // For Instagram on iOS, try to trigger the "Open in Safari" prompt
           // Create a link that might trigger the browser selector
           const link = document.createElement('a');
-          link.href = loginUrl;
+          link.href = handoffUrl;
           link.target = '_blank';
           link.rel = 'noopener noreferrer';
           
@@ -67,20 +83,20 @@ export function InAppBrowserModal({
           document.body.removeChild(link);
         } else {
           // Fallback for other iOS browsers
-          window.open(loginUrl, '_blank');
+          window.open(handoffUrl, '_blank');
         }
       } else if (isAndroid) {
         // Android: Use intent URLs to force external browser
         if (userAgent.includes('Instagram')) {
           // Try Chrome intent first
-          window.location.href = `intent://${loginUrl.replace(/^https?:\/\//, '')}#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(loginUrl)};end`;
+          window.location.href = `intent://${handoffUrl.replace(/^https?:\/\//, '')}#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(handoffUrl)};end`;
         } else {
           // Generic Android intent
-          window.location.href = `intent://${loginUrl.replace(/^https?:\/\//, '')}#Intent;scheme=https;action=android.intent.action.VIEW;end`;
+          window.location.href = `intent://${handoffUrl.replace(/^https?:\/\//, '')}#Intent;scheme=https;action=android.intent.action.VIEW;end`;
         }
       } else {
         // Desktop or other platforms
-        window.open(loginUrl, '_blank');
+        window.open(handoffUrl, '_blank');
       }
     } catch (error) {
       console.error('Failed to open in browser:', error);
@@ -121,7 +137,7 @@ export function InAppBrowserModal({
                 : 'bg-blue-600 hover:bg-blue-700 text-white shadow-lg'
             }`}
           >
-            {copyFeedback ? '✓ Copied to Clipboard!' : '📋 Copy Login Link'}
+            {copyFeedback ? '✓ Copied to Clipboard!' : '📋 Copy App Link'}
           </button>
           
           {/* Platform-specific instructions */}
@@ -130,11 +146,11 @@ export function InAppBrowserModal({
               <div>
                 <p className="font-medium text-blue-800 mb-2">📱 iOS Instructions:</p>
                 <ol className="list-decimal list-inside space-y-1 text-blue-700">
-                  <li>Tap &quot;Copy Login Link&quot; above</li>
+                  <li>Tap &quot;Copy App Link&quot; above</li>
                   <li>Press your home button or swipe up</li>
                   <li>Open Safari (or your preferred browser)</li>
                   <li>Tap the address bar and paste the link</li>
-                  <li>Complete your {provider} login</li>
+                  <li>Tap Sign in with {provider} again there</li>
                 </ol>
               </div>
             )}
@@ -142,10 +158,10 @@ export function InAppBrowserModal({
               <div>
                 <p className="font-medium text-blue-800 mb-2">🤖 Android Instructions:</p>
                 <ol className="list-decimal list-inside space-y-1 text-blue-700">
-                  <li>Tap &quot;Copy Login Link&quot; above</li>
+                  <li>Tap &quot;Copy App Link&quot; above</li>
                   <li>Open Chrome or your default browser</li>
                   <li>Paste the link in the address bar</li>
-                  <li>Complete your {provider} login</li>
+                  <li>Tap Sign in with {provider} again there</li>
                 </ol>
                 <p className="mt-2 text-xs text-blue-600">Or try the &quot;Try Opening in Browser&quot; button below</p>
               </div>
@@ -154,10 +170,10 @@ export function InAppBrowserModal({
               <div>
                 <p className="font-medium text-blue-800 mb-2">💻 Instructions:</p>
                 <ol className="list-decimal list-inside space-y-1 text-blue-700">
-                  <li>Copy the login link above</li>
+                  <li>Copy the app link above</li>
                   <li>Open your default browser</li>
                   <li>Paste and visit the link</li>
-                  <li>Complete your {provider} login</li>
+                  <li>Tap Sign in with {provider} again there</li>
                 </ol>
               </div>
             )}
@@ -177,9 +193,9 @@ export function InAppBrowserModal({
               onClick={() => {
                 if (navigator.share) {
                   navigator.share({
-                    title: `${provider} Login`,
-                    text: `Complete your ${provider} login:`,
-                    url: loginUrl
+                    title: `Sign in with ${provider}`,
+                    text: `Open this in your browser, then tap Sign in with ${provider}:`,
+                    url: handoffUrl
                   }).catch(err => {
                     console.log('Share failed:', err);
                     // Fallback to copy

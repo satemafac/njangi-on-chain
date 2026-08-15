@@ -12,6 +12,7 @@ import React, { useState, useEffect } from 'react';
 import { MessageCircle, Link as LinkIcon, Unlink, Loader } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { AccountData } from '@/services/zkLoginService';
+import { ZkLoginClient } from '@/services/zkLoginClient';
 import { getCurrentNetwork } from '@/services/network-config';
 import ConfirmationModal from './ConfirmationModal';
 import BillingUpsellModal, {
@@ -201,7 +202,11 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
       // Get current network selection
       const currentNetwork = getCurrentNetwork();
 
-      // Call admin-link-circle endpoint with full zkLogin account for transaction signing
+      // Step 1 — the server encrypts the phone number into Walrus and returns
+      // the anchor inputs. It is NOT sent any signing material: this request
+      // used to carry `account.ephemeralPrivateKey` (plus zkProofs, salt, sub
+      // and aud), which let the server sign anything for this address until
+      // the epoch rolled. The key stays in this tab now.
       const response = await fetch('/api/whatsapp/admin-link-circle', {
         method: 'POST',
         headers: {
@@ -213,16 +218,6 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
           phoneOrGroup: phoneOrGroup.trim(),
           adminAddress,
           network: currentNetwork,
-          account: {
-            provider: account.provider,
-            userAddr: account.userAddr,
-            zkProofs: account.zkProofs,
-            ephemeralPrivateKey: account.ephemeralPrivateKey,
-            userSalt: account.userSalt,
-            sub: account.sub,
-            aud: account.aud,
-            maxEpoch: account.maxEpoch
-          }
         })
       });
 
@@ -238,6 +233,61 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
         toast.error(humanizeErrorMessage(data.error, 'Failed to link circle'));
         return;
       }
+
+      // Step 2 — sign the on-chain anchor locally.
+      const prepared = data.data as {
+        packageId: string;
+        registryObjectId: string;
+        walrusBlobId: string;
+        linkNonceHex: string;
+        walrusEndEpoch?: number;
+      };
+      const linkNonce = Uint8Array.from(
+        (prepared.linkNonceHex.match(/.{2}/g) ?? []).map((b) => parseInt(b, 16)),
+      );
+
+      let anchoredDigest: string;
+      try {
+        const signed = await new ZkLoginClient().linkCircleToWhatsApp(account, {
+          packageId: prepared.packageId,
+          registryObjectId: prepared.registryObjectId,
+          circleId,
+          linkType,
+          walrusBlobId: prepared.walrusBlobId,
+          linkNonce,
+          network: currentNetwork,
+        });
+        anchoredDigest = signed.digest;
+      } catch (signErr) {
+        toast.error(
+          humanizeErrorMessage(
+            signErr instanceof Error ? signErr.message : undefined,
+            'Could not sign the on-chain link. Your number was not linked.',
+          ),
+        );
+        return;
+      }
+
+      // Step 3 — tell the server the anchor landed so the webhook index is
+      // written only for links that actually exist on chain.
+      await fetch('/api/whatsapp/admin-link-circle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          circleId,
+          linkType,
+          phoneOrGroup: phoneOrGroup.trim(),
+          adminAddress,
+          network: currentNetwork,
+          anchoredDigest,
+          walrusBlobId: prepared.walrusBlobId,
+          walrusEndEpoch: prepared.walrusEndEpoch,
+        }),
+      }).catch((indexErr) => {
+        // The link exists on chain; a failed index write degrades routing
+        // but must not report failure to the admin.
+        console.warn('Link anchored but index confirmation failed', indexErr);
+      });
 
       toast.success('✅ Circle linked to WhatsApp successfully!');
       setShowLinkForm(false);
@@ -265,26 +315,16 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
       // Get current network selection
       const currentNetwork = getCurrentNetwork();
 
-      // Call unlink endpoint
+      // Step 1 — ask for the anchor inputs. No signing material is sent.
       const response = await fetch('/api/whatsapp/admin-unlink-circle', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           circleId,
           adminAddress,
           network: currentNetwork,
-          account: {
-            provider: account.provider,
-            userAddr: account.userAddr,
-            zkProofs: account.zkProofs,
-            ephemeralPrivateKey: account.ephemeralPrivateKey,
-            userSalt: account.userSalt,
-            sub: account.sub,
-            aud: account.aud,
-            maxEpoch: account.maxEpoch
-          }
         })
       });
 
@@ -294,6 +334,40 @@ const WhatsAppCircleIntegration: React.FC<WhatsAppIntegrationProps> = ({
         toast.error(data.error || 'Failed to unlink circle');
         return;
       }
+
+      // Step 2 — sign the unlink locally, then confirm so the index is dropped.
+      const prepared = data.data as { packageId: string; registryObjectId: string };
+      let anchoredDigest: string;
+      try {
+        const signed = await new ZkLoginClient().unlinkCircleFromWhatsApp(account, {
+          packageId: prepared.packageId,
+          registryObjectId: prepared.registryObjectId,
+          circleId,
+          network: currentNetwork,
+        });
+        anchoredDigest = signed.digest;
+      } catch (signErr) {
+        toast.error(
+          humanizeErrorMessage(
+            signErr instanceof Error ? signErr.message : undefined,
+            'Could not sign the unlink. The circle is still linked.',
+          ),
+        );
+        return;
+      }
+
+      await fetch('/api/whatsapp/admin-unlink-circle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          circleId,
+          adminAddress,
+          network: currentNetwork,
+          anchoredDigest,
+        }),
+      }).catch((indexErr) => {
+        console.warn('Unlink anchored but index confirmation failed', indexErr);
+      });
 
       toast.success('✅ Circle unlinked from WhatsApp');
       setShowUnlinkConfirm(false);

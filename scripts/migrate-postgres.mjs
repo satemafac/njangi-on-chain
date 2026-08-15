@@ -366,6 +366,33 @@ const STATEMENTS = [
             ON gas_sponsorship_usage (sponsored_at);`,
   },
   {
+    // Sponsorship moved to a two-call protocol (/api/sponsor/prepare then
+    // /api/sponsor/execute) so the user's signature is produced in their
+    // browser rather than on our server. That split opens a gap the
+    // single-call version did not have: a caller can request sponsorship
+    // repeatedly and never execute, burning Enoki quota while
+    // gas_sponsorship_usage — which only records successes — stays at zero.
+    //
+    // Each prepare writes a short-lived row here, counted against the caps
+    // alongside completed usage, and deleted on execute. Rows are keyed by
+    // the Enoki digest, which is the only handle the sponsor gives us and
+    // the value execute must attribute usage by.
+    name: 'gas_sponsorship_pending',
+    sql: `CREATE TABLE IF NOT EXISTS gas_sponsorship_pending (
+            digest        TEXT PRIMARY KEY,
+            zklogin_sub   TEXT NOT NULL,
+            user_address  TEXT NOT NULL,
+            circle_id     TEXT,
+            action        TEXT NOT NULL,
+            created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            expires_at    TIMESTAMPTZ NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS gas_sponsorship_pending_sub_idx
+            ON gas_sponsorship_pending (zklogin_sub, expires_at);
+          CREATE INDEX IF NOT EXISTS gas_sponsorship_pending_expiry_idx
+            ON gas_sponsorship_pending (expires_at);`,
+  },
+  {
     // GDPR deletion pipeline: the executor (scripts/
     // process-deletion-request.mjs) records the HMAC of the requester's
     // WhatsApp number on the request row, which (a) documents what was

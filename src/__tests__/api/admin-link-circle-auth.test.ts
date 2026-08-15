@@ -331,7 +331,13 @@ describe('admin-link-circle POST authorization ordering', () => {
     expect(indexWhatsAppLink).not.toHaveBeenCalled();
   });
 
-  it('anchors the link and writes the index for the verified circle only', async () => {
+  // These two used to assert that the ROUTE built and signed the anchor.
+  // It no longer may: the request carried the caller's ephemeralPrivateKey
+  // to make that possible, which handed the server the ability to sign any
+  // transaction for that address. The anchor is signed in the browser now,
+  // so the route's contract is "prepare, then record" and the tests assert
+  // that shape instead.
+  it('prepares the anchor without signing, and does not index yet', async () => {
     getZkLoginSessionStore().set(SESSION_ID, buildSessionRecord(ADMIN_ADDRESS));
     (fetchCircleAdminAddress as jest.Mock).mockResolvedValue(ADMIN_ADDRESS);
     (encryptAndStorePII as jest.Mock).mockResolvedValue({
@@ -348,7 +354,6 @@ describe('admin-link-circle POST authorization ordering', () => {
           circleId: CIRCLE_ID,
           linkType: 1,
           phoneOrGroup: PHONE,
-          account: buildSessionRecord(ADMIN_ADDRESS).account,
           network: 'testnet',
         },
         {},
@@ -358,17 +363,54 @@ describe('admin-link-circle POST authorization ordering', () => {
     );
 
     expect(res.statusCode).toBe(200);
-    // On-chain anchor targets the circle the middleware authorized
-    // (arguments: registry, circle ref, link_type, blob_id, nonce — the
-    // contract derives the admin from the sender + Circle reference, so
-    // no caller-supplied admin address rides along anymore).
-    expect(moveCalls).toHaveLength(1);
-    expect(moveCalls[0].target).toBe('0xpkg::whatsapp_integration::link_circle');
-    expect(moveCalls[0].arguments[1]).toBe(CIRCLE_ID);
-    expect(moveCalls[0].arguments).toHaveLength(5);
-    expect(indexWhatsAppLink).toHaveBeenCalledWith(
-      expect.objectContaining({ circleId: CIRCLE_ID }),
+    expect((res.jsonBody as { data: Record<string, unknown> }).data.status).toBe('pending');
+    // The PII is stored — that is the part only the server can do.
+    expect(encryptAndStorePII).toHaveBeenCalled();
+    // The anchor inputs come back so the browser can build the call itself.
+    expect((res.jsonBody as { data: Record<string, unknown> }).data).toEqual(
+      expect.objectContaining({
+        walrusBlobId: 'blob-1',
+        packageId: '0xpkg',
+        registryObjectId: '0xreg',
+      }),
     );
+    // Nothing was signed here, and no route was written for a link that
+    // does not exist on chain yet.
+    expect(moveCalls).toHaveLength(0);
+    expect(enokiZkLoginService.sendTransaction).not.toHaveBeenCalled();
+    expect(indexWhatsAppLink).not.toHaveBeenCalled();
+  });
+
+  it('indexes only once the client reports the anchor landed', async () => {
+    getZkLoginSessionStore().set(SESSION_ID, buildSessionRecord(ADMIN_ADDRESS));
+    (fetchCircleAdminAddress as jest.Mock).mockResolvedValue(ADMIN_ADDRESS);
+    const res = createMockRes();
+
+    await handler(
+      createPostReq(
+        '/api/whatsapp/admin-link-circle',
+        {
+          circleId: CIRCLE_ID,
+          linkType: 1,
+          phoneOrGroup: PHONE,
+          network: 'testnet',
+          anchoredDigest: '0xdigest',
+          walrusBlobId: 'blob-1',
+        },
+        {},
+        { 'session-id': SESSION_ID },
+      ),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect((res.jsonBody as { data: Record<string, unknown> }).data.status).toBe('confirmed');
+    expect(indexWhatsAppLink).toHaveBeenCalledWith(
+      expect.objectContaining({ circleId: CIRCLE_ID, walrusBlobId: 'blob-1' }),
+    );
+    // The confirm call must not re-upload the blob it was handed.
+    expect(encryptAndStorePII).not.toHaveBeenCalled();
+    expect(enokiZkLoginService.sendTransaction).not.toHaveBeenCalled();
   });
 });
 
@@ -406,7 +448,7 @@ describe('admin-unlink-circle POST authorization binding', () => {
     expect(deindexWhatsAppLinksForCircle).not.toHaveBeenCalled();
   });
 
-  it('unlinks and deindexes the verified circle only', async () => {
+  it('returns anchor inputs without signing, and does not deindex yet', async () => {
     getZkLoginSessionStore().set(SESSION_ID, buildSessionRecord(ADMIN_ADDRESS));
     (fetchCircleAdminAddress as jest.Mock).mockResolvedValue(ADMIN_ADDRESS);
     const moveCalls = mockSendTransactionCapturingMoveCalls();
@@ -415,11 +457,7 @@ describe('admin-unlink-circle POST authorization binding', () => {
     await unlinkHandler(
       createPostReq(
         '/api/whatsapp/admin-unlink-circle',
-        {
-          circleId: CIRCLE_ID,
-          account: buildSessionRecord(ADMIN_ADDRESS).account,
-          network: 'testnet',
-        },
+        { circleId: CIRCLE_ID, network: 'testnet' },
         {},
         { 'session-id': SESSION_ID },
       ),
@@ -427,12 +465,35 @@ describe('admin-unlink-circle POST authorization binding', () => {
     );
 
     expect(res.statusCode).toBe(200);
-    // arguments: registry, circle ref — the contract asserts the sender
-    // is the circle's current on-chain admin.
-    expect(moveCalls).toHaveLength(1);
-    expect(moveCalls[0].target).toBe('0xpkg::whatsapp_integration::unlink_circle');
-    expect(moveCalls[0].arguments[1]).toBe(CIRCLE_ID);
-    expect(moveCalls[0].arguments).toHaveLength(2);
+    expect((res.jsonBody as { data: Record<string, unknown> }).data.status).toBe('pending');
+    expect((res.jsonBody as { data: Record<string, unknown> }).data).toEqual(
+      expect.objectContaining({ packageId: '0xpkg', registryObjectId: '0xreg' }),
+    );
+    // The unlink is signed in the browser; the route must not sign, and must
+    // not tear down routing for a link that is still live on chain.
+    expect(moveCalls).toHaveLength(0);
+    expect(enokiZkLoginService.sendTransaction).not.toHaveBeenCalled();
+    expect(deindexWhatsAppLinksForCircle).not.toHaveBeenCalled();
+  });
+
+  it('deindexes only once the client reports the unlink landed', async () => {
+    getZkLoginSessionStore().set(SESSION_ID, buildSessionRecord(ADMIN_ADDRESS));
+    (fetchCircleAdminAddress as jest.Mock).mockResolvedValue(ADMIN_ADDRESS);
+    const res = createMockRes();
+
+    await unlinkHandler(
+      createPostReq(
+        '/api/whatsapp/admin-unlink-circle',
+        { circleId: CIRCLE_ID, network: 'testnet', anchoredDigest: '0xdigest' },
+        {},
+        { 'session-id': SESSION_ID },
+      ),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect((res.jsonBody as { data: Record<string, unknown> }).data.status).toBe('confirmed');
     expect(deindexWhatsAppLinksForCircle).toHaveBeenCalledWith(CIRCLE_ID);
+    expect(enokiZkLoginService.sendTransaction).not.toHaveBeenCalled();
   });
 });

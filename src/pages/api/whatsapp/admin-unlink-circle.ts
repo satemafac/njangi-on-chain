@@ -26,18 +26,8 @@ import {
   withCircleAdminAuth,
   type AuthenticatedRequest,
 } from '../../../middleware/admin-auth.middleware';
-import { enokiZkLoginService } from '../../../services/enokiZkLoginService';
-import { AccountData } from '../../../services/zkLoginService';
 import { getActiveWhatsAppRegistries } from '../../../services/whatsapp-registry-service';
-import type { NetworkType } from '../../../services/whatsapp-registry-service';
 import { deindexWhatsAppLinksForCircle } from '../../../lib/whatsapp-link-index';
-
-interface UnlinkCircleRequest {
-  circleId: string; // consumed by withCircleAdminAuth, not the handler
-  adminAddress?: string; // must match the session (middleware-enforced)
-  account?: AccountData;
-  network?: NetworkType; // consumed by withCircleAdminAuth, not the handler
-}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -62,7 +52,7 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
     const adminAddr = req.admin!.suiAddress;
     const circleId = req.admin!.circleId;
     const network = req.admin!.network;
-    const { account } = (req.body ?? {}) as UnlinkCircleRequest;
+    // NB: `account` is deliberately not read — see admin-link-circle.
 
     console.log('🔗 POST /admin-unlink-circle:', {
       circleId,
@@ -93,65 +83,52 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
     }
 
     // If account data provided, send the blockchain transaction
-    if (account && account.zkProofs && account.ephemeralPrivateKey) {
-      const result = await enokiZkLoginService.sendTransaction(
-        account,
-        (txb) => {
-          // Build the unlink_circle transaction in the provided txb
-          txb.moveCall({
-            target: `${packageId}::whatsapp_integration::unlink_circle`,
-            arguments: [
-              txb.object(registryObjectId),
-              // Circle by reference; the contract asserts the sender is
-              // the circle's current on-chain admin.
-              txb.object(circleId)
-            ]
-          });
-        },
-        { gasBudget: 10_000_000 },
-        network as 'testnet' | 'mainnet'  // Pass network override
-      );
+    // The unlink anchor is signed in the browser
+    // (ZkLoginClient.unlinkCircleFromWhatsApp) and confirmed back here.
+    //
+    // This route used to sign server-side from an `ephemeralPrivateKey` the
+    // manage page put in the request body — see buildUnlinkCircleTx. The
+    // contract takes the Circle by reference and asserts the sender is its
+    // current on-chain admin, so nothing about authorization depended on the
+    // server holding the key.
+    const { anchoredDigest } = req.body as { anchoredDigest?: string };
 
-      // Phase 2: drop the off-chain Postgres index entries so the webhook
-      // stops routing inbound messages to the unlinked circle. Failures are
-      // logged but non-fatal — on-chain state already reflects the unlink.
-      try {
-        await deindexWhatsAppLinksForCircle(circleId);
-      } catch (indexError) {
-        console.warn('[admin-unlink-circle] Failed to deindex WhatsApp link', indexError);
-      }
-
-      logAdminAction('UNLINK_CIRCLE_SUCCESS', adminAddr, {
-        circleId,
-        txDigest: result.digest,
-        status: 'confirmed_on_blockchain'
-      });
-
+    if (!anchoredDigest) {
       return res.status(200).json({
         success: true,
         data: {
-          message: 'Circle successfully unlinked from WhatsApp on-chain!',
+          message: 'Sign the on-chain unlink to finish.',
           circleId,
-          txDigest: result.digest,
-          status: 'confirmed'
-        }
+          packageId,
+          registryObjectId,
+          status: 'pending',
+        },
       });
-    } else {
-      // Fallback: Account data not provided
-      logAdminAction('UNLINK_CIRCLE_SUCCESS', adminAddr, {
-        circleId,
-        status: 'pending_blockchain_confirmation'
-      });
+    }
+
+    // Drop the off-chain Postgres index so the webhook stops routing inbound
+    // messages here. Non-fatal — on-chain state already reflects the unlink.
+    try {
+      await deindexWhatsAppLinksForCircle(circleId);
+    } catch (indexError) {
+      console.warn('[admin-unlink-circle] Failed to deindex WhatsApp link', indexError);
+    }
+
+    logAdminAction('UNLINK_CIRCLE_SUCCESS', adminAddr, {
+      circleId,
+      txDigest: anchoredDigest,
+      status: 'confirmed_on_blockchain',
+    });
 
     return res.status(200).json({
       success: true,
       data: {
-          message: 'Circle unlink initiated. Waiting for blockchain confirmation...',
-          circleId,
-          status: 'pending'
-      }
+        message: 'Circle successfully unlinked from WhatsApp.',
+        circleId,
+        txDigest: anchoredDigest,
+        status: 'confirmed',
+      },
     });
-    }
 
   } catch (error) {
     const suiAddress = req.admin?.suiAddress;

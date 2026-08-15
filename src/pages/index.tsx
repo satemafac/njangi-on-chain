@@ -27,7 +27,9 @@ import { LegalFooter } from '../components/LegalFooter';
 import { LocaleSwitcher } from '../components/ui/LocaleSwitcher';
 import { useTranslation } from '../hooks/useTranslation';
 import { getNetworkConfig, setCurrentNetwork } from '../services/network-config';
-import { SUPPORT_EMAIL, SUPPORT_MAILTO } from '../lib/constants';
+import { SUPPORT_MAILTO } from '../lib/constants';
+import { webApplication, website } from '../lib/structured-data';
+import { Seo } from '../components/Seo';
 import { Reveal, RevealItem } from '../components/landing/Reveal';
 import TiltCard from '../components/landing/TiltCard';
 import KineticNames from '../components/landing/KineticNames';
@@ -456,7 +458,8 @@ export default function Home() {
     }
   }, [account, router]);
 
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://njangionchain.com';
+  // The canonical origin now lives in src/lib/structured-data.ts (SITE_URL) and
+  // is applied by <Seo>, so this page no longer needs its own copy of it.
   const currentNetworkName = NETWORK_CONFIG[network].networkName;
 
   const proofItems = [
@@ -538,146 +541,40 @@ export default function Home() {
 
   return (
     <>
+      {/* Title stays under 60 characters so Google stops truncating it, and
+          leads with the brand so the site-name line has a clean signal. The
+          description is deliberately concrete and names the traditions people
+          actually search for — the previous one was abstract enough that Google
+          discarded it and substituted its own snippet from the page's FAQ.
+
+          The JSON-LD graph adds WebSite, which is Google's documented source
+          for the site-name line above a result. With no WebSite node it falls
+          back to the bare domain, which is why the SERP read
+          "njangionchain.com". webApplication()'s publisher and Organization's
+          logo now resolve by @id to a single square, opaque render — the old
+          value pointed at njangi-on-chain-logo.png, a 2464x1536 transparent
+          canvas whose mark occupies only 1054x1070, declared as 512x512. */}
+      <Seo
+        title="Njangi On-Chain — Rotating Savings Circles for the Diaspora"
+        titleAbsolute
+        description="Njangi, tontine, susu, esusu — the rotating savings circle your community already runs, now self-custodied and verifiable. No treasurer, no seed phrase."
+        path="/"
+        ogTitle="Njangi On-Chain — savings circles for the global diaspora"
+        ogDescription="The rotating savings circle your community already trusts — njangi, esusu, tontine — now self-custodied, scheduled, and verifiable on-chain. No treasurer. No seed phrase."
+        themeColor="#0a0a0c"
+        jsonLd={[website(), webApplication()]}
+      />
+
       <Head>
-        <title>Njangi On-Chain | Secure Community Savings Circles on Sui</title>
-        <meta
-          name="title"
-          content="Njangi On-Chain | Secure Community Savings Circles on Sui"
-        />
-        <meta
-          name="description"
-          content="Run culturally grounded savings circles with clearer rules, auditable contributions, and low-friction onboarding through zkLogin on Sui."
-        />
-        <meta
-          name="keywords"
-          content="Njangi, ROSCA, Tontine, blockchain savings, Sui blockchain, zkLogin, community savings, USDC, USDT, SUI, BTC"
-        />
-        <meta name="robots" content="index, follow" />
-        <meta name="language" content="English" />
-        <meta name="author" content="Njangi On-Chain" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-
-        <meta property="og:type" content="website" />
-        <meta property="og:url" content={`${baseUrl}/`} />
-        <meta
-          property="og:title"
-          content="Njangi On-Chain — savings circles for the global diaspora"
-        />
-        <meta
-          property="og:description"
-          content="The rotating savings circle your community already trusts — njangi, esusu, tontine — now self-custodied, scheduled, and verifiable on-chain. No treasurer. No seed phrase."
-        />
-        <meta property="og:image" content={`${baseUrl}/og.png?v=2`} />
-        <meta property="og:image:width" content="1200" />
-        <meta property="og:image:height" content="630" />
-        <meta
-          property="og:image:alt"
-          content="Njangi On-Chain — a 3D globe of diaspora savings circles linked across the world"
-        />
-        <meta property="og:site_name" content="Njangi On-Chain" />
-        <meta property="og:locale" content="en_US" />
-
-        <meta property="twitter:card" content="summary_large_image" />
-        <meta property="twitter:url" content={`${baseUrl}/`} />
-        <meta
-          property="twitter:title"
-          content="Njangi On-Chain — savings circles for the global diaspora"
-        />
-        <meta
-          property="twitter:description"
-          content="Njangi, esusu, tontine — the savings circle your community already trusts, now self-custodied and verifiable on-chain. No treasurer, no seed phrase."
-        />
-        <meta property="twitter:image" content={`${baseUrl}/og.png?v=2`} />
-        <meta property="twitter:site" content="@njangi_on_chain" />
-        <meta property="twitter:creator" content="@njangi_on_chain" />
-
-        <meta name="theme-color" content="#0a0a0c" />
-        {/* Tell the browser this page is dark + paint html/body dark, so iOS
-            Safari tints the status bar / top safe-area dark instead of sampling
-            the (globally white) body background. Scoped to the landing via
-            next/head, so light app pages keep their default. */}
+        {/* Not SEO: tell the browser this page is dark and paint html/body dark,
+            so iOS Safari tints the status bar / top safe-area dark instead of
+            sampling the (globally white) body background. Scoped to the landing
+            via next/head, so light app pages keep their default. */}
         <meta name="color-scheme" content="dark" />
         <style>{`html,body{background-color:#0a0a0c!important}`}</style>
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="apple-mobile-web-app-title" content="Njangi On-Chain" />
-
-        <link rel="canonical" href={`${baseUrl}/`} />
-
-        <script
-          type="application/ld+json"
-          dangerouslySetInnerHTML={{
-            __html: JSON.stringify({
-              '@context': 'https://schema.org',
-              '@type': 'WebApplication',
-              name: 'Njangi On-Chain',
-              description: 'Secure, transparent savings circles on Sui blockchain',
-              url: `${baseUrl}/`,
-              applicationCategory: 'FinanceApplication',
-              operatingSystem: 'Web',
-              offers: {
-                '@type': 'Offer',
-                price: '0',
-                priceCurrency: 'USD',
-              },
-              publisher: {
-                '@type': 'Organization',
-                name: 'Njangi On-Chain',
-                url: `${baseUrl}/`,
-                logo: {
-                  '@type': 'ImageObject',
-                  url: `${baseUrl}/njangi-on-chain-logo.png`,
-                  width: 512,
-                  height: 512,
-                },
-                sameAs: [
-                  'https://x.com/njangi_on_chain',
-                  'https://www.instagram.com/njangionchain',
-                ],
-              },
-              featureList: [
-                'Shared circle visibility',
-                'Direct on-chain settlement',
-                'zkLogin authentication',
-                'Multi-asset support',
-                'Smart contract transparency',
-              ],
-              supportedPaymentMethod: [
-                'Cryptocurrency',
-                'USDC',
-                'USDT',
-                'SUI',
-                'Bitcoin',
-              ],
-            }),
-          }}
-        />
-        <script
-          type="application/ld+json"
-          dangerouslySetInnerHTML={{
-            __html: JSON.stringify({
-              '@context': 'https://schema.org',
-              '@type': 'Organization',
-              name: 'Njangi On-Chain',
-              alternateName: 'Njangi',
-              url: `${baseUrl}/`,
-              logo: `${baseUrl}/njangi-on-chain-logo.png`,
-              description:
-                'A blockchain-native operating layer for community savings circles',
-              foundingDate: '2024',
-              industry: 'Financial Technology',
-              sameAs: [
-                'https://x.com/njangi_on_chain',
-                'https://www.instagram.com/njangionchain',
-              ],
-              contactPoint: {
-                '@type': 'ContactPoint',
-                email: SUPPORT_EMAIL,
-                contactType: 'Customer Service',
-              },
-            }),
-          }}
-        />
       </Head>
 
       <div
@@ -832,7 +729,7 @@ export default function Home() {
                     alt="Njangi On-Chain"
                     width={80}
                     height={80}
-                    className="h-full w-full scale-[2.25] object-contain"
+                    className="h-full w-full object-contain"
                     priority
                     unoptimized
                   />
@@ -1506,7 +1403,7 @@ export default function Home() {
                       alt="Njangi On-Chain"
                       width={72}
                       height={72}
-                      className="h-full w-full scale-[2.2] object-contain"
+                      className="h-full w-full object-contain"
                       unoptimized
                     />
                   </span>
