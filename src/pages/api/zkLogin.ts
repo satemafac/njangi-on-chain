@@ -10,7 +10,7 @@ import {
 import { AggregatorClient, Env } from '@cetusprotocol/aggregator-sdk';
 import BN from 'bn.js';
 import { Transaction } from '@mysten/sui/transactions';
-import { enokiZkLoginService } from '@/services/enokiZkLoginService';
+import { enokiZkLoginService, ClientSigningRequiredError } from '@/services/enokiZkLoginService';
 import {
   getCurrentNetwork,
   getCurrentRpcUrl,
@@ -265,9 +265,10 @@ async function validateSession(sessionId: string | undefined, action: string): P
 
   // Different validation rules based on action
   if (action === 'sendTransaction' || action === 'deleteCircle' || action === 'sendTokens') {
-    if (!session.ephemeralPrivateKey) {
-      throw new Error('Invalid session: missing ephemeral key');
-    }
+    // No ephemeral-key check: sessions no longer carry one, and the signing
+    // path it guarded now throws unconditionally. What still matters is that
+    // the session resolves to a real account, so requests stay bound to a
+    // server-verified identity rather than a client-supplied one.
     if (!session.account) {
       throw new Error('Invalid session: missing account data');
     }
@@ -1012,12 +1013,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // act on — rather than letting 30-odd handlers each fail late with a
     // generic 500 from deep inside the signing path.
     //
-    // Legacy v1 sessions still have a key and keep working until they expire.
-    // maxEpoch is one Sui epoch (~24h) and the cookie matches, so this branch
-    // stops being reachable roughly a day after deploy.
+    // Previously this let legacy v1 sessions through, because they still
+    // carried a server-held key. None do now — the key was dropped from the
+    // session record and the signing path throws unconditionally — so every
+    // server-signing action gets the same answer regardless of session vintage.
     if (sessionId && SERVER_SIGNING_ACTIONS.has(action)) {
       const existing = await sessions.get(sessionId);
-      if (existing && !existing.ephemeralPrivateKey) {
+      if (existing) {
         console.log('Rejecting server-signing action for client-signing session:', {
           action,
           protocolVersion: existing.protocolVersion ?? 2,
@@ -1171,15 +1173,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             await cleanupUserSessions(result.address, sessionId);
             
             // Create the account data object.
-            // `ephemeralPrivateKey` is carried only for legacy v1 sessions,
-            // where the server generated it. On v2 it is undefined here and in
-            // the response — the browser merges in its own key. Do not
-            // reintroduce a server-side source for this field.
+            //
+            // No `ephemeralPrivateKey`. It used to be carried through for
+            // legacy v1 sessions; nothing can act on it now that
+            // enokiZkLoginService.sendTransaction throws unconditionally, and
+            // dropping it means key material has no route into server storage
+            // at all. The browser merges in its own key. Do not reintroduce a
+            // server-side source for this field.
             const accountData: AccountData = {
               provider: savedSetup.provider,
               userAddr: result.address,
               zkProofs: result.zkProofs,
-              ephemeralPrivateKey: savedSetup.ephemeralPrivateKey,
               userSalt: result.userSalt,
               sub: result.sub,
               aud: result.aud,
@@ -6562,6 +6566,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'Unknown action' });
     }
   } catch (err) {
+    // The signing path throws this rather than returning; it means the caller
+    // must sign locally, which is a 409 and not a server fault. Mapped here so
+    // any route into it gives the same answer as the guard above, instead of
+    // an opaque 500.
+    if (err instanceof ClientSigningRequiredError) {
+      return res.status(409).json({
+        error:
+          'This action must be signed in your browser. Please refresh the page and try again.',
+        code: 'CLIENT_SIGNING_REQUIRED',
+      });
+    }
     console.error('API error:', err);
     return res.status(500).json({ 
       error: err instanceof Error ? err.message : 'An unexpected error occurred' 
