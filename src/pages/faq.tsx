@@ -52,7 +52,7 @@ export default function FAQPage() {
         {
           id: "smart-contracts-work",
           question: "How do smart contracts manage our savings circle?",
-          answer: "Smart contracts are automated programs on the blockchain that execute predefined rules without human intervention. In your Njangi circle, they automatically: collect contributions from members, randomly determine payout order fairly, distribute funds to the designated recipient each cycle, track all member participation and payments, and enforce circle rules consistently for everyone."
+          answer: "Smart contracts are automated programs on the blockchain that execute predefined rules without human intervention. In your Njangi circle, they hold each cycle's contributions in escrow, release the pot to the member whose turn it is under the rotation order your circle agreed, record every contribution and payout on chain, and apply the same rules to everyone. The rotation order is set by the circle admin before the circle starts, not drawn at random."
         },
         {
           id: "payout-order",
@@ -77,7 +77,7 @@ export default function FAQPage() {
         {
           id: "funds-security",
           question: "How secure are my funds?",
-          answer: "Your funds are secured by multiple layers: 1) Sui blockchain's cryptographic security (same level as Bitcoin), 2) Smart contract automation eliminates human error and fraud, 3) Self-custody means you control your own wallet keys, 4) Multi-signature requirements for group actions, 5) Open-source code that's publicly auditable. We never hold your funds - they're always in your control or locked in transparent smart contracts."
+          answer: "Several things work together: 1) contributions sit in a per-cycle escrow contract rather than with a treasurer, 2) each cycle's recipient is fixed when the round opens, so the pot can only be claimed by that member, 3) you sign every transaction from your own wallet — we hold no key that could sign for you, 4) the rotation order and every payment are recorded on chain for the whole circle to see, and 5) the contract code is public and auditable. What this does not do is remove risk: software can contain bugs, and a member who stops contributing can still leave your payout short. See our risk disclosure for what you are taking on."
         },
         {
           id: "what-if-member-leaves",
@@ -142,7 +142,7 @@ export default function FAQPage() {
         {
           id: "regulations-compliance",
           question: "Is this legal in my country?",
-          answer: "Njangi On-Chain operates as a peer-to-peer community savings platform, similar to traditional informal savings groups that are legal worldwide. However, cryptocurrency regulations vary by country. We recommend checking your local laws regarding cryptocurrency use. Our platform complies with applicable regulations and we're committed to working with authorities to ensure compliance."
+          answer: "Njangi On-Chain is non-custodial coordination software for savings groups: we never hold, move, or take a cut of member funds. Rules about crypto and about savings groups differ by country, and whether any particular rule applies to you depends on where you live — please check your local law. We are not able to give you legal advice about your situation."
         }
       ]
     }

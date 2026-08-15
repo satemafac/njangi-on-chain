@@ -73,6 +73,59 @@ const BANNED_PATTERNS = [
   // operator-driven" describes the operator moving user funds — the exact
   // capability the CLARITY non-controlling test asks about.
   { re: /operator[-\s]driven/i, why: 'implies operator control of user funds' },
+
+  // --- Over-claim patterns ---------------------------------------------
+  //
+  // Added 2026-08-04. Everything above governs the FINANCIAL vocabulary
+  // (yield, interest, vaults). Nothing governed claims about SECURITY or
+  // REGULATORY STATUS, so these sat in CI-green code for months:
+  //
+  //   "Our platform complies with applicable regulations"  (faq.tsx)
+  //   "No single point of failure or fraud risk"           (learn/)
+  //   "Custody risk: None" / "Coordinator risk: None"      (blog/)
+  //   "Smart contract automation eliminates ... fraud"     (faq.tsx)
+  //
+  // Each was contradicted by the product's own risk disclosure ("Software
+  // can have bugs… your circle members are your risk") and, in the
+  // regulatory case, by docs/counsel-brief.md, which treats the posture as
+  // an OPEN question pending an opinion letter. Self-certifying compliance
+  // in public while asking counsel whether the posture holds is the single
+  // highest-exposure sentence a pre-launch product can ship.
+  //
+  // The honest claims are also the stronger ones — "no treasurer holds the
+  // cash" and "everyone sees the same ledger" are true, specific, and
+  // exactly what a njangi member cares about.
+  {
+    re: /\b(?:complies|compliant|in compliance)\s+with\s+(?:all\s+)?(?:applicable|relevant|local)\s+(?:laws?|regulations?)/i,
+    why: 'self-certifies a regulatory posture counsel treats as unresolved',
+  },
+  {
+    re: /\b(?:eliminat\w+|remov\w+|prevent\w+)\s+(?:the\s+)?(?:risk\s+of\s+)?(?:fraud|theft|human error)/i,
+    why: 'absolute security claim; contradicted by the risk disclosure',
+  },
+  {
+    re: /\bno\s+(?:single\s+point\s+of\s+failure|fraud\s+risk|custody\s+risk|coordinator\s+risk)/i,
+    why: 'absolute risk-elimination claim',
+  },
+  {
+    re: /\b(?:custody|coordinator|counterparty)\s+risk:\s*none/i,
+    why: 'absolute risk-elimination claim',
+  },
+  {
+    re: /\bcryptographic\s+guarantees?\b/i,
+    why: 'overstates what the contract guarantees',
+  },
+  {
+    re: /\bensures?\s+fairness\b/i,
+    why: 'unfalsifiable fairness claim',
+  },
+  // Payout order is set by the admin before activation and is visible on
+  // chain. Calling it random is not an over-claim so much as a wrong
+  // description of the product — and the FAQ contradicted itself about it.
+  {
+    re: /random\w*\s+(?:determine|select|assign|choose)\w*\s+(?:the\s+)?payout/i,
+    why: 'payout order is admin-set and on-chain, not random',
+  },
 ];
 
 // Line-level whitelist: disclaimers and denials are the GOOD kind of
@@ -139,8 +192,12 @@ if (violations.length > 0) {
     console.error(`  ${v.file}:${v.line}  "${v.phrase}"  (${v.why})`);
   }
   console.error(
-    `\n[check:copy] ${violations.length} violation(s). The product has no yield/interest features — ` +
-      'see docs/compliance-roadmap-cex-dex-non-kyc.md §A3 for the standard and approved framing.',
+    `\n[check:copy] ${violations.length} violation(s).\n` +
+      '  Financial vocabulary: the product has no yield/interest features — see\n' +
+      '  docs/compliance-roadmap-cex-dex-non-kyc.md §A3 for the approved framing.\n' +
+      '  Security/regulatory claims: state what the contract actually does. The\n' +
+      '  honest claim is usually the stronger one, and the risk disclosure in\n' +
+      '  docs/legal-drafts/risk-disclosure.en.md is what the copy must not contradict.',
   );
   process.exit(1);
 }
