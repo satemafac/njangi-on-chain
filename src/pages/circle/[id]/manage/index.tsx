@@ -23,6 +23,7 @@ import {
   type RecoveryExecutionStatus,
 } from '@/lib/recovery-execution';
 import { getRecoveryProposalUiState, getRecoveryDelegateCardCopy } from '@/lib/recovery-ui';
+import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
 import { resolveStablecoinMetadata } from '@/lib/stablecoin-metadata';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
@@ -1265,15 +1266,19 @@ export default function ManageCircle() {
 
       // Fetch custody wallet info in parallel with other operations
         try {
-          const custodyWalletEvents = await queryEventsCached({
-              query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyWalletCreated` },
-            limit: 50
+          // Three-tier discovery (dynamic field -> events -> own tx history).
+          // The event-only lookup this replaces broke the moment the
+          // wallet-created event aged out of RPC retention — with a PASSED
+          // emergency stop waiting on exactly this id to execute.
+          const custodyResolution = await resolveCustodyWalletId({
+            client,
+            circleId: id as string,
+            packageId: determinedPackageId,
+            userAddress,
+            queryEvents: (params) => queryEventsCached(params),
           });
-          const custodyEvent = custodyWalletEvents.data.find(event => 
-              (event.parsedJson as { circle_id?: string })?.circle_id === id
-          );
-          const walletId = (custodyEvent?.parsedJson as { wallet_id?: string })?.wallet_id;
-          
+          const walletId = custodyResolution?.walletId;
+
           if (walletId) {
               // Parallel fetch: wallet data and dynamic fields
               const [walletData, walletDynamicFields] = await Promise.all([
@@ -6042,12 +6047,29 @@ export default function ManageCircle() {
                               <button
                                 type="button"
                                 onClick={handleExecuteRecovery}
-                                disabled={isSubmittingRecoveryAction || loadingRecoveryExecution}
+                                // Also gated on the custody wallet having
+                                // resolved: the handler builds the refund
+                                // transaction against it and bails without it.
+                                // An enabled button that always bails is how
+                                // this failure hid — the click "worked" and
+                                // nothing happened.
+                                disabled={
+                                  isSubmittingRecoveryAction ||
+                                  loadingRecoveryExecution ||
+                                  !circle?.custody?.walletId
+                                }
                                 className={`${dangerActionClass} mt-4`}
                               >
                                 <AlertTriangle className="mr-2 h-4 w-4" />
                                 {isSubmittingRecoveryAction ? 'Executing...' : 'Execute Emergency Stop'}
                               </button>
+                              {!circle?.custody?.walletId && (
+                                <p className="mt-2 text-xs text-red-700/80">
+                                  Waiting for the circle&rsquo;s custody wallet to resolve —
+                                  the refund transaction is built against it. Refresh if this
+                                  persists.
+                                </p>
+                              )}
                             </div>
                           )}
 

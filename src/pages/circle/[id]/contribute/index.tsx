@@ -17,6 +17,7 @@ import {
 } from '../../../../services/network-config';
 import { cetusService } from '../../../../lib/cetus-service';
 import { ZkLoginClient } from '@/services/zkLoginClient';
+import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
 import { isSwapsEnabled } from '@/config/feature-flags';
 import RampPicker from '@/components/RampPicker';
 import CycleEscrowPanel from '@/components/CycleEscrowPanel';
@@ -526,9 +527,9 @@ export default function ContributeToCircle() {
   const requiredContributionUsdc = (circle?.contributionAmountUsd || 0) / 100;
   const requiredSecurityDepositUsdc = (circle?.securityDepositUsd || 0) / 100;
 
-  // The custody wallet id comes from a separate CustodyWalletCreated event
-  // lookup, so `circle` can be fully populated while `walletId` is still an
-  // empty string — an RPC 429 on that one query is enough. An empty id
+  // The custody wallet id comes from a separate discovery step (see
+  // custody-wallet-discovery.ts), so `circle` can be fully populated while
+  // `walletId` is still an empty string — one failed lookup is enough. An empty id
   // normalizes into the all-zero object id downstream, and the payment lands as
   // `The following input objects are invalid: {"code":"0x000...000"}`. Every
   // control that spends the wallet id stays disabled until this reads true.
@@ -1177,30 +1178,25 @@ export default function ContributeToCircle() {
           }
         }
         
-        // 3. Fetch CustodyWalletCreated event for walletId. Per-node indexer
-        // gaps can throw "Could not find the referenced transaction events"
-        // here even when the upstream try/catch is in place — isolate so a
-        // failed wallet lookup doesn't surface as a runtime overlay.
+        // 3. Resolve the custody wallet id. Three-tier discovery (dynamic
+        // field -> events -> the member's own deposit history) so a per-node
+        // indexer gap or expired event retention no longer erases the wallet
+        // from the page — deposits build their transaction against this id.
         try {
-          const custodyEvents = await client.queryEvents({
-            query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyWalletCreated` },
-            limit: 100
+          const custodyResolution = await resolveCustodyWalletId({
+            client,
+            circleId: id as string,
+            packageId: determinedPackageId,
+            userAddress,
           });
-          const custodyEvent = custodyEvents.data.find(event =>
-            event.parsedJson &&
-                typeof event.parsedJson === 'object' &&
-                'circle_id' in event.parsedJson &&
-                'wallet_id' in event.parsedJson &&
-            event.parsedJson.circle_id === id
-          );
-          if (custodyEvent?.parsedJson) {
-            walletId = (custodyEvent.parsedJson as { wallet_id: string }).wallet_id;
-            console.log('Contribute - Found wallet ID from events:', walletId);
+          if (custodyResolution) {
+            walletId = custodyResolution.walletId;
+            console.log('Contribute - custody wallet resolved via', custodyResolution.source);
           } else {
-            console.warn('Contribute - No CustodyWalletCreated event found for circle:', id);
+            console.warn('Contribute - custody wallet unresolved for circle:', id);
           }
         } catch (walletLookupErr) {
-          console.warn('Contribute - CustodyWalletCreated lookup failed (non-fatal):', walletLookupErr);
+          console.warn('Contribute - custody wallet lookup failed (non-fatal):', walletLookupErr);
         }
 
       } catch (error) {
