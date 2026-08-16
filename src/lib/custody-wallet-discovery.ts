@@ -230,3 +230,57 @@ export async function resolveCustodyWalletId(
 
   return null;
 }
+
+/**
+ * The coin type a recovery must unwind, read from the WALLET rather than
+ * from events.
+ *
+ * `execute_recovery<CoinType>` needs a type argument, and the previous
+ * derivation (`loadRecoveryStablecoinCoinType`) reconstructed it from three
+ * event queries — which went dark with the same retention expiry that hid the
+ * wallet id, blocking an approved refund a second way. The wallet cannot
+ * forget what it holds: its balance dynamic fields are keyed by coin type,
+ * and `stablecoin_config.target_coin_type` names it directly when set.
+ */
+export async function resolveCustodyStablecoinType(
+  client: SuiClient,
+  walletId: string,
+): Promise<string | null> {
+  const ensurePrefixed = (t: string): string => (t.startsWith('0x') ? t : `0x${t}`);
+
+  try {
+    const obj = await client.getObject({ id: walletId, options: { showContent: true } });
+    const content = obj.data?.content;
+    if (content && content.dataType === 'moveObject') {
+      const cfg = (content.fields as {
+        stablecoin_config?: { fields?: { target_coin_type?: string } } | null;
+      }).stablecoin_config;
+      const configured = cfg?.fields?.target_coin_type;
+      if (typeof configured === 'string' && configured.includes('::')) {
+        return ensurePrefixed(configured);
+      }
+    }
+  } catch {
+    // fall through to the balance fields
+  }
+
+  try {
+    const page = await client.getDynamicFields({ parentId: walletId });
+    for (const entry of page.data) {
+      const name = (entry as { name?: { value?: unknown } }).name?.value;
+      const objectType = (entry as { objectType?: string }).objectType ?? '';
+      if (
+        typeof name === 'string' &&
+        name.includes('::') &&
+        objectType.includes('::balance::Balance<') &&
+        !/::sui::SUI$/.test(name)
+      ) {
+        return ensurePrefixed(name);
+      }
+    }
+  } catch {
+    // no balance fields readable either
+  }
+
+  return null;
+}

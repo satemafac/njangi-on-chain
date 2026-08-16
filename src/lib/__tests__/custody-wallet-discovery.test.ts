@@ -12,6 +12,7 @@ import type { SuiClient } from '@mysten/sui/client';
 import {
   resolveCustodyWalletId,
   isCustodyWalletForCircle,
+  resolveCustodyStablecoinType,
 } from '@/lib/custody-wallet-discovery';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -168,5 +169,59 @@ describe('pages no longer hard-wire event-only discovery', () => {
     const source = readFileSync(join(process.cwd(), rel), 'utf8');
     expect(source).not.toContain('CustodyWalletCreated');
     expect(source).toContain('resolveCustodyWalletId');
+  });
+});
+
+describe('resolveCustodyStablecoinType', () => {
+  const USDC_UNPREFIXED = '26b3'.padEnd(4, '0') + 'ab'.repeat(30) + '::usdc::USDC';
+
+  it('prefers the configured target coin type when present', async () => {
+    const client = makeClient({
+      getObject: jest.fn(async () => ({
+        data: {
+          type: `${PKG}::njangi_custody::CustodyWallet`,
+          content: {
+            dataType: 'moveObject',
+            fields: { stablecoin_config: { fields: { target_coin_type: `0x2::usdc::USDC` } } },
+          },
+        },
+      })),
+    });
+    expect(await resolveCustodyStablecoinType(client, WALLET)).toBe('0x2::usdc::USDC');
+  });
+
+  it('falls back to the wallet balance fields when the config is None — the retention case', async () => {
+    // Live shape observed on testnet: stablecoin_config null, but the wallet
+    // carries a Balance<T> dynamic field keyed by the (unprefixed) coin type.
+    const client = makeClient({
+      getObject: jest.fn(async () => ({
+        data: {
+          type: `${PKG}::njangi_custody::CustodyWallet`,
+          content: { dataType: 'moveObject', fields: { stablecoin_config: null } },
+        },
+      })),
+      getDynamicFields: jest.fn(async () => ({
+        data: [
+          { name: { value: 'registered_types' }, objectType: 'vector<0x1::string::String>' },
+          { name: { value: USDC_UNPREFIXED }, objectType: '0x2::balance::Balance<0x…::usdc::USDC>' },
+        ],
+      })),
+    });
+    expect(await resolveCustodyStablecoinType(client, WALLET)).toBe(`0x${USDC_UNPREFIXED}`);
+  });
+
+  it('never answers with the SUI type — recovery unwinds the stablecoin leg', async () => {
+    const client = makeClient({
+      getObject: jest.fn(async () => ({
+        data: {
+          type: `${PKG}::njangi_custody::CustodyWallet`,
+          content: { dataType: 'moveObject', fields: { stablecoin_config: null } },
+        },
+      })),
+      getDynamicFields: jest.fn(async () => ({
+        data: [{ name: { value: '2::sui::SUI' }, objectType: '0x2::balance::Balance<0x2::sui::SUI>' }],
+      })),
+    });
+    expect(await resolveCustodyStablecoinType(client, WALLET)).toBeNull();
   });
 });

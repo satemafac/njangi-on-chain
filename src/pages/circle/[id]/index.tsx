@@ -41,7 +41,7 @@ import type { NetworkType } from '@/services/whatsapp-registry-service';
 import { priceService } from '../../../services/price-service';
 import { getCirclePackageId, getSuiClientFromPool } from '../../../services/circle-service';
 import { readObject, queryEventsCached, invalidateObject, invalidateSuiRead } from '@/lib/sui-read';
-import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
+import { resolveCustodyWalletId, resolveCustodyStablecoinType } from '@/lib/custody-wallet-discovery';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import { logSuiReadError } from '@/services/sui-rpc-failover';
 import { ZkLoginClient, ZkLoginError } from '../../../services/zkLoginClient';
@@ -1241,7 +1241,15 @@ export default function CircleDetails() {
       return;
     }
 
-    const stablecoinType = recoveryStablecoinType || circle.custody.stablecoinCoinType;
+    let stablecoinType: string | null =
+      recoveryStablecoinType || circle.custody.stablecoinCoinType || null;
+    if (!stablecoinType) {
+      // Same retention-proof fallback as the emergency-stop handler.
+      stablecoinType = await resolveCustodyStablecoinType(
+        getPooledSuiClient(),
+        circle.custody.walletId,
+      );
+    }
     if (!stablecoinType) {
       toast.error('Stablecoin type is unavailable for this custody wallet.');
       return;
@@ -1298,7 +1306,18 @@ export default function CircleDetails() {
       return;
     }
 
-    const stablecoinType = recoveryStablecoinType || circle.custody.stablecoinCoinType;
+    // The event-derived sources (loadRecoveryStablecoinCoinType and the
+    // wallet's stablecoin_config) can both be empty — the former ages out
+    // with RPC retention, the latter was simply never set on some wallets.
+    // The wallet's own balance fields cannot forget what it holds.
+    let stablecoinType: string | null =
+      recoveryStablecoinType || circle.custody.stablecoinCoinType || null;
+    if (!stablecoinType) {
+      stablecoinType = await resolveCustodyStablecoinType(
+        getPooledSuiClient(),
+        circle.custody.walletId,
+      );
+    }
     if (!stablecoinType) {
       toast.error('Stablecoin type is unavailable for this custody wallet.');
       return;
