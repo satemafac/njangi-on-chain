@@ -644,6 +644,97 @@ export function buildReorderRotationPositionsTx({
   return tx;
 }
 
+// ---------------------------------------------------------------------------
+// Mid-cycle migration.
+//
+// A njangi that ran offline for months does not start at rotation position 0.
+// The admin declares where the group actually stands, every member confirms
+// it, and activation then resumes there instead of at the top of the order.
+//
+// All three are refused on a live circle by the contract: the declaration
+// moves current_position at activation, which is the payout pointer, so it can
+// only ever be set before anyone has funded a cycle.
+// ---------------------------------------------------------------------------
+
+export function buildDeclareMigrationStateTx({
+  packageId,
+  circleId,
+  priorRoundsCompleted,
+  startPosition,
+}: CircleAdminBuilderInput & {
+  priorRoundsCompleted: number;
+  startPosition: number;
+}): Transaction {
+  if (!Number.isInteger(startPosition) || startPosition < 0) {
+    throw new Error('The starting position must be a whole number.');
+  }
+  if (!Number.isInteger(priorRoundsCompleted) || priorRoundsCompleted < 0) {
+    throw new Error('Rounds already completed must be a whole number.');
+  }
+  if (startPosition === 0 && priorRoundsCompleted === 0) {
+    throw new Error(
+      'This circle has no history to record — create it as a new circle instead.',
+    );
+  }
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::njangi_circles::declare_migration_state`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.pure.u64(priorRoundsCompleted),
+      tx.pure.u64(startPosition),
+      tx.object(CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+/**
+ * Confirms the declared history. `version` is the ledger version the member
+ * actually read: if the admin has rewritten it since, the contract aborts
+ * rather than recording agreement to terms the member never saw. Always pass
+ * the version that was on screen, never a freshly fetched one.
+ *
+ * Takes an optional `txb` so the confirmation can ride in the same transaction
+ * as the member's security deposit — they sign once, not twice.
+ */
+export function buildAcknowledgeMigrationStateTx({
+  packageId,
+  circleId,
+  version,
+  txb,
+}: CircleAdminBuilderInput & { version: number | string; txb?: Transaction }): Transaction {
+  const parsed = typeof version === 'string' ? Number(version) : version;
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error('A valid migration ledger version is required.');
+  }
+  const tx = txb ?? new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::njangi_circles::acknowledge_migration_state`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.pure.u64(parsed),
+      tx.object(CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+export function buildClearMigrationStateTx({
+  packageId,
+  circleId,
+}: CircleAdminBuilderInput): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${normalizeRequiredPackageId(packageId)}::njangi_circles::clear_migration_state`,
+    arguments: [
+      tx.object(normalizeRequiredObjectId(circleId, 'Circle ID')),
+      tx.object(CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
 /**
  * Legacy-rail payout: releases the pooled contributions to the scheduled
  * recipient.

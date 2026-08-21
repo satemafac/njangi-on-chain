@@ -10,6 +10,11 @@ import { RecoveryRefundTable } from '@/components/recovery/RecoveryRefundTable';
 import { RecoveryStateBadge } from '@/components/recovery/RecoveryStateBadge';
 import { getCircleConfigFieldsFromDynamicFields } from '@/lib/circle-config';
 import {
+  getMigrationLedgerFromDynamicFields,
+  resolveMigrationRatification,
+  type MigrationLedger,
+} from '@/lib/circle-migration';
+import {
   getRecoveryAutoReleaseUiState,
   parseRecoveryStatus,
   type RecoveryStatusSnapshot,
@@ -33,6 +38,7 @@ import {
   getCurrentNetwork,
 } from '../../../../services/network-config';
 import RotationOrderList from '../../../../components/RotationOrderList';
+import CircleMigrationPanel from '../../../../components/CircleMigrationPanel';
 import ConfirmationModal from '../../../../components/ConfirmationModal';
 import BillingUpsellModal, {
   parseUpgradeRequired,
@@ -434,6 +440,8 @@ const parseMoveError = (error: string): { code: number; message: string } => {
                     return { code, message: 'Member approval failed: This user is already a member of the circle.' };
                 case 29: // ECircleCapacityReached
                     return { code, message: 'Cannot add more members: Circle has reached its maximum member limit.' };
+                case 58: // ECircleNotPausedForConfigChange
+                    return { code, message: 'New members can only be added before the circle starts, or while it is paused between rounds. A member added mid-round has no place in the payout order and could never be paid.' };
                 default:
                     return { code, message: `Circle Error ${code}: Member approval failed.` };
             }
@@ -445,11 +453,35 @@ const parseMoveError = (error: string): { code: number; message: string } => {
                 case 21: return { code, message: 'Circle activation failed: Some members have not paid their security deposits yet.' };
                 case 22: return { code, message: 'Circle activation failed: The circle needs to have at least 3 members before activation.' }; // Updated based on Move code
                 case 54: return { code, message: 'Circle activation failed: The circle is already active.' }; // ECircleNotActive
+                case 55: return { code, message: 'Circle activation failed: The circle is already active.' }; // ECircleIsActive
                 case 71: return { code, message: 'Circle activation failed: Next in command must be an active non-admin member before the circle goes live.' };
+                case 79: return { code, message: 'Circle activation failed: Every member must confirm where this circle currently stands before it can start.' };
                 default: return { code, message: `Activation Error ${code}: Operation failed.` };
             }
         }
         
+        if (
+          moduleName === 'njangi_circles'
+          && (
+            functionName === 'declare_migration_state'
+            || functionName === 'acknowledge_migration_state'
+            || functionName === 'clear_migration_state'
+          )
+        ) {
+            switch (code) {
+                case 7: return { code, message: "Only the circle admin can record where the circle stands" };
+                case 8: return { code, message: "Only members in the payout order can confirm this" };
+                case 29: return { code, message: "That position is outside this circle's payout order" };
+                case 55: return { code, message: "The circle has already started, so its history can no longer be changed" };
+                case 76: return { code, message: "This circle has no recorded history to confirm" };
+                case 77: return { code, message: "The details changed since you opened this page. Reload and confirm again." };
+                case 78: return { code, message: "You have already confirmed this" };
+                case 80: return { code, message: "Give every member a place in the payout order first" };
+                case 81: return { code, message: "There is nothing to record — this is an ordinary new circle" };
+                default: return { code, message: `Migration Error ${code}: Operation failed.` };
+            }
+        }
+
         if (moduleName === 'njangi_circles' && (functionName === 'set_rotation_position' || functionName === 'reorder_rotation_positions')) {
             switch(code) {
                 case 7: return { code, message: "Only the circle admin can set rotation positions" };
@@ -654,6 +686,10 @@ export default function ManageCircle() {
   const [copiedId, setCopiedId] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [isEditingRotation, setIsEditingRotation] = useState(false);
+  // Mid-cycle migration: where a circle that was already running elsewhere
+  // stands, and who has confirmed it. Null for an ordinary new circle.
+  const [migrationLedger, setMigrationLedger] = useState<MigrationLedger | null>(null);
+  const [isMigrationBusy, setIsMigrationBusy] = useState(false);
   const [confirmationModal, setConfirmationModal] = useState({
     isOpen: false,
     title: '',
@@ -918,6 +954,7 @@ export default function ManageCircle() {
           const resolvedConfigFields = configFields as Record<string, SuiFieldValue>;
           console.log('Manage - CircleConfig fields:', resolvedConfigFields);
           setRecoveryStatus(parseRecoveryStatus(resolvedConfigFields as Record<string, unknown>));
+          setMigrationLedger(await getMigrationLedgerFromDynamicFields(client, dynamicFieldsResult.data));
 
           if (resolvedConfigFields.contribution_amount) {
             configValues.contributionAmount = Number(resolvedConfigFields.contribution_amount) / 1e9;
@@ -3579,6 +3616,130 @@ export default function ManageCircle() {
     });
   };
 
+  // ------------------------------------------------------------------
+  // Mid-cycle migration
+  //
+  // Records where a circle that has been running elsewhere already stands.
+  // The contract refuses this once the circle is live, and refuses to start
+  // the circle until every member has confirmed it.
+  // ------------------------------------------------------------------
+  const handleDeclareMigrationState = (priorRoundsCompleted: number, startPosition: number) => {
+    if (!id || !circle || !account) return;
+
+    const rotation = members
+      .filter((member) => typeof member.position === 'number')
+      .slice()
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const nextRecipient = rotation[startPosition];
+    const alreadyCollected = rotation.slice(0, startPosition);
+
+    setConfirmationModal({
+      isOpen: true,
+      title: 'Confirm your circle\'s current position',
+      message: (
+        <div className="space-y-3">
+          <p>
+            You are recording that this circle has already been running, and that{' '}
+            {nextRecipient ? shortenAddress(nextRecipient.address) : 'the next member'} is
+            next to collect.
+          </p>
+          {alreadyCollected.length > 0 && (
+            <div className="rounded-[16px] border border-stone-200 bg-stone-50 p-3 text-sm text-slate-700">
+              <p className="font-medium text-slate-900">
+                Recorded as already collected, off this platform
+              </p>
+              <ul className="mt-2 list-disc pl-5">
+                {alreadyCollected.map((member) => (
+                  <li key={member.address}>{shortenAddress(member.address)}</li>
+                ))}
+              </ul>
+              <p className="mt-2">
+                They keep contributing each round, and collect again when the next
+                round comes back to them.
+              </p>
+            </div>
+          )}
+          <p>
+            Every member is asked to confirm this before the circle starts. Nothing
+            takes effect until they all have.
+          </p>
+        </div>
+      ),
+      confirmText: 'Record it',
+      cancelText: 'Cancel',
+      confirmButtonVariant: 'primary',
+      onConfirm: async () => {
+        const toastId = 'declare-migration';
+        try {
+          setIsMigrationBusy(true);
+          toast.loading('Recording your circle\'s position...', { id: toastId });
+
+          await new ZkLoginClient().declareMigrationState(
+            account,
+            id as string,
+            priorRoundsCompleted,
+            startPosition,
+            getCurrentNetwork(),
+          );
+
+          toast.success('Recorded. Members can now confirm it.', { id: toastId });
+          await fetchCircleDetails();
+        } catch (error) {
+          console.error('Error declaring migration state:', error);
+          toast.error(parseMoveError(error instanceof Error ? error.message : String(error)).message, {
+            id: toastId,
+          });
+        } finally {
+          setIsMigrationBusy(false);
+        }
+      },
+    });
+  };
+
+  const handleClearMigrationState = () => {
+    if (!id || !circle || !account) return;
+
+    setConfirmationModal({
+      isOpen: true,
+      title: 'Start this circle from the beginning?',
+      message: (
+        <div className="space-y-2">
+          <p>
+            This removes the recorded history. The circle will start a fresh
+            rotation with whoever is first in the payout order.
+          </p>
+          <p>Any confirmations members have already given are discarded.</p>
+        </div>
+      ),
+      confirmText: 'Remove the history',
+      cancelText: 'Keep it',
+      confirmButtonVariant: 'warning',
+      onConfirm: async () => {
+        const toastId = 'clear-migration';
+        try {
+          setIsMigrationBusy(true);
+          toast.loading('Removing the recorded history...', { id: toastId });
+
+          await new ZkLoginClient().clearMigrationState(
+            account,
+            id as string,
+            getCurrentNetwork(),
+          );
+
+          toast.success('Removed. This circle will start from the beginning.', { id: toastId });
+          await fetchCircleDetails();
+        } catch (error) {
+          console.error('Error clearing migration state:', error);
+          toast.error(parseMoveError(error instanceof Error ? error.message : String(error)).message, {
+            id: toastId,
+          });
+        } finally {
+          setIsMigrationBusy(false);
+        }
+      },
+    });
+  };
+
   // Add this helper function to check if rotation order is properly set
   const isRotationOrderSet = (members: Member[]): boolean => {
     if (members.length === 0) return false;
@@ -3646,6 +3807,20 @@ export default function ManageCircle() {
     saveRotationOrder(newOrder);
   };
 
+  // Mirrors the contract's is_migration_ratified: every seat in the rotation,
+  // at the ledger's current version. Null when the circle never migrated.
+  const migrationRatification = useMemo(() => {
+    if (!migrationLedger) return null;
+
+    const rotationOrder = members
+      .filter((member) => typeof member.position === 'number')
+      .slice()
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+      .map((member) => member.address);
+
+    return resolveMigrationRatification(migrationLedger, rotationOrder);
+  }, [migrationLedger, members]);
+
   // Update the Activate Circle button disabled logic
   const canActivate = useMemo(() => {
     // 1. Check if we have a circle object
@@ -3674,6 +3849,15 @@ export default function ManageCircle() {
     
     // 5. Circle should not already be active
     const notAlreadyActive = !circle.isActive;
+
+    // 6. A circle that declared where it already stands cannot start until
+    // every member has confirmed that picture, AND the payout order still
+    // matches the one they confirmed. The contract refuses both
+    // (EMigrationNotRatified / EMigrationRotationChanged); this keeps the
+    // button honest about why.
+    const migrationSettled =
+      !migrationRatification
+      || (migrationRatification.isRatified && migrationRatification.matchesRotation);
     
     // Log conditions for debugging
     console.log('Circle activation conditions:', {
@@ -3682,12 +3866,13 @@ export default function ManageCircle() {
       hasMinimumMembers,
       hasEligibleRecoveryDelegate,
       notAlreadyActive,
+      migrationSettled,
       currentMembers: circle.currentMembers,
     });
     
     // All conditions must be true
-    return depositsPaid && rotationSet && hasMinimumMembers && hasEligibleRecoveryDelegate && notAlreadyActive;
-  }, [circle, allDepositsPaid, loadingRecoveryStatus, members, recoveryStatus]);
+    return depositsPaid && rotationSet && hasMinimumMembers && hasEligibleRecoveryDelegate && notAlreadyActive && migrationSettled;
+  }, [circle, allDepositsPaid, loadingRecoveryStatus, members, recoveryStatus, migrationRatification]);
 
   // Add this function to debug member deposit status
   const debugMemberDeposits = () => {
@@ -4032,6 +4217,7 @@ export default function ManageCircle() {
       const dynamicFieldsResult = await client.getDynamicFields({ parentId: id as string });
       const configFields = await getCircleConfigFieldsFromDynamicFields(client, dynamicFieldsResult.data);
       setRecoveryStatus(parseRecoveryStatus(configFields));
+      setMigrationLedger(await getMigrationLedgerFromDynamicFields(client, dynamicFieldsResult.data));
       setRecoveryStatusError(false);
     } catch (error) {
       logSuiReadError('Failed to refresh recovery status:', error);
@@ -4677,6 +4863,43 @@ export default function ManageCircle() {
       );
     }
     
+    if (migrationRatification && !migrationRatification.matchesRotation) {
+      return (
+        <div>
+          <p>
+            The payout order changed after this circle&apos;s history was recorded.
+            Members confirmed a different queue, so the record has to be made
+            again with the order as it stands now.
+          </p>
+          <p className="mt-2 text-xs">
+            Open Circle history above, start again, and members will be asked to
+            confirm the new order.
+          </p>
+        </div>
+      );
+    }
+
+    if (migrationRatification && !migrationRatification.isRatified) {
+      return (
+        <div>
+          <p>
+            Every member must confirm where this circle currently stands before it
+            can start.
+          </p>
+          <p className="mt-2 font-medium">Still to confirm:</p>
+          <ul className="mt-1 list-disc pl-5 text-xs">
+            {migrationRatification.pending.map((address) => (
+              <li key={address}>{shortenAddress(address)}</li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs">
+            Members confirm on their own contribution page, in the same step as
+            their security deposit.
+          </p>
+        </div>
+      );
+    }
+
     return "All requirements met! Circle can be activated.";
   };
 
@@ -7101,6 +7324,34 @@ export default function ManageCircle() {
                       autoOpenWhenReady={autoOpenFirstRound}
                       onAutoOpenFired={() => setAutoOpenFirstRound(false)}
                       {...resolveCircleSettlementCoin(circle.autoSwapEnabled)}
+                    />
+                  </div>
+                ) : null}
+
+                {/* Already-running circles: record where the rotation stands
+                    before activation, and collect every member's confirmation.
+                    Hidden once the circle is live — the contract refuses these
+                    calls then, because they move the payout pointer. */}
+                {!circle.isActive ? (
+                  <div className={sectionCardClass}>
+                    <div className="mb-5">
+                      <p className={sectionEyebrowClass}>Before you start</p>
+                      <h3 className={`${sectionTitleClass} mt-2`}>Circle history</h3>
+                      <p className="mt-2 text-sm leading-6 text-slate-500">
+                        Moving a group that is already part-way through its rotation?
+                        Record where it stands so it carries on from there instead of
+                        starting over.
+                      </p>
+                    </div>
+                    <CircleMigrationPanel
+                      members={members}
+                      adminAddress={circle.admin}
+                      memberNames={memberNameMap}
+                      shortenAddress={shortenAddress}
+                      ratification={migrationRatification}
+                      isBusy={isMigrationBusy || loading}
+                      onDeclare={handleDeclareMigrationState}
+                      onClear={handleClearMigrationState}
                     />
                   </div>
                 ) : null}

@@ -79,6 +79,12 @@ export const SPONSORABLE_MOVE_FUNCTIONS: readonly string[] = Object.freeze([
   'njangi_cycle_escrow::open_cycle_stable_with_gate',
   // Membership + recovery so a gas-less member is never trapped.
   'njangi_circles::member_deposit_security_deposit',
+  // Confirming a migrated circle's recorded history moves no funds and is
+  // member-initiated, but the circle cannot START until every member has done
+  // it — so a gas-less member who could not confirm would block their whole
+  // group. It also rides in the same PTB as the deposit above, and Enoki
+  // rejects the entire transaction if any single target is unlisted.
+  'njangi_circles::acknowledge_migration_state',
   'njangi_circles::execute_recovery',
   'njangi_circles::trigger_auto_release',
 ]);

@@ -60,3 +60,51 @@ describe('activation requirement copy', () => {
     expect(page).not.toMatch(/getRecoveryDelegateValidationError\(\{[^}]*required:\s*true/);
   });
 });
+
+describe('mid-cycle migration copy', () => {
+  // The declared history is a claim about turns taken somewhere Njangi cannot
+  // see. The members confirm it; the software does not check it. Copy that
+  // says "verified" turns a group's own bookkeeping into a platform assurance
+  // we have no basis for — the same over-claim class as the regulatory and
+  // fraud-elimination patterns already banned in check-marketing-copy.mjs.
+  const surfaces = [
+    'components/CircleMigrationPanel.tsx',
+    'pages/circle/[id]/contribute/index.tsx',
+    'pages/create-circle.tsx',
+  ];
+
+  it.each(surfaces)('%s does not claim the recorded history is verified', (rel) => {
+    const source = stripComments(read(rel));
+
+    expect(source).not.toMatch(/verif\w*\s+(?:history|payouts?|turns?|rotation)/i);
+    expect(source).not.toMatch(/(?:history|turns?|payouts?)\s+(?:are|is|was|were)\s+verif/i);
+  });
+
+  it.each(surfaces)('%s attributes the history to the members, not the platform', (rel) => {
+    const source = stripComments(read(rel));
+
+    // "we confirmed" / "Njangi confirms" would put the assurance on us.
+    expect(source).not.toMatch(/\b(?:we|njangi)\s+(?:confirm|verify|validate)\w*\b/i);
+  });
+
+  // Every member must sign off before a declared history takes effect
+  // (EMigrationNotRatified, njangi_circles.move). If the manage page ever
+  // stopped gating on that, the button would promise an activation the
+  // contract refuses.
+  it('the manage page gates activation on unanimous confirmation', () => {
+    const page = stripComments(read('pages/circle/[id]/manage/index.tsx'));
+
+    expect(page).toContain('migrationRatification');
+    expect(page).toMatch(/migrationSettled/);
+  });
+
+  // The version the member saw is what makes a rewritten ledger abort rather
+  // than silently inherit their agreement. Re-reading it at signing time would
+  // defeat the guard entirely.
+  it('the contribute page confirms against the version on screen', () => {
+    const page = stripComments(read('pages/circle/[id]/contribute/index.tsx'));
+
+    expect(page).toContain('migrationVersionOnScreen');
+    expect(page).toContain('acknowledgeMigrationVersion: migrationVersionOnScreen');
+  });
+});

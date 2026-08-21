@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../../../../contexts/AuthContext';
 import { SuiClient } from '@mysten/sui/client';
@@ -33,6 +33,13 @@ import {
 } from '@/lib/onramp-provider';
 import { RAMP_PROVIDER_LABELS, type RampProviderId } from '@/lib/ramp-geo';
 import { getCircleConfigFieldsFromDynamicFields } from '@/lib/circle-config';
+import {
+  getMigrationLedgerFromDynamicFields,
+  hasMemberAcknowledged,
+  isSameMember,
+  resolveMigrationRatification,
+  type MigrationLedger,
+} from '@/lib/circle-migration';
 import { resolveCircleLifecycleState } from '@/lib/circle-chain';
 import { isResolvedSuiObjectId } from '@/lib/sui-object-id';
 import type { CoinbaseAssetIntent } from '@/types/coinbase-onramp';
@@ -402,6 +409,9 @@ const readOutstandingSecurityDepositRaw = async (
 };
 
 
+const shortenAddress = (value: string): string =>
+  value.length > 12 ? `${value.slice(0, 6)}...${value.slice(-4)}` : value;
+
 export default function ContributeToCircle() {
   const router = useRouter();
   const { id } = router.query;
@@ -490,6 +500,12 @@ export default function ContributeToCircle() {
   // New states for cycle position tracking
   const [currentPositionInCycle, setCurrentPositionInCycle] = useState<number | null>(null);
   const [totalMembersInRotation, setTotalMembersInRotation] = useState<number | null>(null);
+
+  // Mid-cycle migration: this circle may have been running elsewhere before it
+  // joined. Members confirm the recorded history before it can start.
+  const [migrationLedger, setMigrationLedger] = useState<MigrationLedger | null>(null);
+  const [rotationOrderAddresses, setRotationOrderAddresses] = useState<string[]>([]);
+  const [isConfirmingMigration, setIsConfirmingMigration] = useState(false);
 
   // Add a new state variable to track if a user has had their security deposit returned during the current paused cycle
   const [securityDepositReturnedDuringPause, setSecurityDepositReturnedDuringPause] = useState<boolean>(false);
@@ -1058,6 +1074,7 @@ export default function ContributeToCircle() {
         if (!isNaN(position) && position >= 0 && rotationOrderArray.length > 0) {
           setCurrentPositionInCycle(position);
           setTotalMembersInRotation(rotationOrderArray.length);
+          setRotationOrderAddresses(rotationOrderArray as string[]);
           console.log(`Contribute - Fetched cycle position: ${position + 1} of ${rotationOrderArray.length}`);
           // Phase 6: hydrate the member-name map so the CycleEscrowPanel can
           // show "It's Aminata's turn" instead of a hex address. We fire-
@@ -1286,6 +1303,7 @@ export default function ContributeToCircle() {
         if (configFields) {
           const resolvedConfigFields = configFields as Record<string, SuiFieldValue>;
           console.log('Contribute - CircleConfig fields:', resolvedConfigFields);
+          setMigrationLedger(await getMigrationLedgerFromDynamicFields(client, dynamicFields));
 
           if (resolvedConfigFields.contribution_amount) {
             configValues.contributionAmount = Number(resolvedConfigFields.contribution_amount) / 1e9;
@@ -2481,6 +2499,7 @@ export default function ContributeToCircle() {
           usdcCoinType: USDC_COIN_TYPE,
           suiCoinType: getCoinType('SUI'),
           network: getCurrentNetwork(),
+          acknowledgeMigrationVersion: migrationVersionOnScreen,
         },
       );
 
@@ -2707,6 +2726,7 @@ export default function ContributeToCircle() {
             suiCoinType: getCoinType('SUI'),
             fallbackSuiAmount: fallbackSui,
             network: getCurrentNetwork(),
+            acknowledgeMigrationVersion: migrationVersionOnScreen,
           },
         );
         responseData = { digest: result.digest };
@@ -3092,6 +3112,7 @@ export default function ContributeToCircle() {
             usdcCoinType: USDC_COIN_TYPE,
             suiCoinType: getCoinType('SUI'),
             network: getCurrentNetwork(),
+            acknowledgeMigrationVersion: migrationVersionOnScreen,
           },
         );
         responseData = { digest: result.digest };
@@ -3221,6 +3242,64 @@ export default function ContributeToCircle() {
   const walletSummaryDetail = userAddress
     ? `${userAddress.substring(0, 6)}...${userAddress.substring(userAddress.length - 4)}`
     : 'Wallet unavailable';
+  // This circle may have been running elsewhere before it joined. Marking a
+  // member as already collected takes them out of this round's payout queue,
+  // so nobody's turn is written off until every member confirms the same
+  // picture — including this one. The contract enforces it at activation.
+  const migrationRatification = useMemo(
+    () => resolveMigrationRatification(migrationLedger, rotationOrderAddresses),
+    [migrationLedger, rotationOrderAddresses],
+  );
+
+  const needsMyMigrationConfirmation = Boolean(
+    migrationLedger
+      && !circle?.isActive
+      && userAddress
+      && rotationOrderAddresses.some((address) => isSameMember(address, userAddress))
+      && !hasMemberAcknowledged(migrationLedger, userAddress),
+  );
+
+  // The version the member is looking at right now. Passing this — rather than
+  // re-reading it at signing time — is what makes the contract abort if the
+  // organiser rewrote the history after this page loaded.
+  const migrationVersionOnScreen = needsMyMigrationConfirmation
+    ? migrationLedger?.version
+    : undefined;
+
+  // Members who paid their deposit BEFORE the organiser recorded the history
+  // have no deposit transaction left to ride along with, so they confirm on
+  // its own. Same call, same version guard.
+  const handleConfirmMigrationState = async () => {
+    if (!account || !circle || !migrationLedger) return;
+
+    const toastId = 'confirm-migration';
+    try {
+      setIsConfirmingMigration(true);
+      toast.loading('Confirming...', { id: toastId });
+
+      await new ZkLoginClient().acknowledgeMigrationState(
+        account,
+        circle.id,
+        migrationLedger.version,
+        getCurrentNetwork(),
+      );
+
+      toast.success('Confirmed. Thanks!', { id: toastId });
+      await fetchCircleDetails();
+    } catch (error) {
+      console.error('Error confirming migration state:', error);
+      const message = error instanceof Error ? error.message : 'Could not confirm.';
+      toast.error(
+        /MoveAbort\(.*,\s*77\)/.test(message)
+          ? 'These details changed since this page loaded. Reload and check them again.'
+          : message,
+        { id: toastId },
+      );
+    } finally {
+      setIsConfirmingMigration(false);
+    }
+  };
+
   const cycleSummaryLabel = currentCycle > 0 ? `Cycle ${currentCycle}` : 'Setup';
   const cycleSummaryDetail = circle?.pausedAfterCycle
     ? 'Paused after payout'
@@ -3414,6 +3493,90 @@ export default function ContributeToCircle() {
         )}
 
         {/* Add prominent message for cycle paused state */}
+        {/* This circle was already running before it joined. Everyone confirms
+            the recorded history before it can start here — the contract will
+            not activate the circle until they all have. */}
+        {needsMyMigrationConfirmation && migrationRatification && (
+          <div className="mb-4 rounded-[22px] border border-sky-200 bg-sky-50 p-4 sm:p-5">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+              Before this circle starts
+            </p>
+            <h4 className="mt-2 text-lg font-semibold text-sky-950">
+              Does this match where your circle is?
+            </h4>
+            <p className="mt-2 text-sm leading-6 text-sky-900/80">
+              Your organiser recorded that this circle has been running already.
+              Everyone checks it before the first payout here, because it decides
+              who is still owed a turn in this round.
+            </p>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-[16px] border border-sky-200 bg-white p-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Already collected
+                </p>
+                <ul className="mt-2 space-y-1 text-sm text-slate-700">
+                  {migrationRatification.alreadyCollected.length === 0 ? (
+                    <li className="text-slate-500">Nobody yet</li>
+                  ) : (
+                    migrationRatification.alreadyCollected.map((address, index) => (
+                      <li key={address}>
+                        {index + 1}. {memberNameMap[address] || shortenAddress(address)}
+                        {isSameMember(address, userAddress) ? ' — you' : ''}
+                      </li>
+                    ))
+                  )}
+                </ul>
+              </div>
+              <div className="rounded-[16px] border border-sky-200 bg-white p-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Still to collect
+                </p>
+                <ul className="mt-2 space-y-1 text-sm text-slate-700">
+                  {migrationRatification.stillWaiting.map((address, index) => (
+                    <li key={address}>
+                      {migrationRatification.alreadyCollected.length + index + 1}.{' '}
+                      {memberNameMap[address] || shortenAddress(address)}
+                      {isSameMember(address, userAddress) ? ' — you' : ''}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+
+            <p className="mt-3 text-sm text-sky-900/80">
+              {migrationLedger && migrationLedger.priorRoundsCompleted > 0
+                ? `Your group also recorded ${migrationLedger.priorRoundsCompleted} full ${
+                    migrationLedger.priorRoundsCompleted === 1 ? 'round' : 'rounds'
+                  } finished before joining. `
+                : ''}
+              Everyone keeps contributing every round. Anyone listed as already
+              collected takes their next turn when the round comes back around.
+            </p>
+
+            {userDepositPaid ? (
+              <button
+                type="button"
+                onClick={handleConfirmMigrationState}
+                disabled={isConfirmingMigration}
+                className={`${primaryActionClass} mt-4 w-full sm:w-auto`}
+              >
+                {isConfirmingMigration ? 'Confirming...' : 'Yes, this is right'}
+              </button>
+            ) : (
+              <p className="mt-4 rounded-[16px] bg-white px-3 py-2 text-sm text-slate-600">
+                You confirm this in the same step as your security deposit below —
+                one signature, both at once.
+              </p>
+            )}
+
+            <p className="mt-3 text-xs text-sky-900/70">
+              Not right? Ask your organiser to correct it. Changing it asks
+              everyone to check again.
+            </p>
+          </div>
+        )}
+
         {circle?.pausedAfterCycle && (
           <div className={`${warningPanelClass} mb-4`}>
             <div className="flex items-start space-x-3">

@@ -218,6 +218,42 @@ if (circle && wallet && coin && admin) {
     );
   }
 
+  // The migration ledger says where a rotation already stands, and activation
+  // applies it to current_position. Declaring one against a live circle would
+  // move the payout pointer after members had funded the cycle — the same
+  // redirect the rotation lock above exists to prevent. Migration is a genesis
+  // declaration, so it is refused outright on an active circle rather than
+  // merely deferred to the paused window.
+  if (isActive && rotation.length >= 2) {
+    const declareMigration = () => {
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${pkg}::njangi_circles::declare_migration_state`,
+        arguments: [
+          tx.object(circle),
+          tx.pure.u64(0), // prior_rounds_completed
+          tx.pure.u64(1), // start_position — writes off position 0's turn
+          tx.object(CLOCK),
+        ],
+      });
+      return tx;
+    };
+    const attempt = await abortsFor(admin, declareMigration);
+    record(
+      attempt.refused && attempt.code === 55,
+      'admin cannot declare a migration state while the circle is active',
+      attempt.refused
+        ? `refused (${attempt.code === 55 ? '55 ECircleIsActive' : attempt.code ?? attempt.error})`
+        : 'ALLOWED — an admin could rewrite a funded rotation',
+    );
+  } else {
+    record(
+      true,
+      'migration lock (needs an ACTIVE circle with >=2 in rotation)',
+      isActive ? 'skipped — rotation too short' : 'skipped — circle inactive',
+    );
+  }
+
   // The admin-liveness fallback exists for an ABSENT admin, so the admin is
   // the one party who must never fire it.
   //
