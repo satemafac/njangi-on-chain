@@ -32,6 +32,7 @@ import {
 // entitlement-preflight.ts and the matching note in BillingUpsellModal).
 import { hasFeaturePreflight } from '../components/milestones/entitlement-preflight';
 import { useTranslation } from '../hooks/useTranslation';
+import { resolveCreatedCircleId } from '@/lib/circle-creation-discovery';
 import BillingUpsellModal from '../components/BillingUpsellModal';
 import {
   preflightSanctionsCheck,
@@ -415,7 +416,7 @@ interface InviteMember {
 
 export default function CreateCircle() {
   const router = useRouter();
-  const { isAuthenticated, account, userAddress } = useAuth();
+  const { isAuthenticated, isLoading: authLoading, account, userAddress } = useAuth();
   const { isReady: signerReady, signAndExecute: signGoalPool } = useZkLoginSigner();
   const { t } = useTranslation();
   const [currentStep, setCurrentStep] = useState(0); // Start at step 0 for circle type selection
@@ -451,6 +452,9 @@ export default function CreateCircle() {
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [createdCircleId, setCreatedCircleId] = useState<string | null>(null);
+  // The creation transaction names the circle exactly; the event scan below
+  // only guesses at it. Keep the digest so we can ask the cheap question first.
+  const [createdCircleDigest, setCreatedCircleDigest] = useState<string | null>(null);
   const [showSmartGoalUpsell, setShowSmartGoalUpsell] = useState(false);
   const [checkingSmartGoalAccess, setCheckingSmartGoalAccess] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -567,10 +571,21 @@ export default function CreateCircle() {
   };
 
   React.useEffect(() => {
-    if (!isAuthenticated) {
-      router.push('/');
+    // Wait for the session to hydrate before deciding anybody is signed out.
+    // Without this, a hard load of /create-circle bounces every signed-in
+    // organiser: isAuthenticated is false on the first render, this pushed
+    // them to '/', and '/' pushes an authenticated user straight to
+    // /dashboard — so a bookmark or a pasted link silently never opened the
+    // page. `replace` rather than `push` so a genuinely signed-out visitor
+    // does not land back here with the Back button.
+    if (authLoading) {
+      return;
     }
-  }, [isAuthenticated, router]);
+
+    if (!isAuthenticated) {
+      router.replace('/');
+    }
+  }, [authLoading, isAuthenticated, router]);
 
   // Add effect to update SUI price when currency changes
   useEffect(() => {
@@ -887,9 +902,11 @@ export default function CreateCircle() {
         getCurrentNetwork(),
       );
       
-      // Store the transaction digest for reference
+      // Keep the digest: it resolves the new circle deterministically, without
+      // event history (which not every RPC serves) and without guessing.
       if (result.digest) {
         console.log('Circle creation transaction successful:', result.digest);
+        setCreatedCircleDigest(result.digest);
       }
 
       // Move to invite step on success
@@ -931,6 +948,23 @@ export default function CreateCircle() {
     try {
       // Use connection pool and batch query for better performance
       const client = getSuiClientFromPool(getCurrentRpcUrl());
+
+      // Preferred path: read the circle straight out of the transaction that
+      // created it. One request, no event history, and it names THE circle
+      // just created rather than the most recent one this admin happens to
+      // own. The event scan below stays as a fallback for a session that lost
+      // the digest (e.g. the form was restored after re-authentication).
+      if (createdCircleDigest) {
+        try {
+          const fromDigest = await resolveCreatedCircleId(client, createdCircleDigest);
+          if (fromDigest) {
+            console.log('Resolved circle ID from creation transaction:', fromDigest);
+            return fromDigest;
+          }
+        } catch (digestError) {
+          console.warn('Could not resolve circle from creation digest, falling back to events:', digestError);
+        }
+      }
 
       // Query for CircleCreated events using batch query
       const adminEvents = await batchQueryEvents(
@@ -1083,7 +1117,7 @@ The Njangi On-Chain Team`;
     });
   };
 
-  if (!isAuthenticated) {
+  if (authLoading || !isAuthenticated) {
     return null;
   }
 

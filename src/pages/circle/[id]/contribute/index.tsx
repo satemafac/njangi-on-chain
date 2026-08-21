@@ -3170,6 +3170,47 @@ export default function ContributeToCircle() {
   }, [circle, userAddress, currentCycle]);
 
   // Add this function to handle manual refresh
+  // The custody wallet id is resolved by a separate lookup, and every payment
+  // control stays disabled until it lands (see `circleWalletReady`). When that
+  // lookup loses to a rate limit — 429s from the shared RPC are routine under
+  // load — the deposit button sat on "Loading circle details..." until somebody
+  // noticed the retry link. Members read that as the circle being broken.
+  //
+  // Retry it here, bounded and backing off, so the common case heals itself.
+  // Backoff matters: a tight retry would spend the very budget it is waiting
+  // on and keep the page stuck. The manual button remains for the rest.
+  const walletRetryCountRef = useRef(0);
+
+  useEffect(() => {
+    walletRetryCountRef.current = 0;
+  }, [circle?.id]);
+
+  useEffect(() => {
+    // Only once the circle itself has loaded: before that this is not a failed
+    // wallet lookup, it is a page that has not finished its first read.
+    if (!circle?.id || circleWalletReady) {
+      return;
+    }
+
+    const MAX_WALLET_RETRIES = 4;
+    if (walletRetryCountRef.current >= MAX_WALLET_RETRIES) {
+      return;
+    }
+
+    const attempt = walletRetryCountRef.current;
+    const delayMs = 2000 * 2 ** attempt; // 2s, 4s, 8s, 16s
+    const timer = setTimeout(() => {
+      walletRetryCountRef.current = attempt + 1;
+      console.log(
+        `[contribute] custody wallet unresolved, retry ${attempt + 1}/${MAX_WALLET_RETRIES}`,
+      );
+      void fetchCircleDetails();
+    }, delayMs);
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [circle?.id, circleWalletReady]);
+
   const handleRefreshContributionStatus = async () => {
     toast.loading('Refreshing contribution status...', { id: 'refresh-status' });
     try {

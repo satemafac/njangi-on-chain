@@ -53,7 +53,7 @@ const DEFAULT_TTL_DAYS = 90;
 
 export default function AdminCompliancePage() {
   const router = useRouter();
-  const { isAuthenticated, userAddress } = useAuth();
+  const { isAuthenticated, isLoading: authLoading, userAddress } = useAuth();
   const { isReady, signAndExecute } = useZkLoginSigner();
 
   const [network, setNetwork] = useState<NetworkType>('testnet');
@@ -96,10 +96,19 @@ export default function AdminCompliancePage() {
   }, []);
 
   useEffect(() => {
+    // Same hydration race as /create-circle: isAuthenticated is false on the
+    // first render after a hard load, so a signed-in attestor was bounced to
+    // '/', which then forwards an authenticated user to /dashboard. The
+    // publish runbook opens this page by URL, which is exactly the path that
+    // failed.
+    if (authLoading) {
+      return;
+    }
+
     if (!isAuthenticated) {
       router.replace('/');
     }
-  }, [isAuthenticated, router]);
+  }, [authLoading, isAuthenticated, router]);
 
   // P9A: auto-discover the AttestorCap(s) the signed-in operator owns so
   // single-cap ops get a deterministic prefill. Multi-cap environments
