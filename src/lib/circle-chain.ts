@@ -65,16 +65,19 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
   // Testnet lineage. Original published 2026-06-12; v2 (2026-06-15) added
   // njangi_goal_pool; v3 (2026-06-15) added combined "amount by date" goals;
   // v4 (2026-08-02) locked the rotation order mid-cycle and made
-  // `njangi_cycle_escrow::finalize` recipient-only.
+  // `njangi_cycle_escrow::finalize` recipient-only; v5 (2026-08-20) let a
+  // circle that was already running elsewhere join mid-rotation.
   //
   // published-at = latest package (move-call target); original-id stays v1
-  // (type identity + event filters). v4 was an UPGRADE, not a fresh publish,
-  // so original-id is unchanged and every circle created under v1-v3 remains
-  // reachable — which is why the v4 hardening avoided touching any public
-  // struct's abilities (that would have been upgrade-incompatible and forced
-  // a new lineage).
+  // (type identity + event filters). Every version since has been an UPGRADE,
+  // not a fresh publish, so original-id is unchanged and every circle created
+  // under an earlier version remains reachable — which is why v4 avoided
+  // touching any public struct's abilities, and why v5 put its migration
+  // ledger in a dynamic field rather than adding a field to CircleConfig.
+  // Either would have been upgrade-incompatible and forced a new lineage,
+  // stranding every existing circle.
   testnet: {
-    publishedAt: '0x1a5fd4877f940f637cf4ac95fcd75cb352065de8b9e0acb9dbd29daa09b7846e',
+    publishedAt: '0x988966677bb06995062c05bacd3a716cb3135a63b94ef04d1d5bdcccd9e53442',
     originalId: '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
   },
 };
