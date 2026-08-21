@@ -144,8 +144,20 @@ export async function findCurrentCycleEscrow(
     }
     return null;
   } catch (err) {
+    // Rethrow rather than reporting a failed read as "no escrow".
+    //
+    // Swallowing this returned null, which is indistinguishable from a circle
+    // whose round genuinely has not been opened — so a rate-limited query
+    // rendered "This round hasn't been opened yet" on a circle whose round WAS
+    // open, telling members to go chase an admin who had already done it.
+    // Same failure shape the recovery-status read was fixed for: a read that
+    // failed must not look like a fact.
+    //
+    // Every caller already handles a throw (the panel surfaces a retry; the
+    // alert and attestation sweeps skip the circle), which is the behaviour
+    // they each wanted anyway.
     console.warn('[cycle-escrow-discovery] Failed to query CycleEscrowOpened', err);
-    return null;
+    throw err;
   }
 }
 

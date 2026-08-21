@@ -130,6 +130,10 @@ export function CycleEscrowPanel({
   const [liveState, setLiveState] = useState<CycleEscrowLiveState | null>(null);
   const [contributors, setContributors] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  // Distinguishes "could not read this round" from "no round yet". Without
+  // it a rate-limited lookup renders as a confident (and wrong) statement
+  // that the admin has not opened the round.
+  const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState<null | 'open' | 'pay' | 'claim' | 'advance'>(null);
   const [lastDigest, setLastDigest] = useState<string | null>(null);
   // Gated round + no attestation on the caller's wallet: explain the
@@ -148,6 +152,7 @@ export function CycleEscrowPanel({
 
   const refresh = useCallback(async () => {
     setLoading(true);
+    setLoadError(false);
     try {
       const found = await findCurrentCycleEscrow(rpcClient, network, circleId);
       setSummary(found);
@@ -162,6 +167,11 @@ export function CycleEscrowPanel({
       }
     } catch (err) {
       console.warn('[CycleEscrowPanel] refresh failed', err);
+      // Say so, rather than falling through to the "not open yet" copy.
+      setLoadError(true);
+      setSummary(null);
+      setLiveState(null);
+      setContributors([]);
     } finally {
       setLoading(false);
     }
@@ -544,7 +554,9 @@ export function CycleEscrowPanel({
         </div>
       ) : stage === 'no-round-open' ? (
         <div className="mt-5 rounded-lg border border-dashed border-slate-200 p-4">
-          <p className="text-sm text-slate-700">{t('escrow.notOpen')}</p>
+          <p className="text-sm text-slate-700">
+            {loadError ? t('escrow.loadFailed') : t('escrow.notOpen')}
+          </p>
           {isAdmin && showAdminOpenButton ? (
             <>
               <button

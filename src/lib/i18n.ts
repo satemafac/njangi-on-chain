@@ -53,6 +53,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.signInHint':
       'Please sign in again to pay into the pot or collect a payout. Your wallet session needs to be active so your phone can sign the transaction — nothing is ever sent to our server.',
     'escrow.loading': "Looking up this round's pot on the blockchain…",
+    'escrow.loadFailed':
+      "We couldn't reach the network to check this round. It may already be open — retry in a moment.",
     'escrow.notOpen':
       "This round hasn't been opened yet. Once the circle admin opens it, members can pay their share and the first person on the list will be ready to collect.",
     'escrow.openRound': 'Open this round',
@@ -388,6 +390,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.signInHint':
       "Veuillez vous reconnecter pour payer votre part ou recevoir le versement. Votre session portefeuille doit être active pour que le téléphone signe la transaction — rien ne transite par notre serveur.",
     'escrow.loading': 'Recherche de la cagnotte de ce tour sur la blockchain…',
+    'escrow.loadFailed':
+      "We couldn't reach the network to check this round. It may already be open — retry in a moment.",
     'escrow.notOpen':
       "Ce tour n'est pas encore ouvert. Une fois que l'administrateur du cercle l'ouvre, les membres peuvent verser leur part et la première personne de la liste sera prête à recevoir.",
     'escrow.openRound': 'Ouvrir ce tour',
@@ -727,6 +731,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.signInHint':
       'Abeg sign in again so you fit pay inside di pot or collect your payout. Your phone go sign di transaction — our server no dey see am.',
     'escrow.loading': 'Dey find di pot for dis round for blockchain…',
+    'escrow.loadFailed':
+      "We couldn't reach the network to check this round. It may already be open — retry in a moment.",
     'escrow.notOpen':
       'Dis round neva open. Once di circle admin open am, people go fit pay dem share and di first person for di list go dey ready to collect.',
     'escrow.openRound': 'Open dis round',
@@ -782,6 +788,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.signInHint':
       'Tafadhali ingia tena ili uweze kulipa mchango au kuchukua malipo. Kipindi cha pochi yako lazima kiwe hai ili simu yako isaini muamala — hakuna kinachotumwa kwa seva yetu.',
     'escrow.loading': 'Tunatafuta kibanda cha raundi hii kwenye blockchain…',
+    'escrow.loadFailed':
+      "We couldn't reach the network to check this round. It may already be open — retry in a moment.",
     'escrow.notOpen':
       'Raundi hii bado haijafunguliwa. Msimamizi wa duara akiifungua, wanachama wataweza kulipa mchango wao na mtu wa kwanza kwenye orodha atakuwa tayari kuchukua malipo.',
     'escrow.openRound': 'Fungua raundi hii',
@@ -835,6 +843,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.signInHint':
       'ወደ ገንዘቡ ለመክፈል ወይም ክፍያ ለመሰብሰብ እባክዎ እንደገና ይግቡ። የኪስ ቦርሳ ክፍለ ጊዜው ንቁ መሆን አለበት — ወደ አገልጋያችን የሚላክ ምንም የለም።',
     'escrow.loading': 'የዚህን ዙር ገንዘብ ከብሎክቼን ላይ በማፈላለግ ላይ…',
+    'escrow.loadFailed':
+      "We couldn't reach the network to check this round. It may already be open — retry in a moment.",
     'escrow.notOpen':
       'ይህ ዙር እስካሁን አልተከፈተም። አስተዳዳሪው ሲከፍተው አባላት ድርሻቸውን መክፈል ይችላሉ፣ የመጀመሪያው ሰው ክፍያ ለመውሰድ ዝግጁ ይሆናል።',
     'escrow.openRound': 'ይህንን ዙር ክፈት',
@@ -886,6 +896,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.signInHint':
       'يرجى تسجيل الدخول مرة أخرى للدفع في الصندوق أو تحصيل المستحقات. يجب أن تكون جلسة المحفظة نشطة ليوقّع هاتفك المعاملة — لا يُرسَل أي شيء إلى خادمنا.',
     'escrow.loading': 'جاري البحث عن صندوق هذه الجولة على البلوكتشين…',
+    'escrow.loadFailed':
+      "We couldn't reach the network to check this round. It may already be open — retry in a moment.",
     'escrow.notOpen':
       'لم تُفتح هذه الجولة بعد. فور فتحها من قِبَل مشرف الدائرة، يمكن للأعضاء دفع حصتهم وسيكون الشخص الأول في القائمة جاهزاً للاستلام.',
     'escrow.openRound': 'افتح هذه الجولة',
@@ -936,6 +948,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.signInHint':
       'لطفاً برای پرداخت سهم یا دریافت مبلغ دوباره وارد شوید. نشست کیف‌پول باید فعال باشد تا گوشی شما تراکنش را امضا کند — چیزی به سرور ما ارسال نمی‌شود.',
     'escrow.loading': 'در حال جست‌وجوی صندوق این دور روی بلاک‌چین…',
+    'escrow.loadFailed':
+      "We couldn't reach the network to check this round. It may already be open — retry in a moment.",
     'escrow.notOpen':
       'این دور هنوز باز نشده است. به‌محض اینکه مدیر حلقه آن را باز کند، اعضا می‌توانند سهم خود را پرداخت کنند و نفر اول لیست برای دریافت آماده است.',
     'escrow.openRound': 'این دور را باز کن',
