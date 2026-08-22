@@ -14,6 +14,10 @@ import {
   type TransakAssetIntent,
 } from '../../../../services/transak-service';
 import { isSanctionedCountry } from '../../../../lib/ramp-geo';
+import {
+  getDriftStatusForAddress,
+  addressDriftErrorBody,
+} from '@/lib/zklogin-address-bindings';
 
 interface RequestBody {
   walletAddress?: string;
@@ -104,6 +108,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(403).json({
       error: 'This service is not available in your region.',
       code: 'BLOCKED_REGION',
+    });
+  }
+
+  // Address-drift gate — same rationale and failure mode as the MoonPay
+  // and Coinbase session routes.
+  const driftScreen = await getDriftStatusForAddress(body.walletAddress.trim());
+  if (driftScreen.drifted) {
+    return res.status(409).json({
+      provider: 'transak',
+      ...addressDriftErrorBody(driftScreen.previousAddresses),
     });
   }
   if (body.redirectURL !== undefined) {

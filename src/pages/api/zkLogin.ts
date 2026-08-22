@@ -1492,6 +1492,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // they do not realise is new, while their existing funds sit
           // elsewhere. Claim, refund, recovery and withdrawal are never gated
           // this way — see src/lib/zklogin-address-bindings.ts.
+          //
+          // HONEST LIMIT: like the billing gate below, this is a SOFT gate.
+          // create_circle is a public Move entry point and the Phase 2
+          // client-side signer submits straight to RPC, so a determined
+          // client bypasses this route entirely. The hard coverage for a
+          // drifted user is the join gate (the join queue is ours) plus the
+          // AddressDriftGate interstitial, which the create page is not
+          // exempt from. This check is honest friction, not security.
           {
             const drift = await getDriftStatusForIdentity({
               iss: session.account.iss ?? null,

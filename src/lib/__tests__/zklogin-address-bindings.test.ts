@@ -301,3 +301,43 @@ describe('normalizeAddress', () => {
     expect(normalizeAddress('  0xAbC  ')).toBe('0xabc');
   });
 });
+
+describe('getDriftStatusForAddress (ramp/whatsapp surfaces)', () => {
+  it('flags an address whose identity holds other addresses', async () => {
+    query.mockReset();
+    query.mockImplementation((sql: string) => {
+      if (/JOIN zklogin_address_bindings b/i.test(String(sql))) {
+        return Promise.resolve({ rows: [{ user_address: ADDR_OLD.toLowerCase() }] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+
+    const { getDriftStatusForAddress } = await import('../zklogin-address-bindings');
+    const result = await getDriftStatusForAddress(ADDR_NEW);
+
+    expect(result.drifted).toBe(true);
+    expect(result.previousAddresses).toEqual([ADDR_OLD.toLowerCase()]);
+  });
+
+  it('reports clean for an address with a single-address identity', async () => {
+    query.mockReset();
+    query.mockResolvedValue({ rows: [] });
+
+    const { getDriftStatusForAddress } = await import('../zklogin-address-bindings');
+    const result = await getDriftStatusForAddress(ADDR_NEW);
+
+    expect(result.drifted).toBe(false);
+    expect(result.status).toBe('known');
+  });
+
+  it('fails OPEN on lookup errors — a detection outage must not stop a ramp', async () => {
+    query.mockReset();
+    query.mockRejectedValue(new Error('down'));
+
+    const { getDriftStatusForAddress } = await import('../zklogin-address-bindings');
+    const result = await getDriftStatusForAddress(ADDR_NEW);
+
+    expect(result.drifted).toBe(false);
+    expect(result.status).toBe('unavailable');
+  });
+});

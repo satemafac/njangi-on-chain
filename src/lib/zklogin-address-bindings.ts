@@ -443,3 +443,56 @@ export async function assertNoAddressDrift(
     throw new AddressDriftBlockedError(result.previousAddresses);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Address-based drift lookup
+//
+// The ramp-session routes authenticate by WALLET ADDRESS, not by zkLogin
+// session, so the identity-keyed check above cannot run there. This
+// answers the question those surfaces actually have: "does this address
+// belong to an identity that has drifted?" — in which case funding it (or
+// binding WhatsApp to it) is a new commitment the user may not understand
+// they are making at a different account than they think.
+//
+// Both sides of a drifted identity are blocked, deliberately: topping up
+// the NEW address deepens a commitment at an account the user may not
+// realise is new, and topping up the OLD address sends money somewhere no
+// login can reach any more.
+//
+// Identity here is matched on `sub` alone, not the (iss|provider) branches
+// the login-path lookup uses. A cross-provider `sub` collision is
+// vanishingly unlikely, and the asymmetry documented on listKnownBindings
+// applies with the same force: a false positive pauses a top-up, a false
+// negative funds a stranded account.
+// ---------------------------------------------------------------------------
+
+export async function getDriftStatusForAddress(
+  address: string,
+): Promise<DriftResult> {
+  const currentAddress = normalizeAddress(address);
+
+  if (!isPostgresConfigured()) {
+    return { ...UNAVAILABLE, currentAddress };
+  }
+
+  try {
+    await ensureTable();
+    const { rows } = await getSharedPgPool().query(
+      `SELECT DISTINCT b.user_address
+         FROM zklogin_address_bindings a
+         JOIN zklogin_address_bindings b ON b.sub = a.sub
+        WHERE a.user_address = $1
+          AND b.user_address <> $1
+        ORDER BY b.user_address`,
+      [currentAddress],
+    );
+
+    const previousAddresses = rows.map((r) => r.user_address as string);
+    return previousAddresses.length === 0
+      ? { status: 'known', drifted: false, currentAddress, previousAddresses: [] }
+      : { status: 'drifted', drifted: true, currentAddress, previousAddresses };
+  } catch (err) {
+    console.error('[address-drift] address-based lookup failed', err);
+    return { ...UNAVAILABLE, currentAddress };
+  }
+}
