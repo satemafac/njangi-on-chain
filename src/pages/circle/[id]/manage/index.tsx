@@ -1317,6 +1317,30 @@ export default function ManageCircle() {
           });
           const walletId = custodyResolution?.walletId;
 
+          // Store the id the moment it resolves, BEFORE reading balances.
+          //
+          // These were coupled: custody was only set inside the balance-parse
+          // branch below, so a rate-limited wallet read threw away an id we had
+          // already resolved. Everything gated on custody.walletId then failed —
+          // most visibly member removal, which needs the id and nothing else,
+          // and which reported no error because the id it was handed was ''.
+          //
+          // Balances are presentation; the id is capability. Losing the former
+          // must not cost the latter.
+          if (walletId) {
+            setCircle(prev => prev ? {
+              ...prev,
+              custody: {
+                stablecoinEnabled: false,
+                stablecoinType: '',
+                stablecoinBalance: 0,
+                suiBalance: 0,
+                ...(prev.custody ?? {}),
+                walletId,
+              },
+            } : prev);
+          }
+
           if (walletId) {
               // Parallel fetch: wallet data and dynamic fields
               const [walletData, walletDynamicFields] = await Promise.all([
