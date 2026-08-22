@@ -23,6 +23,15 @@ const stripComments = (source: string): string =>
   source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 
 describe('confirmation dialog ordering', () => {
+  // The component closes too, and its close runs AFTER the consumer's
+  // handler — so this layer matters even when the page gets it right.
+  it('the shared modal closes before running its action', () => {
+    const modal = stripComments(read('components/ConfirmationModal.tsx'));
+
+    expect(modal).not.toMatch(/onConfirm\(\);\s*onClose\(\);/);
+    expect(modal).toMatch(/onClose\(\);\s*onConfirm\(\);/);
+  });
+
   it('the manage page closes the dialog before running the action', () => {
     const page = stripComments(read('pages/circle/[id]/manage/index.tsx'));
 

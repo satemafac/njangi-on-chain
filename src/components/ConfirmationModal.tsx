@@ -72,8 +72,21 @@ const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
               <button
                 className={`px-4 py-2 text-sm font-medium text-white rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors ${getConfirmButtonClass()}`}
                 onClick={() => {
+                  // Close BEFORE confirming, not after.
+                  //
+                  // Some consumers chain a second dialog from onConfirm — the
+                  // manage page's Resume Cycle opens one to spell out that
+                  // resuming resets every member's deposit. Closing afterwards
+                  // clobbered it: the close ran against the state the consumer
+                  // had just set, so the second dialog opened and shut in the
+                  // same tick and its action never ran. Resume Cycle silently
+                  // did nothing, stranding circles paused at the end of a round.
+                  //
+                  // This way the queued close lands first, so a dialog opened
+                  // by onConfirm wins, and a consumer that opens nothing still
+                  // just closes.
+                  onClose();
                   onConfirm();
-                  onClose(); // Close modal after confirmation
                 }}
               >
                 {confirmText}
