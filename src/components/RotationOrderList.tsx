@@ -2,8 +2,9 @@ import React, { useState, useCallback } from 'react';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, User, Info } from 'lucide-react';
+import { GripVertical, User, Info, Shuffle } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
+import { shuffleDistinct } from '@/lib/rotation-shuffle';
 
 interface Member {
   address: string;
@@ -126,6 +127,19 @@ const RotationOrderList: React.FC<RotationOrderListProps> = ({
     }
   }, []);
   
+  /**
+   * Stages a random order in the list, the same way dragging does. The user
+   * still presses Save.
+   *
+   * This used to live on the parent page and commit straight to the save
+   * confirmation, leaving this list untouched — so it looked like nothing had
+   * happened, and pressing it again just queued another confirmation for a
+   * different order.
+   */
+  const handleShuffle = useCallback(() => {
+    setMemberList((current) => shuffleDistinct(current, (member) => member.address));
+  }, []);
+
   const handleSave = () => {
     // Extract the addresses in the new order
     const newOrderAddresses = memberList.map(member => member.address);
@@ -190,7 +204,16 @@ const RotationOrderList: React.FC<RotationOrderListProps> = ({
         </SortableContext>
       </DndContext>
       
-      <div className="flex justify-end space-x-3 mt-4">
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <button
+          onClick={handleShuffle}
+          disabled={memberList.length < 2}
+          className="inline-flex items-center px-4 py-2 border border-gray-300 text-gray-700 rounded-md shadow-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Shuffle size={16} className="mr-2" />
+          Shuffle
+        </button>
+        <div className="flex space-x-3">
         <button
           onClick={onCancelEdit}
           className="px-4 py-2 border border-gray-300 text-gray-700 rounded-md shadow-sm hover:bg-gray-50"
@@ -203,6 +226,7 @@ const RotationOrderList: React.FC<RotationOrderListProps> = ({
         >
           Save Rotation Order
         </button>
+        </div>
       </div>
     </div>
   );

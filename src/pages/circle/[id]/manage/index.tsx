@@ -3788,24 +3788,6 @@ export default function ManageCircle() {
   }, [members]);
 
   // Add this shuffle function after the saveRotationOrder function
-  const shuffleRotationOrder = () => {
-    if (!members.length) return;
-    
-    // Create a copy of the members array
-    const shuffledMembers = [...members];
-    
-    // Fisher-Yates shuffle algorithm
-    for (let i = shuffledMembers.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffledMembers[i], shuffledMembers[j]] = [shuffledMembers[j], shuffledMembers[i]];
-    }
-    
-    // Extract addresses in the new order
-    const newOrder = shuffledMembers.map(member => member.address);
-    
-    // Save the new order
-    saveRotationOrder(newOrder);
-  };
 
   // Mirrors the contract's is_migration_ratified: every seat in the rotation,
   // at the ledger's current version. Null when the circle never migrated.
@@ -6791,27 +6773,6 @@ export default function ManageCircle() {
                           <p className="text-xs mt-1">The rotation order determines who receives payouts in which order.</p>
                         </div>
                       )}
-                      {/* This does NOT rearrange the list below and wait for
-                          Save — it picks a random order and goes straight to
-                          the save confirmation. Sitting above a drag list that
-                          has its own Save button, "Shuffle Order" read as a
-                          preview, so it looked like it had done nothing. The
-                          label and the line beside it say what it actually
-                          does. */}
-                      <div className="mb-4 flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
-                        <p className="text-xs text-slate-500">
-                          Draws a random order and asks you to confirm it — separate from the list below.
-                        </p>
-                        <button
-                          onClick={shuffleRotationOrder}
-                          className={`${secondaryActionClass} px-4 py-2`}
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                          </svg>
-                          Shuffle and save
-                        </button>
-                      </div>
                       <RotationOrderList 
                         members={members}
                         adminAddress={circle.admin}
