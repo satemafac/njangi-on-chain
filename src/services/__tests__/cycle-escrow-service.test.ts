@@ -1,5 +1,9 @@
 import type { Transaction } from '@mysten/sui/transactions';
-import { buildOpenCycleTx } from '@/services/cycle-escrow-service';
+import {
+  buildContributeWithAttestationTx,
+  buildFinalizeAndRedeemWithAttestationTx,
+  buildOpenCycleTx,
+} from '@/services/cycle-escrow-service';
 
 jest.mock('@/services/network-config', () => ({
   getNetworkConfig: () => ({ rpcUrl: 'http://localhost:9000' }),
@@ -91,5 +95,103 @@ describe('buildOpenCycleTx', () => {
       { kind: 'u8', v: 6 },
       { kind: 'object', id: '0x6' },
     ]);
+  });
+});
+
+describe('buildContributeWithAttestationTx', () => {
+  // Regression: `contribute_with_attestation` takes (escrow, payment,
+  // attestation, config, clock). The builder used to omit the shared
+  // ComplianceConfig, so every gated contribution aborted on-chain with
+  // "Incorrect number of arguments".
+  it('passes the ComplianceConfig between the attestation and the clock', () => {
+    const { txb, calls } = makeFakeTxb();
+    buildContributeWithAttestationTx({
+      ...BASE,
+      escrowId: '0xescrow',
+      paymentCoinId: '0xcoin',
+      attestationObjectId: '0xattestation',
+      complianceConfigId: '0xconfig',
+    })(txb);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].target).toBe('0xpkg::njangi_cycle_escrow::contribute_with_attestation');
+    expect(calls[0].typeArguments).toEqual([BASE.coinType]);
+    expect(calls[0].arguments).toEqual([
+      { kind: 'object', id: '0xescrow' },
+      { kind: 'object', id: '0xcoin' },
+      { kind: 'object', id: '0xattestation' },
+      { kind: 'object', id: '0xconfig' },
+      { kind: 'object', id: '0x6' },
+    ]);
+  });
+
+  it('fails at build time with a named error when the config id is missing', () => {
+    expect(() =>
+      buildContributeWithAttestationTx({
+        ...BASE,
+        escrowId: '0xescrow',
+        paymentCoinId: '0xcoin',
+        attestationObjectId: '0xattestation',
+        complianceConfigId: '',
+      }),
+    ).toThrow('Missing required argument: complianceConfigId');
+  });
+});
+
+describe('buildFinalizeAndRedeemWithAttestationTx', () => {
+  // Regression: `finalize_and_redeem_with_attestation` takes (escrow,
+  // attestation, config, clock). The builder used to omit the shared
+  // ComplianceConfig, so every gated payout aborted on-chain with
+  // "Incorrect number of arguments".
+  it('passes the ComplianceConfig between the attestation and the clock', () => {
+    const { txb, calls } = makeFakeTxb();
+    buildFinalizeAndRedeemWithAttestationTx({
+      ...BASE,
+      circleId: undefined,
+      escrowId: '0xescrow',
+      attestationObjectId: '0xattestation',
+      complianceConfigId: '0xconfig',
+    })(txb);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].target).toBe(
+      '0xpkg::njangi_cycle_escrow::finalize_and_redeem_with_attestation',
+    );
+    expect(calls[0].arguments).toEqual([
+      { kind: 'object', id: '0xescrow' },
+      { kind: 'object', id: '0xattestation' },
+      { kind: 'object', id: '0xconfig' },
+      { kind: 'object', id: '0x6' },
+    ]);
+  });
+
+  it('still chains advance_circle_after_claim when a circleId is provided', () => {
+    const { txb, calls } = makeFakeTxb();
+    buildFinalizeAndRedeemWithAttestationTx({
+      ...BASE,
+      escrowId: '0xescrow',
+      circleId: '0xcircle',
+      attestationObjectId: '0xattestation',
+      complianceConfigId: '0xconfig',
+    })(txb);
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1].target).toBe('0xpkg::njangi_cycle_escrow::advance_circle_after_claim');
+    expect(calls[1].arguments).toEqual([
+      { kind: 'object', id: '0xcircle' },
+      { kind: 'object', id: '0xescrow' },
+      { kind: 'object', id: '0x6' },
+    ]);
+  });
+
+  it('fails at build time with a named error when the config id is missing', () => {
+    expect(() =>
+      buildFinalizeAndRedeemWithAttestationTx({
+        ...BASE,
+        escrowId: '0xescrow',
+        attestationObjectId: '0xattestation',
+        complianceConfigId: '',
+      }),
+    ).toThrow('Missing required argument: complianceConfigId');
   });
 });
