@@ -108,15 +108,22 @@ expiring, revocable share links.
 **Deliberately not claimed:** per-member, per-cycle on-time status. That needs the v1.1 entry
 function above. The UI reports "turn not yet reached" rather than ever asserting a missed payment.
 
-## 5. Parallel track — counsel (starts at t=0, zero engineering cost)
+## 5. Counsel track — OWNER DECISION 2026-08-22: last before go-live
 
-`docs/counsel-addendum-asset-conversion.md` is written and ready to send. It asks whether the
-flagship — a member converting their own payout into tokenized assets through a licensed partner —
-can be built at all, and in which of three variants.
+`docs/counsel-addendum-asset-conversion.md` is written and send-ready. This document originally
+recommended sending it immediately; **the owner has decided counsel review is the final step
+before go-live instead.** Consequences of that sequencing, so nobody trips on them later:
 
-Send it **now**, with or immediately after `docs/counsel-brief.md`. It is the longest pole in the
-product and it costs us nothing to start. No design work on that feature begins before a written
-answer, per the Phase C tripwire in `docs/compliance-roadmap-cex-dex-non-kyc.md`.
+- The mainnet gate in `docs/compliance-roadmap-cex-dex-non-kyc.md` is unchanged: **no real
+  family money before the opinion letter lands.** Counsel-last therefore means counsel sits
+  directly on the go-live critical path — everything else must be finished and waiting on it,
+  not the other way around.
+- The Phase C tripwire still holds in the meantime: no design work on asset conversion (rungs
+  2–3), auction framing, or the account-recovery build until the answers come back. Those tracks
+  are paused-by-sequencing, not forgotten — each has a review-ready document
+  (`counsel-addendum-asset-conversion.md`, `prd-account-recovery.md` §6.2).
+- The counsel package to send, when the time comes: `docs/counsel-brief.md` + the asset-conversion
+  addendum + the account-recovery question + the bidding-circles framing question.
 
 ## 6. Deliberately not in this wave
 
@@ -155,6 +162,6 @@ Every gap from the 2026-08-20 status review, with its outcome:
 | /record unreachable | **Closed.** "Your record" entry in the dashboard wallet panel. |
 | New copy outside i18n | **Closed** to the house standard: drift.* / record.* keys in EN + FR (strict parity enforced by test); the other five locales remain intentionally partial with EN fallback, per the documented policy. Dates follow the app locale. |
 | Share page unverified e2e | **Closed.** Verified in the real browser against a production build, the production database and live testnet chain data: live link renders a real member's 3 circles (EN and FR); a payout landed on-chain mid-test and the record picked it up; revoked, expired and unknown tokens all render one identical "not available" page; signed-out /record shows the sign-in CTA. Local-prod note: the HTTPS-force middleware 301s plain-http localhost, so local prod testing needs an x-forwarded-proto: https shim in front of `next start`. |
-| Per-cycle on-time status | **Open by design** — needs a new Move entry function taking &Clock (Circle Record v1.1, publish-gated). The UI claims nothing it cannot prove. |
-| Counsel letter unsent | **Open — owner action.** `docs/counsel-addendum-asset-conversion.md` is ready to send. |
-| Account recovery unbuilt | **Open — roadmap** (post-beta), unchanged. |
+| Per-cycle on-time status | **Code complete, publish-gated (2026-08-22).** v1.1 shipped in source: `open_cycle*_indexed` entries append each escrow's id to a `FIELD_ESCROW_HISTORY` dynamic field on the Circle (taking `&mut Circle` — new functions may, existing signatures may not), and `contribute_timed*` record per-member timestamps. 176/176 Move tests. Frontend reads the history + timestamps and renders "N of M recorded" on-time evidence — only when data exists; absence renders nothing. Client targets switch behind `NEXT_PUBLIC_ESCROW_TIMED_ENTRIES_ENABLED` (default OFF). **Goes live when the owner authorizes the v6 publish**: run the publish runbook, `sui client upgrade --dry-run` first per the upgrade-compatibility memory, then flip the flag. |
+| Counsel letter unsent | **Owner-sequenced: LAST before go-live** (decision 2026-08-22, see §5). Package is assembled and waiting. |
+| Account recovery unbuilt | **Design complete, build-gated on review** — `docs/prd/prd-account-recovery.md`: member-registered recovery beneficiary, 7-day registration cooldown + 14-day challenge window, redirects owed value only (never votes/membership), member cancel always wins. Counsel question folded into the pre-go-live package. |
