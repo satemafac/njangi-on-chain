@@ -7874,8 +7874,21 @@ export default function ManageCircle() {
         isOpen={confirmationModal.isOpen}
         onClose={() => setConfirmationModal(prev => ({ ...prev, isOpen: false }))}
         onConfirm={() => {
-          confirmationModal.onConfirm();
+          // Close FIRST, then run the action.
+          //
+          // Some handlers chain a second confirmation — handleResumeCycle
+          // opens one to spell out that resuming resets every member's
+          // deposit. Closing afterwards clobbered it: the close ran against
+          // the state the handler had just set, so the second dialog opened
+          // and shut in the same tick and its transaction was never sent.
+          // Resume Cycle therefore did nothing at all, stranding every circle
+          // paused at the end of every round.
+          //
+          // Ordering it this way makes the queued close land first and any
+          // dialog the handler opens win, while a handler that opens nothing
+          // still just closes.
           setConfirmationModal(prev => ({ ...prev, isOpen: false }));
+          confirmationModal.onConfirm();
         }}
         title={confirmationModal.title}
         message={confirmationModal.message}
