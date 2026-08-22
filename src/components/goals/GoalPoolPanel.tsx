@@ -20,7 +20,10 @@ import {
   buildCancelAfterDeadlineTx,
   buildClaimRefundTx,
 } from '@/services/goal-pool-service';
-import { findFreshestAttestation } from '@/lib/compliance-gate';
+import {
+  findFreshestAttestation,
+  resolveComplianceConfigId,
+} from '@/lib/compliance-gate';
 import VerificationRequiredModal from '@/components/VerificationRequiredModal';
 
 interface Props {
@@ -167,6 +170,7 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
     // rotational escrow panel) and explain instead of erroring when they
     // don't have one yet.
     let attestationObjectId: string | undefined;
+    let complianceConfigId: string | undefined;
     if (state.requiresAttestation) {
       const attestation = await findFreshestAttestation(userAddress, network).catch(
         () => null,
@@ -176,6 +180,20 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
         return;
       }
       attestationObjectId = attestation.objectId;
+      // contribute_with_attestation validates against the EXACT config
+      // pinned on the pool and takes that object as an argument. Prefer
+      // the pinned id read off the pool itself; fall back to the lineage
+      // singleton (same resolver the open flow used to pin it).
+      complianceConfigId =
+        state.compliancyConfigId ??
+        (await resolveComplianceConfigId(network).catch(() => null)) ??
+        undefined;
+      if (!complianceConfigId) {
+        toast.error(
+          'Verification is required for this pool but is not configured yet. Please contact support.',
+        );
+        return;
+      }
     }
     const base = BigInt(Math.round(value * 10 ** coin.decimals));
     void runWithSigner(
@@ -186,6 +204,7 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
         amount: base,
         ownerAddress: userAddress,
         attestationObjectId,
+        complianceConfigId,
       }),
       120_000_000,
       'Added to the pot! 🎉',

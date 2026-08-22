@@ -141,6 +141,14 @@ export function buildOpenCycleTx(params: OpenCycleParams): BuildTransactionFn {
 
 export interface ContributeWithAttestationParams extends ContributeParams {
   attestationObjectId: string;
+  /**
+   * The shared ComplianceConfig object the escrow pinned at open time.
+   * `contribute_with_attestation` takes it right after the attestation
+   * (resolve it with `resolveComplianceConfigId` from lib/compliance-gate).
+   * Omitting it used to produce an on-chain "Incorrect number of
+   * arguments" abort on every gated contribution.
+   */
+  complianceConfigId: string;
 }
 
 export function buildContributeWithAttestationTx(
@@ -150,6 +158,7 @@ export function buildContributeWithAttestationTx(
   const escrowId = requireAddr(params.escrowId, 'escrowId');
   const paymentCoinId = requireAddr(params.paymentCoinId, 'paymentCoinId');
   const attestationId = requireAddr(params.attestationObjectId, 'attestationObjectId');
+  const complianceConfigId = requireAddr(params.complianceConfigId, 'complianceConfigId');
   return (txb: Transaction) => {
     txb.moveCall({
       target: `${packageId}::njangi_cycle_escrow::contribute_with_attestation`,
@@ -158,6 +167,7 @@ export function buildContributeWithAttestationTx(
         txb.object(escrowId),
         txb.object(paymentCoinId),
         txb.object(attestationId),
+        txb.object(complianceConfigId),
         txb.object(CLOCK_OBJECT_ID),
       ],
     });
@@ -166,6 +176,14 @@ export function buildContributeWithAttestationTx(
 
 export interface FinalizeAndRedeemWithAttestationParams extends FinalizeAndRedeemParams {
   attestationObjectId: string;
+  /**
+   * The shared ComplianceConfig object the escrow pinned at open time.
+   * `finalize_and_redeem_with_attestation` takes it right after the
+   * attestation (resolve it with `resolveComplianceConfigId` from
+   * lib/compliance-gate). Omitting it used to produce an on-chain
+   * "Incorrect number of arguments" abort on every gated payout.
+   */
+  complianceConfigId: string;
 }
 
 export function buildFinalizeAndRedeemWithAttestationTx(
@@ -174,6 +192,7 @@ export function buildFinalizeAndRedeemWithAttestationTx(
   const packageId = packageIdFor(params.network);
   const escrowId = requireAddr(params.escrowId, 'escrowId');
   const attestationId = requireAddr(params.attestationObjectId, 'attestationObjectId');
+  const complianceConfigId = requireAddr(params.complianceConfigId, 'complianceConfigId');
   return (txb: Transaction) => {
     txb.moveCall({
       target: `${packageId}::njangi_cycle_escrow::finalize_and_redeem_with_attestation`,
@@ -181,6 +200,7 @@ export function buildFinalizeAndRedeemWithAttestationTx(
       arguments: [
         txb.object(escrowId),
         txb.object(attestationId),
+        txb.object(complianceConfigId),
         txb.object(CLOCK_OBJECT_ID),
       ],
     });

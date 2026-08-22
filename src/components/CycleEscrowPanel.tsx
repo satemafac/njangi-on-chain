@@ -400,9 +400,12 @@ export function CycleEscrowPanel({
 
   // Phase 8: resolve the member's freshest valid ComplianceAttestation
   // once per session and reuse it for gated contribute/finalize calls.
-  // Returns null when the attestation isn't required, or throws with a
-  // njangi-friendly toast when it is required and missing.
-  const resolveAttestationIdOrAbort = useCallback(async (): Promise<string | null> => {
+  // Returns null when the gate isn't active, 'ABORT' after surfacing a
+  // njangi-friendly explanation when a required piece is missing, or the
+  // pair of object ids the gated entrypoints need.
+  const resolveGateArgsOrAbort = useCallback(async (): Promise<
+    { attestationId: string; complianceConfigId: string } | null | 'ABORT'
+  > => {
     const gateActive =
       !!liveState?.requiresAttestation || isComplianceGateEnabled();
     if (!gateActive) return null;
@@ -415,15 +418,30 @@ export function CycleEscrowPanel({
       setShowVerificationRequired(true);
       return 'ABORT';
     }
-    return attestation.objectId;
+    // The gated entrypoints validate the attestation against the exact
+    // ComplianceConfig the escrow pinned at open time, and take that
+    // config object as an argument right after the attestation. Resolve
+    // it up front (same pattern as onStartRound) — sending the call
+    // without it aborts on-chain with an unfriendly "Incorrect number
+    // of arguments".
+    const complianceConfigId = await resolveComplianceConfigId(network).catch(
+      () => null,
+    );
+    if (!complianceConfigId) {
+      toast.error(
+        'Verification is required in your region but is not configured yet. Please contact support.',
+      );
+      return 'ABORT';
+    }
+    return { attestationId: attestation.objectId, complianceConfigId };
   }, [liveState?.requiresAttestation, userAddress, network]);
 
   const onPayShare = useCallback(async () => {
     if (!summary || !userAddress) return;
-    const attestationId = await resolveAttestationIdOrAbort();
-    if (attestationId === 'ABORT') return;
+    const gateArgs = await resolveGateArgsOrAbort();
+    if (gateArgs === 'ABORT') return;
 
-    if (attestationId) {
+    if (gateArgs) {
       // Gated contribute: we inline the auto-coin + gated moveCall in a
       // single builder so the PTB contains the coin split + the
       // compliance-checked contribute in one atomic transaction.
@@ -449,7 +467,8 @@ export function CycleEscrowPanel({
           arguments: [
             txb.object(escrowId),
             coinArg,
-            txb.object(attestationId),
+            txb.object(gateArgs.attestationId),
+            txb.object(gateArgs.complianceConfigId),
             txb.object('0x6'),
           ],
         });
@@ -466,14 +485,14 @@ export function CycleEscrowPanel({
       ownerAddress: userAddress,
     });
     void runWithSigner('pay', build, 100_000_000);
-  }, [summary, userAddress, network, coinType, contributionAmountBase, runWithSigner, resolveAttestationIdOrAbort]);
+  }, [summary, userAddress, network, coinType, contributionAmountBase, runWithSigner, resolveGateArgsOrAbort]);
 
   const onCollectPayout = useCallback(async () => {
     if (!summary) return;
-    const attestationId = await resolveAttestationIdOrAbort();
-    if (attestationId === 'ABORT') return;
+    const gateArgs = await resolveGateArgsOrAbort();
+    if (gateArgs === 'ABORT') return;
 
-    const build = attestationId
+    const build = gateArgs
       ? buildFinalizeAndRedeemWithAttestationTx({
           network,
           escrowId: summary.escrowId,
@@ -481,7 +500,8 @@ export function CycleEscrowPanel({
           // Advance the circle's rotation atomically with the payout — without
           // this the cycle stalls on the same recipient.
           circleId,
-          attestationObjectId: attestationId,
+          attestationObjectId: gateArgs.attestationId,
+          complianceConfigId: gateArgs.complianceConfigId,
         })
       : buildFinalizeAndRedeemTx({
           network,
@@ -490,7 +510,7 @@ export function CycleEscrowPanel({
           circleId,
         });
     void runWithSigner('claim', build, 120_000_000);
-  }, [summary, network, coinType, circleId, runWithSigner, resolveAttestationIdOrAbort]);
+  }, [summary, network, coinType, circleId, runWithSigner, resolveGateArgsOrAbort]);
 
   // Recovery: advance a circle whose payout was collected but whose rotation
   // never moved on (e.g. claimed before the collect flow chained the advance).
