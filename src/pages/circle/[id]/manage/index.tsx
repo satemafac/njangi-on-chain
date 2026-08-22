@@ -4910,8 +4910,9 @@ export default function ManageCircle() {
             ))}
           </ul>
           <p className="mt-2 text-xs">
-            Members confirm on their own contribution page, in the same step as
-            their security deposit.
+            Each member confirms on their own contribute page: paying the security
+            deposit counts as confirming, and anyone who already paid sees a
+            &ldquo;Yes, this is right&rdquo; button there instead.
           </p>
         </div>
       );

@@ -200,8 +200,10 @@ const CircleMigrationPanel: React.FC<CircleMigrationPanelProps> = ({
           </div>
           <p className="mt-1 text-sm text-slate-600">
             This is a record of turns taken elsewhere, so every member confirms it
-            themselves before the circle starts. Members confirm on their own
-            contribution page, in the same step as their security deposit.
+            themselves before the circle starts. Each member confirms on their own
+            contribute page: paying the security deposit counts as confirming, and
+            anyone who already paid sees a &ldquo;Yes, this is right&rdquo; button
+            there instead.
           </p>
 
           <ul className="mt-3 space-y-2">

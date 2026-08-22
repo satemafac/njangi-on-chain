@@ -87,6 +87,24 @@ describe('mid-cycle migration copy', () => {
     expect(source).not.toMatch(/\b(?:we|njangi)\s+(?:confirm|verify|validate)\w*\b/i);
   });
 
+  // The standalone confirm button exists precisely for members whose deposit
+  // is already paid (no deposit transaction left to ride along with). It once
+  // lived inside renderContributionOptions, which returns null when
+  // userDepositPaid — unreachable for exactly its audience, deadlocking
+  // activation. It must render at page level, outside that helper.
+  it('the confirm panel is not gated behind the deposit-only payment card', () => {
+    const page = stripComments(read('pages/circle/[id]/contribute/index.tsx'));
+
+    expect(page).toContain('{renderMigrationConfirmation()}');
+
+    // Nothing after renderContributionOptions begins may depend on the
+    // confirmation flag: the helper early-returns on userDepositPaid, so any
+    // migration UI inside it is dead for paid-up members.
+    const helperStart = page.indexOf('const renderContributionOptions');
+    expect(helperStart).toBeGreaterThan(-1);
+    expect(page.slice(helperStart)).not.toContain('needsMyMigrationConfirmation');
+  });
+
   // Every member must sign off before a declared history takes effect
   // (EMigrationNotRatified, njangi_circles.move). If the manage page ever
   // stopped gating on that, the button would promise an activation the

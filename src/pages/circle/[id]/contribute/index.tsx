@@ -3354,6 +3354,98 @@ export default function ContributeToCircle() {
       : formatUsdCentsAsUsdc(!userDepositPaid ? circle.securityDepositUsd || 0 : circle.contributionAmountUsd || 0);
 
   // Update the renderContributionOptions function to show a message when user is the current recipient
+  // Rendered at page level, NOT inside renderContributionOptions(): that
+  // helper returns null once the deposit is paid, which made this panel —
+  // and with it the standalone confirm button — unreachable for exactly the
+  // members who need it (deposit already paid, so no deposit transaction is
+  // left for the acknowledgement to ride along with).
+  const renderMigrationConfirmation = () => {
+    if (!needsMyMigrationConfirmation || !migrationRatification) {
+      return null;
+    }
+
+    return (
+      <div className="mb-4 rounded-[22px] border border-sky-200 bg-sky-50 p-4 sm:p-5">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+          Before this circle starts
+        </p>
+        <h4 className="mt-2 text-lg font-semibold text-sky-950">
+          Does this match where your circle is?
+        </h4>
+        <p className="mt-2 text-sm leading-6 text-sky-900/80">
+          Your organiser recorded that this circle has been running already.
+          Everyone checks it before the first payout here, because it decides
+          who is still owed a turn in this round.
+        </p>
+
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div className="rounded-[16px] border border-sky-200 bg-white p-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Already collected
+            </p>
+            <ul className="mt-2 space-y-1 text-sm text-slate-700">
+              {migrationRatification.alreadyCollected.length === 0 ? (
+                <li className="text-slate-500">Nobody yet</li>
+              ) : (
+                migrationRatification.alreadyCollected.map((address, index) => (
+                  <li key={address}>
+                    {index + 1}. {memberNameMap[address] || shortenAddress(address)}
+                    {isSameMember(address, userAddress) ? ' — you' : ''}
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
+          <div className="rounded-[16px] border border-sky-200 bg-white p-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Still to collect
+            </p>
+            <ul className="mt-2 space-y-1 text-sm text-slate-700">
+              {migrationRatification.stillWaiting.map((address, index) => (
+                <li key={address}>
+                  {migrationRatification.alreadyCollected.length + index + 1}.{' '}
+                  {memberNameMap[address] || shortenAddress(address)}
+                  {isSameMember(address, userAddress) ? ' — you' : ''}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+
+        <p className="mt-3 text-sm text-sky-900/80">
+          {migrationLedger && migrationLedger.priorRoundsCompleted > 0
+            ? `Your group also recorded ${migrationLedger.priorRoundsCompleted} full ${
+                migrationLedger.priorRoundsCompleted === 1 ? 'round' : 'rounds'
+              } finished before joining. `
+            : ''}
+          Everyone keeps contributing every round. Anyone listed as already
+          collected takes their next turn when the round comes back around.
+        </p>
+
+        {userDepositPaid ? (
+          <button
+            type="button"
+            onClick={handleConfirmMigrationState}
+            disabled={isConfirmingMigration}
+            className={`${primaryActionClass} mt-4 w-full sm:w-auto`}
+          >
+            {isConfirmingMigration ? 'Confirming...' : 'Yes, this is right'}
+          </button>
+        ) : (
+          <p className="mt-4 rounded-[16px] bg-white px-3 py-2 text-sm text-slate-600">
+            You confirm this in the same step as your security deposit below —
+            one signature, both at once.
+          </p>
+        )}
+
+        <p className="mt-3 text-xs text-sky-900/70">
+          Not right? Ask your organiser to correct it. Changing it asks
+          everyone to check again.
+        </p>
+      </div>
+    );
+  };
+
   const renderContributionOptions = () => {
     // Cycle contributions are handled EXCLUSIVELY by the CycleEscrowPanel at the
     // top of the page — it reads/writes the on-chain per-cycle escrow, which is
@@ -3537,86 +3629,6 @@ export default function ContributeToCircle() {
         {/* This circle was already running before it joined. Everyone confirms
             the recorded history before it can start here — the contract will
             not activate the circle until they all have. */}
-        {needsMyMigrationConfirmation && migrationRatification && (
-          <div className="mb-4 rounded-[22px] border border-sky-200 bg-sky-50 p-4 sm:p-5">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
-              Before this circle starts
-            </p>
-            <h4 className="mt-2 text-lg font-semibold text-sky-950">
-              Does this match where your circle is?
-            </h4>
-            <p className="mt-2 text-sm leading-6 text-sky-900/80">
-              Your organiser recorded that this circle has been running already.
-              Everyone checks it before the first payout here, because it decides
-              who is still owed a turn in this round.
-            </p>
-
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <div className="rounded-[16px] border border-sky-200 bg-white p-3">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Already collected
-                </p>
-                <ul className="mt-2 space-y-1 text-sm text-slate-700">
-                  {migrationRatification.alreadyCollected.length === 0 ? (
-                    <li className="text-slate-500">Nobody yet</li>
-                  ) : (
-                    migrationRatification.alreadyCollected.map((address, index) => (
-                      <li key={address}>
-                        {index + 1}. {memberNameMap[address] || shortenAddress(address)}
-                        {isSameMember(address, userAddress) ? ' — you' : ''}
-                      </li>
-                    ))
-                  )}
-                </ul>
-              </div>
-              <div className="rounded-[16px] border border-sky-200 bg-white p-3">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Still to collect
-                </p>
-                <ul className="mt-2 space-y-1 text-sm text-slate-700">
-                  {migrationRatification.stillWaiting.map((address, index) => (
-                    <li key={address}>
-                      {migrationRatification.alreadyCollected.length + index + 1}.{' '}
-                      {memberNameMap[address] || shortenAddress(address)}
-                      {isSameMember(address, userAddress) ? ' — you' : ''}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-
-            <p className="mt-3 text-sm text-sky-900/80">
-              {migrationLedger && migrationLedger.priorRoundsCompleted > 0
-                ? `Your group also recorded ${migrationLedger.priorRoundsCompleted} full ${
-                    migrationLedger.priorRoundsCompleted === 1 ? 'round' : 'rounds'
-                  } finished before joining. `
-                : ''}
-              Everyone keeps contributing every round. Anyone listed as already
-              collected takes their next turn when the round comes back around.
-            </p>
-
-            {userDepositPaid ? (
-              <button
-                type="button"
-                onClick={handleConfirmMigrationState}
-                disabled={isConfirmingMigration}
-                className={`${primaryActionClass} mt-4 w-full sm:w-auto`}
-              >
-                {isConfirmingMigration ? 'Confirming...' : 'Yes, this is right'}
-              </button>
-            ) : (
-              <p className="mt-4 rounded-[16px] bg-white px-3 py-2 text-sm text-slate-600">
-                You confirm this in the same step as your security deposit below —
-                one signature, both at once.
-              </p>
-            )}
-
-            <p className="mt-3 text-xs text-sky-900/70">
-              Not right? Ask your organiser to correct it. Changing it asks
-              everyone to check again.
-            </p>
-          </div>
-        )}
 
         {circle?.pausedAfterCycle && (
           <div className={`${warningPanelClass} mb-4`}>
@@ -4713,6 +4725,7 @@ export default function ContributeToCircle() {
                   </div>
                 </div>
 
+                {renderMigrationConfirmation()}
                 {renderContributionOptions()}
               </div>
             ) : (
