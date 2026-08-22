@@ -13,9 +13,11 @@ import { useRouter } from 'next/router';
 import { Loader2 } from 'lucide-react';
 import { CircleRecordView } from '@/components/CircleRecordView';
 import { Seo } from '@/components/Seo';
+import { useTranslation } from '@/hooks/useTranslation';
 import type { CircleRecord } from '@/lib/circle-record';
 
 export default function SharedRecordPage() {
+  const { t } = useTranslation();
   const router = useRouter();
   const token = Array.isArray(router.query.token)
     ? router.query.token[0]
@@ -70,23 +72,22 @@ export default function SharedRecordPage() {
           // distinguish them, so neither can this page.
           <div className="mx-auto max-w-md rounded-xl border border-[#e6ddd1] bg-white p-6 text-center">
             <h1 className="text-lg font-bold text-[#111827]">
-              This link isn&apos;t available
+              {t('record.shared.missingTitle')}
             </h1>
             <p className="mt-2 text-sm text-[#556070]">
-              It may have expired or been turned off by the person who shared it.
-              Ask them for a new link.
+              {t('record.shared.missingBody')}
             </p>
           </div>
         ) : state === 'error' || !record ? (
           <div className="mx-auto max-w-md rounded-xl border border-[#e6ddd1] bg-white p-6 text-center">
             <p className="text-sm text-[#374151]">
-              We couldn&apos;t load this record just now. Please try again shortly.
+              {t('record.shared.loadFailed')}
             </p>
           </div>
         ) : (
           <CircleRecordView
             record={record}
-            headerNote="Shared with you by the person this record belongs to."
+            headerNote={t('record.sharedNote')}
           />
         )}
       </main>

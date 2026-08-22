@@ -10,6 +10,7 @@ import Link from 'next/link';
 import { Loader2, Download, Link2, Printer, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTranslation } from '@/hooks/useTranslation';
 import { CircleRecordView } from '@/components/CircleRecordView';
 import type { CircleRecord } from '@/lib/circle-record';
 
@@ -22,6 +23,7 @@ interface ShareLink {
 const TTL_CHOICES = [7, 30, 90];
 
 export default function RecordPage() {
+  const { t } = useTranslation();
   const { isAuthenticated, isLoading: authLoading } = useAuth();
   const [record, setRecord] = useState<CircleRecord | null>(null);
   const [loading, setLoading] = useState(true);
@@ -74,21 +76,21 @@ export default function RecordPage() {
       });
       const data = await res.json();
       if (!res.ok || !data?.success) {
-        toast.error('Could not create the link. Please try again.');
+        toast.error(t('record.share.createFailed'));
         return;
       }
       await loadLinks();
       const url = `${window.location.origin}/record/s/${data.link.token}`;
       try {
         await navigator.clipboard.writeText(url);
-        toast.success('Link created and copied');
+        toast.success(t('record.share.createdCopied'));
       } catch {
-        toast.success('Link created');
+        toast.success(t('record.share.created'));
       }
     } finally {
       setCreating(false);
     }
-  }, [ttlDays, loadLinks]);
+  }, [ttlDays, loadLinks, t]);
 
   const revokeLink = useCallback(
     async (token: string) => {
@@ -98,13 +100,13 @@ export default function RecordPage() {
         body: JSON.stringify({ token }),
       });
       if (res.ok) {
-        toast.success('Link turned off');
+        toast.success(t('record.share.revoked'));
         await loadLinks();
       } else {
-        toast.error('Could not turn off that link.');
+        toast.error(t('record.share.revokeFailed'));
       }
     },
-    [loadLinks],
+    [loadLinks, t],
   );
 
   const downloadJson = useCallback(() => {
@@ -123,15 +125,15 @@ export default function RecordPage() {
   if (!authLoading && !isAuthenticated) {
     return (
       <main className="mx-auto max-w-3xl px-4 py-16 text-center">
-        <h1 className="text-2xl font-bold text-[#111827]">Your record</h1>
+        <h1 className="text-2xl font-bold text-[#111827]">{t('record.page.signedOutTitle')}</h1>
         <p className="mt-3 text-sm text-[#556070]">
-          Sign in to see your savings circle record.
+          {t('record.page.signedOutBody')}
         </p>
         <Link
           href="/"
           className="mt-6 inline-block rounded-xl bg-[#111827] px-5 py-2.5 text-sm font-semibold text-white"
         >
-          Go to sign in
+          {t('record.page.signedOutCta')}
         </Link>
       </main>
     );
@@ -142,20 +144,19 @@ export default function RecordPage() {
       {loading || authLoading ? (
         <div className="flex items-center justify-center py-24 text-[#556070]">
           <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-          Reading your record…
+          {t('record.page.loading')}
         </div>
       ) : failed || !record ? (
         <div className="mx-auto max-w-md rounded-xl border border-[#e6ddd1] bg-white p-6 text-center">
           <p className="text-sm text-[#374151]">
-            We couldn&apos;t read your record just now. Nothing is wrong with your
-            circles — this is a problem reading the public records.
+            {t('record.page.loadFailed')}
           </p>
           <button
             type="button"
             onClick={() => void loadRecord()}
             className="mt-4 rounded-xl bg-[#111827] px-4 py-2 text-sm font-semibold text-white"
           >
-            Try again
+            {t('record.page.retry')}
           </button>
         </div>
       ) : (
@@ -164,17 +165,15 @@ export default function RecordPage() {
 
           <section className="mx-auto mt-10 w-full max-w-3xl rounded-xl border border-[#e6ddd1] bg-white p-5 print:hidden">
             <h2 className="text-sm font-bold uppercase tracking-wide text-[#111827]">
-              Share or save
+              {t('record.share.heading')}
             </h2>
             <p className="mt-2 text-xs leading-relaxed text-[#556070]">
-              A share link lets someone read this record without an account. It
-              stops working on its own after the time you choose, and you can turn
-              it off at any moment.
+              {t('record.share.blurb')}
             </p>
 
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <label className="text-xs text-[#556070]" htmlFor="ttl">
-                Link lasts
+                {t('record.share.lasts')}
               </label>
               <select
                 id="ttl"
@@ -184,7 +183,7 @@ export default function RecordPage() {
               >
                 {TTL_CHOICES.map((d) => (
                   <option key={d} value={d}>
-                    {d} days
+                    {t('record.share.days', { n: d })}
                   </option>
                 ))}
               </select>
@@ -199,7 +198,7 @@ export default function RecordPage() {
                 ) : (
                   <Link2 className="h-4 w-4" />
                 )}
-                Create link
+                {t('record.share.create')}
               </button>
               <button
                 type="button"
@@ -207,7 +206,7 @@ export default function RecordPage() {
                 className="inline-flex items-center gap-1.5 rounded-xl border border-[#ddd5ca] px-4 py-2 text-sm font-semibold text-[#111827]"
               >
                 <Printer className="h-4 w-4" />
-                Print
+                {t('record.share.print')}
               </button>
               <button
                 type="button"
@@ -215,7 +214,7 @@ export default function RecordPage() {
                 className="inline-flex items-center gap-1.5 rounded-xl border border-[#ddd5ca] px-4 py-2 text-sm font-semibold text-[#111827]"
               >
                 <Download className="h-4 w-4" />
-                Download
+                {t('record.share.download')}
               </button>
             </div>
 
@@ -230,7 +229,7 @@ export default function RecordPage() {
                       /record/s/{l.token.slice(0, 12)}…
                     </span>
                     <span className="text-[11px] text-[#8a8578]">
-                      until {new Date(l.expiresAtMs).toLocaleDateString()}
+                      {t('record.share.until', { date: new Date(l.expiresAtMs).toLocaleDateString() })}
                     </span>
                     <button
                       type="button"
@@ -238,7 +237,7 @@ export default function RecordPage() {
                       className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#8E2F3C]"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
-                      Turn off
+                      {t('record.share.revoke')}
                     </button>
                   </li>
                 ))}

@@ -9,7 +9,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import * as Dialog from '@radix-ui/react-dialog';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
-import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink, ArrowRightLeft, ChevronDown, ChevronUp } from 'lucide-react';
+import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink, ArrowRightLeft, ChevronDown, ChevronUp, ScrollText } from 'lucide-react';
 import RampPicker from '@/components/RampPicker';
 import ReceiveFundsModal from '@/components/ReceiveFundsModal';
 import CashOutGuide from '@/components/CashOutGuide';
@@ -6787,6 +6787,25 @@ export default function Dashboard() {
                   </div>
                 </div>
               </div>
+
+              {/* Circle Record entry point — the /record page existed with no
+                  way to reach it. Free at every tier; see
+                  docs/prd/prd-circle-record.md. */}
+              <button
+                type="button"
+                onClick={() => router.push('/record')}
+                className="flex w-full items-center gap-3 border-b border-stone-200 px-5 py-3.5 text-left transition-colors hover:bg-stone-50 sm:px-6"
+              >
+                <ScrollText className="h-4 w-4 shrink-0 text-slate-500" />
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold text-slate-900">
+                    {t('record.dashboard.title')}
+                  </span>
+                  <span className="block truncate text-xs text-slate-500">
+                    {t('record.dashboard.blurb')}
+                  </span>
+                </span>
+              </button>
 
               <div className="px-5 py-5 sm:px-6 sm:py-6">
                 <div className="grid gap-4 md:hidden">

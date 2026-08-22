@@ -8,74 +8,17 @@
 // and points at support. It never blames the user, never says "salt", and
 // never promises recovery we cannot deliver.
 //
+// Copy lives in the shared i18n dictionary (drift.* keys, EN + FR; other
+// locales fall back to EN per the house policy in i18n-key-parity.test.ts).
+// The EN/FR toggle drives the GLOBAL locale so the rest of the app follows.
+//
 // Structure and conventions mirror LegalAcceptanceModal — same overlay,
-// same dialog shell, same EN/FR toggle — so this reads as part of the app
-// rather than an error page.
+// same dialog shell — so this reads as part of the app, not an error page.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { isLegalGateExemptPath } from '../lib/legal-acceptance';
-
-type Lang = 'en' | 'fr';
-
-const COPY: Record<Lang, {
-  title: string;
-  intro: string;
-  previousLabel: string;
-  currentLabel: string;
-  whatNow: string;
-  reassure: string;
-  canStill: string;
-  cannotYet: string;
-  support: string;
-  languageLabel: string;
-  dismiss: string;
-}> = {
-  en: {
-    title: 'This sign-in opened a different account',
-    intro:
-      'Signing in just now gave you a different account than the one you used before. ' +
-      'This is a problem on our side, not something you did.',
-    previousLabel: 'Your previous account',
-    currentLabel: 'The account you are in now',
-    whatNow:
-      'Anything you saved before — your circles and your money — is still at the previous ' +
-      'account. It has not been lost or moved. But this sign-in cannot reach it, and we ' +
-      'cannot move funds between accounts for you.',
-    reassure:
-      'We have been alerted automatically and are looking into it.',
-    canStill:
-      'You can still collect a payout that is owed to you, ask for a refund, and take part ' +
-      'in your circle’s recovery vote.',
-    cannotYet:
-      'Joining a circle, creating one, and paying a contribution are paused until this is sorted out.',
-    support: 'Please contact support and mention both accounts shown above.',
-    languageLabel: 'Language',
-    dismiss: 'I understand',
-  },
-  fr: {
-    title: 'Cette connexion a ouvert un compte différent',
-    intro:
-      'La connexion que vous venez d’effectuer vous a donné un compte différent de celui que ' +
-      'vous utilisiez auparavant. Le problème vient de nous, pas de vous.',
-    previousLabel: 'Votre compte précédent',
-    currentLabel: 'Le compte actuel',
-    whatNow:
-      'Tout ce que vous aviez — vos tontines et votre argent — se trouve toujours sur le compte ' +
-      'précédent. Rien n’a été perdu ni déplacé. Mais cette connexion ne peut pas y accéder, et ' +
-      'nous ne pouvons pas transférer des fonds d’un compte à l’autre à votre place.',
-    reassure:
-      'Nous avons été alertés automatiquement et nous examinons la situation.',
-    canStill:
-      'Vous pouvez toujours percevoir un versement qui vous est dû, demander un remboursement, ' +
-      'et participer au vote de récupération de votre tontine.',
-    cannotYet:
-      'Rejoindre une tontine, en créer une, et payer une cotisation sont suspendus le temps de régler cela.',
-    support: 'Veuillez contacter le support en mentionnant les deux comptes indiqués ci-dessus.',
-    languageLabel: 'Langue',
-    dismiss: 'J’ai compris',
-  },
-};
+import { useTranslation } from '@/hooks/useTranslation';
 
 function shortenAddress(addr: string): string {
   if (!addr || addr.length <= 20) return addr;
@@ -94,8 +37,7 @@ export function AddressDriftModal({
   onDismiss,
 }: AddressDriftModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const [lang, setLang] = useState<Lang>('en');
-  const t = COPY[lang];
+  const { t, locale, setLocale } = useTranslation();
 
   useEffect(() => {
     dialogRef.current?.focus();
@@ -116,21 +58,21 @@ export function AddressDriftModal({
       >
         <header className="flex items-start justify-between gap-3 border-b border-[#e6ddd1] bg-[#f1ece4]/80 px-5 py-4">
           <h2 id="address-drift-title" className="text-lg font-bold text-[#111827]">
-            {t.title}
+            {t('drift.title')}
           </h2>
           <div
             className="inline-flex shrink-0 overflow-hidden rounded-full border border-[#ddd5ca] bg-white text-xs font-semibold"
             role="group"
-            aria-label={t.languageLabel}
+            aria-label={t('drift.languageLabel')}
           >
             {(['en', 'fr'] as const).map((code) => (
               <button
                 key={code}
                 type="button"
-                onClick={() => setLang(code)}
-                aria-pressed={lang === code}
+                onClick={() => setLocale(code)}
+                aria-pressed={locale === code}
                 className={
-                  lang === code
+                  locale === code
                     ? 'bg-[#111827] px-3 py-1.5 text-white'
                     : 'px-3 py-1.5 text-[#556070] hover:text-[#111827]'
                 }
@@ -142,16 +84,13 @@ export function AddressDriftModal({
         </header>
 
         <div className="flex-1 overflow-y-auto px-5 py-4">
-          <p className="text-sm leading-relaxed text-[#374151]">{t.intro}</p>
+          <p className="text-sm leading-relaxed text-[#374151]">{t('drift.intro')}</p>
 
           <div className="mt-4 space-y-3">
             {previousAddresses.map((addr) => (
-              <div
-                key={addr}
-                className="rounded-xl border border-[#e6ddd1] bg-white p-3"
-              >
+              <div key={addr} className="rounded-xl border border-[#e6ddd1] bg-white p-3">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-[#8a8578]">
-                  {t.previousLabel}
+                  {t('drift.previousLabel')}
                 </p>
                 <p className="mt-1 break-all font-mono text-xs text-[#111827]" title={addr}>
                   {shortenAddress(addr)}
@@ -160,7 +99,7 @@ export function AddressDriftModal({
             ))}
             <div className="rounded-xl border border-[#e6ddd1] bg-white p-3">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-[#8a8578]">
-                {t.currentLabel}
+                {t('drift.currentLabel')}
               </p>
               <p
                 className="mt-1 break-all font-mono text-xs text-[#111827]"
@@ -171,18 +110,18 @@ export function AddressDriftModal({
             </div>
           </div>
 
-          <p className="mt-4 text-sm leading-relaxed text-[#374151]">{t.whatNow}</p>
-          <p className="mt-2 text-sm leading-relaxed text-[#374151]">{t.reassure}</p>
+          <p className="mt-4 text-sm leading-relaxed text-[#374151]">{t('drift.whatNow')}</p>
+          <p className="mt-2 text-sm leading-relaxed text-[#374151]">{t('drift.reassure')}</p>
 
           <div className="mt-4 rounded-xl border border-emerald-300 bg-emerald-50 p-3">
-            <p className="text-xs leading-relaxed text-emerald-900">{t.canStill}</p>
+            <p className="text-xs leading-relaxed text-emerald-900">{t('drift.canStill')}</p>
           </div>
           <div className="mt-2 rounded-xl border border-amber-300 bg-amber-50 p-3">
-            <p className="text-xs leading-relaxed text-amber-900">{t.cannotYet}</p>
+            <p className="text-xs leading-relaxed text-amber-900">{t('drift.cannotYet')}</p>
           </div>
 
           <p className="mt-4 text-sm font-semibold leading-relaxed text-[#111827]">
-            {t.support}
+            {t('drift.support')}
           </p>
         </div>
 
@@ -192,7 +131,7 @@ export function AddressDriftModal({
             onClick={onDismiss}
             className="w-full rounded-xl bg-[#111827] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#1f2937]"
           >
-            {t.dismiss}
+            {t('drift.dismiss')}
           </button>
         </footer>
       </div>
@@ -248,8 +187,9 @@ export function AddressDriftGate({ active }: AddressDriftGateProps) {
         });
       } catch {
         // Network hiccup: fail open for this read. The server-side gates on
-        // circle create/join still refuse the actual commitments, so a
-        // missed interstitial degrades the warning, not the protection.
+        // circle create/join, ramp sessions and WhatsApp linking still
+        // refuse the actual commitments, so a missed interstitial degrades
+        // the warning, not the protection.
       }
     })();
     return () => {
