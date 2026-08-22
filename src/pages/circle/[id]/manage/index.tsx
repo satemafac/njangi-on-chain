@@ -4904,60 +4904,47 @@ export default function ManageCircle() {
   };
 
   // Add a function to resume the cycle
+  /**
+   * Resumes the circle into the next round.
+   *
+   * Runs the transaction directly rather than opening a second dialog. The
+   * button that reaches here already confirms, with strictly more detail (it
+   * spells out the deposit reset); the dialog this used to chain only
+   * restated it. Chaining was also what broke it: a dialog opened from inside
+   * another dialog's confirm handler is closed again by the dialog that is
+   * dismissing itself, so the transaction was never built and every circle
+   * stayed stranded paused at the end of a round.
+   */
   const handleResumeCycle = async () => {
     if (!circle || !circle.paused) return;
-    
-    // Show confirmation modal first
-    setConfirmationModal({
-      isOpen: true,
-      title: 'Resume Circle Cycle',
-      message: (
-        <div>
-          <p>Cycle {circle.currentCycle} has completed. Would you like to:</p>
-          <ul className="mt-2 list-disc pl-5 text-sm">
-            <li>Resume to the next cycle</li>
-            <li>Allow members to make contributions for the new cycle</li>
-          </ul>
-          <p className="mt-2">Are you sure you want to proceed?</p>
-        </div>
-      ),
-      confirmText: 'Resume Cycle',
-      cancelText: 'Cancel',
-      confirmButtonVariant: 'primary',
-      onConfirm: async () => {
-        const toastId = 'resume-cycle';
-        try {
-          toast.loading('Resuming cycle...', { id: toastId });
-          
-          if (!account) {
-            toast.error('User account not available. Please log in again.', { id: toastId });
-            return;
-          }
-          
-          // Call the backend API
-          const { response: response, result: result } = await runSignedTx(() =>
-            new ZkLoginClient().resumeCycle(account, circle.id));
-          
-          if (!response.ok) {
-            console.error('Failed to resume cycle:', result);
-            const errorDetail = parseMoveError(result.error || '');
-            toast.error(errorDetail.message, { id: toastId });
-            return;
-          }
-          
-          // Update local state
-          setCircle(prevCircle => prevCircle ? { ...prevCircle, paused: false } : null);
-          
-          // Refresh circle details
-          await fetchCircleDetails();
-          
-          toast.success('Successfully resumed to the next cycle', { id: toastId });
-        } catch (error) {
-          console.error('Error resuming cycle:', error);
-          toast.error('Failed to resume cycle', { id: toastId });
-        }
+
+    const toastId = 'resume-cycle';
+    try {
+      toast.loading('Resuming cycle...', { id: toastId });
+
+      if (!account) {
+        toast.error('User account not available. Please log in again.', { id: toastId });
+        return;
       }
-    });
+
+      const { response, result } = await runSignedTx(() =>
+        new ZkLoginClient().resumeCycle(account, circle.id));
+
+      if (!response.ok) {
+        console.error('Failed to resume cycle:', result);
+        const errorDetail = parseMoveError(result.error || '');
+        toast.error(errorDetail.message, { id: toastId });
+        return;
+      }
+
+      setCircle(prevCircle => prevCircle ? { ...prevCircle, paused: false } : null);
+      await fetchCircleDetails();
+
+      toast.success('Successfully resumed to the next cycle', { id: toastId });
+    } catch (error) {
+      console.error('Error resuming cycle:', error);
+      toast.error('Failed to resume cycle', { id: toastId });
+    }
   };
 
   const openReturnAllDepositsModal = () => {
