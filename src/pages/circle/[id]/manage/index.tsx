@@ -9,6 +9,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { RecoveryRefundTable } from '@/components/recovery/RecoveryRefundTable';
 import { RecoveryStateBadge } from '@/components/recovery/RecoveryStateBadge';
 import { getCircleConfigFieldsFromDynamicFields } from '@/lib/circle-config';
+import { isResolvedSuiObjectId } from '@/lib/sui-object-id';
 import {
   getMigrationLedgerFromDynamicFields,
   resolveMigrationRatification,
@@ -1606,9 +1607,19 @@ export default function ManageCircle() {
         throw new Error('Authentication required');
       }
 
+      // Fail with something the admin can act on. Passing `?? ''` sent an
+      // empty id into the transaction builder, which threw its own internal
+      // message about an unresolved object — so a wallet that had not loaded
+      // read as a mysterious failure rather than "wait for the wallet".
+      const walletId = circle?.custody?.walletId;
+      if (!isResolvedSuiObjectId(walletId)) {
+        throw new Error(
+          "This circle's wallet has not loaded yet, so the deposit cannot be returned. Refresh the circle details and try again.",
+        );
+      }
+
       const { response: response, result: result } = await runSignedTx(() =>
-        new ZkLoginClient().adminRemoveMember(
-            account, circleId, memberAddress, circle?.custody?.walletId ?? ''));
+        new ZkLoginClient().adminRemoveMember(account, circleId, memberAddress, walletId));
 
       if (!response.ok) {
         throw new Error(result.error || 'Failed to remove member');

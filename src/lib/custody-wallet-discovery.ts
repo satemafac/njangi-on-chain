@@ -51,6 +51,7 @@ const CUSTODY_TOUCHING_FUNCTIONS = new Set([
 
 export type CustodyDiscoverySource =
   | 'dynamic_field'
+  | 'creation_tx'
   | 'events'
   | 'transaction_history';
 
@@ -122,6 +123,59 @@ async function fromDynamicField(
     // placeholder. Treat that as "not set" rather than a candidate.
     if (normalizeId(value) === normalizeId(circleId)) return null;
     return value;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolves the wallet from the transaction that created the circle.
+ *
+ * This is the tier that actually works, and it exists because the durable-
+ * looking one does not: `create_circle` seeds the `wallet_id` dynamic field
+ * with the CIRCLE'S OWN id as a placeholder (njangi_circles.move), and nothing
+ * writes the real wallet id there unless an admin calls `update_wallet_id`. So
+ * `fromDynamicField` correctly rejects it on every circle, discovery falls
+ * through to the event scan — and event history is served by only some RPC
+ * endpoints, never the configured primary. The net effect on production was
+ * that the custody wallet was permanently unresolvable, which disables every
+ * payment control and silently breaks member removal.
+ *
+ * The field object itself is still useful even though its VALUE is a
+ * placeholder: it is written once at creation, so its `previousTransaction`
+ * pins the creating transaction forever, and that transaction's object
+ * changes contain the CustodyWallet minted alongside the circle. Both calls
+ * are ordinary object/transaction reads, which every endpoint serves.
+ */
+async function fromCreationTransaction(
+  client: SuiClient,
+  circleId: string,
+): Promise<string | null> {
+  try {
+    const field = await client.getDynamicFieldObject({
+      parentId: circleId,
+      name: { type: '0x1::string::String', value: 'wallet_id' },
+    });
+
+    const digest = field.data?.previousTransaction;
+    if (typeof digest !== 'string' || digest.length === 0) return null;
+
+    const tx = await client.getTransactionBlock({
+      digest,
+      options: { showObjectChanges: true },
+    });
+
+    const created = (tx.objectChanges ?? []).filter(
+      (change): change is Extract<typeof change, { type: 'created' }> =>
+        change.type === 'created' &&
+        typeof (change as { objectType?: string }).objectType === 'string' &&
+        (change as { objectType: string }).objectType.endsWith(CUSTODY_WALLET_TYPE_SUFFIX),
+    );
+
+    // One wallet per circle; refuse to guess if a transaction somehow made
+    // several, since a wrong id here reaches a transaction builder.
+    if (created.length !== 1) return null;
+    return created[0].objectId;
   } catch {
     return null;
   }
@@ -213,6 +267,13 @@ export async function resolveCustodyWalletId(
   const fromField = await fromDynamicField(client, circleId);
   if (fromField && (await isCustodyWalletForCircle(client, fromField, circleId))) {
     return { walletId: fromField, source: 'dynamic_field' };
+  }
+
+  // Before the event scan: a direct digest lookup, served by every endpoint,
+  // where the event tier is served by almost none.
+  const fromCreation = await fromCreationTransaction(client, circleId);
+  if (fromCreation && (await isCustodyWalletForCircle(client, fromCreation, circleId))) {
+    return { walletId: fromCreation, source: 'creation_tx' };
   }
 
   const fromEvent = await fromEvents({ client, circleId, packageId, queryEvents: args.queryEvents });

@@ -225,3 +225,98 @@ describe('resolveCustodyStablecoinType', () => {
     expect(await resolveCustodyStablecoinType(client, WALLET)).toBeNull();
   });
 });
+
+/**
+ * The tier that carries production.
+ *
+ * `create_circle` seeds the `wallet_id` dynamic field with the CIRCLE'S OWN
+ * id as a placeholder, so the dynamic-field tier rejects it on every circle
+ * and discovery fell through to an event scan the primary RPC cannot serve.
+ * The wallet was therefore permanently unresolvable, which disables every
+ * payment control and silently breaks member removal.
+ */
+describe('resolveCustodyWalletId — creation transaction tier', () => {
+  const CIRCLE = '0x0478ee8482627fd53f13dfbeebc0bcaf369189c1d20256ea91abc0dd6f0c91b3';
+  const WALLET = '0x19ef0c85eb6771548bcf74f76212f70c72dd8a3620c7c0ef954c22844f497e33';
+  const WALLET_TYPE = '0xabc::njangi_custody::CustodyWallet';
+
+  const clientWith = (overrides: Record<string, unknown> = {}) =>
+    ({
+      // Placeholder value: the field holds the circle id, as the contract writes it.
+      getDynamicFieldObject: jest.fn().mockResolvedValue({
+        data: {
+          previousTransaction: 'CREATE_DIGEST',
+          content: { dataType: 'moveObject', fields: { value: CIRCLE } },
+        },
+      }),
+      getTransactionBlock: jest.fn().mockResolvedValue({
+        objectChanges: [
+          { type: 'created', objectId: WALLET, objectType: WALLET_TYPE },
+          { type: 'created', objectId: '0xdead', objectType: '0xabc::njangi_circles::Circle' },
+        ],
+      }),
+      getObject: jest.fn().mockResolvedValue({
+        data: { type: WALLET_TYPE, content: { dataType: 'moveObject', fields: { circle_id: CIRCLE } } },
+      }),
+      queryEvents: jest.fn().mockRejectedValue(new Error('event history unavailable')),
+      queryTransactionBlocks: jest.fn().mockResolvedValue({ data: [] }),
+      ...overrides,
+    }) as unknown as Parameters<typeof resolveCustodyWalletId>[0]['client'];
+
+  it('resolves through the creation transaction when the field holds the placeholder', async () => {
+    const client = clientWith();
+
+    const res = await resolveCustodyWalletId({ client, circleId: CIRCLE, packageId: '0xabc' });
+
+    expect(res).toEqual({ walletId: WALLET, source: 'creation_tx' });
+  });
+
+  // The whole point: it must not need event history.
+  it('does not depend on the event scan', async () => {
+    const queryEvents = jest.fn().mockRejectedValue(new Error('endpoint refuses event history'));
+    const client = clientWith({ queryEvents });
+
+    const res = await resolveCustodyWalletId({ client, circleId: CIRCLE, packageId: '0xabc' });
+
+    expect(res?.walletId).toBe(WALLET);
+    expect(queryEvents).not.toHaveBeenCalled();
+  });
+
+  it('refuses to guess when the creating transaction made several wallets', async () => {
+    const client = clientWith({
+      getTransactionBlock: jest.fn().mockResolvedValue({
+        objectChanges: [
+          { type: 'created', objectId: WALLET, objectType: WALLET_TYPE },
+          { type: 'created', objectId: '0xother', objectType: WALLET_TYPE },
+        ],
+      }),
+    });
+
+    const res = await resolveCustodyWalletId({ client, circleId: CIRCLE, packageId: '0xabc' });
+
+    expect(res).toBeNull();
+  });
+
+  it('falls through when the field has no creating transaction', async () => {
+    const client = clientWith({
+      getDynamicFieldObject: jest.fn().mockResolvedValue({ data: { content: null } }),
+    });
+
+    const res = await resolveCustodyWalletId({ client, circleId: CIRCLE, packageId: '0xabc' });
+
+    expect(res).toBeNull();
+  });
+
+  // A wallet belonging to a different circle must never be accepted.
+  it('rejects a wallet whose circle_id does not match', async () => {
+    const client = clientWith({
+      getObject: jest.fn().mockResolvedValue({
+        data: { type: WALLET_TYPE, content: { dataType: 'moveObject', fields: { circle_id: '0xdifferent' } } },
+      }),
+    });
+
+    const res = await resolveCustodyWalletId({ client, circleId: CIRCLE, packageId: '0xabc' });
+
+    expect(res).toBeNull();
+  });
+});
