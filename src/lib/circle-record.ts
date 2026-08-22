@@ -31,13 +31,15 @@
 //   * `Member.missed_payments`, `reputation_score` and
 //     `consecutive_on_time_payments` are never assigned anywhere in the
 //     contracts. They are structurally always 0. Do not surface them.
-//   * `CycleEscrow.contributed` IS durable per cycle, but nothing on chain
-//     links a Circle to its past escrow objects, and `open_cycle` takes
-//     `circle: &Circle` (immutable), so an index cannot be added without a
-//     signature change that Sui upgrades forbid. Enumerating past escrows
-//     therefore needs an event scan, which this project's read policy
-//     rules out (src/lib/sui-read.ts) and which current RPC endpoints
-//     serve unreliably.
+//   * `CycleEscrow.contributed` IS durable per cycle, but for circles that
+//     predate v1.1 nothing on chain links a Circle to its past escrow
+//     objects (`open_cycle` takes an immutable &Circle, and Sui upgrades
+//     forbid changing that signature). v1.1 added NEW `open_cycle*_indexed`
+//     entries taking &mut Circle that append each escrow's id to a
+//     FIELD_ESCROW_HISTORY dynamic field, plus `contribute_timed*` entries
+//     recording per-member timestamps — so cycles run through those paths
+//     ARE enumerable and carry on-time evidence (readOnTimeEvidence below).
+//     Cycles that predate them still are not, and render as "no data".
 //
 // The load-bearing insight that makes a pure-object-read record possible:
 // `finalize` asserts `contributors_count >= required_contributors`
@@ -48,13 +50,22 @@
 // they received a payout at that position.
 //
 // So everything below is a pure object read: owned membership receipts,
-// the Circle object, and the members table. No event scans, no escrow
-// enumeration, no dependence on fields the contracts never write.
+// the Circle object, the members table, and (post-v1.1) the escrow history
+// field and its escrows. No event scans anywhere, and no dependence on
+// fields the contracts never write.
 
 import { getCurrentNetwork, type NetworkType } from '@/services/network-config';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import { discoverMemberCircleIds } from './membership-discovery';
+import { getPublishedPackageMetadata } from './circle-chain';
 import { cachedRead } from './sui-read';
+
+export interface CircleOnTime {
+  /** Cycles carrying a recorded per-member timestamp for this member. */
+  recorded: number;
+  /** Of those, contributions that landed at or before the cycle's due time. */
+  onTime: number;
+}
 
 export interface CircleRecordEntry {
   circleId: string;
@@ -75,6 +86,13 @@ export interface CircleRecordEntry {
   rotationPosition: number | null;
   memberCount: number | null;
   currentCycle: number | null;
+  /**
+   * On-time evidence from the v1.1 timed entry points, or null when the
+   * circle has no recorded data (predates the upgrade, or its opens never
+   * used the indexed path). Null must render as NOTHING — absence of a
+   * record is never evidence of anything.
+   */
+  onTime: CircleOnTime | null;
 }
 
 export interface CircleRecordSummary {
@@ -227,6 +245,127 @@ async function readMemberRow(
   }
 }
 
+/** Escrows examined per circle; beyond this we report the recent window. */
+const MAX_ESCROWS_PER_CIRCLE = 24;
+
+function decodeByteName(value: unknown): string | null {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((b) => (typeof b === 'number' ? String.fromCharCode(b) : ''))
+      .join('');
+  }
+  return null;
+}
+
+/**
+ * The circle's on-chain escrow history (v1.1 `FIELD_ESCROW_HISTORY`),
+ * newest last, or null when the field does not exist / cannot be read.
+ * A `vector<u8>` dynamic-field name comes back as a byte array on most
+ * nodes, so the match decodes it — same pitfall circle-migration.ts
+ * documents.
+ */
+async function readEscrowHistory(
+  circleId: string,
+  network: NetworkType,
+): Promise<string[] | null> {
+  const client = getPooledSuiClient({ network });
+  try {
+    let cursor: string | null | undefined;
+    let fieldObjectId: string | null = null;
+    let pages = 0;
+    do {
+      const res = await client.getDynamicFields({
+        parentId: circleId,
+        cursor: cursor ?? undefined,
+      });
+      for (const f of res.data) {
+        const nameRecord =
+          f && typeof f.name === 'object' ? (f.name as { value?: unknown }) : null;
+        if (decodeByteName(nameRecord?.value) === 'escrow_history') {
+          fieldObjectId = f.objectId;
+          break;
+        }
+      }
+      cursor = fieldObjectId ? null : res.hasNextPage ? res.nextCursor : null;
+      pages += 1;
+    } while (cursor && pages < 10);
+
+    if (!fieldObjectId) return null;
+
+    const obj = await client.getObject({ id: fieldObjectId, options: { showContent: true } });
+    const content = obj.data?.content;
+    if (!content || content.dataType !== 'moveObject') return null;
+    const fields = asRecord((content as { fields?: unknown }).fields);
+    const value = fields?.value;
+    if (!Array.isArray(value)) return null;
+    return value.filter((id): id is string => typeof id === 'string');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * On-time evidence for one member across the circle's recorded escrows.
+ *
+ * Counts only what is provable: a cycle contributes to `recorded` only if
+ * a v1.1 timestamp exists for this member, and refunded (cancelled)
+ * cycles are excluded entirely. Any read failure returns what was
+ * gathered so far or null — never a fabricated count.
+ */
+async function readOnTimeEvidence(
+  circleId: string,
+  memberAddress: string,
+  network: NetworkType,
+): Promise<CircleOnTime | null> {
+  const history = await readEscrowHistory(circleId, network);
+  if (!history || history.length === 0) return null;
+
+  const { originalId } = getPublishedPackageMetadata(network);
+  if (!originalId) return null;
+  const keyType = `${originalId}::njangi_cycle_escrow::ContributionTimeKey`;
+
+  const client = getPooledSuiClient({ network });
+  const recent = history.slice(-MAX_ESCROWS_PER_CIRCLE);
+
+  let recorded = 0;
+  let onTime = 0;
+
+  await Promise.all(
+    recent.map(async (escrowId) => {
+      try {
+        const obj = await client.getObject({ id: escrowId, options: { showContent: true } });
+        const content = obj.data?.content;
+        if (!content || content.dataType !== 'moveObject') return;
+        const fields = asRecord((content as { fields?: unknown }).fields);
+        if (!fields || fields.refunded === true) return;
+        const snapshot = asRecord(asRecord(fields.snapshot)?.fields) ?? asRecord(fields.snapshot);
+        const dueAtMs = parseU64(snapshot?.due_at_ms);
+        if (dueAtMs === null) return;
+
+        const ts = await client.getDynamicFieldObject({
+          parentId: escrowId,
+          name: { type: keyType, value: { member: memberAddress } },
+        });
+        if (ts.error || !ts.data) return;
+        const tsContent = ts.data.content;
+        if (!tsContent || tsContent.dataType !== 'moveObject') return;
+        const tsFields = asRecord((tsContent as { fields?: unknown }).fields);
+        const paidAtMs = parseU64(tsFields?.value);
+        if (paidAtMs === null) return;
+
+        recorded += 1;
+        if (paidAtMs <= dueAtMs) onTime += 1;
+      } catch {
+        // Skip unreadable escrows; partial evidence is still evidence,
+        // and a read failure must never manufacture a late payment.
+      }
+    }),
+  );
+
+  return recorded > 0 ? { recorded, onTime } : null;
+}
+
 /**
  * Builds the member's record across every circle they hold a receipt for.
  *
@@ -254,6 +393,7 @@ export async function buildCircleRecord(
 
       const historyIndex = state.rotationHistory.indexOf(normalized);
       const orderIndex = state.rotationOrder.indexOf(normalized);
+      const onTime = await readOnTimeEvidence(circleId, normalized, network);
 
       return {
         circleId,
@@ -270,6 +410,7 @@ export async function buildCircleRecord(
               : null,
         memberCount: state.memberCount,
         currentCycle: state.currentCycle,
+        onTime,
       };
     }),
   );

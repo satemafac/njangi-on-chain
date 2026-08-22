@@ -99,6 +99,13 @@ module njangi::njangi_circles {
     // every site that resets `contributions_this_cycle` so the record and
     // the counter always move in lockstep.
     const FIELD_CYCLE_CONTRIBUTORS: vector<u8> = b"cycle_contributors";
+    // Append-only index of every CycleEscrow this circle has opened via the
+    // *_indexed open paths (Circle Record v1.1). Exists so past escrows are
+    // enumerable by OBJECT READ — before this, the only route was a
+    // queryEvents scan, which the read policy forbids and current RPC
+    // endpoints serve unreliably. Lives as a dynamic field because Sui
+    // upgrades cannot add struct fields to Circle.
+    const FIELD_ESCROW_HISTORY: vector<u8> = b"escrow_history";
 
     // Dynamic-field key for the circle-level compliance requirement.
     // Stored as a dynamic field (absent == false) so the Circle struct
@@ -2915,6 +2922,38 @@ module njangi::njangi_circles {
         };
     }
     
+    // ----------------------------------------------------------
+    // Escrow history (Circle Record v1.1)
+    // ----------------------------------------------------------
+
+    /// Records a newly opened cycle escrow in the circle's on-chain
+    /// history. package-internal: only sibling modules (the escrow module)
+    /// may write it, so the history can never contain an id the package
+    /// itself did not mint.
+    public(package) fun record_escrow_opened(circle: &mut Circle, escrow_id: ID) {
+        if (dynamic_field::exists_(&circle.id, FIELD_ESCROW_HISTORY)) {
+            let history = dynamic_field::borrow_mut<vector<u8>, vector<ID>>(
+                &mut circle.id,
+                FIELD_ESCROW_HISTORY
+            );
+            vector::push_back(history, escrow_id);
+        } else {
+            dynamic_field::add(&mut circle.id, FIELD_ESCROW_HISTORY, vector[escrow_id]);
+        }
+    }
+
+    /// Every escrow opened through the indexed paths, oldest first. Empty
+    /// for circles that predate the feature or only used the un-indexed
+    /// opens — callers must treat absence as "no data", never as "no
+    /// cycles ran".
+    public fun get_escrow_history(circle: &Circle): vector<ID> {
+        if (dynamic_field::exists_(&circle.id, FIELD_ESCROW_HISTORY)) {
+            *dynamic_field::borrow<vector<u8>, vector<ID>>(&circle.id, FIELD_ESCROW_HISTORY)
+        } else {
+            vector::empty<ID>()
+        }
+    }
+
     // ----------------------------------------------------------
     // Advance rotation position and cycle management
     // ----------------------------------------------------------

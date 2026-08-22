@@ -422,6 +422,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'record.circle.payout': 'Payout',
     'record.circle.payoutReceived': 'Received (round {round})',
     'record.circle.payoutNotYet': 'Turn not yet reached',
+    'record.circle.onTime': 'On time',
+    'record.circle.onTimeValue': '{onTime} of {recorded} recorded',
     'record.verify.title': 'How to check this.',
     'record.verify.body':
       'Every figure above comes from public records on the Sui network. Open any circle link to read the same information directly, without relying on this page.',
@@ -837,6 +839,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'record.circle.payout': 'Versement',
     'record.circle.payoutReceived': 'Reçu (tour {round})',
     'record.circle.payoutNotYet': 'Tour pas encore atteint',
+    'record.circle.onTime': 'À temps',
+    'record.circle.onTimeValue': '{onTime} sur {recorded} enregistrées',
     'record.verify.title': 'Comment vérifier ceci.',
     'record.verify.body':
       'Chaque chiffre ci-dessus provient des registres publics du réseau Sui. Ouvrez le lien d’une tontine pour lire les mêmes informations directement, sans dépendre de cette page.',

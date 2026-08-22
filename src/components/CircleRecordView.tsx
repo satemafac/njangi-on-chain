@@ -136,6 +136,18 @@ export function CircleRecordView({ record, headerNote }: CircleRecordViewProps) 
                         : t('record.circle.payoutNotYet')
                     }
                   />
+                  {c.onTime && c.onTime.recorded > 0 ? (
+                    // Rendered ONLY when on-chain timestamps exist for this
+                    // member. Absence of the row is absence of data, never a
+                    // claim — see CircleOnTime in circle-record.ts.
+                    <Fact
+                      label={t('record.circle.onTime')}
+                      value={t('record.circle.onTimeValue', {
+                        onTime: c.onTime.onTime,
+                        recorded: c.onTime.recorded,
+                      })}
+                    />
+                  ) : null}
                 </dl>
 
                 <a

@@ -16,9 +16,15 @@ jest.mock('@/services/network-config', () => ({
 
 const getObject = jest.fn();
 const getDynamicFieldObject = jest.fn();
+const getDynamicFields = jest.fn();
 
 jest.mock('@/services/sui-rpc-failover', () => ({
-  getPooledSuiClient: () => ({ getObject, getDynamicFieldObject }),
+  getPooledSuiClient: () => ({ getObject, getDynamicFieldObject, getDynamicFields }),
+}));
+
+const ORIGINAL_PKG = '0x' + 'f0'.repeat(32);
+jest.mock('../circle-chain', () => ({
+  getPublishedPackageMetadata: () => ({ originalId: ORIGINAL_PKG }),
 }));
 
 const discoverMemberCircleIds = jest.fn();
@@ -88,6 +94,9 @@ function memberRow(joinedAt: number, payoutPosition?: number) {
 beforeEach(() => {
   getObject.mockReset();
   getDynamicFieldObject.mockReset();
+  getDynamicFields.mockReset();
+  // Default: no dynamic fields on the circle -> no escrow history.
+  getDynamicFields.mockResolvedValue({ data: [], hasNextPage: false, nextCursor: null });
   discoverMemberCircleIds.mockReset();
 });
 
@@ -215,5 +224,136 @@ describe('buildCircleRecord', () => {
     const serialized = JSON.stringify(record).toLowerCase();
 
     expect(serialized).not.toMatch(/"score"|"rating"|"grade"|"tier"|reputation/);
+  });
+});
+
+
+describe('on-time evidence (v1.1 timed entries)', () => {
+  const HISTORY_FIELD_OBJ = '0x' + 'dd'.repeat(32);
+  const ESCROW_1 = '0x' + 'e1'.repeat(32);
+  const ESCROW_2 = '0x' + 'e2'.repeat(32);
+  const DUE = 1_700_000_000_000;
+
+  function escrowObject(id: string, opts: { refunded?: boolean; dueAtMs?: number } = {}) {
+    return {
+      data: {
+        content: {
+          dataType: 'moveObject',
+          fields: {
+            refunded: opts.refunded ?? false,
+            snapshot: { fields: { due_at_ms: String(opts.dueAtMs ?? DUE) } },
+          },
+        },
+      },
+    };
+  }
+
+  function timestampField(paidAtMs: number) {
+    return {
+      data: {
+        content: { dataType: 'moveObject', fields: { value: String(paidAtMs) } },
+      },
+    };
+  }
+
+  function wireCircleWithHistory(escrowIds: string[], timestamps: Record<string, number | null>) {
+    discoverMemberCircleIds.mockResolvedValue([CIRCLE_A]);
+    // The circle carries an escrow_history dynamic field (byte-array name,
+    // the spelling most nodes return for a vector<u8> key).
+    getDynamicFields.mockResolvedValue({
+      data: [
+        {
+          objectId: HISTORY_FIELD_OBJ,
+          name: { type: 'vector<u8>', value: Array.from('escrow_history').map((c) => c.charCodeAt(0)) },
+        },
+      ],
+      hasNextPage: false,
+      nextCursor: null,
+    });
+    getObject.mockImplementation(({ id }: { id: string }) => {
+      if (id === CIRCLE_A) {
+        return Promise.resolve(circleObject({ rotationHistory: [ME] }));
+      }
+      if (id === HISTORY_FIELD_OBJ) {
+        return Promise.resolve({
+          data: { content: { dataType: 'moveObject', fields: { value: escrowIds } } },
+        });
+      }
+      const escrow = escrowIds.find((e) => e === id);
+      if (escrow) return Promise.resolve(escrowObject(id, { refunded: timestamps[id] === undefined ? false : false }));
+      return Promise.resolve({ data: null });
+    });
+    getDynamicFieldObject.mockImplementation(({ parentId, name }: { parentId: string; name: unknown }) => {
+      const nameRecord = name as { type?: string; value?: { member?: string } };
+      if (typeof nameRecord?.type === 'string' && nameRecord.type.includes('ContributionTimeKey')) {
+        const ts = timestamps[parentId];
+        if (ts == null) return Promise.resolve({ error: { code: 'dynamicFieldNotFound' } });
+        return Promise.resolve(timestampField(ts));
+      }
+      // Members-table lookup used by readMemberRow.
+      return Promise.resolve(memberRow(1_700_000_000_000, 0));
+    });
+  }
+
+  it('counts recorded and on-time contributions from escrow timestamps', async () => {
+    wireCircleWithHistory([ESCROW_1, ESCROW_2], {
+      [ESCROW_1]: DUE - 1000, // on time
+      [ESCROW_2]: DUE + 1000, // recorded, late
+    });
+
+    const record = await buildCircleRecord(ME);
+    expect(record.circles).toHaveLength(1);
+    expect(record.circles[0].onTime).toEqual({ recorded: 2, onTime: 1 });
+  });
+
+  it('reports null when no timestamps exist for the member', async () => {
+    wireCircleWithHistory([ESCROW_1], { [ESCROW_1]: null });
+    const record = await buildCircleRecord(ME);
+    expect(record.circles[0].onTime).toBeNull();
+  });
+
+  it('reports null for circles with no escrow history field at all', async () => {
+    discoverMemberCircleIds.mockResolvedValue([CIRCLE_A]);
+    getObject.mockResolvedValue(circleObject({ rotationHistory: [ME] }));
+    getDynamicFieldObject.mockResolvedValue(memberRow(1_700_000_000_000, 0));
+
+    const record = await buildCircleRecord(ME);
+    expect(record.circles[0].onTime).toBeNull();
+  });
+
+  it('excludes refunded (cancelled) escrows from the counts', async () => {
+    discoverMemberCircleIds.mockResolvedValue([CIRCLE_A]);
+    getDynamicFields.mockResolvedValue({
+      data: [
+        {
+          objectId: HISTORY_FIELD_OBJ,
+          name: { type: 'vector<u8>', value: Array.from('escrow_history').map((c) => c.charCodeAt(0)) },
+        },
+      ],
+      hasNextPage: false,
+      nextCursor: null,
+    });
+    getObject.mockImplementation(({ id }: { id: string }) => {
+      if (id === CIRCLE_A) return Promise.resolve(circleObject({ rotationHistory: [ME] }));
+      if (id === HISTORY_FIELD_OBJ) {
+        return Promise.resolve({
+          data: { content: { dataType: 'moveObject', fields: { value: [ESCROW_1] } } },
+        });
+      }
+      if (id === ESCROW_1) return Promise.resolve(escrowObject(id, { refunded: true }));
+      return Promise.resolve({ data: null });
+    });
+    getDynamicFieldObject.mockImplementation(({ name }: { name: unknown }) => {
+      const nameRecord = name as { type?: string };
+      if (typeof nameRecord?.type === 'string' && nameRecord.type.includes('ContributionTimeKey')) {
+        return Promise.resolve(timestampField(DUE - 1000));
+      }
+      return Promise.resolve(memberRow(1_700_000_000_000, 0));
+    });
+
+    const record = await buildCircleRecord(ME);
+    // The only escrow is refunded -> no evidence, and crucially no
+    // "late" or "missed" fabricated from a cancelled cycle.
+    expect(record.circles[0].onTime).toBeNull();
   });
 });

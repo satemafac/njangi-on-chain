@@ -72,11 +72,17 @@ export const SPONSORABLE_MOVE_FUNCTIONS: readonly string[] = Object.freeze([
   // Cycle escrow — the money path a zero-SUI member must reach.
   'njangi_cycle_escrow::contribute',
   'njangi_cycle_escrow::contribute_with_attestation',
+  // v1.1 timed twins (flag-gated client-side; listing them before the
+  // publish is harmless — Enoki refuses unknown targets anyway).
+  'njangi_cycle_escrow::contribute_timed',
+  'njangi_cycle_escrow::contribute_timed_with_attestation',
   'njangi_cycle_escrow::finalize_and_redeem',
   'njangi_cycle_escrow::finalize_and_redeem_with_attestation',
   'njangi_cycle_escrow::advance_circle_after_claim',
   'njangi_cycle_escrow::open_cycle_stable',
   'njangi_cycle_escrow::open_cycle_stable_with_gate',
+  'njangi_cycle_escrow::open_cycle_stable_indexed',
+  'njangi_cycle_escrow::open_cycle_stable_indexed_with_gate',
   // Membership + recovery so a gas-less member is never trapped.
   'njangi_circles::member_deposit_security_deposit',
   // Confirming a migrated circle's recorded history moves no funds and is

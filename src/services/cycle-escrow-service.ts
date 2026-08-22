@@ -14,6 +14,7 @@ import { getPooledSuiClient } from './sui-rpc-failover';
 import { getNetworkConfig, getPackageIdForNetwork } from './network-config';
 import type { NetworkType } from './whatsapp-registry-service';
 import { preparePaymentCoin } from '../lib/payment-coin-builder';
+import { isTimedEscrowEntriesEnabled } from '@/config/feature-flags';
 
 const CLOCK_OBJECT_ID = '0x6';
 
@@ -115,13 +116,17 @@ export function buildOpenCycleTx(params: OpenCycleParams): BuildTransactionFn {
   const complianceConfigId = params.withComplianceGate
     ? requireAddr(params.complianceConfigId ?? '', 'complianceConfigId')
     : null;
+  // v1.1 (flag-gated on the published package version): the *_indexed
+  // twins also append the new escrow's id to the circle's on-chain
+  // history, which is what makes past escrows enumerable by object read.
+  const indexed = isTimedEscrowEntriesEnabled() ? '_indexed' : '';
   const target = isStable
     ? params.withComplianceGate
-      ? `${packageId}::njangi_cycle_escrow::open_cycle_stable_with_gate`
-      : `${packageId}::njangi_cycle_escrow::open_cycle_stable`
+      ? `${packageId}::njangi_cycle_escrow::open_cycle_stable${indexed}_with_gate`
+      : `${packageId}::njangi_cycle_escrow::open_cycle_stable${indexed}`
     : params.withComplianceGate
-      ? `${packageId}::njangi_cycle_escrow::open_cycle_with_gate`
-      : `${packageId}::njangi_cycle_escrow::open_cycle`;
+      ? `${packageId}::njangi_cycle_escrow::open_cycle${indexed}_with_gate`
+      : `${packageId}::njangi_cycle_escrow::open_cycle${indexed}`;
   return (txb: Transaction) => {
     const gateArgs = complianceConfigId ? [txb.object(complianceConfigId)] : [];
     txb.moveCall({
@@ -192,11 +197,17 @@ export function buildContributeTx(params: ContributeParams): BuildTransactionFn 
   const packageId = packageIdFor(params.network);
   const escrowId = requireAddr(params.escrowId, 'escrowId');
   const paymentCoinId = requireAddr(params.paymentCoinId, 'paymentCoinId');
+  // v1.1: contribute_timed also records the member's contribution
+  // timestamp on the escrow (takes the Clock as an extra argument), which
+  // is what lets the Circle Record say "on time" as a fact.
+  const timed = isTimedEscrowEntriesEnabled();
   return (txb: Transaction) => {
     txb.moveCall({
-      target: `${packageId}::njangi_cycle_escrow::contribute`,
+      target: `${packageId}::njangi_cycle_escrow::contribute${timed ? '_timed' : ''}`,
       typeArguments: [params.coinType],
-      arguments: [txb.object(escrowId), txb.object(paymentCoinId)],
+      arguments: timed
+        ? [txb.object(escrowId), txb.object(paymentCoinId), txb.object(CLOCK_OBJECT_ID)]
+        : [txb.object(escrowId), txb.object(paymentCoinId)],
     });
   };
 }
@@ -231,10 +242,13 @@ export function buildContributeWithAutoCoinTx(
       coinType: params.coinType,
       amount: params.contributionAmount,
     });
+    const timed = isTimedEscrowEntriesEnabled();
     txb.moveCall({
-      target: `${packageId}::njangi_cycle_escrow::contribute`,
+      target: `${packageId}::njangi_cycle_escrow::contribute${timed ? '_timed' : ''}`,
       typeArguments: [params.coinType],
-      arguments: [txb.object(escrowId), coinArg],
+      arguments: timed
+        ? [txb.object(escrowId), coinArg, txb.object(CLOCK_OBJECT_ID)]
+        : [txb.object(escrowId), coinArg],
     });
   };
 }

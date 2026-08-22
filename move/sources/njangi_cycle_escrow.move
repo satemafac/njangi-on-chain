@@ -4,6 +4,7 @@ module njangi::njangi_cycle_escrow {
     use sui::coin::{Self, Coin};
     use sui::event;
     use sui::table::{Self, Table};
+    use sui::dynamic_field as df;
     use std::ascii;
     use std::type_name;
 
@@ -97,6 +98,14 @@ module njangi::njangi_cycle_escrow {
         due_at_ms: u64,
         opened_at_ms: u64,
     }
+
+    /// Dynamic-field key for a member's contribution timestamp on the
+    /// escrow's UID (Circle Record v1.1). Written only by the *_timed
+    /// contribute paths; absent for contributions made through the
+    /// original entry points, so readers must treat "no timestamp" as
+    /// "not recorded", never as "not contributed" — the `contributed`
+    /// table remains the authority on THAT question.
+    public struct ContributionTimeKey has copy, drop, store { member: address }
 
     public struct CycleEscrow<phantom T> has key {
         id: UID,
@@ -248,7 +257,7 @@ module njangi::njangi_cycle_escrow {
         ctx: &mut TxContext
     ) {
         let amount = circles::get_contribution_amount_raw(circle);
-        open_cycle_internal<T>(circle, amount, clock, option::none(), ctx);
+        let _ = open_cycle_internal<T>(circle, amount, clock, option::none(), ctx);
     }
 
     /// Phase 7: opens a per-cycle escrow that requires every contributor
@@ -267,7 +276,7 @@ module njangi::njangi_cycle_escrow {
         ctx: &mut TxContext
     ) {
         let amount = circles::get_contribution_amount_raw(circle);
-        open_cycle_internal<T>(
+        let _ = open_cycle_internal<T>(
             circle, amount, clock, option::some(object::id(compliance_config)), ctx
         );
     }
@@ -287,7 +296,7 @@ module njangi::njangi_cycle_escrow {
         ctx: &mut TxContext
     ) {
         let amount = stable_contribution_amount(circle, stable_decimals);
-        open_cycle_internal<T>(circle, amount, clock, option::none(), ctx);
+        let _ = open_cycle_internal<T>(circle, amount, clock, option::none(), ctx);
     }
 
     /// Compliance-gated variant of `open_cycle_stable` (see
@@ -300,9 +309,138 @@ module njangi::njangi_cycle_escrow {
         ctx: &mut TxContext
     ) {
         let amount = stable_contribution_amount(circle, stable_decimals);
-        open_cycle_internal<T>(
+        let _ = open_cycle_internal<T>(
             circle, amount, clock, option::some(object::id(compliance_config)), ctx
         );
+    }
+
+    // ----------------------------------------------------------
+    // Circle Record v1.1 — indexed opens and timed contributions.
+    //
+    // Additive entry points only: Sui upgrades forbid changing existing
+    // public signatures, so the original opens (immutable &Circle) stay
+    // exactly as they are and these *_indexed variants take &mut Circle
+    // to also append the new escrow's id to the circle's on-chain
+    // history (circles::record_escrow_opened). That single append is
+    // what makes past escrows enumerable by object read; without it the
+    // only route is an event scan.
+    //
+    // The frontend switches to these targets behind a flag once the
+    // package version carrying them is published; older circles keep
+    // working through the original entries indefinitely.
+    // ----------------------------------------------------------
+
+    public fun open_cycle_indexed<T>(
+        circle: &mut Circle,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let amount = circles::get_contribution_amount_raw(circle);
+        let escrow_id = open_cycle_internal<T>(circle, amount, clock, option::none(), ctx);
+        circles::record_escrow_opened(circle, escrow_id);
+    }
+
+    public fun open_cycle_stable_indexed<T>(
+        circle: &mut Circle,
+        stable_decimals: u8,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let amount = stable_contribution_amount(circle, stable_decimals);
+        let escrow_id = open_cycle_internal<T>(circle, amount, clock, option::none(), ctx);
+        circles::record_escrow_opened(circle, escrow_id);
+    }
+
+    public fun open_cycle_indexed_with_gate<T>(
+        circle: &mut Circle,
+        compliance_config: &ComplianceConfig,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let amount = circles::get_contribution_amount_raw(circle);
+        let escrow_id = open_cycle_internal<T>(
+            circle, amount, clock, option::some(object::id(compliance_config)), ctx
+        );
+        circles::record_escrow_opened(circle, escrow_id);
+    }
+
+    public fun open_cycle_stable_indexed_with_gate<T>(
+        circle: &mut Circle,
+        compliance_config: &ComplianceConfig,
+        stable_decimals: u8,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let amount = stable_contribution_amount(circle, stable_decimals);
+        let escrow_id = open_cycle_internal<T>(
+            circle, amount, clock, option::some(object::id(compliance_config)), ctx
+        );
+        circles::record_escrow_opened(circle, escrow_id);
+    }
+
+    /// `contribute`, plus a per-member timestamp so "paid on time" can be
+    /// an on-chain fact instead of a guess. The timestamp is written
+    /// AFTER contribute_internal's asserts, so a rejected contribution
+    /// never leaves a time record behind.
+    public fun contribute_timed<T>(
+        escrow: &mut CycleEscrow<T>,
+        payment: Coin<T>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        assert!(!escrow.requires_attestation, E_COMPLIANCE_ATTESTATION_REQUIRED);
+        let sender = tx_context::sender(ctx);
+        contribute_internal<T>(escrow, payment, ctx);
+        record_contribution_time(escrow, sender, clock::timestamp_ms(clock));
+    }
+
+    /// Gated twin of `contribute_timed` (see `contribute_with_attestation`
+    /// for the attestation semantics).
+    public fun contribute_timed_with_attestation<T>(
+        escrow: &mut CycleEscrow<T>,
+        payment: Coin<T>,
+        attestation: &ComplianceAttestation,
+        config: &ComplianceConfig,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert_attestation_valid(
+            attestation, config, sender, escrow.compliance_config_id, clock
+        );
+        contribute_internal<T>(escrow, payment, ctx);
+        record_contribution_time(escrow, sender, clock::timestamp_ms(clock));
+    }
+
+    fun record_contribution_time<T>(
+        escrow: &mut CycleEscrow<T>,
+        member: address,
+        ts_ms: u64
+    ) {
+        let key = ContributionTimeKey { member };
+        // contribute_internal's E_ALREADY_CONTRIBUTED makes a double-write
+        // unreachable through the public paths; the exists_ guard is
+        // defence in depth so a future caller cannot abort on a duplicate.
+        if (df::exists_(&escrow.id, key)) {
+            *df::borrow_mut<ContributionTimeKey, u64>(&mut escrow.id, key) = ts_ms;
+        } else {
+            df::add(&mut escrow.id, key, ts_ms);
+        }
+    }
+
+    /// When this member's contribution landed, if it went through a
+    /// *_timed path. `none` means NOT RECORDED — the `contributed` table,
+    /// not this, answers whether they paid at all.
+    public fun get_contribution_time<T>(
+        escrow: &CycleEscrow<T>,
+        member: address
+    ): Option<u64> {
+        let key = ContributionTimeKey { member };
+        if (df::exists_(&escrow.id, key)) {
+            option::some(*df::borrow<ContributionTimeKey, u64>(&escrow.id, key))
+        } else {
+            option::none()
+        }
     }
 
     fun open_cycle_internal<T>(
@@ -311,7 +449,7 @@ module njangi::njangi_cycle_escrow {
         clock: &Clock,
         opener_gate_config_id: Option<ID>,
         ctx: &mut TxContext
-    ) {
+    ): ID {
         // Authoritative compliance gate (June 2026 audit fix): the
         // circle-level on-chain flag is OR'd into whatever the caller
         // asked for. Opening a cycle is permissionless, so without this a
@@ -409,6 +547,7 @@ module njangi::njangi_cycle_escrow {
         });
 
         transfer::share_object(escrow);
+        escrow_id
     }
 
     /// Records a member's contribution into the escrow. The amount must
@@ -1072,6 +1211,144 @@ module njangi::njangi_cycle_escrow {
         let payment = coin::mint_for_testing<SUI>(TEST_CONTRIBUTION, ts::ctx(scenario));
         contribute(&mut escrow, payment, ts::ctx(scenario));
         ts::return_shared(escrow);
+    }
+
+    #[test_only]
+    fun setup_circle_and_indexed_escrow(scenario: &mut ts::Scenario): Clock {
+        let mut clock = clock::create_for_testing(ts::ctx(scenario));
+        clock::set_for_testing(&mut clock, TEST_START_MS);
+        circles::share_circle_for_testing(
+            vector[TEST_ADMIN, TEST_BOB, TEST_CAROL],
+            TEST_CONTRIBUTION,
+            TEST_USD_CENTS,
+            &clock,
+            ts::ctx(scenario)
+        );
+
+        ts::next_tx(scenario, TEST_ADMIN);
+        let mut circle = ts::take_shared<Circle>(scenario);
+        open_cycle_indexed<SUI>(&mut circle, &clock, ts::ctx(scenario));
+        ts::return_shared(circle);
+        clock
+    }
+
+    #[test_only]
+    fun contribute_timed_as(scenario: &mut ts::Scenario, who: address, clock: &Clock) {
+        ts::next_tx(scenario, who);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(scenario);
+        let payment = coin::mint_for_testing<SUI>(TEST_CONTRIBUTION, ts::ctx(scenario));
+        contribute_timed(&mut escrow, payment, clock, ts::ctx(scenario));
+        ts::return_shared(escrow);
+    }
+
+    // ----------------------------------------------------------
+    // Circle Record v1.1: escrow history + contribution timestamps
+    // ----------------------------------------------------------
+
+    #[test]
+    fun test_indexed_open_records_escrow_history() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_indexed_escrow(&mut scenario);
+
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let circle = ts::take_shared<Circle>(&mut scenario);
+        let escrow = ts::take_shared<CycleEscrow<SUI>>(&mut scenario);
+
+        let history = circles::get_escrow_history(&circle);
+        assert!(vector::length(&history) == 1, 9300);
+        assert!(*vector::borrow(&history, 0) == object::id(&escrow), 9301);
+
+        ts::return_shared(escrow);
+        ts::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_plain_open_leaves_history_empty() {
+        // Circles that only ever used the original opens must read as
+        // "no data", not "no cycles" — this pins the empty baseline.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_escrow(&mut scenario);
+
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let circle = ts::take_shared<Circle>(&mut scenario);
+        assert!(vector::length(&circles::get_escrow_history(&circle)) == 0, 9310);
+        ts::return_shared(circle);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_contribute_timed_records_timestamp() {
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let mut clock = setup_circle_and_indexed_escrow(&mut scenario);
+        let paid_at = TEST_START_MS + 86_400_000; // one day in
+        clock::set_for_testing(&mut clock, paid_at);
+
+        contribute_timed_as(&mut scenario, TEST_BOB, &clock);
+
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let escrow = ts::take_shared<CycleEscrow<SUI>>(&mut scenario);
+        let recorded = get_contribution_time(&escrow, TEST_BOB);
+        assert!(option::is_some(&recorded), 9320);
+        assert!(*option::borrow(&recorded) == paid_at, 9321);
+        // The contributed table stays the authority on WHO paid.
+        assert!(has_member_contributed(&escrow, TEST_BOB), 9322);
+        ts::return_shared(escrow);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_plain_contribute_records_no_timestamp() {
+        // A legacy-path contribution must read as "not recorded", never
+        // as "not contributed" — the split the UI depends on.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_indexed_escrow(&mut scenario);
+
+        contribute_as(&mut scenario, TEST_BOB);
+
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let escrow = ts::take_shared<CycleEscrow<SUI>>(&mut scenario);
+        assert!(option::is_none(&get_contribution_time(&escrow, TEST_BOB)), 9330);
+        assert!(has_member_contributed(&escrow, TEST_BOB), 9331);
+        ts::return_shared(escrow);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_ALREADY_CONTRIBUTED)]
+    fun test_contribute_timed_still_rejects_double_pay() {
+        // The timed path must inherit every assert of the original — a
+        // second payment aborts before any timestamp write.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_indexed_escrow(&mut scenario);
+        contribute_timed_as(&mut scenario, TEST_BOB, &clock);
+        contribute_timed_as(&mut scenario, TEST_BOB, &clock);
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_indexed_open_appends() {
+        // Two indexed opens -> two history entries, append-only.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_indexed_escrow(&mut scenario);
+
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let mut circle = ts::take_shared<Circle>(&mut scenario);
+        open_cycle_indexed<SUI>(&mut circle, &clock, ts::ctx(&mut scenario));
+        let history = circles::get_escrow_history(&circle);
+        assert!(vector::length(&history) == 2, 9340);
+        ts::return_shared(circle);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
     }
 
     #[test_only]
