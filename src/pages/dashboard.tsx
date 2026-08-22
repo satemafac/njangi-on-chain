@@ -62,6 +62,9 @@ import {
   getSuiRpcErrorMessage,
   isRateLimitedSuiRpcError,
 } from '@/services/sui-rpc-failover';
+import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
+import { isResolvedSuiObjectId } from '@/lib/sui-object-id';
+import { normalizeSuiObjectId } from '@mysten/sui/utils';
 
 // Global type declaration for network config
 declare global {
@@ -3597,7 +3600,13 @@ export default function Dashboard() {
             const contentFields = content && typeof content === 'object' && 'fields' in content
               ? (content.fields as { value?: string })
               : null;
-            if (contentFields?.value) {
+            // create_circle seeds this field with the CIRCLE'S OWN id as a
+            // placeholder and only update_wallet_id ever replaces it. Mapping
+            // it through hands the circle id to callers expecting a wallet.
+            const isPlaceholder =
+              typeof contentFields?.value === 'string' &&
+              normalizeSuiObjectId(contentFields.value) === normalizeSuiObjectId(ref.circleId);
+            if (contentFields?.value && !isPlaceholder) {
               circleWalletMapFromDynamic.set(ref.circleId, contentFields.value);
             }
           });
@@ -4691,8 +4700,32 @@ export default function Dashboard() {
 
         // Find the circle to get its wallet ID and package ID
         const circle = circles.find(c => c.id === circleId);
-        const walletId = circle?.walletId;
         const circlePackageId = circle?.packageId; // Get the package ID this circle was created with
+
+        // The dashboard resolves wallets in bulk from events and the wallet_id
+        // dynamic field. Events are served by almost no endpoint, and that
+        // field holds a placeholder, so the bulk map is usually empty — and
+        // delete_circle cannot run without the real id. Resolve this ONE
+        // circle properly here, where the cost is a single lookup rather than
+        // one per circle on every dashboard load.
+        let walletId = circle?.walletId;
+        if (!isResolvedSuiObjectId(walletId) && circlePackageId) {
+          const resolved = await resolveCustodyWalletId({
+            client: getSuiClientFromPool(getJsonRpcUrl()),
+            circleId,
+            packageId: circlePackageId,
+            userAddress: userAddress ?? undefined,
+          });
+          walletId = resolved?.walletId;
+        }
+
+        if (!isResolvedSuiObjectId(walletId)) {
+          toast.error(
+            "This circle's wallet could not be loaded, so it cannot be deleted yet. Refresh and try again.",
+          );
+          setIsDeleting(null);
+          return;
+        }
         
         console.log("🔍 DELETE DIAGNOSTICS:");
         console.log("  Circle to delete:", circle);
