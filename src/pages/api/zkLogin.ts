@@ -51,6 +51,12 @@ import {
   EntitlementError,
 } from '@/lib/entitlement-gate';
 import { screenAddress, sanctionsErrorBody } from '@/lib/sanctions';
+import {
+  checkAddressDrift,
+  alertDrift,
+  getDriftStatusForIdentity,
+  addressDriftErrorBody,
+} from '@/lib/zklogin-address-bindings';
 import { isEmbargoedHeaders, embargoErrorBody } from '@/lib/embargo';
 import {
   disabledResponse,
@@ -1169,9 +1175,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               throw new SanctionsBlockedAtLoginError();
             }
 
+            // Address-drift detection.
+            //
+            // MUST run before cleanupUserSessions below. That call wipes the
+            // user's prior session rows, and zklogin_sessions carries a 24h
+            // TTL — which is exactly why drift was silent until now: the
+            // previous address was destroyed before the new one existed, so
+            // nothing could ever compare them. The bindings table is the
+            // durable record; ordering this first keeps the two consistent.
+            //
+            // Deliberately does NOT block the login. The user must be able to
+            // get in to see the explanation, and — more importantly — to
+            // reach claim, refund and recovery. Commitment surfaces (circle
+            // create/join, contribute, ramp session) refuse separately via
+            // assertNoAddressDrift. Fail-closed on new commitments, fail-open
+            // on fund access: the same split src/lib/sanctions.ts uses, for
+            // the same reason.
+            const drift = await checkAddressDrift({
+              iss: result.iss ?? null,
+              sub: result.sub,
+              aud: result.aud,
+              provider: savedSetup.provider,
+              userAddress: result.address,
+            });
+            if (drift.drifted) {
+              await alertDrift(
+                {
+                  iss: result.iss ?? null,
+                  sub: result.sub,
+                  provider: savedSetup.provider,
+                },
+                drift,
+              );
+            }
+
             // Clean up any existing sessions for this user
             await cleanupUserSessions(result.address, sessionId);
-            
+
             // Create the account data object.
             //
             // No `ephemeralPrivateKey`. It used to be carried through for
@@ -1187,6 +1227,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               userSalt: result.userSalt,
               sub: result.sub,
               aud: result.aud,
+              iss: result.iss,
               maxEpoch: savedSetup.maxEpoch,
               picture: result.picture,
               name: result.name
@@ -1442,6 +1483,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const screen = await screenAddress(session.account.userAddr, 'circle_create');
             if (screen.blocked) {
               return res.status(403).json(sanctionsErrorBody());
+            }
+          }
+
+          // Address-drift gate. Creating a circle is a NEW COMMITMENT, so it
+          // fails closed: if this identity previously resolved to a different
+          // address, the user may be about to build a circle at an account
+          // they do not realise is new, while their existing funds sit
+          // elsewhere. Claim, refund, recovery and withdrawal are never gated
+          // this way — see src/lib/zklogin-address-bindings.ts.
+          {
+            const drift = await getDriftStatusForIdentity({
+              iss: session.account.iss ?? null,
+              sub: session.account.sub,
+              provider: session.account.provider,
+              userAddress: session.account.userAddr,
+            });
+            if (drift.drifted) {
+              return res.status(409).json(addressDriftErrorBody(drift.previousAddresses));
             }
           }
 

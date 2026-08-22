@@ -68,6 +68,55 @@ fact to state early and accurately in any of these:
 3. Legal demand → counsel before compliance or refusal.
 4. Document in the log.
 
+## Scenario 4 — Address drift (users signing in to a different account)
+
+Signal: `[address-drift] DRIFT DETECTED` in logs, a Sentry event tagged
+`feature: address-drift`, or a user reporting that their circles and money
+"disappeared" after signing in normally.
+
+**What it means.** A zkLogin address derives from `(iss, aud, sub, salt)`.
+If any of those changes, the same social login resolves to a DIFFERENT Sui
+address and the user's funds stay at the old one, unreachable. See
+`CLAUDE.md` → "Address-affecting environment variables".
+
+1. **Establish blast radius first.** One user is odd; several in an hour is
+   a configuration incident that will hit everyone who signs in next. Query:
+   `SELECT COUNT(*) FROM (SELECT sub FROM zklogin_address_bindings
+   GROUP BY sub, COALESCE(iss, provider)
+   HAVING COUNT(DISTINCT user_address) > 1) t;`
+   (`countRecentDriftEvents()` in `src/lib/zklogin-address-bindings.ts`
+   answers the same question windowed to the last hour.)
+2. **Ask the only question that matters: what changed?** In order of
+   likelihood — the Enoki API key (rotation changes the salt *even within
+   the same app*), `NEXT_PUBLIC_{GOOGLE,FACEBOOK,APPLE}_CLIENT_ID`, or the
+   Enoki application itself. Check the deploy/env change history around the
+   first drift timestamp (`MIN(first_seen_at)` on the new bindings).
+3. **If a change is identified, REVERT IT.** Restoring the previous salt
+   source restores the original addresses for everyone who has not yet been
+   onboarded under the new one. This is the only real fix and it gets
+   harder every hour, because each new user onboarded under the new
+   configuration is someone the revert will then strand. **Speed matters
+   more than diagnosis here** — revert first, understand afterwards.
+4. **Do not tell users their funds are "safe" or "recoverable" as a matter
+   of course.** The funds are intact at the old address, but we hold no key
+   for it and cannot move them. The modal already says this accurately;
+   support must not improve on it.
+5. Affected users can still claim payouts, request refunds and take part in
+   recovery votes at their *current* address — the gate is deliberately
+   fail-open on fund access. Joining, creating and contributing are blocked
+   until resolved.
+6. For a circle whose members are split across old and new addresses, the
+   protocol's answer is the member-initiated recovery vote, same as
+   Scenario 3(a): members can stop the circle and take back what they put
+   in. Point them to it; we cannot do it for them.
+7. Record in the log below: first drift timestamp, count of affected
+   identities, the suspected change, whether it was reverted, and the
+   addresses involved.
+
+**Prevention.** Treat any Enoki key rotation as an ADDRESS MIGRATION, not a
+credential refresh: do it before you have users, never after, and keep the
+previous key — it is the only route back.
+
 ## Contact chain
 
 - Counsel: {{COUNSEL_CONTACT}} (fill when the A6 engagement closes)

@@ -131,6 +131,13 @@ export interface AccountData {
   userSalt: string;
   sub: string;
   aud: string;
+  /**
+   * JWT `iss`. Optional because sessions created before this field existed
+   * will not have it; `provider` is the fallback identity key in that case.
+   * Used only for address-drift detection — see
+   * src/lib/zklogin-address-bindings.ts.
+   */
+  iss?: string;
   maxEpoch: number;
   picture?: string;
   name?: string;
@@ -477,12 +484,19 @@ export class EnokiZkLoginService {
    * Validate account data and proof expiration
    */
 
-  public async handleCallback(token: string, setupData: SetupData): Promise<{ 
+  public async handleCallback(token: string, setupData: SetupData): Promise<{
     address: string;
     zkProofs: ZkLoginProofs;
     userSalt: string;
     sub: string;
     aud: string;
+    /**
+     * JWT `iss`. Carried out of the callback because (iss, sub) is the only
+     * identity key that survives a salt OR client-id change — both of which
+     * silently move the user's address. See
+     * src/lib/zklogin-address-bindings.ts for why aud cannot be part of it.
+     */
+    iss?: string;
     picture?: string;
     name?: string;
   }> {
@@ -587,12 +601,13 @@ export class EnokiZkLoginService {
       });
     }
 
-    return { 
-      address: userAddr, 
+    return {
+      address: userAddr,
       zkProofs,
       userSalt: userSalt.toString(),
       sub: jwtPayload.sub,
       aud: typeof jwtPayload.aud === 'string' ? jwtPayload.aud : jwtPayload.aud[0],
+      iss: typeof jwtPayload.iss === 'string' ? jwtPayload.iss : undefined,
       picture,
       name
     };
