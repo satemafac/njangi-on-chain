@@ -14,10 +14,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           # Keep in lockstep with package.json "engines.node" — that field is
           # what Vercel uses for the serverless runtime, so CI must test the
@@ -27,7 +27,7 @@ jobs:
 
       - name: Cache Sui CLI
         id: sui-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.local/bin/sui
           key: sui-cli-${{ runner.os }}-${{ hashFiles('move/Move.toml') }}
