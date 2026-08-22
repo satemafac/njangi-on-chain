@@ -77,7 +77,7 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
       const collected: ActionableAlert[] = [];
       for (const circle of circles) {
         try {
-          const escrow = await findCurrentCycleEscrow(client, network, circle.id);
+          const escrow = await findCurrentCycleEscrow(network, circle.id);
           if (!escrow) continue;
           const state = await readCycleEscrowState(escrow.escrowId, network, client);
           if (!state || state.claimed) continue;
@@ -115,7 +115,7 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
           }
 
           // Has the user already paid for this round?
-          const contributors = await listContributors(escrow.escrowId, network, client);
+          const contributors = await listContributors(escrow.escrowId, network);
           const alreadyPaid = contributors.some(
             (c) => c.toLowerCase() === userAddress.toLowerCase(),
           );

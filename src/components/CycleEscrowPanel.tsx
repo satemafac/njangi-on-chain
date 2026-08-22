@@ -154,12 +154,12 @@ export function CycleEscrowPanel({
     setLoading(true);
     setLoadError(false);
     try {
-      const found = await findCurrentCycleEscrow(rpcClient, network, circleId);
+      const found = await findCurrentCycleEscrow(network, circleId);
       setSummary(found);
       if (found) {
         const state = await readCycleEscrowState(found.escrowId, network, rpcClient);
         setLiveState(state);
-        const paidList = await listContributors(found.escrowId, network, rpcClient);
+        const paidList = await listContributors(found.escrowId, network);
         setContributors(paidList);
       } else {
         setLiveState(null);
