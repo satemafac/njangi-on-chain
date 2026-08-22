@@ -140,3 +140,21 @@ answer, per the Phase C tripwire in `docs/compliance-roadmap-cex-dex-non-kyc.md`
   a non-technical audience in two languages. Budget a review pass, not just a translation.
 - **Counsel latency is unbounded from our side.** Nothing in Waves 0–2 depends on it, which is
   deliberate; keep it that way.
+
+
+## 8. Gap closure — 2026-08-22
+
+Every gap from the 2026-08-20 status review, with its outcome:
+
+| Gap | Outcome |
+|---|---|
+| Work uncommitted | **Closed.** Committed as six semantic commits on `feat/smart-goal-pools`. |
+| Migration never run | **Closed.** `npm run migrate:postgres` ran against the production database: all 25 statements applied, backfill seeded 4 identities (0 drifted — clean baseline), sanctions list intact (419 addresses, v2026-07-13). |
+| Drift guard covered 2 of 4 commitment surfaces | **Closed.** Now gates circle create, join, all three ramp session routes (address-based lookup — those routes have no session identity) and WhatsApp linking. The sponsor broker is deliberately ungated: sponsorship failure falls back to self-paid gas by design, so a gate there blocks nothing. |
+| Circle-create gate bypassable | **Documented, not closable server-side.** create_circle is a public Move entry point with client-side signing; the route now says so plainly (matching the billing gate's own caveat). Hard coverage = join queue + client interstitial. |
+| /record unreachable | **Closed.** "Your record" entry in the dashboard wallet panel. |
+| New copy outside i18n | **Closed** to the house standard: drift.* / record.* keys in EN + FR (strict parity enforced by test); the other five locales remain intentionally partial with EN fallback, per the documented policy. Dates follow the app locale. |
+| Share page unverified e2e | **Closed.** Verified in the real browser against a production build, the production database and live testnet chain data: live link renders a real member's 3 circles (EN and FR); a payout landed on-chain mid-test and the record picked it up; revoked, expired and unknown tokens all render one identical "not available" page; signed-out /record shows the sign-in CTA. Local-prod note: the HTTPS-force middleware 301s plain-http localhost, so local prod testing needs an x-forwarded-proto: https shim in front of `next start`. |
+| Per-cycle on-time status | **Open by design** — needs a new Move entry function taking &Clock (Circle Record v1.1, publish-gated). The UI claims nothing it cannot prove. |
+| Counsel letter unsent | **Open — owner action.** `docs/counsel-addendum-asset-conversion.md` is ready to send. |
+| Account recovery unbuilt | **Open — roadmap** (post-beta), unchanged. |

@@ -15,9 +15,11 @@
 import { useTranslation } from '@/hooks/useTranslation';
 import type { CircleRecord } from '@/lib/circle-record';
 
-function formatDate(ms: number | null | undefined): string {
+function formatDate(ms: number | null | undefined, locale: string): string {
   if (!ms || ms <= 0) return '—';
-  return new Date(ms).toLocaleDateString(undefined, {
+  // App locale, not browser locale — otherwise a French page renders
+  // English dates and reads half-translated.
+  return new Date(ms).toLocaleDateString(locale, {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
@@ -39,7 +41,7 @@ export interface CircleRecordViewProps {
 }
 
 export function CircleRecordView({ record, headerNote }: CircleRecordViewProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const { summary, circles } = record;
   const hasHistory = circles.length > 0;
 
@@ -56,7 +58,7 @@ export function CircleRecordView({ record, headerNote }: CircleRecordViewProps) 
           {record.address}
         </p>
         <p className="mt-3 text-sm text-[#556070]">
-          {t('record.generated', { date: formatDate(record.generatedAtMs), network: record.network })}
+          {t('record.generated', { date: formatDate(record.generatedAtMs, locale), network: record.network })}
         </p>
         {headerNote ? (
           <p className="mt-3 text-sm text-[#374151]">{headerNote}</p>
@@ -108,7 +110,7 @@ export function CircleRecordView({ record, headerNote }: CircleRecordViewProps) 
                     {c.circleName || t('record.circle.untitled')}
                   </h3>
                   <span className="text-xs text-[#8a8578]">
-                    {t('record.circle.joined', { date: formatDate(c.joinedAtMs) })}
+                    {t('record.circle.joined', { date: formatDate(c.joinedAtMs, locale) })}
                   </span>
                 </div>
 

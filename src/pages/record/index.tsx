@@ -23,7 +23,7 @@ interface ShareLink {
 const TTL_CHOICES = [7, 30, 90];
 
 export default function RecordPage() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const { isAuthenticated, isLoading: authLoading } = useAuth();
   const [record, setRecord] = useState<CircleRecord | null>(null);
   const [loading, setLoading] = useState(true);
@@ -229,7 +229,7 @@ export default function RecordPage() {
                       /record/s/{l.token.slice(0, 12)}…
                     </span>
                     <span className="text-[11px] text-[#8a8578]">
-                      {t('record.share.until', { date: new Date(l.expiresAtMs).toLocaleDateString() })}
+                      {t('record.share.until', { date: new Date(l.expiresAtMs).toLocaleDateString(locale) })}
                     </span>
                     <button
                       type="button"
