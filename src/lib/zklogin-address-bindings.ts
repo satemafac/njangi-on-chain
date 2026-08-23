@@ -6,10 +6,10 @@
 // A zkLogin address is derived from (iss, aud, sub, salt). Three of those
 // can change without the user doing anything:
 //
-//   salt — supplied by Enoki, and it changes when the API key is rotated,
-//          even within the same application (see CLAUDE.md for the testnet
-//          evidence: same Google account, same sub, same client id, same
-//          app — only the live key moved, and the address moved with it).
+//   salt — supplied by Enoki per user per application. Key ROTATION does
+//          NOT move it (CLAUDE.md, corrected 2026-08-02 — the rotation-day
+//          flip was a provider mixup); deleting/recreating the Enoki APP
+//          does, silently and permanently.
 //   aud  — the OAuth client id.
 //   iss  — swapping the provider entry entirely.
 //

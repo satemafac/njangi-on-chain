@@ -87,10 +87,14 @@ address and the user's funds stay at the old one, unreachable. See
    (`countRecentDriftEvents()` in `src/lib/zklogin-address-bindings.ts`
    answers the same question windowed to the last hour.)
 2. **Ask the only question that matters: what changed?** In order of
-   likelihood — the Enoki API key (rotation changes the salt *even within
-   the same app*), `NEXT_PUBLIC_{GOOGLE,FACEBOOK,APPLE}_CLIENT_ID`, or the
-   Enoki application itself. Check the deploy/env change history around the
-   first drift timestamp (`MIN(first_seen_at)` on the new bindings).
+   likelihood — `NEXT_PUBLIC_{GOOGLE,FACEBOOK,APPLE}_CLIENT_ID`, or the
+   Enoki APPLICATION being deleted/recreated (which resets salts). Note:
+   rotating an Enoki API key within the same app does NOT move salts
+   (CLAUDE.md, corrected 2026-08-02) — before suspecting salt drift at
+   all, check whether the "same user" is actually a different PROVIDER
+   identity (sub/aud formats identify it). Check the deploy/env change
+   history around the first drift timestamp (`MIN(first_seen_at)` on the
+   new bindings).
 3. **If a change is identified, REVERT IT.** Restoring the previous salt
    source restores the original addresses for everyone who has not yet been
    onboarded under the new one. This is the only real fix and it gets
@@ -113,9 +117,11 @@ address and the user's funds stay at the old one, unreachable. See
    identities, the suspected change, whether it was reverted, and the
    addresses involved.
 
-**Prevention.** Treat any Enoki key rotation as an ADDRESS MIGRATION, not a
-credential refresh: do it before you have users, never after, and keep the
-previous key — it is the only route back.
+**Prevention.** Key rotation is a plain credential refresh and is safe.
+The address-affecting changes are client ids, provider entries, and the
+Enoki application itself — treat THOSE as address migrations: never change
+them once users exist, and record any change in the deploy log so step 2
+has something to find.
 
 ## Contact chain
 

@@ -12,10 +12,11 @@
 A zkLogin address derives from `(iss, aud, sub, salt)`. Three of those can change without any
 user action:
 
-- **`salt`** — supplied by Enoki, and it changes when the Enoki API key is rotated, even within
-  the same application. This is documented in `CLAUDE.md` with testnet evidence: circles created
-  2026-07-04 belong to one address, everything after to another, with the same Google account,
-  same `sub`, same client id, same app. The only variable that moved was the live API key.
+- **`salt`** — supplied by Enoki per user per application. **Key rotation within the same app
+  does NOT move it** (CLAUDE.md corrected this on 2026-08-02: the rotation-day address flip was
+  a provider mixup — Facebook-you vs Google-you — not salt drift, and cross-rotation stability
+  is directly evidenced). What DOES move it: deleting and recreating the Enoki application,
+  which resets its salts with no error and no migration path.
 - **`aud`** — the OAuth client id (`NEXT_PUBLIC_{GOOGLE,FACEBOOK,APPLE}_CLIENT_ID`).
 - **`iss`** — swapping the identity provider entry entirely.
 
