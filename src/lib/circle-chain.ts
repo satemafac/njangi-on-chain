@@ -3,6 +3,14 @@ import type { NetworkType } from '@/config/public-env';
 export type CircleActiveSource = 'field' | 'activation-event' | 'default';
 
 export interface PublishedPackageMetadata {
+  /**
+   * Package version that DEFINED the v1.1 timed-escrow types
+   * (ContributionTimeKey). Types introduced in an upgrade anchor to the
+   * id of the version that introduced them — neither the original id nor
+   * whatever published-at later becomes. Null on lineages that have not
+   * published v1.1 yet (mainnet today).
+   */
+  timedEntriesPackageId?: string | null;
   publishedAt: string | null;
   originalId: string | null;
 }
@@ -61,6 +69,7 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
   mainnet: {
     publishedAt: '0x7bf5274804a6008ebfbd9bfe766defb7fd5aa5fe6777419c2b6531ec99120b55',
     originalId: '0x7bf5274804a6008ebfbd9bfe766defb7fd5aa5fe6777419c2b6531ec99120b55',
+    timedEntriesPackageId: null,
   },
   // Testnet lineage. Original published 2026-06-12; v2 (2026-06-15) added
   // njangi_goal_pool; v3 (2026-06-15) added combined "amount by date" goals;
@@ -82,6 +91,10 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
   testnet: {
     publishedAt: '0x859e3add80ce891423d49702b2b3350addf1726ca634000c7394748c0c416c8e',
     originalId: '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
+    // v6 introduced the timed-escrow types; they stay anchored here even
+    // after future upgrades move published-at.
+    timedEntriesPackageId:
+      '0x859e3add80ce891423d49702b2b3350addf1726ca634000c7394748c0c416c8e',
   },
 };
 

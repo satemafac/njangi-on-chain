@@ -24,7 +24,10 @@ jest.mock('@/services/sui-rpc-failover', () => ({
 
 const ORIGINAL_PKG = '0x' + 'f0'.repeat(32);
 jest.mock('../circle-chain', () => ({
-  getPublishedPackageMetadata: () => ({ originalId: ORIGINAL_PKG }),
+  getPublishedPackageMetadata: () => ({
+    originalId: ORIGINAL_PKG,
+    timedEntriesPackageId: ORIGINAL_PKG,
+  }),
 }));
 
 const discoverMemberCircleIds = jest.fn();

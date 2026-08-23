@@ -321,9 +321,14 @@ async function readOnTimeEvidence(
   const history = await readEscrowHistory(circleId, network);
   if (!history || history.length === 0) return null;
 
-  const { originalId } = getPublishedPackageMetadata(network);
-  if (!originalId) return null;
-  const keyType = `${originalId}::njangi_cycle_escrow::ContributionTimeKey`;
+  // ContributionTimeKey is a v1.1-introduced type: it anchors to the id
+  // of the package version that DEFINED it (v6), not the original id —
+  // the inverse of the membership-discovery rule, which applies only to
+  // types that existed at original publish. Using originalId here
+  // silently found nothing (live, 2026-08-23).
+  const { timedEntriesPackageId } = getPublishedPackageMetadata(network);
+  if (!timedEntriesPackageId) return null;
+  const keyType = `${timedEntriesPackageId}::njangi_cycle_escrow::ContributionTimeKey`;
 
   const client = getPooledSuiClient({ network });
   const recent = history.slice(-MAX_ESCROWS_PER_CIRCLE);
