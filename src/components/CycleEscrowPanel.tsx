@@ -26,6 +26,7 @@ import {
   isComplianceGateEnabled,
   resolveComplianceConfigId,
 } from '@/lib/compliance-gate';
+import { isTimedEscrowEntriesEnabled } from '@/config/feature-flags';
 import VerificationRequiredModal from '@/components/VerificationRequiredModal';
 import {
   preflightSanctionsCheck,
@@ -436,6 +437,22 @@ export function CycleEscrowPanel({
       const contributionAmount = BigInt(contributionAmountBase);
       const escrowId = summary.escrowId;
       const ownerAddress = userAddress;
+      // The on-chain *_with_attestation entries take the escrow-pinned
+      // ComplianceConfig as an argument; omitting it is an arity abort —
+      // the dormant bug that silently broke every gated contribution
+      // until 2026-08-23. Resolve it up front and refuse with a readable
+      // message rather than aborting on-chain.
+      const complianceConfigId =
+        (await resolveComplianceConfigId(network).catch(() => null)) ?? undefined;
+      if (!complianceConfigId) {
+        toast.error(
+          'Verification is required in your region but is not configured yet. Please contact support.',
+        );
+        return;
+      }
+      const timedTarget = isTimedEscrowEntriesEnabled()
+        ? 'contribute_timed_with_attestation'
+        : 'contribute_with_attestation';
       const build: TransactionBuilder = async (txb, client) => {
         const { coinArg } = await preparePaymentCoin({
           txb,
@@ -445,12 +462,13 @@ export function CycleEscrowPanel({
           amount: contributionAmount,
         });
         txb.moveCall({
-          target: `${packageId}::njangi_cycle_escrow::contribute_with_attestation`,
+          target: `${packageId}::njangi_cycle_escrow::${timedTarget}`,
           typeArguments: [coinType],
           arguments: [
             txb.object(escrowId),
             coinArg,
             txb.object(attestationId),
+            txb.object(complianceConfigId),
             txb.object('0x6'),
           ],
         });
@@ -474,6 +492,21 @@ export function CycleEscrowPanel({
     const attestationId = await resolveAttestationIdOrAbort();
     if (attestationId === 'ABORT') return;
 
+    // Same arity requirement as the gated contribute: the on-chain entry
+    // takes the escrow-pinned ComplianceConfig, so resolve it or refuse
+    // readably instead of aborting on-chain.
+    let collectConfigId: string | undefined;
+    if (attestationId) {
+      collectConfigId =
+        (await resolveComplianceConfigId(network).catch(() => null)) ?? undefined;
+      if (!collectConfigId) {
+        toast.error(
+          'Verification is required in your region but is not configured yet. Please contact support.',
+        );
+        return;
+      }
+    }
+
     const build = attestationId
       ? buildFinalizeAndRedeemWithAttestationTx({
           network,
@@ -483,6 +516,7 @@ export function CycleEscrowPanel({
           // this the cycle stalls on the same recipient.
           circleId,
           attestationObjectId: attestationId,
+          complianceConfigId: collectConfigId as string,
         })
       : buildFinalizeAndRedeemTx({
           network,
