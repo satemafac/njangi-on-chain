@@ -1,10 +1,12 @@
 import {
+  clampStartPosition,
   extractMigrationLedgerFromObjectContent,
   getMigrationLedgerObjectId,
   hasMemberAcknowledged,
   isMigrationLedgerDynamicField,
   isSameMember,
   resolveMigrationRatification,
+  resolveMigrationSetupBlocker,
 } from '@/lib/circle-migration';
 
 const ADMIN = '0x000000000000000000000000000000000000000000000000000000000000000a';
@@ -276,5 +278,52 @@ describe('migration ledger dynamic-field discovery', () => {
 
   it('returns null when the circle has no ledger field at all', () => {
     expect(getMigrationLedgerObjectId([])).toBeNull();
+  });
+});
+
+describe('resolveMigrationSetupBlocker', () => {
+  it('asks for members before anything else', () => {
+    expect(resolveMigrationSetupBlocker(1, 1)).toBe('need-members');
+    expect(resolveMigrationSetupBlocker(2, 2)).toBe('need-members');
+  });
+
+  it('asks for positions once enough members are in', () => {
+    expect(resolveMigrationSetupBlocker(3, 1)).toBe('need-positions');
+    expect(resolveMigrationSetupBlocker(4, 3)).toBe('need-positions');
+  });
+
+  it('clears when every member holds a position', () => {
+    expect(resolveMigrationSetupBlocker(3, 3)).toBeNull();
+    expect(resolveMigrationSetupBlocker(5, 5)).toBeNull();
+  });
+
+  it('reports missing members even when nobody is positioned yet', () => {
+    // Both conditions can hold at once; the member shortfall is the one the
+    // admin can act on first, so it wins.
+    expect(resolveMigrationSetupBlocker(2, 0)).toBe('need-members');
+  });
+});
+
+describe('clampStartPosition', () => {
+  it('passes an in-range position through', () => {
+    expect(clampStartPosition(0, 3)).toBe(0);
+    expect(clampStartPosition(2, 3)).toBe(2);
+  });
+
+  it('clamps a position that points past the current rotation', () => {
+    // The stored ledger kept the queue it was declared against; a member
+    // removed since then leaves start_position out of range.
+    expect(clampStartPosition(3, 3)).toBe(2);
+    expect(clampStartPosition(9, 4)).toBe(3);
+  });
+
+  it('falls back to the first seat on garbage input', () => {
+    expect(clampStartPosition(-1, 3)).toBe(0);
+    expect(clampStartPosition(1.5, 3)).toBe(0);
+    expect(clampStartPosition(Number.NaN, 3)).toBe(0);
+  });
+
+  it('returns 0 for an empty rotation', () => {
+    expect(clampStartPosition(2, 0)).toBe(0);
   });
 });

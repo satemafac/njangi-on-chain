@@ -344,3 +344,36 @@ export function resolveMigrationRatification(
     matchesRotation,
   };
 }
+
+/**
+ * Why the admin cannot record history yet, or null when they can.
+ *
+ * Two distinct states used to share one "set the payout order first" message,
+ * which read as a lock further along than it was — organisers inferred that
+ * deposits were part of the gate. They never are: the contract's only
+ * structural precondition (EIncompleteRotationOrder) is that every current
+ * member holds a rotation position.
+ */
+export type MigrationSetupBlocker = 'need-members' | 'need-positions';
+
+export function resolveMigrationSetupBlocker(
+  memberCount: number,
+  positionedCount: number,
+  minMembers = 3,
+): MigrationSetupBlocker | null {
+  if (memberCount < minMembers) return 'need-members';
+  if (positionedCount < memberCount) return 'need-positions';
+  return null;
+}
+
+/**
+ * A stored start position can point past the end of the CURRENT rotation —
+ * the ledger keeps the queue it was declared against, and members can be
+ * removed before the admin re-records. Prefilling an edit form with an
+ * out-of-range index would preselect nobody and then declare garbage.
+ */
+export function clampStartPosition(startPosition: number, rotationLength: number): number {
+  if (rotationLength <= 0) return 0;
+  if (!Number.isInteger(startPosition) || startPosition < 0) return 0;
+  return Math.min(startPosition, rotationLength - 1);
+}

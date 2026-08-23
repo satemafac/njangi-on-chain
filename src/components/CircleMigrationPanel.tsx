@@ -1,6 +1,11 @@
-import React, { useMemo, useState } from 'react';
-import { Check, Clock, History, Info, RotateCcw, Users } from 'lucide-react';
-import { isSameMember, type MigrationRatification } from '@/lib/circle-migration';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Check, Clock, History, Info, Pencil, RotateCcw, Users } from 'lucide-react';
+import {
+  clampStartPosition,
+  isSameMember,
+  resolveMigrationSetupBlocker,
+  type MigrationRatification,
+} from '@/lib/circle-migration';
 
 export interface MigrationPanelMember {
   address: string;
@@ -66,22 +71,54 @@ const CircleMigrationPanel: React.FC<CircleMigrationPanelProps> = ({
   const [priorRounds, setPriorRounds] = useState<string>(
     String(ratification?.ledger.priorRoundsCompleted ?? 0),
   );
+  const [isEditing, setIsEditing] = useState(false);
 
-  const rotationIsComplete = rotation.length === members.length && rotation.length >= 3;
+  // A successful re-declare bumps the ledger version; leave edit mode so the
+  // freshly recorded state (and its reset confirmations) become visible. A
+  // failed declare changes nothing, so the form stays open.
+  const ledgerVersion = ratification?.ledger.version;
+  useEffect(() => {
+    setIsEditing(false);
+  }, [ledgerVersion]);
 
-  if (!rotationIsComplete) {
+  const beginEditing = () => {
+    if (ratification) {
+      setPriorRounds(String(ratification.ledger.priorRoundsCompleted));
+      setNextTurnIndex(
+        clampStartPosition(ratification.ledger.startPosition, rotation.length),
+      );
+    }
+    setIsEditing(true);
+  };
+
+  const setupBlocker = resolveMigrationSetupBlocker(members.length, rotation.length);
+
+  if (setupBlocker) {
     return (
       <div className="rounded-[16px] border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
         <div className="flex items-start gap-2">
           <Info size={18} className="mt-0.5 shrink-0" />
-          <div>
-            <p className="font-medium">Set the payout order first</p>
-            <p className="mt-1">
-              Add every member and give each one a place in the rotation. Until the
-              order is complete there are no positions to point at, so the circle
-              cannot record where it currently stands.
-            </p>
-          </div>
+          {setupBlocker === 'need-members' ? (
+            <div>
+              <p className="font-medium">Waiting for members to join</p>
+              <p className="mt-1">
+                A circle needs at least 3 members before its history can be
+                recorded. Share the invite link and approve everyone who joins —
+                this step unlocks as soon as they are in. Nobody has to pay a
+                security deposit first.
+              </p>
+            </div>
+          ) : (
+            <div>
+              <p className="font-medium">Assign the payout order first</p>
+              <p className="mt-1">
+                Everyone is in — now give each member a place in the rotation
+                using Edit Rotation Order above. History points at those
+                positions, so it can only be recorded once the order is set.
+                Security deposits are not required for this step.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -95,7 +132,7 @@ const CircleMigrationPanel: React.FC<CircleMigrationPanelProps> = ({
   // ------------------------------------------------------------------
   // Declared and awaiting confirmations
   // ------------------------------------------------------------------
-  if (ratification) {
+  if (ratification && !isEditing) {
     const { ledger, alreadyCollected, stillWaiting, nextRecipient, confirmed, pending } =
       ratification;
 
@@ -114,7 +151,7 @@ const CircleMigrationPanel: React.FC<CircleMigrationPanelProps> = ({
                 </p>
                 <button
                   type="button"
-                  onClick={onClear}
+                  onClick={beginEditing}
                   disabled={isBusy}
                   className="mt-3 inline-flex items-center gap-2 rounded-[12px] border border-amber-300 bg-white px-3 py-2 text-sm font-medium text-amber-900 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -247,35 +284,59 @@ const CircleMigrationPanel: React.FC<CircleMigrationPanelProps> = ({
             Got this wrong? Changing it asks every member to confirm again, including
             those who already have.
           </p>
-          <button
-            type="button"
-            onClick={onClear}
-            disabled={isBusy}
-            className="mt-3 inline-flex items-center gap-2 rounded-[12px] border border-stone-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <RotateCcw size={15} />
-            Start this circle from the beginning instead
-          </button>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={beginEditing}
+              disabled={isBusy}
+              className="inline-flex items-center gap-2 rounded-[12px] border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Pencil size={15} />
+              Edit these details
+            </button>
+            <button
+              type="button"
+              onClick={onClear}
+              disabled={isBusy}
+              className="inline-flex items-center gap-2 rounded-[12px] border border-stone-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <RotateCcw size={15} />
+              Start this circle from the beginning instead
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
   // ------------------------------------------------------------------
-  // Nothing declared yet
+  // Nothing declared yet — or the admin is revising what was declared
   // ------------------------------------------------------------------
+  const isRevisingDeclared = isEditing && ratification !== null;
+
   return (
     <div className="space-y-4">
       <div className="rounded-[16px] border border-stone-200 bg-white p-4">
         <div className="flex items-center gap-2 text-slate-900">
           <History size={18} />
-          <h4 className="font-semibold">Has this circle already been running?</h4>
+          <h4 className="font-semibold">
+            {isRevisingDeclared
+              ? 'Update where this circle stands'
+              : 'Has this circle already been running?'}
+          </h4>
         </div>
-        <p className="mt-1 text-sm text-slate-600">
-          If your group has been going for a while, record where it is now and it
-          will carry on from there. Leave this alone and the circle starts a fresh
-          rotation with the first person in the order.
-        </p>
+        {isRevisingDeclared ? (
+          <p className="mt-1 text-sm text-slate-600">
+            Saving replaces the current record. Every member will be asked to
+            confirm the new one, including anyone who already confirmed.
+          </p>
+        ) : (
+          <p className="mt-1 text-sm text-slate-600">
+            If your group has been going for a while, record where it is now and it
+            will carry on from there. Leave this alone and the circle starts a fresh
+            rotation with the first person in the order.
+          </p>
+        )}
 
         <div className="mt-4">
           <label
@@ -355,14 +416,26 @@ const CircleMigrationPanel: React.FC<CircleMigrationPanelProps> = ({
           </p>
         )}
 
-        <button
-          type="button"
-          onClick={() => onDeclare(parsedPriorRounds, nextTurnIndex)}
-          disabled={isBusy || !priorRoundsValid || !declaresSomething}
-          className="mt-4 inline-flex items-center gap-2 rounded-[12px] bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Record this and ask members to confirm
-        </button>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => onDeclare(parsedPriorRounds, nextTurnIndex)}
+            disabled={isBusy || !priorRoundsValid || !declaresSomething}
+            className="inline-flex items-center gap-2 rounded-[12px] bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Record this and ask members to confirm
+          </button>
+          {isRevisingDeclared && (
+            <button
+              type="button"
+              onClick={() => setIsEditing(false)}
+              disabled={isBusy}
+              className="inline-flex items-center gap-2 rounded-[12px] border border-stone-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Keep what was recorded
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
