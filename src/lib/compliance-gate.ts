@@ -29,7 +29,7 @@ import type { SuiClient } from '@mysten/sui/client';
 import type { NetworkType } from '../services/whatsapp-registry-service';
 import { getNetworkConfig, getPackageIdForNetwork } from '../services/network-config';
 import { getPooledSuiClient } from '../services/sui-rpc-failover';
-import { getPackageLookupIds } from './circle-chain';
+import { getPublishedPackageMetadata, getPackageLookupIds } from './circle-chain';
 
 function packageIdFor(network: NetworkType): string {
   const fromConfig = getPackageIdForNetwork(network);
@@ -148,7 +148,13 @@ export async function fetchValidAttestations(
   network: NetworkType,
   client?: SuiClient,
 ): Promise<AttestationRow[]> {
-  const packageId = packageIdFor(network);
+  // Struct types stay anchored to the package's ORIGINAL id across
+  // upgrades (see membership-discovery.ts) — filtering on the current
+  // published-at id silently matches nothing after the first upgrade,
+  // which blinded this preflight to every real attestation (found live
+  // 2026-08-23, one upgrade after the filter was written).
+  const { originalId } = getPublishedPackageMetadata(network);
+  const packageId = originalId ?? packageIdFor(network);
   const rpcClient =
     client ??
     getPooledSuiClient({
