@@ -66,7 +66,10 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
   // njangi_goal_pool; v3 (2026-06-15) added combined "amount by date" goals;
   // v4 (2026-08-02) locked the rotation order mid-cycle and made
   // `njangi_cycle_escrow::finalize` recipient-only; v5 (2026-08-20) let a
-  // circle that was already running elsewhere join mid-rotation.
+  // circle that was already running elsewhere join mid-rotation; v6
+  // (2026-08-22) added the Circle Record v1.1 entries — open_cycle*_indexed
+  // (escrow-history dynamic field on the Circle) and contribute_timed*
+  // (per-member contribution timestamps).
   //
   // published-at = latest package (move-call target); original-id stays v1
   // (type identity + event filters). Every version since has been an UPGRADE,
@@ -77,7 +80,7 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
   // Either would have been upgrade-incompatible and forced a new lineage,
   // stranding every existing circle.
   testnet: {
-    publishedAt: '0x988966677bb06995062c05bacd3a716cb3135a63b94ef04d1d5bdcccd9e53442',
+    publishedAt: '0x859e3add80ce891423d49702b2b3350addf1726ca634000c7394748c0c416c8e',
     originalId: '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
   },
 };
