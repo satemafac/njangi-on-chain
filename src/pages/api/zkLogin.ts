@@ -1786,10 +1786,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               walletObj = null; // Signal to skip wallet-specific validations
             }
           } catch (error) {
+            // REFUSE — a failed read must not disarm a safety gate on a
+            // destructive, irreversible operation. The checks below are
+            // what prove this wallet belongs to this circle and is empty
+            // before the circle is deleted; skipping them because the read
+            // errored is the one interpretation with no safe outcome.
+            // (A genuine not-found above is different: that is a verified
+            // absence and keeps its existing network-mismatch handling.)
             const currentNetwork = getCurrentNetwork();
-            console.warn(`Error fetching wallet ${walletId} on ${currentNetwork} network:`, error);
-            console.log(`Proceeding with circle deletion without wallet verification (network mismatch)`);
-            walletObj = null; // Signal to skip wallet-specific validations
+            console.error(`Error fetching wallet ${walletId} on ${currentNetwork}; refusing to delete unverified:`, error);
+            return res.status(503).json({
+              error: 'WALLET_VERIFICATION_UNAVAILABLE',
+              message:
+                'We could not verify this circle\'s wallet just now, so nothing was deleted. Please try again shortly.',
+            });
           }
           
           // Only perform wallet validation if walletObj exists (network match)
@@ -2865,9 +2875,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             
             console.log(`Final user deposit status: ${userDepositPaid ? 'PAID' : 'NOT PAID'}`);
           } catch (error) {
-            console.warn('Error checking deposit status:', error);
-            // Continue with default assumption that deposit is not paid
-            console.log('Assuming deposit is NOT paid due to error checking status');
+            // REFUSE — do not guess. This flag selects the Move call
+            // target below: "not paid" routes the member's swapped USDC
+            // into member_deposit_security_deposit instead of
+            // contribute_stablecoin. Assuming "not paid" on a failed read
+            // therefore takes a member who ALREADY paid their deposit and
+            // sends their contribution in as a second one. A read failure
+            // must never move money down a different path.
+            console.error('Error checking deposit status; refusing to guess:', error);
+            return res.status(503).json({
+              error: 'DEPOSIT_STATUS_UNAVAILABLE',
+              message:
+                'We could not confirm your security deposit status just now, so we have not moved any funds. Please try again shortly.',
+            });
           }
           // *** END NEW SECTION ***
 
@@ -4264,12 +4284,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   }
                 }
               } catch (amountError) {
-                console.warn('[contributeFromCustody][SUI] Failed to resolve contribution amount from chain:', amountError);
+                console.error('[contributeFromCustody][SUI] Failed to resolve contribution amount from chain:', amountError);
               }
 
           if (contributionAmount === 0) {
-                console.warn('[contributeFromCustody][SUI] Using fallback contribution amount of 50000000 MIST');
-              contributionAmount = 50000000;
+                // REFUSE — do not invent an amount. The old fallback
+                // submitted a hardcoded 0.05 SUI as the member's cycle
+                // contribution whenever the circle read failed, which is a
+                // fabricated money figure moved on the member's behalf.
+                // The circle is the only authority on what a share costs.
+                console.error('[contributeFromCustody][SUI] Contribution amount unresolved; refusing to guess');
+                return res.status(503).json({
+                  error: 'CONTRIBUTION_AMOUNT_UNAVAILABLE',
+                  message:
+                    'We could not read this circle\'s contribution amount just now, so nothing was sent. Please try again shortly.',
+                });
           }
           
               txResult = await instance.sendTransaction(

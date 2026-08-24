@@ -618,9 +618,21 @@ export default function ContributeToCircle() {
               console.log('[Membership] User found in members table, access granted');
               return true;
             }
-          } catch {
-            // User not found in members table
-            console.log('[Membership] User not found in members table');
+            // A non-notFound error is an UNKNOWN, not an absence. Falling
+            // through on one told a paid-up member "you are not a member of
+            // this circle" and blocked the contribute page.
+            if (memberField.error) {
+              const code = (memberField.error as { code?: string }).code ?? '';
+              if (code !== 'dynamicFieldNotFound') {
+                throw new Error(`members-table read failed: ${code || 'unknown'}`);
+              }
+            }
+          } catch (err) {
+            // Only a verified absence may fall through to the event scan;
+            // a read failure must not masquerade as "not a member".
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes('members-table read failed')) throw err;
+            console.log('[Membership] User not present in members table (verified absent)');
           }
         }
       }

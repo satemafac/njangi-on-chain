@@ -85,24 +85,37 @@ export async function isCustodyWalletForCircle(
   client: SuiClient,
   walletId: string,
   circleId: string,
-): Promise<boolean> {
+): Promise<boolean | null> {
+  // Tri-state. `false` must mean "read it, and it is genuinely not this
+  // circle's wallet"; `null` means "could not read". Collapsing a
+  // transient failure to `false` rejects a CORRECT wallet id, so
+  // resolveCustodyWalletId returns null and every money-out control goes
+  // dark — the production failure this module's header was written to
+  // end, reintroduced through its own validator.
   try {
     const obj = await client.getObject({
       id: walletId,
       options: { showType: true, showContent: true },
     });
+    if (obj.error) {
+      const code = (obj.error as { code?: string }).code ?? '';
+      // A deleted/nonexistent object is a real answer; anything else is
+      // an unknown.
+      return code === 'deleted' || code === 'notExists' ? false : null;
+    }
     const type = obj.data?.type ?? '';
+    if (!type) return null;
     if (!type.endsWith(CUSTODY_WALLET_TYPE_SUFFIX)) return false;
 
     const content = obj.data?.content;
-    if (!content || content.dataType !== 'moveObject') return false;
+    if (!content || content.dataType !== 'moveObject') return null;
     const fields = content.fields as { circle_id?: string };
     return (
       typeof fields.circle_id === 'string' &&
       normalizeId(fields.circle_id) === normalizeId(circleId)
     );
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -265,25 +278,25 @@ export async function resolveCustodyWalletId(
   const { client, circleId, packageId, userAddress } = args;
 
   const fromField = await fromDynamicField(client, circleId);
-  if (fromField && (await isCustodyWalletForCircle(client, fromField, circleId))) {
+  if (fromField && (await isCustodyWalletForCircle(client, fromField, circleId)) === true) {
     return { walletId: fromField, source: 'dynamic_field' };
   }
 
   // Before the event scan: a direct digest lookup, served by every endpoint,
   // where the event tier is served by almost none.
   const fromCreation = await fromCreationTransaction(client, circleId);
-  if (fromCreation && (await isCustodyWalletForCircle(client, fromCreation, circleId))) {
+  if (fromCreation && (await isCustodyWalletForCircle(client, fromCreation, circleId)) === true) {
     return { walletId: fromCreation, source: 'creation_tx' };
   }
 
   const fromEvent = await fromEvents({ client, circleId, packageId, queryEvents: args.queryEvents });
-  if (fromEvent && (await isCustodyWalletForCircle(client, fromEvent, circleId))) {
+  if (fromEvent && (await isCustodyWalletForCircle(client, fromEvent, circleId)) === true) {
     return { walletId: fromEvent, source: 'events' };
   }
 
   if (userAddress) {
     for (const candidate of await fromTransactionHistory(client, circleId, userAddress)) {
-      if (await isCustodyWalletForCircle(client, candidate, circleId)) {
+      if ((await isCustodyWalletForCircle(client, candidate, circleId)) === true) {
         return { walletId: candidate, source: 'transaction_history' };
       }
     }

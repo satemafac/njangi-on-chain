@@ -8,6 +8,7 @@ import { getConfiguredNetworkFromEnv, type NetworkType } from '@/config/public-e
 import { getNetworkConfig } from './network-config';
 import { getPooledSuiClient } from './sui-rpc-failover';
 import { readObject, queryEventsCached } from '@/lib/sui-read';
+import { resolveCircleLifecycleState } from '@/lib/circle-chain';
 
 export interface CircleStatusData {
   name: string;
@@ -321,23 +322,41 @@ export async function getCircleStatus(circleId: string, network?: 'testnet' | 'm
     const currentBeneficiary = rotationOrder[currentPosition] || members[currentPosition]?.address;
     console.log('[CircleStatus] Current beneficiary at position', currentPosition, ':', currentBeneficiary?.slice(0, 15));
     
-    // Calculate estimated total collected (simplified)
+    // Upper bound, not a reading. This is contribution_amount x members x
+    // cycles — an arithmetic estimate with no on-chain read behind it, and
+    // it is delivered to members over WhatsApp. Callers must present it as
+    // an estimate; see `totalCollectedIsEstimate` on the return value.
     const totalCollected = contributionAmountUsd * members.length * currentCycle;
-    
-    // Check if circle is active
-    let isActive = false;
+
+    // Field first, activation event only as a fallback — the shared
+    // resolver, so this path cannot disagree with the rest of the app.
+    //
+    // The previous order was inverted: a SUCCESSFUL-but-empty event scan
+    // set isActive=false, and only a thrown error fell back to the field.
+    // Once CircleActivated aged out of RPC retention, an active circle
+    // started telling its members "this circle is not active" over
+    // WhatsApp.
+    let activationEventFound = false;
     try {
       const activationEvents = await queryEventsCached({
         query: { MoveEventType: `${packageId}::njangi_circles::CircleActivated` },
         limit: 50
       }, { network: targetNetwork });
-      isActive = activationEvents.data.some(event => 
+      activationEventFound = activationEvents.data.some(event =>
         (event.parsedJson as { circle_id?: string })?.circle_id === circleId
       );
     } catch {
-      // Default to checking fields
-      isActive = fields.is_active === true;
+      // Scan unavailable; the on-chain field below is authoritative anyway.
     }
+    const lifecycle = resolveCircleLifecycleState(
+      {
+        is_active: fields.is_active,
+        paused_after_cycle: fields.paused_after_cycle,
+        current_cycle: fields.current_cycle,
+      } as Parameters<typeof resolveCircleLifecycleState>[0],
+      { activationEventFound, defaultCurrentCycle: currentCycle },
+    );
+    const isActive = lifecycle.isActive;
     
     return {
       name: typeof fields.name === 'string' ? fields.name : 'Unknown Circle',

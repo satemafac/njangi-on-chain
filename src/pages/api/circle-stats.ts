@@ -1,10 +1,12 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getCurrentNetwork, getCurrentNetworkConfig } from '@/services/network-config';
+import { getPublishedPackageMetadata } from '@/lib/circle-chain';
 
 type ResponseData = {
   success: boolean;
   data?: {
-    circleCount: number;
+    /** null = could not read; the landing page renders a syncing state. */
+    circleCount: number | null;
   };
   message?: string;
 };
@@ -106,6 +108,8 @@ export default async function handler(
       officialRpcUrl,
     ].filter(Boolean)));
     const packageId = networkConfig.packageId;
+    const { originalId } = getPublishedPackageMetadata(getCurrentNetwork());
+    const eventPackageId = originalId ?? packageId;
 
     console.log('[API] circle-stats using network config:', {
       network: currentNetwork,
@@ -125,7 +129,9 @@ export default async function handler(
         method: 'suix_queryEvents',
         params: [
           {
-            MoveEventType: `${packageId}::njangi_circles::CircleCreated`
+            // originalId: Move event types anchor to the DEFINING package,
+            // so published-at matches zero events forever after an upgrade.
+            MoveEventType: `${eventPackageId}::njangi_circles::CircleCreated`
           },
           null,
           null,
@@ -173,26 +179,25 @@ export default async function handler(
       }
     }
 
-    // Final fallback to ensure we show at least some activity
-    if (circleCount === 0) {
-      circleCount = 3; // Reasonable fallback for demo
-    }
-
+    // No invented number. This figure is published on the public landing
+    // page as a claim about real usage; a "reasonable fallback for demo"
+    // is a fabricated statistic. index.tsx already renders a proper
+    // "syncing" state for null — the old fallback of 3 defeated it.
     return res.status(200).json({
       success: true,
       data: {
-        circleCount: circleCount
-      }
+        circleCount: circleCount > 0 ? circleCount : null,
+      },
     });
 
   } catch (error) {
     console.error('[API] Error fetching circle stats:', error);
-    
+
     return res.status(200).json({
       success: true,
       data: {
-        circleCount: 3 // Fallback value
-      }
+        circleCount: null,
+      },
     });
   }
 } 

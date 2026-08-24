@@ -133,3 +133,47 @@ has something to find.
 ## Incident log
 
 _Append dated entries here. None yet._
+
+## Reads that lie — the recurring bug family
+
+Found six times in production on 2026-08-23/24, then twice more by audit.
+Every instance renders as a confident falsehood about a person or their
+money, and unit tests never catch any of it because tests mock the reads.
+
+**The four shapes:**
+
+1. **Swallowed error as absence.** `catch { return null | [] | false }`
+   around an RPC read, where the caller cannot tell "failed" from
+   "genuinely absent". Presents as: "you are not a member", "nobody has
+   paid", "you have no circles", "deposit not paid".
+2. **Wrong package id.** Move types anchor to the package version that
+   DEFINED them. Types from the original publish need `originalId`; types
+   added in an upgrade need that version's id (e.g.
+   `timedEntriesPackageId`). Using published-at matches **zero** objects
+   or events forever, with no error.
+3. **Pinned / rationed client.** Reads that bypass `withSuiRpcFailover`,
+   or whose failure lands in a swallow. Some endpoints serve object reads
+   but refuse event history, and the rationed one is tried last.
+4. **Silent field drop.** An accessor that rebuilds its return value from
+   hand-listed fields, so a newly added field never reaches callers.
+
+**The rules:**
+
+- Distinguish absence from failure. `dynamicFieldNotFound` / `notExists`
+  is an answer; anything else is an unknown. Use `boolean | null`,
+  `string | null`, or an explicit `status: 'ok' | 'unavailable'`.
+- **Never move money or run a destructive operation on a guessed read.**
+  Refuse with a 503 and say nothing was done. Three shipped bugs did the
+  opposite: routing a contribution as a second deposit, submitting a
+  hardcoded contribution amount, and skipping the wallet check before
+  deleting a circle.
+- Never publish an invented figure. A "reasonable fallback for demo" on a
+  public page is a fabricated statistic.
+- Spread-first in accessors so a new field cannot be dropped.
+
+**Reference implementations:** `src/lib/circle-record.ts` (absent `[]` vs
+unknown `null`, via failover), `src/lib/circle-chain.ts`
+(`resolveCircleLifecycleState`, spread-first accessor),
+`src/pages/api/cron/cycle-finalized.ts` (refuses loudly on a package-id
+mismatch), `src/components/CycleEscrowPanel.tsx` (`loadError` distinct
+from "not open yet").

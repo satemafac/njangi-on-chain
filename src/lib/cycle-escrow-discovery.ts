@@ -290,7 +290,12 @@ export async function listContributors(
     }
     return contributors;
   } catch (err) {
+    // Rethrow. Returning [] here reads as "nobody has paid this round",
+    // which told members who HAD paid that their share was still due
+    // (NjangiRoundAlerts). The sibling findCurrentCycleEscrow rethrows for
+    // exactly this reason, and every caller already has a per-circle catch
+    // that skips the circle instead of asserting a falsehood about it.
     console.warn('[cycle-escrow-discovery] Failed to list contributors', err);
-    return [];
+    throw err;
   }
 }
