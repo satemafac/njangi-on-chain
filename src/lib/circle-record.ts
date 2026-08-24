@@ -55,7 +55,7 @@
 // fields the contracts never write.
 
 import { getCurrentNetwork, type NetworkType } from '@/services/network-config';
-import { getPooledSuiClient } from '@/services/sui-rpc-failover';
+import { getPooledSuiClient, withSuiRpcFailover } from '@/services/sui-rpc-failover';
 import { discoverMemberCircleIds } from './membership-discovery';
 import { getPublishedPackageMetadata } from './circle-chain';
 import { cachedRead } from './sui-read';
@@ -269,8 +269,13 @@ async function readEscrowHistory(
   circleId: string,
   network: NetworkType,
 ): Promise<string[] | null> {
-  const client = getPooledSuiClient({ network });
+  // Through the failover chain, not a pinned client. The configured
+  // primary is rationed (see RATE_LIMITED_RPC_HOSTS): a 429 here used to
+  // be swallowed into "no history", which reads as "this member has no
+  // on-time record" — a read failure masquerading as a fact. Cost a live
+  // debugging cycle on 2026-08-24.
   try {
+    return await withSuiRpcFailover(network, 'readEscrowHistory', async (client) => {
     let cursor: string | null | undefined;
     let fieldObjectId: string | null = null;
     let pages = 0;
@@ -291,16 +296,20 @@ async function readEscrowHistory(
       pages += 1;
     } while (cursor && pages < 10);
 
-    if (!fieldObjectId) return null;
+      // Genuinely absent: this circle has no indexed cycles yet.
+      if (!fieldObjectId) return [];
 
-    const obj = await client.getObject({ id: fieldObjectId, options: { showContent: true } });
-    const content = obj.data?.content;
-    if (!content || content.dataType !== 'moveObject') return null;
-    const fields = asRecord((content as { fields?: unknown }).fields);
-    const value = fields?.value;
-    if (!Array.isArray(value)) return null;
-    return value.filter((id): id is string => typeof id === 'string');
-  } catch {
+      const obj = await client.getObject({ id: fieldObjectId, options: { showContent: true } });
+      const content = obj.data?.content;
+      if (!content || content.dataType !== 'moveObject') return [];
+      const fields = asRecord((content as { fields?: unknown }).fields);
+      const value = fields?.value;
+      if (!Array.isArray(value)) return [];
+      return value.filter((id): id is string => typeof id === 'string');
+    });
+  } catch (err) {
+    // Every endpoint failed. Report UNKNOWN (null), never "no history".
+    console.warn('[circle-record] escrow-history read failed on every RPC', err);
     return null;
   }
 }
@@ -330,7 +339,6 @@ async function readOnTimeEvidence(
   if (!timedEntriesPackageId) return null;
   const keyType = `${timedEntriesPackageId}::njangi_cycle_escrow::ContributionTimeKey`;
 
-  const client = getPooledSuiClient({ network });
   const recent = history.slice(-MAX_ESCROWS_PER_CIRCLE);
 
   let recorded = 0;
@@ -339,10 +347,13 @@ async function readOnTimeEvidence(
   await Promise.all(
     recent.map(async (escrowId) => {
       try {
+        await withSuiRpcFailover(network, 'readOnTimeEvidence', async (client) => {
         const obj = await client.getObject({ id: escrowId, options: { showContent: true } });
         const content = obj.data?.content;
         if (!content || content.dataType !== 'moveObject') return;
         const fields = asRecord((content as { fields?: unknown }).fields);
+        // Refunded (cancelled) cycles are excluded entirely — never
+        // counted as a missed or late payment.
         if (!fields || fields.refunded === true) return;
         const snapshot = asRecord(asRecord(fields.snapshot)?.fields) ?? asRecord(fields.snapshot);
         const dueAtMs = parseU64(snapshot?.due_at_ms);
@@ -361,6 +372,7 @@ async function readOnTimeEvidence(
 
         recorded += 1;
         if (paidAtMs <= dueAtMs) onTime += 1;
+        });
       } catch {
         // Skip unreadable escrows; partial evidence is still evidence,
         // and a read failure must never manufacture a late payment.

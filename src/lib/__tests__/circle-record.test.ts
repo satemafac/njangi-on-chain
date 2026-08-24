@@ -20,6 +20,13 @@ const getDynamicFields = jest.fn();
 
 jest.mock('@/services/sui-rpc-failover', () => ({
   getPooledSuiClient: () => ({ getObject, getDynamicFieldObject, getDynamicFields }),
+  // Mirrors the real helper's contract: hand the operation a client and
+  // let its rejection propagate, so tests exercise the same failure paths.
+  withSuiRpcFailover: (
+    _network: string,
+    _op: string,
+    fn: (c: unknown) => Promise<unknown>,
+  ) => fn({ getObject, getDynamicFieldObject, getDynamicFields }),
 }));
 
 const ORIGINAL_PKG = '0x' + 'f0'.repeat(32);
@@ -357,6 +364,32 @@ describe('on-time evidence (v1.1 timed entries)', () => {
     const record = await buildCircleRecord(ME);
     // The only escrow is refunded -> no evidence, and crucially no
     // "late" or "missed" fabricated from a cancelled cycle.
+    expect(record.circles[0].onTime).toBeNull();
+  });
+});
+
+
+describe('read failures are reported as unknown, never as absence', () => {
+  it('returns null onTime when the history read fails on every RPC', async () => {
+    // A rate-limited lookup must not render as "this member has no
+    // on-time record" — the failure mode that shipped on 2026-08-24.
+    discoverMemberCircleIds.mockResolvedValue([CIRCLE_A]);
+    getObject.mockResolvedValue(circleObject({ rotationHistory: [ME] }));
+    getDynamicFieldObject.mockResolvedValue(memberRow(1_700_000_000_000, 0));
+    getDynamicFields.mockRejectedValue(Object.assign(new Error('429'), { status: 429 }));
+
+    const record = await buildCircleRecord(ME);
+    expect(record.circles).toHaveLength(1);
+    expect(record.circles[0].onTime).toBeNull();
+  });
+
+  it('treats a circle with no history field as no data, not an error', async () => {
+    discoverMemberCircleIds.mockResolvedValue([CIRCLE_A]);
+    getObject.mockResolvedValue(circleObject({ rotationHistory: [ME] }));
+    getDynamicFieldObject.mockResolvedValue(memberRow(1_700_000_000_000, 0));
+    getDynamicFields.mockResolvedValue({ data: [], hasNextPage: false, nextCursor: null });
+
+    const record = await buildCircleRecord(ME);
     expect(record.circles[0].onTime).toBeNull();
   });
 });
