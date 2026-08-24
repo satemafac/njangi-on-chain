@@ -118,9 +118,17 @@ export function getPublishedPackageMetadata(
 ): PublishedPackageMetadata {
   const metadata = PACKAGE_LINEAGE_BY_NETWORK[network];
 
+  // Spread first so a newly added lineage field cannot be silently
+  // dropped by this accessor — timedEntriesPackageId was, and the loss
+  // was invisible until on-time evidence came back empty in production
+  // (2026-08-24) despite the on-chain data being present.
   return {
+    ...metadata,
     publishedAt: normalizePackageId(metadata.publishedAt),
     originalId: normalizePackageId(metadata.originalId),
+    timedEntriesPackageId: metadata.timedEntriesPackageId
+      ? normalizePackageId(metadata.timedEntriesPackageId)
+      : null,
   };
 }
 

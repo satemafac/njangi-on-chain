@@ -1,4 +1,5 @@
 import {
+  getPublishedPackageMetadata,
   extractPackageIdFromMoveType,
   getPackageLookupIds,
   normalizePackageId,
@@ -169,5 +170,19 @@ describe('circle-chain helpers', () => {
         activeSource: 'field',
       });
     });
+  });
+});
+
+describe('getPublishedPackageMetadata passes through every lineage field', () => {
+  it('returns timedEntriesPackageId for testnet (v6 defined the timed types)', () => {
+    const meta = getPublishedPackageMetadata('testnet');
+    expect(meta.timedEntriesPackageId).toBe(
+      '0x859e3add80ce891423d49702b2b3350addf1726ca634000c7394748c0c416c8e',
+    );
+  });
+
+  it('returns null (not undefined) for a lineage without the timed types', () => {
+    const meta = getPublishedPackageMetadata('mainnet');
+    expect(meta.timedEntriesPackageId).toBeNull();
   });
 });
