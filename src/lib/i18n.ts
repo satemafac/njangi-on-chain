@@ -53,6 +53,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.signInHint':
       'Please sign in again to pay into the pot or collect a payout. Your wallet session needs to be active so your phone can sign the transaction — nothing is ever sent to our server.',
     'escrow.loading': "Looking up this round's pot on the blockchain…",
+    'escrow.loadFailed':
+      "We couldn't reach the network to check this round. It may already be open — retry in a moment.",
     'escrow.notOpen':
       "This round hasn't been opened yet. Once the circle admin opens it, members can pay their share and the first person on the list will be ready to collect.",
     'escrow.openRound': 'Open this round',
@@ -91,6 +93,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'alerts.yourShareDue.body':
       'The {circle} circle is waiting on your share — {amount}. Tap to pay into the pot.',
     'alerts.yourTurn.title': "It's your turn to collect",
+    'alerts.unreadable':
+      "We couldn't check {count} of your circles just now, so anything due there isn't shown. Please refresh in a moment.",
     'alerts.yourTurn.body':
       'Everyone in {circle} has paid. Your payout of {amount} is ready — tap to send it to your wallet.',
     'alerts.adminOpenRound.title': 'Ready to start the next round?',
@@ -375,6 +379,86 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'billing.analytics.title': 'Analytics are a Premium feature',
     'billing.analytics.body':
       'See contribution history, on-time rates, and payout trends across your circles.',
+
+    // Address-drift interstitial (src/components/AddressDriftModal.tsx).
+    // Frightening moment, our fault, plain words: no "salt", no blame, no
+    // promises of recovery we cannot deliver.
+    'drift.title': 'This sign-in opened a different account',
+    'drift.intro':
+      'Signing in just now gave you a different account than the one you used before. This is a problem on our side, not something you did.',
+    'drift.previousLabel': 'Your previous account',
+    'drift.currentLabel': 'The account you are in now',
+    'drift.whatNow':
+      'Anything you saved before — your circles and your money — is still at the previous account. It has not been lost or moved. But this sign-in cannot reach it, and we cannot move funds between accounts for you.',
+    'drift.reassure': 'We have been alerted automatically and are looking into it.',
+    'drift.canStill':
+      'You can still collect a payout that is owed to you, ask for a refund, and take part in your circle’s recovery vote.',
+    'drift.cannotYet':
+      'Joining a circle, creating one, and paying a contribution are paused until this is sorted out.',
+    'drift.support': 'Please contact support and mention both accounts shown above.',
+    'drift.languageLabel': 'Language',
+    'drift.dismiss': 'I understand',
+
+    // Circle Record (src/components/CircleRecordView.tsx, /record pages).
+    // Compliance boundary: facts only — no score/rating/grade vocabulary,
+    // and never a negative claim about a person.
+    'record.eyebrow': 'Savings circle record',
+    'record.title': 'Participation record',
+    'record.generated': 'Generated {date} · {network}',
+    'record.sharedNote': 'Shared with you by the person this record belongs to.',
+    'record.summary.circlesJoined': 'Circles joined',
+    'record.summary.payoutsReceived': 'Payouts received',
+    'record.summary.completedRounds': 'Completed rounds',
+    'record.summary.memberSince': 'Member since',
+    'record.fullFundingNote':
+      'A round only completes when every member has paid in full — the circle cannot move to the next person otherwise. Each completed round below is therefore a round that was fully funded.',
+    'record.circles.heading': 'Circles',
+    'record.circles.empty':
+      'No circles yet. Once you join one, your record starts building here.',
+    'record.circle.untitled': 'Untitled circle',
+    'record.circle.joined': 'Joined {date}',
+    'record.circle.completedRounds': 'Completed rounds',
+    'record.circle.members': 'Members',
+    'record.circle.yourTurn': 'Your turn',
+    'record.circle.turnNotSet': 'Not set',
+    'record.circle.payout': 'Payout',
+    'record.circle.payoutReceived': 'Received (round {round})',
+    'record.circle.payoutNotYet': 'Turn not yet reached',
+    'record.circle.onTime': 'On time',
+    'record.circle.onTimeValue': '{onTime} of {recorded} recorded',
+    'record.verify.title': 'How to check this.',
+    'record.verify.body':
+      'Every figure above comes from public records on the Sui network. Open any circle link to read the same information directly, without relying on this page.',
+    'record.disclaimer':
+      'This is a record of savings circle activity. It is not a credit report, not a score, and not an assessment of anyone’s creditworthiness. It shows what happened; it does not rate the person it belongs to.',
+    'record.page.loading': 'Reading your record…',
+    'record.page.loadFailed':
+      'We couldn’t read your record just now. Nothing is wrong with your circles — this is a problem reading the public records.',
+    'record.page.retry': 'Try again',
+    'record.page.signedOutTitle': 'Your record',
+    'record.page.signedOutBody': 'Sign in to see your savings circle record.',
+    'record.page.signedOutCta': 'Go to sign in',
+    'record.share.heading': 'Share or save',
+    'record.share.blurb':
+      'A share link lets someone read this record without an account. It stops working on its own after the time you choose, and you can turn it off at any moment.',
+    'record.share.lasts': 'Link lasts',
+    'record.share.days': '{n} days',
+    'record.share.create': 'Create link',
+    'record.share.print': 'Print',
+    'record.share.download': 'Download',
+    'record.share.until': 'until {date}',
+    'record.share.revoke': 'Turn off',
+    'record.share.created': 'Link created',
+    'record.share.createdCopied': 'Link created and copied',
+    'record.share.createFailed': 'Could not create the link. Please try again.',
+    'record.share.revoked': 'Link turned off',
+    'record.share.revokeFailed': 'Could not turn off that link.',
+    'record.shared.missingTitle': 'This link isn’t available',
+    'record.shared.missingBody':
+      'It may have expired or been turned off by the person who shared it. Ask them for a new link.',
+    'record.shared.loadFailed': 'We couldn’t load this record just now. Please try again shortly.',
+    'record.dashboard.title': 'Your record',
+    'record.dashboard.blurb': 'Your circle history — view, print, or share it',
   },
   fr: {
     // Escrow panel
@@ -388,6 +472,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.signInHint':
       "Veuillez vous reconnecter pour payer votre part ou recevoir le versement. Votre session portefeuille doit être active pour que le téléphone signe la transaction — rien ne transite par notre serveur.",
     'escrow.loading': 'Recherche de la cagnotte de ce tour sur la blockchain…',
+    'escrow.loadFailed':
+      "We couldn't reach the network to check this round. It may already be open — retry in a moment.",
     'escrow.notOpen':
       "Ce tour n'est pas encore ouvert. Une fois que l'administrateur du cercle l'ouvre, les membres peuvent verser leur part et la première personne de la liste sera prête à recevoir.",
     'escrow.openRound': 'Ouvrir ce tour',
@@ -429,6 +515,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'alerts.yourShareDue.body':
       'Le cercle {circle} attend votre part — {amount}. Appuyez pour verser dans la cagnotte.',
     'alerts.yourTurn.title': "C'est à votre tour de récupérer",
+    'alerts.unreadable':
+      "Nous n'avons pas pu vérifier {count} de vos tontines pour le moment ; ce qui y est dû n'est donc pas affiché. Veuillez réessayer dans un instant.",
     'alerts.yourTurn.body':
       "Tous les membres de {circle} ont payé. Votre versement de {amount} est prêt — appuyez pour l'envoyer à votre portefeuille.",
     'alerts.adminOpenRound.title': 'Prêt à lancer le prochain tour ?',
@@ -714,6 +802,82 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'billing.analytics.title': "L'analyse est une fonctionnalité Premium",
     'billing.analytics.body':
       "Consultez l'historique des versements, les taux de ponctualité et les tendances des paiements de vos cercles.",
+
+    // Interstitiel de dérive d'adresse (src/components/AddressDriftModal.tsx).
+    'drift.title': 'Cette connexion a ouvert un compte différent',
+    'drift.intro':
+      'La connexion que vous venez d’effectuer vous a donné un compte différent de celui que vous utilisiez auparavant. Le problème vient de nous, pas de vous.',
+    'drift.previousLabel': 'Votre compte précédent',
+    'drift.currentLabel': 'Le compte actuel',
+    'drift.whatNow':
+      'Tout ce que vous aviez — vos tontines et votre argent — se trouve toujours sur le compte précédent. Rien n’a été perdu ni déplacé. Mais cette connexion ne peut pas y accéder, et nous ne pouvons pas transférer des fonds d’un compte à l’autre à votre place.',
+    'drift.reassure': 'Nous avons été alertés automatiquement et nous examinons la situation.',
+    'drift.canStill':
+      'Vous pouvez toujours percevoir un versement qui vous est dû, demander un remboursement, et participer au vote de récupération de votre tontine.',
+    'drift.cannotYet':
+      'Rejoindre une tontine, en créer une, et payer une cotisation sont suspendus le temps de régler cela.',
+    'drift.support': 'Veuillez contacter le support en mentionnant les deux comptes indiqués ci-dessus.',
+    'drift.languageLabel': 'Langue',
+    'drift.dismiss': 'J’ai compris',
+
+    // Relevé de participation (Circle Record).
+    'record.eyebrow': 'Relevé de tontine',
+    'record.title': 'Relevé de participation',
+    'record.generated': 'Généré le {date} · {network}',
+    'record.sharedNote': 'Partagé avec vous par la personne à qui appartient ce relevé.',
+    'record.summary.circlesJoined': 'Tontines rejointes',
+    'record.summary.payoutsReceived': 'Versements reçus',
+    'record.summary.completedRounds': 'Tours terminés',
+    'record.summary.memberSince': 'Membre depuis',
+    'record.fullFundingNote':
+      'Un tour ne se termine que lorsque chaque membre a payé sa part en entier — sinon la tontine ne peut pas passer au membre suivant. Chaque tour terminé ci-dessous a donc été entièrement financé.',
+    'record.circles.heading': 'Tontines',
+    'record.circles.empty':
+      'Pas encore de tontine. Dès que vous en rejoignez une, votre relevé commence à se construire ici.',
+    'record.circle.untitled': 'Tontine sans nom',
+    'record.circle.joined': 'Rejointe le {date}',
+    'record.circle.completedRounds': 'Tours terminés',
+    'record.circle.members': 'Membres',
+    'record.circle.yourTurn': 'Votre tour',
+    'record.circle.turnNotSet': 'Non défini',
+    'record.circle.payout': 'Versement',
+    'record.circle.payoutReceived': 'Reçu (tour {round})',
+    'record.circle.payoutNotYet': 'Tour pas encore atteint',
+    'record.circle.onTime': 'À temps',
+    'record.circle.onTimeValue': '{onTime} sur {recorded} enregistrées',
+    'record.verify.title': 'Comment vérifier ceci.',
+    'record.verify.body':
+      'Chaque chiffre ci-dessus provient des registres publics du réseau Sui. Ouvrez le lien d’une tontine pour lire les mêmes informations directement, sans dépendre de cette page.',
+    'record.disclaimer':
+      'Ceci est un relevé d’activité de tontine. Ce n’est ni un rapport de crédit, ni une note, ni une évaluation de la solvabilité de quiconque. Il montre ce qui s’est passé ; il ne note pas la personne à qui il appartient.',
+    'record.page.loading': 'Lecture de votre relevé…',
+    'record.page.loadFailed':
+      'Impossible de lire votre relevé pour le moment. Vos tontines vont bien — c’est un problème de lecture des registres publics.',
+    'record.page.retry': 'Réessayer',
+    'record.page.signedOutTitle': 'Votre relevé',
+    'record.page.signedOutBody': 'Connectez-vous pour voir votre relevé de tontine.',
+    'record.page.signedOutCta': 'Aller à la connexion',
+    'record.share.heading': 'Partager ou enregistrer',
+    'record.share.blurb':
+      'Un lien de partage permet à quelqu’un de lire ce relevé sans compte. Il cesse de fonctionner tout seul après la durée que vous choisissez, et vous pouvez le désactiver à tout moment.',
+    'record.share.lasts': 'Durée du lien',
+    'record.share.days': '{n} jours',
+    'record.share.create': 'Créer le lien',
+    'record.share.print': 'Imprimer',
+    'record.share.download': 'Télécharger',
+    'record.share.until': 'jusqu’au {date}',
+    'record.share.revoke': 'Désactiver',
+    'record.share.created': 'Lien créé',
+    'record.share.createdCopied': 'Lien créé et copié',
+    'record.share.createFailed': 'Impossible de créer le lien. Veuillez réessayer.',
+    'record.share.revoked': 'Lien désactivé',
+    'record.share.revokeFailed': 'Impossible de désactiver ce lien.',
+    'record.shared.missingTitle': 'Ce lien n’est pas disponible',
+    'record.shared.missingBody':
+      'Il a peut-être expiré ou été désactivé par la personne qui l’a partagé. Demandez-lui un nouveau lien.',
+    'record.shared.loadFailed': 'Impossible de charger ce relevé pour le moment. Veuillez réessayer sous peu.',
+    'record.dashboard.title': 'Votre relevé',
+    'record.dashboard.blurb': 'L’historique de vos tontines — à consulter, imprimer ou partager',
   },
   pcm: {
     // Escrow panel — Nigerian / Cameroonian Pidgin
@@ -727,6 +891,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.signInHint':
       'Abeg sign in again so you fit pay inside di pot or collect your payout. Your phone go sign di transaction — our server no dey see am.',
     'escrow.loading': 'Dey find di pot for dis round for blockchain…',
+    'escrow.loadFailed':
+      "We couldn't reach the network to check this round. It may already be open — retry in a moment.",
     'escrow.notOpen':
       'Dis round neva open. Once di circle admin open am, people go fit pay dem share and di first person for di list go dey ready to collect.',
     'escrow.openRound': 'Open dis round',
@@ -782,6 +948,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.signInHint':
       'Tafadhali ingia tena ili uweze kulipa mchango au kuchukua malipo. Kipindi cha pochi yako lazima kiwe hai ili simu yako isaini muamala — hakuna kinachotumwa kwa seva yetu.',
     'escrow.loading': 'Tunatafuta kibanda cha raundi hii kwenye blockchain…',
+    'escrow.loadFailed':
+      "We couldn't reach the network to check this round. It may already be open — retry in a moment.",
     'escrow.notOpen':
       'Raundi hii bado haijafunguliwa. Msimamizi wa duara akiifungua, wanachama wataweza kulipa mchango wao na mtu wa kwanza kwenye orodha atakuwa tayari kuchukua malipo.',
     'escrow.openRound': 'Fungua raundi hii',
@@ -835,6 +1003,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.signInHint':
       'ወደ ገንዘቡ ለመክፈል ወይም ክፍያ ለመሰብሰብ እባክዎ እንደገና ይግቡ። የኪስ ቦርሳ ክፍለ ጊዜው ንቁ መሆን አለበት — ወደ አገልጋያችን የሚላክ ምንም የለም።',
     'escrow.loading': 'የዚህን ዙር ገንዘብ ከብሎክቼን ላይ በማፈላለግ ላይ…',
+    'escrow.loadFailed':
+      "We couldn't reach the network to check this round. It may already be open — retry in a moment.",
     'escrow.notOpen':
       'ይህ ዙር እስካሁን አልተከፈተም። አስተዳዳሪው ሲከፍተው አባላት ድርሻቸውን መክፈል ይችላሉ፣ የመጀመሪያው ሰው ክፍያ ለመውሰድ ዝግጁ ይሆናል።',
     'escrow.openRound': 'ይህንን ዙር ክፈት',
@@ -886,6 +1056,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.signInHint':
       'يرجى تسجيل الدخول مرة أخرى للدفع في الصندوق أو تحصيل المستحقات. يجب أن تكون جلسة المحفظة نشطة ليوقّع هاتفك المعاملة — لا يُرسَل أي شيء إلى خادمنا.',
     'escrow.loading': 'جاري البحث عن صندوق هذه الجولة على البلوكتشين…',
+    'escrow.loadFailed':
+      "We couldn't reach the network to check this round. It may already be open — retry in a moment.",
     'escrow.notOpen':
       'لم تُفتح هذه الجولة بعد. فور فتحها من قِبَل مشرف الدائرة، يمكن للأعضاء دفع حصتهم وسيكون الشخص الأول في القائمة جاهزاً للاستلام.',
     'escrow.openRound': 'افتح هذه الجولة',
@@ -936,6 +1108,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'escrow.signInHint':
       'لطفاً برای پرداخت سهم یا دریافت مبلغ دوباره وارد شوید. نشست کیف‌پول باید فعال باشد تا گوشی شما تراکنش را امضا کند — چیزی به سرور ما ارسال نمی‌شود.',
     'escrow.loading': 'در حال جست‌وجوی صندوق این دور روی بلاک‌چین…',
+    'escrow.loadFailed':
+      "We couldn't reach the network to check this round. It may already be open — retry in a moment.",
     'escrow.notOpen':
       'این دور هنوز باز نشده است. به‌محض اینکه مدیر حلقه آن را باز کند، اعضا می‌توانند سهم خود را پرداخت کنند و نفر اول لیست برای دریافت آماده است.',
     'escrow.openRound': 'این دور را باز کن',

@@ -41,6 +41,8 @@ import type { NetworkType } from '@/services/whatsapp-registry-service';
 import { priceService } from '../../../services/price-service';
 import { getCirclePackageId, getSuiClientFromPool } from '../../../services/circle-service';
 import { readObject, queryEventsCached, invalidateObject, invalidateSuiRead } from '@/lib/sui-read';
+import { resolveCustodyWalletId, resolveCustodyStablecoinType } from '@/lib/custody-wallet-discovery';
+import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import { logSuiReadError } from '@/services/sui-rpc-failover';
 import { ZkLoginClient, ZkLoginError } from '../../../services/zkLoginClient';
 import { getCurrentNetwork, getCurrentRpcUrl } from '../../../services/network-config';
@@ -185,6 +187,7 @@ export default function CircleDetails() {
   const [loadingRecoveryLiveness, setLoadingRecoveryLiveness] = useState(false);
   const [isSubmittingRecoveryVote, setIsSubmittingRecoveryVote] = useState(false);
   const [isSubmittingAutoRelease, setIsSubmittingAutoRelease] = useState(false);
+  const [isExecutingRecovery, setIsExecutingRecovery] = useState(false);
   const [suiPrice, setSuiPrice] = useState(1.25); // Default price until we fetch real price
   const [copiedId, setCopiedId] = useState(false);
   // Track membership verification status (used for access control flow)
@@ -236,9 +239,20 @@ export default function CircleDetails() {
               console.log('[Membership] User found in members table, access granted');
               return true;
             }
-          } catch {
-            // User not found in members table
-            console.log('[Membership] User not found in members table');
+            // Only a verified absence may fall through to the event scan.
+            // Any other error is UNKNOWN — and the caller turns a false
+            // answer into "You are no longer a member of this circle" plus
+            // a forced redirect off the page.
+            if (memberField.error) {
+              const code = (memberField.error as { code?: string }).code ?? '';
+              if (code !== 'dynamicFieldNotFound') {
+                throw new Error(`members-table read failed: ${code || 'unknown'}`);
+              }
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes('members-table read failed')) throw err;
+            console.log('[Membership] User not present in members table (verified absent)');
           }
         }
       }
@@ -557,14 +571,17 @@ export default function CircleDetails() {
       let custodyWalletId: string | null = null;
       let custodyStablecoinCoinType: string | undefined;
       try {
-        const custodyWalletEvents = await queryEventsCached({
-          query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyWalletCreated` },
-          limit: 50,
+        // Three-tier discovery — see custody-wallet-discovery.ts. Members
+        // need this resolved to execute a passed emergency stop; the event-
+        // only lookup went dark when RPC retention expired.
+        const custodyResolution = await resolveCustodyWalletId({
+          client: getPooledSuiClient(),
+          circleId: id as string,
+          packageId: determinedPackageId,
+          userAddress,
+          queryEvents: (params) => queryEventsCached(params),
         });
-        const custodyEvent = custodyWalletEvents.data.find((event) =>
-          (event.parsedJson as { circle_id?: string })?.circle_id === id,
-        );
-        custodyWalletId = (custodyEvent?.parsedJson as { wallet_id?: string })?.wallet_id || null;
+        custodyWalletId = custodyResolution?.walletId ?? null;
 
         if (custodyWalletId) {
           const walletData = await readObject(custodyWalletId, { showContent: true });
@@ -705,9 +722,18 @@ export default function CircleDetails() {
             parentId: membersTableId,
             name: { type: 'address', value: address },
           });
+          if (memberField.error) {
+            const code = (memberField.error as { code?: string }).code ?? '';
+            // Verified absence => not eligible. Anything else is a failed
+            // read, and returning false there hides the recovery
+            // auto-release control with no explanation — on the one screen
+            // a stuck circle needs.
+            if (code !== 'dynamicFieldNotFound') throw new Error(code || 'read failed');
+          }
           return canMemberTriggerAutoReleaseFromFieldObject(memberField.data?.content);
-        } catch {
-          return false;
+        } catch (err) {
+          console.warn('[recovery] eligibility read failed for', address, err);
+          throw err;
         }
       };
 
@@ -726,9 +752,12 @@ export default function CircleDetails() {
       setViewerCanAutoReleaseFallback(viewerEligible);
       setDelegateCanAutoReleaseFallback(delegateEligible);
     } catch (error) {
+      // Do NOT clobber to false. These flags gate the recovery
+      // auto-release control; setting them false on a failed read hides
+      // the escape hatch on the one screen a stuck circle needs, and says
+      // "you are not eligible" when the truth is "we could not check".
+      // Keep the last known values and let the retry settle it.
       logSuiReadError('Details - Error refreshing recovery liveness state:', error);
-      setViewerCanAutoReleaseFallback(false);
-      setDelegateCanAutoReleaseFallback(false);
     } finally {
       setLoadingRecoveryLiveness(false);
     }
@@ -1235,7 +1264,15 @@ export default function CircleDetails() {
       return;
     }
 
-    const stablecoinType = recoveryStablecoinType || circle.custody.stablecoinCoinType;
+    let stablecoinType: string | null =
+      recoveryStablecoinType || circle.custody.stablecoinCoinType || null;
+    if (!stablecoinType) {
+      // Same retention-proof fallback as the emergency-stop handler.
+      stablecoinType = await resolveCustodyStablecoinType(
+        getPooledSuiClient(),
+        circle.custody.walletId,
+      );
+    }
     if (!stablecoinType) {
       toast.error('Stablecoin type is unavailable for this custody wallet.');
       return;
@@ -1277,6 +1314,74 @@ export default function CircleDetails() {
       toast.error(error instanceof Error ? error.message : 'Failed to trigger auto-release', { id: toastId });
     } finally {
       setIsSubmittingAutoRelease(false);
+    }
+  };
+
+  const handleExecuteRecoveryAsMember = async () => {
+    // execute_recovery is PERMISSIONLESS once the member vote passes — the
+    // contract asserts only that the proposal passed, never who the sender
+    // is. The UI used to offer it to the admin alone, which quietly
+    // reintroduced the dependency the emergency stop exists to remove: an
+    // admin who vanished after the vote left members unable to reach their
+    // own approved refund through the product.
+    if (!circle || !circle.custody?.walletId || !account) {
+      toast.error('Recovery wallet information is unavailable. Refresh and try again.');
+      return;
+    }
+
+    // The event-derived sources (loadRecoveryStablecoinCoinType and the
+    // wallet's stablecoin_config) can both be empty — the former ages out
+    // with RPC retention, the latter was simply never set on some wallets.
+    // The wallet's own balance fields cannot forget what it holds.
+    let stablecoinType: string | null =
+      recoveryStablecoinType || circle.custody.stablecoinCoinType || null;
+    if (!stablecoinType) {
+      stablecoinType = await resolveCustodyStablecoinType(
+        getPooledSuiClient(),
+        circle.custody.walletId,
+      );
+    }
+    if (!stablecoinType) {
+      toast.error('Stablecoin type is unavailable for this custody wallet.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Execute the emergency stop now? This halts the circle and returns tracked funds to their recorded owners. It cannot be undone.',
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setIsExecutingRecovery(true);
+    const toastId = 'execute-recovery-member';
+
+    try {
+      toast.loading('Executing the emergency stop...', { id: toastId });
+      const zkLoginClient = ZkLoginClient.getInstance();
+      await zkLoginClient.executeRecovery(account, {
+        circleId: circle.id,
+        walletId: circle.custody.walletId,
+        stablecoinType,
+        network: getCurrentNetwork(),
+      });
+
+      toast.success('Emergency stop executed. Refunds are on their way to recorded owners.', { id: toastId });
+      await Promise.all([
+        fetchCircleDetails(),
+        fetchRecoveryStatus(),
+        fetchRecoveryExecutionState(),
+        fetchRecoveryLivenessState(),
+      ]);
+    } catch (error) {
+      console.error('Details - Failed to execute recovery:', error);
+      if (error instanceof ZkLoginError && error.requireRelogin) {
+        router.push('/');
+        return;
+      }
+      toast.error(error instanceof Error ? error.message : 'Failed to execute the emergency stop', { id: toastId });
+    } finally {
+      setIsExecutingRecovery(false);
     }
   };
 
@@ -1558,7 +1663,7 @@ export default function CircleDetails() {
                           : recoveryStatus?.rawState === 2
                             ? 'The circle has been stopped for recovery. Refund progress below reflects the unwind events emitted from custody.'
                             : recoveryProposalPassed
-                              ? 'This emergency stop proposal has majority approval and is waiting for admin execution.'
+                              ? 'This emergency stop proposal has majority approval. Any member can now execute the stop-and-refund path.'
                               : recoveryProposalFailed
                                 ? 'This emergency stop proposal closed without majority approval. The vote path is no longer active.'
                                 : recoveryProposal
@@ -1625,7 +1730,7 @@ export default function CircleDetails() {
                       title={`Emergency stop ${recoveryProposalUi.titleLabel}`}
                       description={
                         recoveryProposalPassed
-                          ? 'Member-majority approval is locked in. The admin can now execute the stop-and-refund path.'
+                          ? 'Member-majority approval is locked in. Any member — not only the admin — can execute the stop-and-refund path below.'
                           : recoveryProposalFailed
                             ? 'This proposal closed without meeting the majority threshold.'
                             : 'Eligible members can cast one irreversible onchain vote on whether this circle should halt and unwind funds.'
@@ -1699,6 +1804,35 @@ export default function CircleDetails() {
                         )
                       }
                     />
+                  )}
+
+                  {recoveryProposal && recoveryProposalPassed && (recoveryStatus?.rawState ?? 1) < 2 && (
+                    <div className={`${detailCardClass} mt-6 border-[#ead6d0] bg-[#fdf2f1] p-5`}>
+                      <p className={detailLabelClass}>Execute</p>
+                      <h3 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-[#8f3f34]">
+                        Execute the emergency stop
+                      </h3>
+                      <p className="mt-2 text-sm leading-6 text-[#5f6674]">
+                        The member vote passed, so execution is open to every member — it does not
+                        wait on the admin. Tracked contributions and security deposits return from
+                        custody to their recorded owners.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void handleExecuteRecoveryAsMember()}
+                        disabled={isExecutingRecovery || !circle?.custody?.walletId}
+                        className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-[#a5443a] px-4 py-3 text-sm font-semibold text-white transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#8f3f34] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <AlertTriangle className="h-4 w-4" />
+                        {isExecutingRecovery ? 'Executing...' : 'Execute emergency stop'}
+                      </button>
+                      {!circle?.custody?.walletId && (
+                        <p className="mt-2 text-xs text-[#8f3f34]/80">
+                          Waiting for the circle&rsquo;s custody wallet to resolve — the refund
+                          transaction is built against it. Refresh if this persists.
+                        </p>
+                      )}
+                    </div>
                   )}
 
                   {!recoveryProposal && (recoveryStatus?.rawState === 2 || recoveryStatus?.rawState === 3) && (

@@ -56,7 +56,8 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
   const { isReady, signAndExecute } = useZkLoginSigner();
   const [state, setState] = useState<GoalPoolState | null>(null);
   const [loading, setLoading] = useState(true);
-  const [myContribution, setMyContribution] = useState('0');
+  // null = could not read (distinct from a verified '0').
+  const [myContribution, setMyContribution] = useState<string | null>('0');
   const [amountInput, setAmountInput] = useState('');
   const [busy, setBusy] = useState(false);
   // Gated pool + no attestation on the caller's wallet: explain the
@@ -134,7 +135,7 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
 
     const isAdmin = !!userAddress && userAddress.toLowerCase() === state.admin.toLowerCase();
     const deadlinePassed = deadlineMs > 0 && now > deadlineMs;
-    const myAmount = BigInt(myContribution);
+    const myAmount = BigInt(myContribution ?? '0');
 
     return {
       coin,
@@ -153,7 +154,12 @@ export default function GoalPoolPanel({ poolId, network, userAddress }: Props) {
       canRelease: !state.released && !state.cancelled && goalMet && balanceGtZero(state.balance),
       canCancelAdmin: isAdmin && !state.released && !state.cancelled && !goalMet,
       canCancelDeadline: !state.released && !state.cancelled && deadlinePassed && !goalMet,
-      canRefund: state.cancelled && myAmount > BigInt(0),
+      // Unknown contribution (read failed) keeps the refund path visible:
+      // the on-chain call is the authority and will reject a non-
+      // contributor anyway. Hiding it on a failed read would strand a real
+      // contributor's money behind a UI that lied about their balance.
+      canRefund: state.cancelled && (myContribution === null || myAmount > BigInt(0)),
+      contributionUnknown: myContribution === null,
     };
   }, [state, userAddress, myContribution]);
 

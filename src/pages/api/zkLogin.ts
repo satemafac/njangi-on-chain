@@ -10,7 +10,7 @@ import {
 import { AggregatorClient, Env } from '@cetusprotocol/aggregator-sdk';
 import BN from 'bn.js';
 import { Transaction } from '@mysten/sui/transactions';
-import { enokiZkLoginService } from '@/services/enokiZkLoginService';
+import { enokiZkLoginService, ClientSigningRequiredError } from '@/services/enokiZkLoginService';
 import {
   getCurrentNetwork,
   getCurrentRpcUrl,
@@ -51,6 +51,12 @@ import {
   EntitlementError,
 } from '@/lib/entitlement-gate';
 import { screenAddress, sanctionsErrorBody } from '@/lib/sanctions';
+import {
+  checkAddressDrift,
+  alertDrift,
+  getDriftStatusForIdentity,
+  addressDriftErrorBody,
+} from '@/lib/zklogin-address-bindings';
 import { isEmbargoedHeaders, embargoErrorBody } from '@/lib/embargo';
 import {
   disabledResponse,
@@ -265,9 +271,10 @@ async function validateSession(sessionId: string | undefined, action: string): P
 
   // Different validation rules based on action
   if (action === 'sendTransaction' || action === 'deleteCircle' || action === 'sendTokens') {
-    if (!session.ephemeralPrivateKey) {
-      throw new Error('Invalid session: missing ephemeral key');
-    }
+    // No ephemeral-key check: sessions no longer carry one, and the signing
+    // path it guarded now throws unconditionally. What still matters is that
+    // the session resolves to a real account, so requests stay bound to a
+    // server-verified identity rather than a client-supplied one.
     if (!session.account) {
       throw new Error('Invalid session: missing account data');
     }
@@ -1012,12 +1019,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // act on — rather than letting 30-odd handlers each fail late with a
     // generic 500 from deep inside the signing path.
     //
-    // Legacy v1 sessions still have a key and keep working until they expire.
-    // maxEpoch is one Sui epoch (~24h) and the cookie matches, so this branch
-    // stops being reachable roughly a day after deploy.
+    // Previously this let legacy v1 sessions through, because they still
+    // carried a server-held key. None do now — the key was dropped from the
+    // session record and the signing path throws unconditionally — so every
+    // server-signing action gets the same answer regardless of session vintage.
     if (sessionId && SERVER_SIGNING_ACTIONS.has(action)) {
       const existing = await sessions.get(sessionId);
-      if (existing && !existing.ephemeralPrivateKey) {
+      if (existing) {
         console.log('Rejecting server-signing action for client-signing session:', {
           action,
           protocolVersion: existing.protocolVersion ?? 2,
@@ -1167,22 +1175,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               throw new SanctionsBlockedAtLoginError();
             }
 
+            // Address-drift detection.
+            //
+            // MUST run before cleanupUserSessions below. That call wipes the
+            // user's prior session rows, and zklogin_sessions carries a 24h
+            // TTL — which is exactly why drift was silent until now: the
+            // previous address was destroyed before the new one existed, so
+            // nothing could ever compare them. The bindings table is the
+            // durable record; ordering this first keeps the two consistent.
+            //
+            // Deliberately does NOT block the login. The user must be able to
+            // get in to see the explanation, and — more importantly — to
+            // reach claim, refund and recovery. Commitment surfaces (circle
+            // create/join, contribute, ramp session) refuse separately via
+            // assertNoAddressDrift. Fail-closed on new commitments, fail-open
+            // on fund access: the same split src/lib/sanctions.ts uses, for
+            // the same reason.
+            const drift = await checkAddressDrift({
+              iss: result.iss ?? null,
+              sub: result.sub,
+              aud: result.aud,
+              provider: savedSetup.provider,
+              userAddress: result.address,
+            });
+            if (drift.drifted) {
+              await alertDrift(
+                {
+                  iss: result.iss ?? null,
+                  sub: result.sub,
+                  provider: savedSetup.provider,
+                },
+                drift,
+              );
+            }
+
             // Clean up any existing sessions for this user
             await cleanupUserSessions(result.address, sessionId);
-            
+
             // Create the account data object.
-            // `ephemeralPrivateKey` is carried only for legacy v1 sessions,
-            // where the server generated it. On v2 it is undefined here and in
-            // the response — the browser merges in its own key. Do not
-            // reintroduce a server-side source for this field.
+            //
+            // No `ephemeralPrivateKey`. It used to be carried through for
+            // legacy v1 sessions; nothing can act on it now that
+            // enokiZkLoginService.sendTransaction throws unconditionally, and
+            // dropping it means key material has no route into server storage
+            // at all. The browser merges in its own key. Do not reintroduce a
+            // server-side source for this field.
             const accountData: AccountData = {
               provider: savedSetup.provider,
               userAddr: result.address,
               zkProofs: result.zkProofs,
-              ephemeralPrivateKey: savedSetup.ephemeralPrivateKey,
               userSalt: result.userSalt,
               sub: result.sub,
               aud: result.aud,
+              iss: result.iss,
               maxEpoch: savedSetup.maxEpoch,
               picture: result.picture,
               name: result.name
@@ -1438,6 +1483,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const screen = await screenAddress(session.account.userAddr, 'circle_create');
             if (screen.blocked) {
               return res.status(403).json(sanctionsErrorBody());
+            }
+          }
+
+          // Address-drift gate. Creating a circle is a NEW COMMITMENT, so it
+          // fails closed: if this identity previously resolved to a different
+          // address, the user may be about to build a circle at an account
+          // they do not realise is new, while their existing funds sit
+          // elsewhere. Claim, refund, recovery and withdrawal are never gated
+          // this way — see src/lib/zklogin-address-bindings.ts.
+          //
+          // HONEST LIMIT: like the billing gate below, this is a SOFT gate.
+          // create_circle is a public Move entry point and the Phase 2
+          // client-side signer submits straight to RPC, so a determined
+          // client bypasses this route entirely. The hard coverage for a
+          // drifted user is the join gate (the join queue is ours) plus the
+          // AddressDriftGate interstitial, which the create page is not
+          // exempt from. This check is honest friction, not security.
+          {
+            const drift = await getDriftStatusForIdentity({
+              iss: session.account.iss ?? null,
+              sub: session.account.sub,
+              provider: session.account.provider,
+              userAddress: session.account.userAddr,
+            });
+            if (drift.drifted) {
+              return res.status(409).json(addressDriftErrorBody(drift.previousAddresses));
             }
           }
 
@@ -1715,10 +1786,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               walletObj = null; // Signal to skip wallet-specific validations
             }
           } catch (error) {
+            // REFUSE — a failed read must not disarm a safety gate on a
+            // destructive, irreversible operation. The checks below are
+            // what prove this wallet belongs to this circle and is empty
+            // before the circle is deleted; skipping them because the read
+            // errored is the one interpretation with no safe outcome.
+            // (A genuine not-found above is different: that is a verified
+            // absence and keeps its existing network-mismatch handling.)
             const currentNetwork = getCurrentNetwork();
-            console.warn(`Error fetching wallet ${walletId} on ${currentNetwork} network:`, error);
-            console.log(`Proceeding with circle deletion without wallet verification (network mismatch)`);
-            walletObj = null; // Signal to skip wallet-specific validations
+            console.error(`Error fetching wallet ${walletId} on ${currentNetwork}; refusing to delete unverified:`, error);
+            return res.status(503).json({
+              error: 'WALLET_VERIFICATION_UNAVAILABLE',
+              message:
+                'We could not verify this circle\'s wallet just now, so nothing was deleted. Please try again shortly.',
+            });
           }
           
           // Only perform wallet validation if walletObj exists (network match)
@@ -2794,9 +2875,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             
             console.log(`Final user deposit status: ${userDepositPaid ? 'PAID' : 'NOT PAID'}`);
           } catch (error) {
-            console.warn('Error checking deposit status:', error);
-            // Continue with default assumption that deposit is not paid
-            console.log('Assuming deposit is NOT paid due to error checking status');
+            // REFUSE — do not guess. This flag selects the Move call
+            // target below: "not paid" routes the member's swapped USDC
+            // into member_deposit_security_deposit instead of
+            // contribute_stablecoin. Assuming "not paid" on a failed read
+            // therefore takes a member who ALREADY paid their deposit and
+            // sends their contribution in as a second one. A read failure
+            // must never move money down a different path.
+            console.error('Error checking deposit status; refusing to guess:', error);
+            return res.status(503).json({
+              error: 'DEPOSIT_STATUS_UNAVAILABLE',
+              message:
+                'We could not confirm your security deposit status just now, so we have not moved any funds. Please try again shortly.',
+            });
           }
           // *** END NEW SECTION ***
 
@@ -3644,9 +3735,75 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           
           // Initialize SUI client for checking coin value
           const suiClient = await createSuiClient();
-          
-          // REMOVED: Backend check for userDepositPaid - rely on frontend status
-          console.log(`Frontend reports deposit status: ${depositIsPaid ? 'PAID' : 'NOT PAID'}`);
+
+          // Deposit status decides WHERE THE MONEY GOES a few lines below
+          // (isSecurityDeposit vs isContribution selects the Move call), so
+          // it is verified server-side against chain. It previously read
+          // `depositIsPaid` straight from the request body — a
+          // client-supplied, unverified flag choosing a fund destination —
+          // and the client kept a STALE value whenever its own refresh
+          // failed. A member whose refresh 429'd could have a contribution
+          // routed in as a second security deposit, or vice versa.
+          //
+          // Unreadable is not "unpaid": refuse rather than guess.
+          let membersTableIdForDeposit: string | undefined;
+          try {
+            const circleObj = await suiClient.getObject({
+              id: circleId,
+              options: { showContent: true },
+            });
+            const content = circleObj.data?.content;
+            if (content && content.dataType === 'moveObject') {
+              const circleFields = (content as {
+                fields?: { members?: { fields?: { id?: { id?: string } } } };
+              }).fields;
+              membersTableIdForDeposit = circleFields?.members?.fields?.id?.id;
+            }
+          } catch (err) {
+            console.error('[depositStablecoin] circle read failed:', err);
+          }
+
+          let verifiedDepositPaid: boolean | null = null;
+          if (membersTableIdForDeposit) {
+            try {
+              const memberField = await suiClient.getDynamicFieldObject({
+                parentId: membersTableIdForDeposit,
+                name: { type: 'address', value: session.account.userAddr },
+              });
+              if (memberField.error) {
+                const code = (memberField.error as { code?: string }).code ?? '';
+                verifiedDepositPaid = code === 'dynamicFieldNotFound' ? false : null;
+              } else {
+                const content = memberField.data?.content;
+                if (content && content.dataType === 'moveObject') {
+                  const outer = (content as { fields?: Record<string, unknown> }).fields ?? {};
+                  const value = (outer.value ?? {}) as { fields?: Record<string, unknown> };
+                  const inner = value.fields ?? (outer as Record<string, unknown>);
+                  verifiedDepositPaid = Boolean(
+                    (inner as { deposit_paid?: unknown }).deposit_paid,
+                  );
+                }
+              }
+            } catch (err) {
+              console.error('[depositStablecoin] deposit-status read failed:', err);
+              verifiedDepositPaid = null;
+            }
+          }
+
+          if (verifiedDepositPaid === null) {
+            return res.status(503).json({
+              error: 'DEPOSIT_STATUS_UNAVAILABLE',
+              message:
+                'We could not confirm your security deposit status just now, so we have not moved any funds. Please try again shortly.',
+            });
+          }
+
+          if (typeof depositIsPaid === 'boolean' && depositIsPaid !== verifiedDepositPaid) {
+            console.warn(
+              `[depositStablecoin] client deposit flag (${depositIsPaid}) disagreed with chain (${verifiedDepositPaid}); using chain.`,
+            );
+          }
+          const depositAlreadyPaid = verifiedDepositPaid;
           
           // Get the coin value to check balance/verify amount
           let coinValue = 0;
@@ -3710,8 +3867,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               requiredDepositAmount,
               coinValue,
               coinType: stablecoinType,
-              isSecurityDeposit: !depositIsPaid,
-              isContribution: depositIsPaid
+              isSecurityDeposit: !depositAlreadyPaid,
+              isContribution: depositAlreadyPaid
             });
             
             // Validate that the coin has sufficient value
@@ -4193,12 +4350,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   }
                 }
               } catch (amountError) {
-                console.warn('[contributeFromCustody][SUI] Failed to resolve contribution amount from chain:', amountError);
+                console.error('[contributeFromCustody][SUI] Failed to resolve contribution amount from chain:', amountError);
               }
 
           if (contributionAmount === 0) {
-                console.warn('[contributeFromCustody][SUI] Using fallback contribution amount of 50000000 MIST');
-              contributionAmount = 50000000;
+                // REFUSE — do not invent an amount. The old fallback
+                // submitted a hardcoded 0.05 SUI as the member's cycle
+                // contribution whenever the circle read failed, which is a
+                // fabricated money figure moved on the member's behalf.
+                // The circle is the only authority on what a share costs.
+                console.error('[contributeFromCustody][SUI] Contribution amount unresolved; refusing to guess');
+                return res.status(503).json({
+                  error: 'CONTRIBUTION_AMOUNT_UNAVAILABLE',
+                  message:
+                    'We could not read this circle\'s contribution amount just now, so nothing was sent. Please try again shortly.',
+                });
           }
           
               txResult = await instance.sendTransaction(
@@ -6562,6 +6728,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'Unknown action' });
     }
   } catch (err) {
+    // The signing path throws this rather than returning; it means the caller
+    // must sign locally, which is a 409 and not a server fault. Mapped here so
+    // any route into it gives the same answer as the guard above, instead of
+    // an opaque 500.
+    if (err instanceof ClientSigningRequiredError) {
+      return res.status(409).json({
+        error:
+          'This action must be signed in your browser. Please refresh the page and try again.',
+        code: 'CLIENT_SIGNING_REQUIRED',
+      });
+    }
     console.error('API error:', err);
     return res.status(500).json({ 
       error: err instanceof Error ? err.message : 'An unexpected error occurred' 

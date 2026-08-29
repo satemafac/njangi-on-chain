@@ -198,45 +198,56 @@ Project-specific slash commands available in `.claude/skills/`:
 
 ### Operations
 
-**⚠️ Address-affecting environment variables (read before changing any)**:
-A zkLogin address is derived from `(issuer, audience, sub, salt)`. Three env
-values feed that, and changing any of them gives the same social login a
-DIFFERENT Sui address — silently, with no error and no migration path:
-- `ENOKI_API_KEY_{TESTNET,MAINNET}` — supplies the salt.
+**⚠️ Address-affecting configuration (read before changing any)**:
+A zkLogin address is derived from `(issuer, audience, sub, salt)`. Changing
+any of these gives the same social login a DIFFERENT Sui address — silently,
+with no error and no migration path:
 - `NEXT_PUBLIC_{GOOGLE,FACEBOOK,APPLE}_CLIENT_ID` — becomes the JWT `aud`.
-- The Enoki app itself (not just its keys).
+- The OAuth provider itself — Google, Facebook and Apple logins are three
+  SEPARATE identities (different `iss`/`sub`) even for the same human, so
+  each provider button resolves to its own wallet.
+- The Enoki application — deleting/recreating the app resets its salts.
 
 The old address keeps its circles, security deposits and funds, and no future
 login reaches it. Recovery means restoring the previous salt source, which
 re-orphans anyone onboarded since. **On mainnet this is permanent user fund
 loss, not an inconvenience.**
 
-**Rotating an Enoki API key changes the salt — even within the same app.**
-This is the important one, because it is counter-intuitive: Enoki's docs
-describe the salt as derived "per user per app", which reads as though key
-rotation is safe. It is not.
+**Rotating an Enoki API key does NOT change the salt.** Enoki derives the
+salt per user per application, exactly as its docs say; keys within the same
+app all resolve the same salt, so key rotation is a plain credential refresh.
 
-Evidence (testnet, 2026-08-02): the Enoki portal held ONE application
-("Njangi OnChain") with two testnet keys — `9b2ce…` (2025-05-24) and
-`75675…` (2026-07-04). Circles created 2026-07-04 belong to `...92b680`;
-everything after belongs to `...9de17d`. Same Google account, same `sub`,
-same client id (unchanged for 49 days), same app. The only variable that
-moved was which API key was live, and the address moved with it.
+An earlier version of this section claimed the opposite, from a 2026-08-02
+misdiagnosis: circles created on rotation day (2026-07-04) belonged to
+`…92b680` and everything after to `…9de17d`, which was read as the salt
+moving with the key. The append-only `legal_acceptances` table later showed
+those two addresses were NEVER the same identity — `…92b680` is the operator's
+FACEBOOK login (15-digit numeric `sub`, Facebook `aud`) and `…9de17d` their
+GOOGLE login; the rotation-day flip was a provider switch that coincided with
+the new key's creation date. Cross-rotation stability is directly evidenced:
+`…9de17d` was first recorded 2026-06-15 (old-key era) and resolves identically
+today; `…92b680` has been continuously active since 2025-05-26 across the
+rotation. When an unfamiliar address appears for "the same user", check the
+provider first (sub/aud formats in `legal_acceptances` or
+`zklogin_address_bindings` identify it) before suspecting salt drift.
 
 Practical consequences:
-1. Treat key rotation as an ADDRESS MIGRATION, not a credential refresh.
-   Rotate before you have users, never after.
-2. Keep the previous key. It is the only route back to the old addresses.
-3. If a key is ever leaked post-launch you are forced to choose between
-   leaving a compromised key live and re-homing every user. Avoid that
-   position: keep the private keys out of screenshots, bug reports, and
-   support threads, and never put one in a `NEXT_PUBLIC_*` var (which
-   inlines it into the browser bundle).
-4. There is currently NO application-level guard that detects a user's
-   address changing between logins. Adding one (warn when a returning `sub`
-   resolves to a new address) is unbuilt work worth doing before mainnet —
-   without it, this failure is silent and the first signal is a support
-   ticket about missing funds.
+1. A leaked key can be revoked without stranding anyone — rotation is safe.
+   (The 2026-07-04 rotation of the leaked `9b2ce…` key stranded no addresses;
+   that key can be deleted from the Enoki portal.)
+2. Keep keys out of screenshots, bug reports, and support threads, and never
+   put one in a `NEXT_PUBLIC_*` var — that inlines it into the browser bundle,
+   which is exactly how `9b2ce…` leaked (fixed in `8165cd4`).
+3. Address drift IS detected now: `src/lib/zklogin-address-bindings.ts`
+   (shipped `8d8a149`) keeps an append-only (iss, sub) → address history,
+   warns on login when a returning identity resolves to a new address, and
+   fail-closes commitment surfaces (circle create/join, contribute, ramp
+   sessions) while leaving claim/refund/recovery reachable. It deliberately
+   treats providers as distinct identities, so Facebook-you and Google-you
+   never trip it.
+4. What users still lack is a provider badge next to the signed-in address —
+   without it, one human with two provider logins reads their own second
+   wallet as a stranger's.
 
 **Vercel deploy (web app)**:
 The app is hosted on **Vercel**; production Postgres is **Neon**. The Move

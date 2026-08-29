@@ -12,6 +12,10 @@ import {
 } from '@/lib/onramp-logging';
 import { isSanctionedCountry } from '@/lib/ramp-geo';
 import { screenAddress } from '@/lib/sanctions';
+import {
+  getDriftStatusForAddress,
+  addressDriftErrorBody,
+} from '@/lib/zklogin-address-bindings';
 import { getTrustedClientIp } from '@/lib/trusted-client-ip';
 import { isRampEnabled } from '@/config/feature-flags';
 
@@ -392,6 +396,25 @@ export default async function handler(
       message: unavailable
         ? 'We could not complete a required compliance check. Please try again shortly.'
         : "This wallet can't use Njangi On-Chain.",
+      fallbackProvider: null,
+    });
+  }
+
+  // Address-drift gate. Funding a wallet is a NEW COMMITMENT: if this
+  // address belongs to an identity whose logins have resolved to more than
+  // one address, the buyer is either deepening a commitment at an account
+  // they may not realise is new, or topping up an old one no login can
+  // reach. Pause the session either way. Fail-open on lookup errors —
+  // consistent with src/lib/zklogin-address-bindings.ts.
+  const driftScreen = await getDriftStatusForAddress(parsedBody.data.walletAddress);
+  if (driftScreen.drifted) {
+    logger.warn('session_address_drift_blocked', {
+      walletAddress: maskWalletAddress(parsedBody.data.walletAddress),
+      previousCount: driftScreen.previousAddresses.length,
+    });
+    return res.status(409).json({
+      provider: 'coinbase',
+      ...addressDriftErrorBody(driftScreen.previousAddresses),
       fallbackProvider: null,
     });
   }

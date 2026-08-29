@@ -32,6 +32,7 @@ import {
 // entitlement-preflight.ts and the matching note in BillingUpsellModal).
 import { hasFeaturePreflight } from '../components/milestones/entitlement-preflight';
 import { useTranslation } from '../hooks/useTranslation';
+import { resolveCreatedCircleId } from '@/lib/circle-creation-discovery';
 import BillingUpsellModal from '../components/BillingUpsellModal';
 import {
   preflightSanctionsCheck,
@@ -167,6 +168,13 @@ interface CircleFormData {
     byDateBehavior?: 'release' | 'refund'; // what happens at byDate if target unmet
     verificationRequired: boolean;
   };
+  /**
+   * Frontend-only. The group is already part-way through its rotation and
+   * will record where it stands before activating. Nothing about the
+   * created circle differs — the history is declared afterwards, once the
+   * roster and payout order exist — so this only steers the wizard.
+   */
+  isMigrating?: boolean;
   goalEmoji?: string; // Frontend-only: prepended to name for smart-goal circles
   goalBeneficiary?: string; // Frontend-only: smart-goal pool beneficiary (blank = creator)
 }
@@ -408,7 +416,7 @@ interface InviteMember {
 
 export default function CreateCircle() {
   const router = useRouter();
-  const { isAuthenticated, account, userAddress } = useAuth();
+  const { isAuthenticated, isLoading: authLoading, account, userAddress } = useAuth();
   const { isReady: signerReady, signAndExecute: signGoalPool } = useZkLoginSigner();
   const { t } = useTranslation();
   const [currentStep, setCurrentStep] = useState(0); // Start at step 0 for circle type selection
@@ -444,6 +452,9 @@ export default function CreateCircle() {
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [createdCircleId, setCreatedCircleId] = useState<string | null>(null);
+  // The creation transaction names the circle exactly; the event scan below
+  // only guesses at it. Keep the digest so we can ask the cheap question first.
+  const [createdCircleDigest, setCreatedCircleDigest] = useState<string | null>(null);
   const [showSmartGoalUpsell, setShowSmartGoalUpsell] = useState(false);
   const [checkingSmartGoalAccess, setCheckingSmartGoalAccess] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -560,10 +571,21 @@ export default function CreateCircle() {
   };
 
   React.useEffect(() => {
-    if (!isAuthenticated) {
-      router.push('/');
+    // Wait for the session to hydrate before deciding anybody is signed out.
+    // Without this, a hard load of /create-circle bounces every signed-in
+    // organiser: isAuthenticated is false on the first render, this pushed
+    // them to '/', and '/' pushes an authenticated user straight to
+    // /dashboard — so a bookmark or a pasted link silently never opened the
+    // page. `replace` rather than `push` so a genuinely signed-out visitor
+    // does not land back here with the Back button.
+    if (authLoading) {
+      return;
     }
-  }, [isAuthenticated, router]);
+
+    if (!isAuthenticated) {
+      router.replace('/');
+    }
+  }, [authLoading, isAuthenticated, router]);
 
   // Add effect to update SUI price when currency changes
   useEffect(() => {
@@ -880,9 +902,11 @@ export default function CreateCircle() {
         getCurrentNetwork(),
       );
       
-      // Store the transaction digest for reference
+      // Keep the digest: it resolves the new circle deterministically, without
+      // event history (which not every RPC serves) and without guessing.
       if (result.digest) {
         console.log('Circle creation transaction successful:', result.digest);
+        setCreatedCircleDigest(result.digest);
       }
 
       // Move to invite step on success
@@ -924,6 +948,23 @@ export default function CreateCircle() {
     try {
       // Use connection pool and batch query for better performance
       const client = getSuiClientFromPool(getCurrentRpcUrl());
+
+      // Preferred path: read the circle straight out of the transaction that
+      // created it. One request, no event history, and it names THE circle
+      // just created rather than the most recent one this admin happens to
+      // own. The event scan below stays as a fallback for a session that lost
+      // the digest (e.g. the form was restored after re-authentication).
+      if (createdCircleDigest) {
+        try {
+          const fromDigest = await resolveCreatedCircleId(client, createdCircleDigest);
+          if (fromDigest) {
+            console.log('Resolved circle ID from creation transaction:', fromDigest);
+            return fromDigest;
+          }
+        } catch (digestError) {
+          console.warn('Could not resolve circle from creation digest, falling back to events:', digestError);
+        }
+      }
 
       // Query for CircleCreated events using batch query
       const adminEvents = await batchQueryEvents(
@@ -1076,7 +1117,7 @@ The Njangi On-Chain Team`;
     });
   };
 
-  if (!isAuthenticated) {
+  if (authLoading || !isAuthenticated) {
     return null;
   }
 
@@ -1278,6 +1319,42 @@ The Njangi On-Chain Team`;
                   <p className="relative mt-3 text-sm leading-6 text-[#5f6674]">Members contribute toward a shared savings goal and celebrate milestones together along the way.</p>
                 </button>
               </div>
+
+              {/* An already-running group is not a third kind of circle — it
+                  is a rotational one that starts part-way through its order.
+                  Giving it its own door matters because the alternative is
+                  restarting the rotation, which costs somebody their turn. */}
+              <button
+                type="button"
+                onClick={() => {
+                  setFormData(prev => ({
+                    ...prev,
+                    cycleType: 'rotational',
+                    smartGoal: undefined,
+                    isMigrating: true,
+                  }));
+                  setCurrentStep(1);
+                }}
+                className="mt-6 flex w-full items-start gap-4 rounded-[24px] border border-[#d7cec1] bg-white p-5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-[#c9c0b2] hover:shadow-[0_24px_70px_-58px_rgba(15,23,42,0.34)]"
+              >
+                <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full border border-[#d8e2f0] bg-[#fbfaf7] text-[#5f708a]">
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className={stepLabelClass}>Already running</p>
+                  <h3 className="mt-2 text-lg font-semibold tracking-[-0.03em] text-[#171923]">
+                    Bring a circle that has already started
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-[#5f6674]">
+                    Halfway through your rotation? Set it up the same way, then
+                    record who has already collected and whose turn is next. Your
+                    circle carries on from there — no waiting for the round to end,
+                    and nobody loses their place.
+                  </p>
+                </div>
+              </button>
 
               {/* Cancel Button */}
               <div className="flex justify-center mt-8">
@@ -1955,6 +2032,44 @@ The Njangi On-Chain Team`;
                 )}
               </div>
 
+              {/* How many people are in the circle.
+                  Until now this was pinned at MIN_MEMBERS with no input, so
+                  every circle was created with room for three and the organiser
+                  had to raise the cap afterwards from the manage page. A group
+                  moving here part-way through its rotation cannot do that: it
+                  needs all its seats before the payout order means anything. */}
+              {formData.cycleType === 'rotational' && (
+                <div className="space-y-2">
+                  <div className="flex items-center flex-wrap">
+                    <label htmlFor="number-of-members" className="block text-sm font-medium text-gray-700">
+                      How many members?
+                    </label>
+                    <InfoTooltip>
+                      <p>Everyone who takes a turn receiving the pot</p>
+                      <p className="text-gray-300 text-xs mt-1">Between {MIN_MEMBERS} and {MAX_MEMBERS}. You can change this later, before the circle starts.</p>
+                    </InfoTooltip>
+                  </div>
+                  <input
+                    id="number-of-members"
+                    type="number"
+                    min={MIN_MEMBERS}
+                    max={MAX_MEMBERS}
+                    value={formData.numberOfMembers}
+                    onChange={(event) => {
+                      const parsed = Number(event.target.value);
+                      handleInputChange(
+                        'numberOfMembers',
+                        Number.isFinite(parsed) ? Math.trunc(parsed) : MIN_MEMBERS,
+                      );
+                    }}
+                    className="w-full px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-500">
+                    Counting you. One full round is one turn each.
+                  </p>
+                </div>
+              )}
+
               {/* Add Rotation Style selector when cycleType is rotational */}
               {formData.cycleType === 'rotational' && (
                 <div className="space-y-2">
@@ -2515,6 +2630,33 @@ The Njangi On-Chain Team`;
                     {formData.numberOfMembers - 1} member slots to fill
                   </span>
                 </div>
+
+                {/* An already-running group has one more step than a new one:
+                    the history can only be recorded once every member is in and
+                    the payout order is set, so it lives on the manage page
+                    rather than here. Point at it, or it gets missed and the
+                    circle starts over from position one. */}
+                {formData.isMigrating && (
+                  <div className="mt-5 rounded-[22px] border border-[#d8e2f0] bg-[#f7fafc] p-4">
+                    <p className={stepLabelClass}>Next, for a circle already running</p>
+                    <p className="mt-2 text-sm leading-6 text-[#5f6674]">
+                      Once everyone has joined and you have set the payout order,
+                      open <span className="font-medium text-[#171923]">Circle history</span> on
+                      the manage page to record who has already collected and whose
+                      turn is next. Each member confirms it, and then the circle
+                      picks up where your group left off.
+                    </p>
+                    {createdCircleId && (
+                      <button
+                        type="button"
+                        onClick={() => router.push(`/circle/${createdCircleId}/manage`)}
+                        className="mt-3 inline-flex items-center rounded-full border border-[#d7cec1] bg-white px-4 py-2 text-sm font-medium text-[#171923] transition hover:border-[#c9c0b2]"
+                      >
+                        Go to circle management
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Direct Invites Section */}

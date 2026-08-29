@@ -17,6 +17,8 @@
 //  10. rate_limits                    (src/lib/rate-limit.ts)
 //  11. webhook_events                 (src/lib/webhook-dedupe.ts)
 //  12. subscriptions                  (src/services/stripe-service.ts)
+//  13. zklogin_address_bindings       (src/lib/zklogin-address-bindings.ts)
+//  14. record_share_tokens            (src/lib/circle-record-share.ts)
 //
 // Phase 12 publish-readiness: replaces the old transactional migration
 // that only knew about `join_requests` + `mainnet_signups`. Keeps every
@@ -468,6 +470,116 @@ const STATEMENTS = [
             ON sanctions_screen_log (created_at);
           CREATE INDEX IF NOT EXISTS sanctions_screen_log_address_idx
             ON sanctions_screen_log (address);`,
+  },
+  {
+    // zkLogin identity -> address history (src/lib/zklogin-address-bindings.ts).
+    //
+    // A zkLogin address derives from (iss, aud, sub, salt). Rotating the
+    // Enoki API key changes the salt — even inside the same app — and the
+    // same social login then resolves to a DIFFERENT address, leaving the
+    // user's funds at the old one with no error and no migration path.
+    // Nothing detected that, because every login wipes the prior session
+    // rows (cleanupUserSessions) and zklogin_sessions has a 24h TTL, so the
+    // previous address was gone before the next one existed. This table is
+    // the durable memory that makes detection possible.
+    //
+    // APPEND-ONLY, like legal_acceptances: a new address inserts a new row
+    // rather than updating the old one, so after a drift event BOTH rows
+    // survive and support can still see where the funds were left.
+    //
+    // Lookups match on (sub, iss) — NOT (sub, aud). A client-id change is
+    // itself one of the drift causes, so keying on aud would make that case
+    // look like a brand-new user and miss it. `provider` is the fallback
+    // match for rows written before iss capture.
+    name: 'zklogin_address_bindings',
+    sql: `CREATE TABLE IF NOT EXISTS zklogin_address_bindings (
+            id            BIGSERIAL PRIMARY KEY,
+            iss           TEXT,
+            sub           TEXT NOT NULL,
+            aud           TEXT NOT NULL,
+            provider      TEXT,
+            user_address  TEXT NOT NULL,
+            first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            login_count   BIGINT NOT NULL DEFAULT 1
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS zklogin_address_bindings_unique
+            ON zklogin_address_bindings (sub, aud, user_address);
+          CREATE INDEX IF NOT EXISTS zklogin_address_bindings_identity
+            ON zklogin_address_bindings (sub, iss);
+          CREATE INDEX IF NOT EXISTS zklogin_address_bindings_provider_identity
+            ON zklogin_address_bindings (sub, provider);`,
+  },
+  {
+    // Backfill for the table above.
+    //
+    // Without this the guard protects nobody at first: a fresh table makes
+    // every existing user's next login look like a first-ever login, so a
+    // drift that has ALREADY happened would still pass undetected once.
+    //
+    // legal_acceptances is the best source — every user must accept before
+    // joining a circle, and it is append-only, so it holds historical
+    // (sub, aud, user_address) triples including ones that predate a drift.
+    // subscriptions and gas_sponsorship_usage cover paying and sponsored
+    // users respectively. Backfilled rows carry iss = NULL and rely on the
+    // provider fallback until each user's next login fills iss in; they use
+    // the earliest known timestamp so ordering stays truthful.
+    //
+    // ON CONFLICT DO NOTHING keeps re-runs a no-op. Guarded with to_regclass
+    // so a fresh database (where the source tables may not exist yet in this
+    // same run) does not fail the statement.
+    name: 'zklogin_address_bindings_backfill',
+    sql: `DO $$
+          BEGIN
+            IF to_regclass('public.legal_acceptances') IS NOT NULL THEN
+              INSERT INTO zklogin_address_bindings
+                     (iss, sub, aud, provider, user_address, first_seen_at, last_seen_at)
+              SELECT NULL, sub, aud, NULL, LOWER(user_address),
+                     MIN(accepted_at), MAX(accepted_at)
+                FROM legal_acceptances
+               WHERE sub IS NOT NULL AND aud IS NOT NULL AND user_address IS NOT NULL
+               GROUP BY sub, aud, LOWER(user_address)
+              ON CONFLICT (sub, aud, user_address) DO NOTHING;
+            END IF;
+
+            IF to_regclass('public.subscriptions') IS NOT NULL THEN
+              INSERT INTO zklogin_address_bindings
+                     (iss, sub, aud, provider, user_address, first_seen_at, last_seen_at)
+              SELECT NULL, sub, aud, NULL, LOWER(user_address),
+                     COALESCE(created_at, NOW()), COALESCE(updated_at, NOW())
+                FROM subscriptions
+               WHERE sub IS NOT NULL AND aud IS NOT NULL AND user_address IS NOT NULL
+              ON CONFLICT (sub, aud, user_address) DO NOTHING;
+            END IF;
+          END $$;`,
+  },
+  {
+    // Circle Record share links (src/lib/circle-record-share.ts).
+    //
+    // A member's participation record is theirs to distribute — we never
+    // furnish it to anyone (see the FCRA note in src/lib/circle-record.ts).
+    // This table holds only the opaque token, the address it resolves to,
+    // and an expiry.
+    //
+    // EXPIRY IS NOT OPTIONAL. A share link is a permanent disclosure if it
+    // never lapses, so every token carries expires_at and the UI cannot
+    // create one without it. revoked_at lets a member withdraw a link they
+    // already sent.
+    //
+    // The token is a random opaque id and must never encode the address,
+    // sub, or any personal identifier — it is handed to third parties.
+    name: 'record_share_tokens',
+    sql: `CREATE TABLE IF NOT EXISTS record_share_tokens (
+            token        TEXT PRIMARY KEY,
+            user_address TEXT NOT NULL,
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            expires_at   TIMESTAMPTZ NOT NULL,
+            revoked_at   TIMESTAMPTZ
+          );
+          CREATE INDEX IF NOT EXISTS record_share_tokens_address_idx
+            ON record_share_tokens (user_address);
+          CREATE INDEX IF NOT EXISTS record_share_tokens_expires_idx
+            ON record_share_tokens (expires_at);`,
   },
 ];
 

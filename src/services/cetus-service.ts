@@ -1,6 +1,6 @@
 import { initCetusSDK } from '@cetusprotocol/cetus-sui-clmm-sdk';
-import { SuiClient } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
+import { getPooledSuiClient, getRpcCandidateUrls } from './sui-rpc-failover';
 import { getObjectTransactionPackageId } from './circle-service';
 import { 
   CetusErrorCode, 
@@ -207,9 +207,15 @@ class CetusService {
     try {
       // Initialize the SDK and cast to our interface
       // Using unknown as an intermediate step to avoid type errors with the SDK
+      // The SDK takes a URL, not a client, so it cannot fail over on its own.
+      // Give it the first CANDIDATE rather than the raw configured URL: the
+      // candidate list applies the rate-limited-endpoint ordering, so the SDK
+      // starts on the endpoint least likely to 429.
+      const preferredRpcUrl =
+        getRpcCandidateUrls(getCurrentNetwork())[0] ?? getCurrentRpcUrl();
       this.sdk = initCetusSDK({
         network: getCurrentNetwork(),
-        fullNodeUrl: getCurrentRpcUrl()
+        fullNodeUrl: preferredRpcUrl
       }) as unknown as CetusSDKInterface;
       
       this.initialized = true;
@@ -402,7 +408,13 @@ class CetusService {
     tx.setSender(walletAddress);
 
     return tx.build({
-      client: new SuiClient({ url: getCurrentRpcUrl() }),
+      // Pooled failover client, not a raw one on a single URL. Building a
+      // swap needs several reads, and pinning them to one endpoint meant a
+      // rate-limited RPC failed the whole swap with "Unable to prepare the
+      // swap transaction" — no retry, no fallback, while every other read
+      // path in the app was failing over normally. Observed live: blockvision
+      // 429s made the swap unexecutable even though the quote had succeeded.
+      client: getPooledSuiClient(),
     });
   }
 

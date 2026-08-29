@@ -233,8 +233,13 @@ export default function GoalPoolsSection({ userAddress, network }: Props) {
         discovered.map(async (s): Promise<[string, GoalPoolState | null]> => {
           try {
             return [s.poolId, await readGoalPoolState(s.poolId, network, client)];
-          } catch {
-            return [s.poolId, null];
+          } catch (err) {
+            // Rethrow so the caller's handler keeps the CACHED state for
+            // this pool. Returning null here rendered the pot as
+            // "0 pooled" with 0% progress — a money figure invented from a
+            // failed read — and then persisted that zero to cache.
+            console.warn('[GoalPoolsSection] pool state read failed', s.poolId, err);
+            throw err;
           }
         }),
       );
@@ -242,7 +247,12 @@ export default function GoalPoolsSection({ userAddress, network }: Props) {
       const nextStates = Object.fromEntries(entries) as Record<string, GoalPoolState | null>;
       setStates(nextStates);
       writeCache(network, userAddress, discovered, nextStates);
-    })();
+    })().catch((err) => {
+      // Revalidation failed. Keep whatever the cache seeded — showing a
+      // stale-but-real pot beats overwriting it with a fabricated zero,
+      // and beats an unhandled rejection.
+      console.warn('[GoalPoolsSection] revalidation failed; keeping cached pools', err);
+    });
 
     return () => {
       active = false;

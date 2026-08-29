@@ -14,6 +14,10 @@ import {
   type MoonPayBaseCurrency,
 } from '../../../../services/moonpay-service';
 import { isSanctionedCountry } from '../../../../lib/ramp-geo';
+import {
+  getDriftStatusForAddress,
+  addressDriftErrorBody,
+} from '@/lib/zklogin-address-bindings';
 
 interface RequestBody {
   walletAddress?: string;
@@ -61,6 +65,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       provider: 'moonpay',
       error: 'BLOCKED_REGION',
       message: 'This service is not available in your region.',
+    });
+  }
+
+  // Address-drift gate: pause funding for either side of a drifted
+  // identity (new address = commitment the buyer may not understand; old
+  // address = unreachable). Fail-open on lookup errors — see
+  // src/lib/zklogin-address-bindings.ts.
+  const driftScreen = await getDriftStatusForAddress(body.walletAddress);
+  if (driftScreen.drifted) {
+    return res.status(409).json({
+      provider: 'moonpay',
+      ...addressDriftErrorBody(driftScreen.previousAddresses),
     });
   }
 

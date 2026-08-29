@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 import { AccountData, OAuthProvider } from '@/services/zkLoginService';
 import { ZkLoginClient } from '@/services/zkLoginClient';
 import { LegalAcceptanceGate } from '@/components/LegalAcceptanceModal';
+import { AddressDriftGate } from '@/components/AddressDriftModal';
 import { useIdleTimer } from '@/hooks/useIdleTimer';
 import { getCurrentNetwork, getNetworkConfig } from '@/services/network-config';
 import { refreshAdminHeartbeatsAfterAuth } from '@/lib/admin-heartbeat-refresh';
@@ -584,6 +585,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           paths flow through this provider, unlike /auth/callback. The gate
           itself exempts recovery/claim routes; see LegalAcceptanceModal. */}
       <LegalAcceptanceGate active={isAuthenticated && !isLoading} />
+      {/* Address-drift gate (docs/prd/prd-address-drift-guard.md): warns when
+          this sign-in resolved to a different Sui address than the identity
+          used before, which strands the user's funds at the old one. Mounted
+          here for the same reason as the legal gate — it must cover session
+          restore, not just /auth/callback — and it exempts the same
+          fund-access routes. */}
+      <AddressDriftGate active={isAuthenticated && !isLoading} />
     </AuthContext.Provider>
   );
 }

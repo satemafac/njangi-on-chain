@@ -157,8 +157,10 @@ export default function CircleGoalsPage() {
       );
       setPendingEscrows(uncounted);
     } catch (err) {
-      console.warn('[goals] pending escrow check failed', err);
-      setPendingEscrows([]);
+      // Keep whatever we last knew. Clearing to [] asserts "no uncounted
+      // rounds" and hides the Update-progress action for genuinely
+      // uncredited, money-bearing escrows.
+      console.warn('[goals] pending escrow check failed; keeping last known list', err);
     }
   }, [circleId, state?.creditedTableId, network, rpcClient]);
 

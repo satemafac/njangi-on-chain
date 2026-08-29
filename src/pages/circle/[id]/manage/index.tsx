@@ -9,6 +9,12 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { RecoveryRefundTable } from '@/components/recovery/RecoveryRefundTable';
 import { RecoveryStateBadge } from '@/components/recovery/RecoveryStateBadge';
 import { getCircleConfigFieldsFromDynamicFields } from '@/lib/circle-config';
+import { isResolvedSuiObjectId } from '@/lib/sui-object-id';
+import {
+  getMigrationLedgerFromDynamicFields,
+  resolveMigrationRatification,
+  type MigrationLedger,
+} from '@/lib/circle-migration';
 import {
   getRecoveryAutoReleaseUiState,
   parseRecoveryStatus,
@@ -22,7 +28,8 @@ import {
   loadRecoveryExecutionStatus,
   type RecoveryExecutionStatus,
 } from '@/lib/recovery-execution';
-import { getRecoveryProposalUiState } from '@/lib/recovery-ui';
+import { getRecoveryProposalUiState, getRecoveryDelegateCardCopy } from '@/lib/recovery-ui';
+import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
 import { resolveStablecoinMetadata } from '@/lib/stablecoin-metadata';
 import { priceService } from '../../../../services/price-service';
 import { JoinRequest } from '../../../../services/database-service';
@@ -32,6 +39,7 @@ import {
   getCurrentNetwork,
 } from '../../../../services/network-config';
 import RotationOrderList from '../../../../components/RotationOrderList';
+import CircleMigrationPanel from '../../../../components/CircleMigrationPanel';
 import ConfirmationModal from '../../../../components/ConfirmationModal';
 import BillingUpsellModal, {
   parseUpgradeRequired,
@@ -433,6 +441,8 @@ const parseMoveError = (error: string): { code: number; message: string } => {
                     return { code, message: 'Member approval failed: This user is already a member of the circle.' };
                 case 29: // ECircleCapacityReached
                     return { code, message: 'Cannot add more members: Circle has reached its maximum member limit.' };
+                case 58: // ECircleNotPausedForConfigChange
+                    return { code, message: 'New members can only be added before the circle starts, or while it is paused between rounds. A member added mid-round has no place in the payout order and could never be paid.' };
                 default:
                     return { code, message: `Circle Error ${code}: Member approval failed.` };
             }
@@ -444,11 +454,35 @@ const parseMoveError = (error: string): { code: number; message: string } => {
                 case 21: return { code, message: 'Circle activation failed: Some members have not paid their security deposits yet.' };
                 case 22: return { code, message: 'Circle activation failed: The circle needs to have at least 3 members before activation.' }; // Updated based on Move code
                 case 54: return { code, message: 'Circle activation failed: The circle is already active.' }; // ECircleNotActive
+                case 55: return { code, message: 'Circle activation failed: The circle is already active.' }; // ECircleIsActive
                 case 71: return { code, message: 'Circle activation failed: Next in command must be an active non-admin member before the circle goes live.' };
+                case 79: return { code, message: 'Circle activation failed: Every member must confirm where this circle currently stands before it can start.' };
                 default: return { code, message: `Activation Error ${code}: Operation failed.` };
             }
         }
         
+        if (
+          moduleName === 'njangi_circles'
+          && (
+            functionName === 'declare_migration_state'
+            || functionName === 'acknowledge_migration_state'
+            || functionName === 'clear_migration_state'
+          )
+        ) {
+            switch (code) {
+                case 7: return { code, message: "Only the circle admin can record where the circle stands" };
+                case 8: return { code, message: "Only members in the payout order can confirm this" };
+                case 29: return { code, message: "That position is outside this circle's payout order" };
+                case 55: return { code, message: "The circle has already started, so its history can no longer be changed" };
+                case 76: return { code, message: "This circle has no recorded history to confirm" };
+                case 77: return { code, message: "The details changed since you opened this page. Reload and confirm again." };
+                case 78: return { code, message: "You have already confirmed this" };
+                case 80: return { code, message: "Give every member a place in the payout order first" };
+                case 81: return { code, message: "There is nothing to record — this is an ordinary new circle" };
+                default: return { code, message: `Migration Error ${code}: Operation failed.` };
+            }
+        }
+
         if (moduleName === 'njangi_circles' && (functionName === 'set_rotation_position' || functionName === 'reorder_rotation_positions')) {
             switch(code) {
                 case 7: return { code, message: "Only the circle admin can set rotation positions" };
@@ -632,7 +666,15 @@ export default function ManageCircle() {
   const [circle, setCircle] = useState<Circle | null>(null);
   const [circlePackageId, setCirclePackageId] = useState<string | null>(null);
   const [recoveryStatus, setRecoveryStatus] = useState<RecoveryStatusSnapshot | null>(null);
-  const [loadingRecoveryStatus, setLoadingRecoveryStatus] = useState(false);
+  // Starts true. A null snapshot is indistinguishable from "auto-release is
+  // disabled" once it reaches getRecoveryAutoReleaseUiState, so treating the
+  // pre-fetch frame as loaded made the page announce a settled state it had
+  // not read yet — and after the delegate-copy fix that would have been a
+  // false all-clear on a safety control rather than a harmless over-warning.
+  const [loadingRecoveryStatus, setLoadingRecoveryStatus] = useState(true);
+  // Distinguishes "read failed" from "still loading"; the catch below used to
+  // leave both looking identical to a successfully-loaded disabled circle.
+  const [recoveryStatusError, setRecoveryStatusError] = useState(false);
   const [recoveryExecution, setRecoveryExecution] = useState<RecoveryExecutionStatus | null>(null);
   const [loadingRecoveryExecution, setLoadingRecoveryExecution] = useState(false);
   const [isSubmittingRecoveryAction, setIsSubmittingRecoveryAction] = useState(false);
@@ -645,6 +687,10 @@ export default function ManageCircle() {
   const [copiedId, setCopiedId] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [isEditingRotation, setIsEditingRotation] = useState(false);
+  // Mid-cycle migration: where a circle that was already running elsewhere
+  // stands, and who has confirmed it. Null for an ordinary new circle.
+  const [migrationLedger, setMigrationLedger] = useState<MigrationLedger | null>(null);
+  const [isMigrationBusy, setIsMigrationBusy] = useState(false);
   const [confirmationModal, setConfirmationModal] = useState({
     isOpen: false,
     title: '',
@@ -909,6 +955,7 @@ export default function ManageCircle() {
           const resolvedConfigFields = configFields as Record<string, SuiFieldValue>;
           console.log('Manage - CircleConfig fields:', resolvedConfigFields);
           setRecoveryStatus(parseRecoveryStatus(resolvedConfigFields as Record<string, unknown>));
+          setMigrationLedger(await getMigrationLedgerFromDynamicFields(client, dynamicFieldsResult.data));
 
           if (resolvedConfigFields.contribution_amount) {
             configValues.contributionAmount = Number(resolvedConfigFields.contribution_amount) / 1e9;
@@ -1257,15 +1304,43 @@ export default function ManageCircle() {
 
       // Fetch custody wallet info in parallel with other operations
         try {
-          const custodyWalletEvents = await queryEventsCached({
-              query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyWalletCreated` },
-            limit: 50
+          // Three-tier discovery (dynamic field -> events -> own tx history).
+          // The event-only lookup this replaces broke the moment the
+          // wallet-created event aged out of RPC retention — with a PASSED
+          // emergency stop waiting on exactly this id to execute.
+          const custodyResolution = await resolveCustodyWalletId({
+            client,
+            circleId: id as string,
+            packageId: determinedPackageId,
+            userAddress,
+            queryEvents: (params) => queryEventsCached(params),
           });
-          const custodyEvent = custodyWalletEvents.data.find(event => 
-              (event.parsedJson as { circle_id?: string })?.circle_id === id
-          );
-          const walletId = (custodyEvent?.parsedJson as { wallet_id?: string })?.wallet_id;
-          
+          const walletId = custodyResolution?.walletId;
+
+          // Store the id the moment it resolves, BEFORE reading balances.
+          //
+          // These were coupled: custody was only set inside the balance-parse
+          // branch below, so a rate-limited wallet read threw away an id we had
+          // already resolved. Everything gated on custody.walletId then failed —
+          // most visibly member removal, which needs the id and nothing else,
+          // and which reported no error because the id it was handed was ''.
+          //
+          // Balances are presentation; the id is capability. Losing the former
+          // must not cost the latter.
+          if (walletId) {
+            setCircle(prev => prev ? {
+              ...prev,
+              custody: {
+                stablecoinEnabled: false,
+                stablecoinType: '',
+                stablecoinBalance: 0,
+                suiBalance: 0,
+                ...(prev.custody ?? {}),
+                walletId,
+              },
+            } : prev);
+          }
+
           if (walletId) {
               // Parallel fetch: wallet data and dynamic fields
               const [walletData, walletDynamicFields] = await Promise.all([
@@ -1556,9 +1631,19 @@ export default function ManageCircle() {
         throw new Error('Authentication required');
       }
 
+      // Fail with something the admin can act on. Passing `?? ''` sent an
+      // empty id into the transaction builder, which threw its own internal
+      // message about an unresolved object — so a wallet that had not loaded
+      // read as a mysterious failure rather than "wait for the wallet".
+      const walletId = circle?.custody?.walletId;
+      if (!isResolvedSuiObjectId(walletId)) {
+        throw new Error(
+          "This circle's wallet has not loaded yet, so the deposit cannot be returned. Refresh the circle details and try again.",
+        );
+      }
+
       const { response: response, result: result } = await runSignedTx(() =>
-        new ZkLoginClient().adminRemoveMember(
-            account, circleId, memberAddress, circle?.custody?.walletId ?? ''));
+        new ZkLoginClient().adminRemoveMember(account, circleId, memberAddress, walletId));
 
       if (!response.ok) {
         throw new Error(result.error || 'Failed to remove member');
@@ -3566,6 +3651,130 @@ export default function ManageCircle() {
     });
   };
 
+  // ------------------------------------------------------------------
+  // Mid-cycle migration
+  //
+  // Records where a circle that has been running elsewhere already stands.
+  // The contract refuses this once the circle is live, and refuses to start
+  // the circle until every member has confirmed it.
+  // ------------------------------------------------------------------
+  const handleDeclareMigrationState = (priorRoundsCompleted: number, startPosition: number) => {
+    if (!id || !circle || !account) return;
+
+    const rotation = members
+      .filter((member) => typeof member.position === 'number')
+      .slice()
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const nextRecipient = rotation[startPosition];
+    const alreadyCollected = rotation.slice(0, startPosition);
+
+    setConfirmationModal({
+      isOpen: true,
+      title: 'Confirm your circle\'s current position',
+      message: (
+        <div className="space-y-3">
+          <p>
+            You are recording that this circle has already been running, and that{' '}
+            {nextRecipient ? shortenAddress(nextRecipient.address) : 'the next member'} is
+            next to collect.
+          </p>
+          {alreadyCollected.length > 0 && (
+            <div className="rounded-[16px] border border-stone-200 bg-stone-50 p-3 text-sm text-slate-700">
+              <p className="font-medium text-slate-900">
+                Recorded as already collected, off this platform
+              </p>
+              <ul className="mt-2 list-disc pl-5">
+                {alreadyCollected.map((member) => (
+                  <li key={member.address}>{shortenAddress(member.address)}</li>
+                ))}
+              </ul>
+              <p className="mt-2">
+                They keep contributing each round, and collect again when the next
+                round comes back to them.
+              </p>
+            </div>
+          )}
+          <p>
+            Every member is asked to confirm this before the circle starts. Nothing
+            takes effect until they all have.
+          </p>
+        </div>
+      ),
+      confirmText: 'Record it',
+      cancelText: 'Cancel',
+      confirmButtonVariant: 'primary',
+      onConfirm: async () => {
+        const toastId = 'declare-migration';
+        try {
+          setIsMigrationBusy(true);
+          toast.loading('Recording your circle\'s position...', { id: toastId });
+
+          await new ZkLoginClient().declareMigrationState(
+            account,
+            id as string,
+            priorRoundsCompleted,
+            startPosition,
+            getCurrentNetwork(),
+          );
+
+          toast.success('Recorded. Members can now confirm it.', { id: toastId });
+          await fetchCircleDetails();
+        } catch (error) {
+          console.error('Error declaring migration state:', error);
+          toast.error(parseMoveError(error instanceof Error ? error.message : String(error)).message, {
+            id: toastId,
+          });
+        } finally {
+          setIsMigrationBusy(false);
+        }
+      },
+    });
+  };
+
+  const handleClearMigrationState = () => {
+    if (!id || !circle || !account) return;
+
+    setConfirmationModal({
+      isOpen: true,
+      title: 'Start this circle from the beginning?',
+      message: (
+        <div className="space-y-2">
+          <p>
+            This removes the recorded history. The circle will start a fresh
+            rotation with whoever is first in the payout order.
+          </p>
+          <p>Any confirmations members have already given are discarded.</p>
+        </div>
+      ),
+      confirmText: 'Remove the history',
+      cancelText: 'Keep it',
+      confirmButtonVariant: 'warning',
+      onConfirm: async () => {
+        const toastId = 'clear-migration';
+        try {
+          setIsMigrationBusy(true);
+          toast.loading('Removing the recorded history...', { id: toastId });
+
+          await new ZkLoginClient().clearMigrationState(
+            account,
+            id as string,
+            getCurrentNetwork(),
+          );
+
+          toast.success('Removed. This circle will start from the beginning.', { id: toastId });
+          await fetchCircleDetails();
+        } catch (error) {
+          console.error('Error clearing migration state:', error);
+          toast.error(parseMoveError(error instanceof Error ? error.message : String(error)).message, {
+            id: toastId,
+          });
+        } finally {
+          setIsMigrationBusy(false);
+        }
+      },
+    });
+  };
+
   // Add this helper function to check if rotation order is properly set
   const isRotationOrderSet = (members: Member[]): boolean => {
     if (members.length === 0) return false;
@@ -3614,24 +3823,20 @@ export default function ManageCircle() {
   }, [members]);
 
   // Add this shuffle function after the saveRotationOrder function
-  const shuffleRotationOrder = () => {
-    if (!members.length) return;
-    
-    // Create a copy of the members array
-    const shuffledMembers = [...members];
-    
-    // Fisher-Yates shuffle algorithm
-    for (let i = shuffledMembers.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffledMembers[i], shuffledMembers[j]] = [shuffledMembers[j], shuffledMembers[i]];
-    }
-    
-    // Extract addresses in the new order
-    const newOrder = shuffledMembers.map(member => member.address);
-    
-    // Save the new order
-    saveRotationOrder(newOrder);
-  };
+
+  // Mirrors the contract's is_migration_ratified: every seat in the rotation,
+  // at the ledger's current version. Null when the circle never migrated.
+  const migrationRatification = useMemo(() => {
+    if (!migrationLedger) return null;
+
+    const rotationOrder = members
+      .filter((member) => typeof member.position === 'number')
+      .slice()
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+      .map((member) => member.address);
+
+    return resolveMigrationRatification(migrationLedger, rotationOrder);
+  }, [migrationLedger, members]);
 
   // Update the Activate Circle button disabled logic
   const canActivate = useMemo(() => {
@@ -3661,6 +3866,15 @@ export default function ManageCircle() {
     
     // 5. Circle should not already be active
     const notAlreadyActive = !circle.isActive;
+
+    // 6. A circle that declared where it already stands cannot start until
+    // every member has confirmed that picture, AND the payout order still
+    // matches the one they confirmed. The contract refuses both
+    // (EMigrationNotRatified / EMigrationRotationChanged); this keeps the
+    // button honest about why.
+    const migrationSettled =
+      !migrationRatification
+      || (migrationRatification.isRatified && migrationRatification.matchesRotation);
     
     // Log conditions for debugging
     console.log('Circle activation conditions:', {
@@ -3669,12 +3883,13 @@ export default function ManageCircle() {
       hasMinimumMembers,
       hasEligibleRecoveryDelegate,
       notAlreadyActive,
+      migrationSettled,
       currentMembers: circle.currentMembers,
     });
     
     // All conditions must be true
-    return depositsPaid && rotationSet && hasMinimumMembers && hasEligibleRecoveryDelegate && notAlreadyActive;
-  }, [circle, allDepositsPaid, loadingRecoveryStatus, members, recoveryStatus]);
+    return depositsPaid && rotationSet && hasMinimumMembers && hasEligibleRecoveryDelegate && notAlreadyActive && migrationSettled;
+  }, [circle, allDepositsPaid, loadingRecoveryStatus, members, recoveryStatus, migrationRatification]);
 
   // Add this function to debug member deposit status
   const debugMemberDeposits = () => {
@@ -4013,13 +4228,20 @@ export default function ManageCircle() {
     }
 
     setLoadingRecoveryStatus(true);
+    setRecoveryStatusError(false);
     try {
       const client = getSuiClientFromPool(getJsonRpcUrl());
       const dynamicFieldsResult = await client.getDynamicFields({ parentId: id as string });
       const configFields = await getCircleConfigFieldsFromDynamicFields(client, dynamicFieldsResult.data);
       setRecoveryStatus(parseRecoveryStatus(configFields));
+      setMigrationLedger(await getMigrationLedgerFromDynamicFields(client, dynamicFieldsResult.data));
+      setRecoveryStatusError(false);
     } catch (error) {
       logSuiReadError('Failed to refresh recovery status:', error);
+      // Record the failure. Previously this branch left state untouched, so a
+      // failed read was permanently indistinguishable from a loaded circle
+      // with auto-release off.
+      setRecoveryStatusError(true);
     } finally {
       setLoadingRecoveryStatus(false);
     }
@@ -4373,7 +4595,9 @@ export default function ManageCircle() {
     const validationError = getRecoveryDelegateValidationError({
       value: recoveryDelegateDraft,
       adminAddress: circle.admin,
-      required: true,
+      // A delegate is only mandatory where the contract makes it mandatory:
+      // activate_circle enforces one solely when auto-release is enabled.
+      required: recoveryStatus?.autoReleaseEnabled === true,
     });
     if (validationError) {
       toast.error(validationError);
@@ -4503,6 +4727,19 @@ export default function ManageCircle() {
   });
   const autoReleaseRemainingMs = autoReleaseUi.remainingMs;
   const autoReleaseReady = autoReleaseUi.ready;
+  // Single source of truth for the admin-liveness card's wording. `statusKnown`
+  // is what stops an unread snapshot from being reported as a settled state —
+  // see getRecoveryDelegateCardCopy for why that mattered more after the fix
+  // than before it.
+  const recoveryStatusKnown = recoveryStatus !== null;
+  const delegateCopy = getRecoveryDelegateCardCopy({
+    statusKnown: recoveryStatusKnown,
+    loadError: recoveryStatusError,
+    autoReleaseEnabled: autoReleaseUi.enabled,
+    delegateStatus: autoReleaseUi.delegateStatus,
+    authorityMode: autoReleaseUi.authorityMode,
+    circleIsActive: Boolean(circle?.isActive),
+  });
   const canExecuteRecovery = Boolean(
     recoveryProposalPassed
       && recoveryStatus
@@ -4512,15 +4749,10 @@ export default function ManageCircle() {
   const canManageRecoveryDelegate = Boolean(
     recoveryStatus?.autoReleaseEnabled && recoveryStatus.rawState === 0,
   );
-  // `activate_circle` only enforces the next-in-command when the circle was
-  // created with auto-release enabled (njangi_circles.move). Circles without
-  // it activate with no delegate at all — and the delegate form is disabled on
-  // exactly those circles, so never tell that admin a delegate is required.
-  const recoveryDelegateRequired = Boolean(recoveryStatus?.autoReleaseEnabled);
   const recoveryDelegateValidationError = getRecoveryDelegateValidationError({
     value: recoveryDelegateDraft,
     adminAddress: circle?.admin,
-    required: true,
+    required: recoveryStatus?.autoReleaseEnabled === true,
   });
   const normalizedRecoveryDelegateDraft = normalizeRecoveryDelegateAddress(recoveryDelegateDraft);
   const recoveryDelegateDraftIsEligibleMember = Boolean(
@@ -4535,11 +4767,16 @@ export default function ManageCircle() {
   const hasRecoveryDelegateDraftChanges =
     (normalizedRecoveryDelegateDraft ?? null) !== (autoReleaseUi.configuredDelegate ?? null);
   const recoveryDelegateFormDisabledReason =
-    !recoveryStatus?.autoReleaseEnabled
-      ? 'Auto-release was not configured for this circle at creation.'
-      : recoveryStatus.rawState !== 0
-        ? 'Delegate updates are locked once emergency recovery leaves the active state.'
-        : null;
+    // `!recoveryStatus?.autoReleaseEnabled` is also true while the snapshot is
+    // still null, so this used to assert "not configured at creation" about a
+    // circle it had not read yet. Check that the status is known first.
+    !recoveryStatus
+      ? delegateCopy.delegateHint
+      : !recoveryStatus.autoReleaseEnabled
+        ? 'Auto-release was not configured for this circle at creation.'
+        : recoveryStatus.rawState !== 0
+          ? 'Delegate updates are locked once emergency recovery leaves the active state.'
+          : null;
   const recoveryExecutionStarted = Boolean(recoveryExecution?.startedAt);
   const recoveryExecutionCompleted = Boolean(recoveryExecution?.completedAt) || recoveryStatus?.rawState === 3;
   const recoveryExecutionProgress = recoveryExecution
@@ -4643,64 +4880,89 @@ export default function ManageCircle() {
       );
     }
     
+    if (migrationRatification && !migrationRatification.matchesRotation) {
+      return (
+        <div>
+          <p>
+            The payout order changed after this circle&apos;s history was recorded.
+            Members confirmed a different queue, so the record has to be made
+            again with the order as it stands now.
+          </p>
+          <p className="mt-2 text-xs">
+            Open Circle history above, start again, and members will be asked to
+            confirm the new order.
+          </p>
+        </div>
+      );
+    }
+
+    if (migrationRatification && !migrationRatification.isRatified) {
+      return (
+        <div>
+          <p>
+            Every member must confirm where this circle currently stands before it
+            can start.
+          </p>
+          <p className="mt-2 font-medium">Still to confirm:</p>
+          <ul className="mt-1 list-disc pl-5 text-xs">
+            {migrationRatification.pending.map((address) => (
+              <li key={address}>{shortenAddress(address)}</li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs">
+            Each member confirms on their own contribute page: paying the security
+            deposit counts as confirming, and anyone who already paid sees a
+            &ldquo;Yes, this is right&rdquo; button there instead.
+          </p>
+        </div>
+      );
+    }
+
     return "All requirements met! Circle can be activated.";
   };
 
   // Add a function to resume the cycle
+  /**
+   * Resumes the circle into the next round.
+   *
+   * Runs the transaction directly rather than opening a second dialog. The
+   * button that reaches here already confirms, with strictly more detail (it
+   * spells out the deposit reset); the dialog this used to chain only
+   * restated it. Chaining was also what broke it: a dialog opened from inside
+   * another dialog's confirm handler is closed again by the dialog that is
+   * dismissing itself, so the transaction was never built and every circle
+   * stayed stranded paused at the end of a round.
+   */
   const handleResumeCycle = async () => {
     if (!circle || !circle.paused) return;
-    
-    // Show confirmation modal first
-    setConfirmationModal({
-      isOpen: true,
-      title: 'Resume Circle Cycle',
-      message: (
-        <div>
-          <p>Cycle {circle.currentCycle} has completed. Would you like to:</p>
-          <ul className="mt-2 list-disc pl-5 text-sm">
-            <li>Resume to the next cycle</li>
-            <li>Allow members to make contributions for the new cycle</li>
-          </ul>
-          <p className="mt-2">Are you sure you want to proceed?</p>
-        </div>
-      ),
-      confirmText: 'Resume Cycle',
-      cancelText: 'Cancel',
-      confirmButtonVariant: 'primary',
-      onConfirm: async () => {
-        const toastId = 'resume-cycle';
-        try {
-          toast.loading('Resuming cycle...', { id: toastId });
-          
-          if (!account) {
-            toast.error('User account not available. Please log in again.', { id: toastId });
-            return;
-          }
-          
-          // Call the backend API
-          const { response: response, result: result } = await runSignedTx(() =>
-            new ZkLoginClient().resumeCycle(account, circle.id));
-          
-          if (!response.ok) {
-            console.error('Failed to resume cycle:', result);
-            const errorDetail = parseMoveError(result.error || '');
-            toast.error(errorDetail.message, { id: toastId });
-            return;
-          }
-          
-          // Update local state
-          setCircle(prevCircle => prevCircle ? { ...prevCircle, paused: false } : null);
-          
-          // Refresh circle details
-          await fetchCircleDetails();
-          
-          toast.success('Successfully resumed to the next cycle', { id: toastId });
-        } catch (error) {
-          console.error('Error resuming cycle:', error);
-          toast.error('Failed to resume cycle', { id: toastId });
-        }
+
+    const toastId = 'resume-cycle';
+    try {
+      toast.loading('Resuming cycle...', { id: toastId });
+
+      if (!account) {
+        toast.error('User account not available. Please log in again.', { id: toastId });
+        return;
       }
-    });
+
+      const { response, result } = await runSignedTx(() =>
+        new ZkLoginClient().resumeCycle(account, circle.id));
+
+      if (!response.ok) {
+        console.error('Failed to resume cycle:', result);
+        const errorDetail = parseMoveError(result.error || '');
+        toast.error(errorDetail.message, { id: toastId });
+        return;
+      }
+
+      setCircle(prevCircle => prevCircle ? { ...prevCircle, paused: false } : null);
+      await fetchCircleDetails();
+
+      toast.success('Successfully resumed to the next cycle', { id: toastId });
+    } catch (error) {
+      console.error('Error resuming cycle:', error);
+      toast.error('Failed to resume cycle', { id: toastId });
+    }
   };
 
   const openReturnAllDepositsModal = () => {
@@ -6013,12 +6275,29 @@ export default function ManageCircle() {
                               <button
                                 type="button"
                                 onClick={handleExecuteRecovery}
-                                disabled={isSubmittingRecoveryAction || loadingRecoveryExecution}
+                                // Also gated on the custody wallet having
+                                // resolved: the handler builds the refund
+                                // transaction against it and bails without it.
+                                // An enabled button that always bails is how
+                                // this failure hid — the click "worked" and
+                                // nothing happened.
+                                disabled={
+                                  isSubmittingRecoveryAction ||
+                                  loadingRecoveryExecution ||
+                                  !circle?.custody?.walletId
+                                }
                                 className={`${dangerActionClass} mt-4`}
                               >
                                 <AlertTriangle className="mr-2 h-4 w-4" />
                                 {isSubmittingRecoveryAction ? 'Executing...' : 'Execute Emergency Stop'}
                               </button>
+                              {!circle?.custody?.walletId && (
+                                <p className="mt-2 text-xs text-red-700/80">
+                                  Waiting for the circle&rsquo;s custody wallet to resolve —
+                                  the refund transaction is built against it. Refresh if this
+                                  persists.
+                                </p>
+                              )}
                             </div>
                           )}
 
@@ -6097,7 +6376,7 @@ export default function ManageCircle() {
                         <div className={mutedPanelClass}>
                           <p className={sectionEyebrowClass}>Trigger authority</p>
                           <p className="mt-2 text-sm font-semibold text-slate-950">
-                            {autoReleaseUi.authorityMode === 'delegate_grace' ? '24h delegate window' : 'Active-member fallback'}
+                            {delegateCopy.authorityModeLabel}
                           </p>
                           <p className="mt-1 text-xs text-slate-500">
                             {autoReleaseUi.delegateStatus === 'valid'
@@ -6106,7 +6385,7 @@ export default function ManageCircle() {
                                 : `Next in command ${shortenAddress(autoReleaseUi.validDelegate || '')} has exclusive trigger rights until ${autoReleaseUi.memberFallbackUnlockTime ? formatDate(autoReleaseUi.memberFallbackUnlockTime) : 'the 24-hour grace deadline'}.`
                               : autoReleaseUi.delegateStatus === 'invalid'
                                 ? 'The configured delegate is no longer an eligible active member, so active members become the fallback as soon as the heartbeat expires.'
-                                : 'Auto-release now requires a valid delegate address before this fallback should be relied on.'}
+                                : delegateCopy.authorityModeHint}
                           </p>
                         </div>
                         <div className={mutedPanelClass}>
@@ -6148,9 +6427,7 @@ export default function ManageCircle() {
                               <p className="mt-2 text-sm font-semibold text-slate-950">
                                 {autoReleaseUi.configuredDelegate
                                   ? shortenAddress(autoReleaseUi.configuredDelegate)
-                                  : recoveryDelegateRequired
-                                    ? 'Delegate required'
-                                    : 'Not applicable'}
+                                  : delegateCopy.delegateValueFallback}
                               </p>
                               <p className="mt-1 text-xs text-slate-500">
                                 {recoveryDelegateFormDisabledReason
@@ -6220,7 +6497,7 @@ export default function ManageCircle() {
                                         : `Currently configured wallet: ${normalizedRecoveryDelegateDraft}`
                                       : circle?.isActive
                                         ? 'Required: active auto-release circles must keep a valid next-in-command wallet configured.'
-                                        : 'Required before activation: choose an active non-admin member as next in command.'}
+                                        : delegateCopy.formHint}
                                 </p>
                               </div>
 
@@ -6254,22 +6531,14 @@ export default function ManageCircle() {
                           ) : (
                             <div className="mt-4 rounded-[18px] border border-stone-200 bg-stone-50/80 p-4 text-sm text-slate-600">
                               <p className="font-medium text-slate-900">
-                                {autoReleaseUi.configuredDelegate
-                                  ? autoReleaseUi.delegateStatus === 'valid'
-                                    ? 'Delegate is healthy.'
-                                    : 'Delegate needs attention.'
-                                  : recoveryDelegateRequired
-                                    ? 'Delegate required.'
-                                    : 'No delegate needed.'}
+                                {delegateCopy.summaryTitle}
                               </p>
                               <p className="mt-2 leading-6">
                                 {autoReleaseUi.configuredDelegate
                                   ? autoReleaseUi.delegateStatus === 'valid'
                                     ? 'If your heartbeat expires, this wallet gets a 24-hour exclusive recovery window before eligible active members can trigger.'
                                     : 'Because this delegate is no longer eligible, active non-admin members will become the fallback once the heartbeat expires.'
-                                  : recoveryDelegateRequired
-                                    ? 'Set a valid delegate before activating this circle so the admin-liveness fallback path is fully armed.'
-                                    : 'This circle was created without auto-release, so activation does not require a next in command. Emergency recovery here goes through the member vote above.'}
+                                  : delegateCopy.summaryBody}
                               </p>
                             </div>
                           )}
@@ -6540,17 +6809,6 @@ export default function ManageCircle() {
                           <p className="text-xs mt-1">The rotation order determines who receives payouts in which order.</p>
                         </div>
                       )}
-                      <div className="flex justify-end mb-4">
-                        <button
-                          onClick={shuffleRotationOrder}
-                          className={`${secondaryActionClass} px-4 py-2`}
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                          </svg>
-                          Shuffle Order
-                        </button>
-                      </div>
                       <RotationOrderList 
                         members={members}
                         adminAddress={circle.admin}
@@ -7057,10 +7315,37 @@ export default function ManageCircle() {
                       memberNames={memberNameMap}
                       showAdminOpenButton
                       circleIsActive={circle.isActive && allDepositsPaid}
-                      requiresRecoveryDelegate={recoveryDelegateRequired}
                       autoOpenWhenReady={autoOpenFirstRound}
                       onAutoOpenFired={() => setAutoOpenFirstRound(false)}
                       {...resolveCircleSettlementCoin(circle.autoSwapEnabled)}
+                    />
+                  </div>
+                ) : null}
+
+                {/* Already-running circles: record where the rotation stands
+                    before activation, and collect every member's confirmation.
+                    Hidden once the circle is live — the contract refuses these
+                    calls then, because they move the payout pointer. */}
+                {!circle.isActive ? (
+                  <div className={sectionCardClass}>
+                    <div className="mb-5">
+                      <p className={sectionEyebrowClass}>Before you start</p>
+                      <h3 className={`${sectionTitleClass} mt-2`}>Circle history</h3>
+                      <p className="mt-2 text-sm leading-6 text-slate-500">
+                        Moving a group that is already part-way through its rotation?
+                        Record where it stands so it carries on from there instead of
+                        starting over.
+                      </p>
+                    </div>
+                    <CircleMigrationPanel
+                      members={members}
+                      adminAddress={circle.admin}
+                      memberNames={memberNameMap}
+                      shortenAddress={shortenAddress}
+                      ratification={migrationRatification}
+                      isBusy={isMigrationBusy || loading}
+                      onDeclare={handleDeclareMigrationState}
+                      onClear={handleClearMigrationState}
                     />
                   </div>
                 ) : null}
@@ -7583,8 +7868,21 @@ export default function ManageCircle() {
         isOpen={confirmationModal.isOpen}
         onClose={() => setConfirmationModal(prev => ({ ...prev, isOpen: false }))}
         onConfirm={() => {
-          confirmationModal.onConfirm();
+          // Close FIRST, then run the action.
+          //
+          // Some handlers chain a second confirmation — handleResumeCycle
+          // opens one to spell out that resuming resets every member's
+          // deposit. Closing afterwards clobbered it: the close ran against
+          // the state the handler had just set, so the second dialog opened
+          // and shut in the same tick and its transaction was never sent.
+          // Resume Cycle therefore did nothing at all, stranding every circle
+          // paused at the end of every round.
+          //
+          // Ordering it this way makes the queued close land first and any
+          // dialog the handler opens win, while a handler that opens nothing
+          // still just closes.
           setConfirmationModal(prev => ({ ...prev, isOpen: false }));
+          confirmationModal.onConfirm();
         }}
         title={confirmationModal.title}
         message={confirmationModal.message}

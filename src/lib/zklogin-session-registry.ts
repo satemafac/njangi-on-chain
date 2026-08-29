@@ -10,12 +10,20 @@
 // an in-memory Map, which breaks the moment two requests land on different
 // lambda instances. When DATABASE_URL is configured the registry now
 // persists sessions to the `zklogin_sessions` Postgres table. The session
-// payload — which includes the ephemeral private key and zk proof
-// material — is encrypted at rest with AES-256-GCM using the 32-byte
+// payload is encrypted at rest with AES-256-GCM using the 32-byte
 // ZKLOGIN_SESSION_ENC_KEY environment variable (same key format as
 // WALRUS_PII_MASTER_KEY; `npm run generate:secrets` fills it). Only
 // non-secret lookup metadata (sub/aud/user_address/max_epoch/expiry) is
 // stored in plaintext columns.
+//
+// The payload no longer contains an ephemeral private key — it did when this
+// was written, and that was the original reason for the ciphertext. The
+// encryption stays anyway, and it is worth being explicit about why rather
+// than leaving a future reader to conclude it is vestigial: the payload still
+// holds the user's SALT and zkProof material. Neither can produce a signature
+// without the browser-held key, so leaking them is not fund loss — but the
+// salt is address-derivation input and the proofs are identity-bound, and
+// storing either in plaintext would be a privacy regression for no benefit.
 //
 // Without DATABASE_URL the registry falls back to the historic in-memory
 // Map (dev / unit tests only — production fails fast instead). The Map is

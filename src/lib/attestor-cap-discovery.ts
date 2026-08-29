@@ -10,6 +10,7 @@ import type { SuiClient } from '@mysten/sui/client';
 import type { NetworkType } from '../services/whatsapp-registry-service';
 import { getNetworkConfig } from '../services/network-config';
 import { getPooledSuiClient } from '../services/sui-rpc-failover';
+import { getPublishedPackageMetadata } from './circle-chain';
 
 export interface AttestorCapRef {
   objectId: string;
@@ -35,7 +36,13 @@ export async function findOwnedAttestorCaps(
   client?: SuiClient,
 ): Promise<AttestorCapRef[]> {
   if (!owner) return [];
-  const packageId = packageIdFor(network);
+  // AttestorCap was defined at ORIGINAL publish, so its struct type stays
+  // anchored there across upgrades — filtering on published-at matches
+  // nothing after any upgrade and tells the operator they own no cap, so
+  // attestation issuance becomes unreachable. Same bug, same fix as
+  // compliance-gate.ts (2026-08-23); this sibling was missed then.
+  const { originalId } = getPublishedPackageMetadata(network);
+  const packageId = originalId ?? packageIdFor(network);
   const rpcClient =
     client ??
     getPooledSuiClient({

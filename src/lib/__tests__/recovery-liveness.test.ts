@@ -198,4 +198,50 @@ describe('recovery liveness helpers', () => {
     expect(state.viewerCanTrigger).toBe(true);
     expect(state.memberFallbackReady).toBe(true);
   });
+
+  /**
+   * Coverage gap that let the delegate bug ship: every other case in this file
+   * passes autoReleaseEnabled: true, so nothing pinned the behaviour callers
+   * actually had to branch on.
+   */
+  it('reports a null snapshot identically to a disabled circle — callers must check status is known', () => {
+    const unknown = getRecoveryAutoReleaseUiState({
+      recoveryStatus: null,
+      adminAddress: ADMIN_ADDRESS,
+      userAddress: ADMIN_ADDRESS,
+      viewerIsEligibleActiveMember: false,
+      delegateIsEligibleActiveMember: false,
+      now: 10_000,
+    });
+
+    expect(unknown.enabled).toBe(false);
+    expect(unknown.delegateStatus).toBe('none');
+    expect(unknown.ready).toBe(false);
+    expect(unknown.memberFallbackReady).toBe(false);
+    // This is the trap: `enabled === false` here means "we have not read the
+    // circle", not "auto-release is off". UI must not render a settled state
+    // from it — see getRecoveryDelegateCardCopy's `statusKnown` input.
+  });
+
+  it('never arms the fallback on a circle where auto-release is disabled', () => {
+    const disabled = getRecoveryAutoReleaseUiState({
+      recoveryStatus: {
+        rawState: 0,
+        autoReleaseEnabled: false,
+        autoReleaseTriggerTime: 2_000,
+        nextInCommand: DELEGATE_ADDRESS,
+      },
+      adminAddress: ADMIN_ADDRESS,
+      userAddress: MEMBER_ADDRESS,
+      viewerIsEligibleActiveMember: true,
+      delegateIsEligibleActiveMember: true,
+      // Well past the trigger time — an enabled circle would be armed here.
+      now: 999_999,
+    });
+
+    expect(disabled.enabled).toBe(false);
+    expect(disabled.ready).toBe(false);
+    expect(disabled.memberFallbackReady).toBe(false);
+    expect(disabled.viewerCanTrigger).toBe(false);
+  });
 });

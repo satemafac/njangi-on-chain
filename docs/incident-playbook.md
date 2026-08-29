@@ -68,6 +68,61 @@ fact to state early and accurately in any of these:
 3. Legal demand → counsel before compliance or refusal.
 4. Document in the log.
 
+## Scenario 4 — Address drift (users signing in to a different account)
+
+Signal: `[address-drift] DRIFT DETECTED` in logs, a Sentry event tagged
+`feature: address-drift`, or a user reporting that their circles and money
+"disappeared" after signing in normally.
+
+**What it means.** A zkLogin address derives from `(iss, aud, sub, salt)`.
+If any of those changes, the same social login resolves to a DIFFERENT Sui
+address and the user's funds stay at the old one, unreachable. See
+`CLAUDE.md` → "Address-affecting environment variables".
+
+1. **Establish blast radius first.** One user is odd; several in an hour is
+   a configuration incident that will hit everyone who signs in next. Query:
+   `SELECT COUNT(*) FROM (SELECT sub FROM zklogin_address_bindings
+   GROUP BY sub, COALESCE(iss, provider)
+   HAVING COUNT(DISTINCT user_address) > 1) t;`
+   (`countRecentDriftEvents()` in `src/lib/zklogin-address-bindings.ts`
+   answers the same question windowed to the last hour.)
+2. **Ask the only question that matters: what changed?** In order of
+   likelihood — `NEXT_PUBLIC_{GOOGLE,FACEBOOK,APPLE}_CLIENT_ID`, or the
+   Enoki APPLICATION being deleted/recreated (which resets salts). Note:
+   rotating an Enoki API key within the same app does NOT move salts
+   (CLAUDE.md, corrected 2026-08-02) — before suspecting salt drift at
+   all, check whether the "same user" is actually a different PROVIDER
+   identity (sub/aud formats identify it). Check the deploy/env change
+   history around the first drift timestamp (`MIN(first_seen_at)` on the
+   new bindings).
+3. **If a change is identified, REVERT IT.** Restoring the previous salt
+   source restores the original addresses for everyone who has not yet been
+   onboarded under the new one. This is the only real fix and it gets
+   harder every hour, because each new user onboarded under the new
+   configuration is someone the revert will then strand. **Speed matters
+   more than diagnosis here** — revert first, understand afterwards.
+4. **Do not tell users their funds are "safe" or "recoverable" as a matter
+   of course.** The funds are intact at the old address, but we hold no key
+   for it and cannot move them. The modal already says this accurately;
+   support must not improve on it.
+5. Affected users can still claim payouts, request refunds and take part in
+   recovery votes at their *current* address — the gate is deliberately
+   fail-open on fund access. Joining, creating and contributing are blocked
+   until resolved.
+6. For a circle whose members are split across old and new addresses, the
+   protocol's answer is the member-initiated recovery vote, same as
+   Scenario 3(a): members can stop the circle and take back what they put
+   in. Point them to it; we cannot do it for them.
+7. Record in the log below: first drift timestamp, count of affected
+   identities, the suspected change, whether it was reverted, and the
+   addresses involved.
+
+**Prevention.** Key rotation is a plain credential refresh and is safe.
+The address-affecting changes are client ids, provider entries, and the
+Enoki application itself — treat THOSE as address migrations: never change
+them once users exist, and record any change in the deploy log so step 2
+has something to find.
+
 ## Contact chain
 
 - Counsel: {{COUNSEL_CONTACT}} (fill when the A6 engagement closes)
@@ -78,3 +133,47 @@ fact to state early and accurately in any of these:
 ## Incident log
 
 _Append dated entries here. None yet._
+
+## Reads that lie — the recurring bug family
+
+Found six times in production on 2026-08-23/24, then twice more by audit.
+Every instance renders as a confident falsehood about a person or their
+money, and unit tests never catch any of it because tests mock the reads.
+
+**The four shapes:**
+
+1. **Swallowed error as absence.** `catch { return null | [] | false }`
+   around an RPC read, where the caller cannot tell "failed" from
+   "genuinely absent". Presents as: "you are not a member", "nobody has
+   paid", "you have no circles", "deposit not paid".
+2. **Wrong package id.** Move types anchor to the package version that
+   DEFINED them. Types from the original publish need `originalId`; types
+   added in an upgrade need that version's id (e.g.
+   `timedEntriesPackageId`). Using published-at matches **zero** objects
+   or events forever, with no error.
+3. **Pinned / rationed client.** Reads that bypass `withSuiRpcFailover`,
+   or whose failure lands in a swallow. Some endpoints serve object reads
+   but refuse event history, and the rationed one is tried last.
+4. **Silent field drop.** An accessor that rebuilds its return value from
+   hand-listed fields, so a newly added field never reaches callers.
+
+**The rules:**
+
+- Distinguish absence from failure. `dynamicFieldNotFound` / `notExists`
+  is an answer; anything else is an unknown. Use `boolean | null`,
+  `string | null`, or an explicit `status: 'ok' | 'unavailable'`.
+- **Never move money or run a destructive operation on a guessed read.**
+  Refuse with a 503 and say nothing was done. Three shipped bugs did the
+  opposite: routing a contribution as a second deposit, submitting a
+  hardcoded contribution amount, and skipping the wallet check before
+  deleting a circle.
+- Never publish an invented figure. A "reasonable fallback for demo" on a
+  public page is a fabricated statistic.
+- Spread-first in accessors so a new field cannot be dropped.
+
+**Reference implementations:** `src/lib/circle-record.ts` (absent `[]` vs
+unknown `null`, via failover), `src/lib/circle-chain.ts`
+(`resolveCircleLifecycleState`, spread-first accessor),
+`src/pages/api/cron/cycle-finalized.ts` (refuses loudly on a package-id
+mismatch), `src/components/CycleEscrowPanel.tsx` (`loadError` distinct
+from "not open yet").

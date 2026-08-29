@@ -9,6 +9,13 @@ module njangi::njangi_circle_config {
     const FIELD_CIRCLE_CONFIG: vector<u8> = b"circle_config";
     const FIELD_MILESTONE_CONFIG: vector<u8> = b"milestone_config";
     const FIELD_PENALTIES_CONFIG: vector<u8> = b"penalties_config";
+    // Mid-cycle migration ledger. Its own dynamic field rather than a
+    // CircleConfig member, for the same reason as FIELD_REQUIRES_ATTESTATION
+    // in njangi_circles: adding a field to CircleConfig changes the layout of
+    // a struct that every existing circle already has serialized, which both
+    // fails the package upgrade compatibility check and would misread those
+    // circles. Absent == never migrated, which is the common case.
+    const FIELD_MIGRATION_LEDGER: vector<u8> = b"migration_ledger";
 
     // Recovery state constants
     const RECOVERY_STATE_ACTIVE: u8 = 0;
@@ -24,6 +31,7 @@ module njangi::njangi_circle_config {
     const EInvalidRecoveryDeadline: u64 = 66;
     const EInvalidRecoveryStateTransition: u64 = 67;
     const ERecoveryDelegateRequired: u64 = 68;
+    const EMigrationLedgerMissing: u64 = 76;
 
     // Circle configuration struct
     public struct CircleConfig has store, drop {
@@ -66,6 +74,50 @@ module njangi::njangi_circle_config {
         yes_votes: u64,
         no_votes: u64,
         majority_threshold: u64,
+    }
+
+    // ----------------------------------------------------------
+    // Mid-cycle migration
+    //
+    // A njangi that has been running offline for months does not start at
+    // rotation position 0 — some members have already collected their pot and
+    // the next turn belongs to somebody in the middle of the order. The ledger
+    // records where the group actually stands so the circle can be activated
+    // there instead of at the top.
+    //
+    // Declaring that positions 0..start_position already collected REMOVES
+    // those members from this round's payout queue, which is fund direction,
+    // not bookkeeping. So the ledger is only a proposal until every member in
+    // the rotation has acknowledged it: `njangi_circles::activate_circle`
+    // refuses to apply a ledger that is not unanimously ratified, and every
+    // re-declaration bumps `version`, which invalidates all prior acks.
+    // ----------------------------------------------------------
+    public struct MigrationAck has copy, drop, store {
+        member: address,
+        version: u64,
+        acked_at: u64,
+    }
+
+    public struct MigrationLedger has copy, drop, store {
+        declared_by: address,
+        declared_at: u64,
+        // Bumped on every re-declaration; acks are bound to the version they
+        // were cast against, so rewriting the ledger forces a fresh round of
+        // confirmations rather than silently inheriting the old ones.
+        version: u64,
+        // Rounds the group completed before it migrated. Seeds `current_cycle`
+        // so the on-chain round numbering continues the group's own count.
+        prior_rounds_completed: u64,
+        // Index into `rotation_order` where on-chain play resumes. Everyone
+        // before it collected their pot off-platform.
+        start_position: u64,
+        // The rotation order as it stood when this was declared. A position
+        // number means nothing on its own: reordering the rotation after
+        // members confirm would hand position N to a different person while
+        // their confirmations still stood. Activation requires the order to
+        // match this exactly.
+        rotation_snapshot: vector<address>,
+        acks: vector<MigrationAck>,
     }
 
     // Milestone configuration struct
@@ -428,6 +480,115 @@ module njangi::njangi_circle_config {
         false
     }
 
+    // ===== Migration ledger =====
+    //
+    // Stored under FIELD_MIGRATION_LEDGER on the circle's own UID, not inside
+    // CircleConfig. Absent means the circle never migrated.
+
+    public fun has_migration_ledger(obj: &UID): bool {
+        dynamic_field::exists_(obj, FIELD_MIGRATION_LEDGER)
+    }
+
+    fun borrow_migration_ledger(obj: &UID): &MigrationLedger {
+        dynamic_field::borrow(obj, FIELD_MIGRATION_LEDGER)
+    }
+
+    public fun get_migration_ledger(obj: &UID): Option<MigrationLedger> {
+        if (!has_migration_ledger(obj)) {
+            return option::none()
+        };
+        option::some(*borrow_migration_ledger(obj))
+    }
+
+    public fun get_migration_version(obj: &UID): u64 {
+        if (!has_migration_ledger(obj)) {
+            return 0
+        };
+        borrow_migration_ledger(obj).version
+    }
+
+    public fun get_migration_start_position(obj: &UID): u64 {
+        if (!has_migration_ledger(obj)) {
+            return 0
+        };
+        borrow_migration_ledger(obj).start_position
+    }
+
+    public fun get_migration_prior_rounds_completed(obj: &UID): u64 {
+        if (!has_migration_ledger(obj)) {
+            return 0
+        };
+        borrow_migration_ledger(obj).prior_rounds_completed
+    }
+
+    public fun get_migration_declared_by(obj: &UID): Option<address> {
+        if (!has_migration_ledger(obj)) {
+            return option::none()
+        };
+        option::some(borrow_migration_ledger(obj).declared_by)
+    }
+
+    public fun get_migration_declared_at(obj: &UID): u64 {
+        if (!has_migration_ledger(obj)) {
+            return 0
+        };
+        borrow_migration_ledger(obj).declared_at
+    }
+
+    public fun get_migration_rotation_snapshot(obj: &UID): vector<address> {
+        if (!has_migration_ledger(obj)) {
+            return vector::empty()
+        };
+        borrow_migration_ledger(obj).rotation_snapshot
+    }
+
+    public fun get_migration_acks(obj: &UID): vector<MigrationAck> {
+        if (!has_migration_ledger(obj)) {
+            return vector::empty()
+        };
+        borrow_migration_ledger(obj).acks
+    }
+
+    public fun get_migration_ack_count(obj: &UID): u64 {
+        if (!has_migration_ledger(obj)) {
+            return 0
+        };
+        vector::length(&borrow_migration_ledger(obj).acks)
+    }
+
+    // An ack only counts against the version it was cast for, so a member who
+    // confirmed an earlier draft of the ledger is NOT counted for a rewritten
+    // one. This is what makes re-declaration invalidate prior confirmations.
+    public fun has_migration_ack_from(obj: &UID, member: address): bool {
+        if (!has_migration_ledger(obj)) {
+            return false
+        };
+
+        let ledger = borrow_migration_ledger(obj);
+        let mut i = 0;
+        let ack_count = vector::length(&ledger.acks);
+        while (i < ack_count) {
+            let ack = vector::borrow(&ledger.acks, i);
+            if (ack.member == member && ack.version == ledger.version) {
+                return true
+            };
+            i = i + 1;
+        };
+        false
+    }
+
+    public fun get_migration_ack_member(ack: &MigrationAck): address {
+        ack.member
+    }
+
+    public fun get_migration_ack_version(ack: &MigrationAck): u64 {
+        ack.version
+    }
+
+    public fun get_migration_ack_timestamp(ack: &MigrationAck): u64 {
+        ack.acked_at
+    }
+
     public fun is_recovery_majority_reached(obj: &UID): bool {
         let config = get_circle_config(obj);
         if (option::is_some(&config.recovery_proposal)) {
@@ -590,6 +751,56 @@ module njangi::njangi_circle_config {
         let updated_at = clock::timestamp_ms(clock);
         let config = get_circle_config_mut(obj);
         clear_recovery_proposal_internal(config, updated_at);
+    }
+
+    // Writes (or rewrites) the declared migration state. Rewriting bumps the
+    // version and drops every ack with it, so a group cannot have the ledger
+    // changed underneath confirmations that were already given.
+    public fun begin_migration_ledger(
+        obj: &mut UID,
+        declared_by: address,
+        prior_rounds_completed: u64,
+        start_position: u64,
+        rotation_snapshot: vector<address>,
+        clock: &Clock
+    ) {
+        let declared_at = clock::timestamp_ms(clock);
+        let next_version = if (has_migration_ledger(obj)) {
+            let previous: MigrationLedger = dynamic_field::remove(obj, FIELD_MIGRATION_LEDGER);
+            previous.version + 1
+        } else {
+            1
+        };
+
+        dynamic_field::add(obj, FIELD_MIGRATION_LEDGER, MigrationLedger {
+            declared_by,
+            declared_at,
+            version: next_version,
+            prior_rounds_completed,
+            start_position,
+            rotation_snapshot,
+            acks: vector::empty(),
+        });
+    }
+
+    public fun append_migration_ack(obj: &mut UID, member: address, clock: &Clock) {
+        let acked_at = clock::timestamp_ms(clock);
+        assert!(has_migration_ledger(obj), EMigrationLedgerMissing);
+
+        let ledger: &mut MigrationLedger =
+            dynamic_field::borrow_mut(obj, FIELD_MIGRATION_LEDGER);
+        let version = ledger.version;
+        vector::push_back(&mut ledger.acks, MigrationAck {
+            member,
+            version,
+            acked_at,
+        });
+    }
+
+    public fun clear_migration_ledger(obj: &mut UID) {
+        if (has_migration_ledger(obj)) {
+            let _removed: MigrationLedger = dynamic_field::remove(obj, FIELD_MIGRATION_LEDGER);
+        };
     }
 
     public fun mark_recovery_stopped(obj: &mut UID, clock: &Clock) {
