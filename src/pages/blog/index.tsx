@@ -26,15 +26,15 @@ export default function BlogIndexPage() {
     },
     {
       id: 'african-diaspora-remittances',
-      title: "How African Diaspora Communities Are Revolutionizing Remittances",
-      excerpt: "The World Bank puts the average cost of sending $200 to Sub-Saharan Africa at 7.9%. What a rotating circle changes about that, and what it does not.",
+      title: "Sending Money Home Isn't the Same as Belonging",
+      excerpt: "The World Bank puts the average cost of sending $200 to Sub-Saharan Africa at 7.9%. A savings circle does not change that number. What it changes is whether the person sending is a member or only a source of funds.",
       category: 'Diaspora',
-      readTime: '12 min read',
-      publishDate: '2024-01-12',
+      readTime: '10 min read',
+      publishDate: '2026-08-28',
       author: 'Njangi On-Chain',
       tags: ['diaspora', 'remittances', 'africa'],
       href: '/blog/african-diaspora-remittances',
-      available: false
+      available: true
     },
     {
       id: 'women-led-savings-circles-africa',

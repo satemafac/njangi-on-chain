@@ -109,6 +109,13 @@ export const SITE_ROUTES: SiteRoute[] = [
   { path: '/pricing', page: 'pricing', lastmod: '2026-08-02', changefreq: 'monthly', priority: 0.7 },
   { path: '/blog', page: 'blog/index', lastmod: '2026-08-02', changefreq: 'weekly', priority: 0.6 },
   {
+    path: '/blog/african-diaspora-remittances',
+    page: 'blog/african-diaspora-remittances',
+    lastmod: '2026-08-28',
+    changefreq: 'yearly',
+    priority: 0.6,
+  },
+  {
     path: '/blog/women-led-savings-circles-africa',
     page: 'blog/women-led-savings-circles-africa',
     lastmod: '2026-08-24',
