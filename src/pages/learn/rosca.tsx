@@ -54,7 +54,7 @@ export default function BlockchainRoscaPage() {
               <span>/</span>
               <Link href="/learn" className="hover:text-gold transition-colors">Learn</Link>
               <span>/</span>
-              <span className="text-cream font-medium">Blockchain ROSCA</span>
+              <span className="text-cream font-medium">ROSCA</span>
             </div>
           </div>
         </nav>
@@ -66,16 +66,16 @@ export default function BlockchainRoscaPage() {
               What is a ROSCA? Rotating Savings and Credit Associations Explained
             </h1>
             <p className="text-xl md:text-2xl mb-8 text-cream-muted">
-              Transforming traditional <strong>Rotating Savings and Credit Associations (ROSCAs)</strong> through 
-              blockchain technology, smart contracts, and decentralized finance. Experience the security and 
-              transparency of community savings reimagined for the digital age.
+              The <strong>rotating savings and credit association</strong> is one of the oldest ways people
+              save together: everyone pays in on a schedule, and each member takes the whole pot in turn.
+              Here is how the model works, where it appears, and how to run one where nobody has to hold the money.
             </p>
             <div className="flex flex-col sm:flex-row gap-4">
               <Link 
                 href="/create-circle" 
                 className="bg-ink-surface text-gold px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface transition-colors text-center"
               >
-                Start Your Digital ROSCA →
+                Start a circle →
               </Link>
               <Link 
                 href="/dashboard" 
@@ -125,7 +125,7 @@ export default function BlockchainRoscaPage() {
                 onClick={() => setActiveTab('blockchain')}
                 className={`px-4 py-2 rounded-lg transition-colors ${activeTab === 'blockchain' ? 'bg-gold/[0.07] text-gold' : 'hover:bg-ink-surface'}`}
               >
-                Blockchain Revolution
+                How It Works Here
               </button>
               <button 
                 onClick={() => setActiveTab('implementation')}
@@ -288,12 +288,12 @@ export default function BlockchainRoscaPage() {
           >
             <section className="space-y-8">
               <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">Blockchain Technology Revolution</h2>
+                <h2 className="text-3xl font-bold mb-6 text-cream">Rules the group cannot quietly change</h2>
                 
                 <div className="mb-8">
-                  <h3 className="text-2xl font-bold mb-4">Smart Contract Automation</h3>
+                  <h3 className="text-2xl font-bold mb-4">The rules, written down</h3>
                   <div className="bg-ink-surface p-4 rounded-lg font-mono text-sm overflow-x-auto">
-                    <pre>{`// Simplified ROSCA Smart Contract
+                    <pre>{`// A simplified sketch of the circle rules
 struct ROSCACircle {
     members: vector<address>,
     contribution_amount: u64,
@@ -311,7 +311,7 @@ public fun make_contribution(
     // Verify contribution amount and member status
     // Record contribution automatically
     // Trigger payout when round complete
-    // Update reputation scores
+    // Advance the rotation to the next member
 }`}</pre>
                   </div>
                 </div>
@@ -345,13 +345,13 @@ public fun make_contribution(
                   </div>
 
                   <div>
-                    <h3 className="text-xl font-bold mb-4 text-gold">Blockchain Solutions</h3>
+                    <h3 className="text-xl font-bold mb-4 text-gold">What changes</h3>
                     <div className="space-y-3">
                       <div className="flex items-start space-x-3">
                         <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
                         <div>
-                          <h4 className="font-semibold text-cream">Cryptographic Security</h4>
-                          <p className="text-sm text-sand">Immutable, transparent, automated</p>
+                          <h4 className="font-semibold text-cream">Nobody holds the pot</h4>
+                          <p className="text-sm text-sand">No operator function can move a circle&rsquo;s money</p>
                         </div>
                       </div>
                       <div className="flex items-start space-x-3">
@@ -365,7 +365,7 @@ public fun make_contribution(
                         <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
                         <div>
                           <h4 className="font-semibold text-cream">Automated Escrow</h4>
-                          <p className="text-sm text-sand">Contributions held and released by smart contract, on schedule</p>
+                          <p className="text-sm text-sand">Contributions held in escrow and released on schedule, to the scheduled member only</p>
                         </div>
                       </div>
                     </div>
@@ -373,11 +373,11 @@ public fun make_contribution(
                 </div>
 
                 <div className="bg-gold/[0.07] p-6 rounded-lg">
-                  <h3 className="text-lg font-semibold text-gold mb-3">Key Blockchain Advantages</h3>
+                  <h3 className="text-lg font-semibold text-gold mb-3">What that gives the circle</h3>
                   <div className="grid md:grid-cols-3 gap-4 text-sm text-gold">
                     <div>
                       <h4 className="font-medium">Transparency</h4>
-                      <p>All transactions publicly verifiable on blockchain</p>
+                      <p>Every contribution and payout sits on a public record any member can check</p>
                     </div>
                     <div>
                       <h4 className="font-medium">Automation</h4>
@@ -401,7 +401,7 @@ public fun make_contribution(
           >
             <section className="space-y-8">
               <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">Getting Started with Blockchain ROSCAs</h2>
+                <h2 className="text-3xl font-bold mb-6 text-cream">Getting started</h2>
                 
                 <div className="grid md:grid-cols-2 gap-8 mb-8">
                   <div>
@@ -436,11 +436,11 @@ public fun make_contribution(
                     <div className="space-y-3">
                       <div className="flex items-center space-x-3">
                         <div className="bg-gold text-cream rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">1</div>
-                        <span className="text-sm">Set up cryptocurrency wallet (Sui Wallet recommended)</span>
+                        <span className="text-sm">Sign in with Google, Facebook or Apple &mdash; no seed phrase</span>
                       </div>
                       <div className="flex items-center space-x-3">
                         <div className="bg-gold text-cream rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">2</div>
-                        <span className="text-sm">Complete identity verification and KYC process</span>
+                        <span className="text-sm">Agree the contribution amount, member count and rotation order</span>
                       </div>
                       <div className="flex items-center space-x-3">
                         <div className="bg-gold text-cream rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">3</div>
@@ -448,7 +448,7 @@ public fun make_contribution(
                       </div>
                       <div className="flex items-center space-x-3">
                         <div className="bg-gold text-cream rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">4</div>
-                        <span className="text-sm">Deposit security fund and start participating</span>
+                        <span className="text-sm">Post your security deposit and pay in each cycle</span>
                       </div>
                     </div>
 
@@ -482,7 +482,7 @@ public fun make_contribution(
                     What is Njangi? Cameroon&rsquo;s Savings Circle
                   </h3>
                   <p className="text-sm text-sand">
-                    Learn about Cameroon&rsquo;s traditional Njangi system and its blockchain transformation.
+                    Cameroon&rsquo;s savings circle: how it works, and why it has lasted.
                   </p>
                 </div>
               </Link>
@@ -490,10 +490,10 @@ public fun make_contribution(
               <Link href="/learn/tontine" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    Tontine Blockchain: African Finance Revolution
+                    What is a Tontine? African Savings Circles
                   </h3>
                   <p className="text-sm text-sand">
-                    Discover how French African tontine traditions meet modern blockchain technology.
+                    The rotating savings circle across West and Central Africa.
                   </p>
                 </div>
               </Link>
@@ -501,10 +501,10 @@ public fun make_contribution(
               <Link href="/learn/susu" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    Sou Sou Crypto: Caribbean Savings Circles
+                    What is a Susu? Caribbean &amp; West African Circles
                   </h3>
                   <p className="text-sm text-sand">
-                    Explore how Caribbean and West African susu traditions embrace cryptocurrency.
+                    Susu, sou-sou and Partner &mdash; the same circle under three names.
                   </p>
                 </div>
               </Link>
@@ -513,10 +513,10 @@ public fun make_contribution(
 
           {/* CTA Section */}
           <section className="bg-gradient-to-r from-ink-surface to-ink-deep rounded-lg text-cream p-8 mt-12 text-center">
-            <h2 className="text-2xl font-bold mb-4">Ready to Join the Blockchain ROSCA Revolution?</h2>
+            <h2 className="text-2xl font-bold mb-4">Run the circle your family already trusts</h2>
             <p className="text-cream-muted mb-6">
-              Experience the future of community savings with transparent, secure, and globally accessible 
-              rotating savings circles powered by blockchain technology.
+              The same rotation, the same people &mdash; with a pot that nobody, including us, can move,
+              and a record every member can check for themselves.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link 
@@ -540,7 +540,7 @@ public fun make_contribution(
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             <p className="text-sm text-sand text-center">
               <strong>Disclaimer:</strong> This content is for educational purposes only and does not constitute financial advice. 
-              Cryptocurrency investments carry risks. Always consult with qualified financial advisors before making investment decisions.
+              Njangi On-Chain is coordination software for savings circles: it never holds your money, never offers an investment, and never pays a return. Take part only with an amount your group can commit to the schedule.
             </p>
           </div>
         </footer>

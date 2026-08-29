@@ -157,11 +157,11 @@ export default function LearnIndexPage() {
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="text-center">
               <h1 className="text-4xl md:text-6xl font-bold mb-6">
-                Learn About Blockchain Savings Circles
+                One tradition, many names.
               </h1>
               <p className="text-xl md:text-2xl mb-8 text-cream-muted max-w-4xl mx-auto">
-                Discover how traditional savings circles from around the world are being revolutionized 
-                by blockchain technology, smart contracts, and decentralized finance.
+                Njangi, tontine, susu, chama, stokvel &mdash; the same practice, wherever it is found.
+                How it works, where it comes from, and how to run one where nobody has to hold the money.
               </p>
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <Link 
@@ -204,8 +204,8 @@ export default function LearnIndexPage() {
           <div className="text-center mb-12">
             <h2 className="text-3xl font-bold text-cream mb-4">Educational Articles</h2>
             <p className="text-lg text-sand max-w-3xl mx-auto">
-              Start with the fundamentals and progress through regional variations to understand 
-              how blockchain technology transforms traditional community finance.
+              Start with the fundamentals and work through the regional variations &mdash; how these
+              circles work, and what changes when the rules cannot be quietly rewritten.
             </p>
           </div>
 
@@ -301,7 +301,7 @@ export default function LearnIndexPage() {
             <div className="text-center mb-12">
               <h2 className="text-3xl font-bold text-cream mb-4">Recommended Learning Path</h2>
               <p className="text-lg text-sand">
-                Follow this sequence to build a comprehensive understanding of blockchain savings circles.
+                Follow this sequence to build a complete picture of how rotating savings circles work.
               </p>
             </div>
 
@@ -358,7 +358,7 @@ export default function LearnIndexPage() {
             <div className="text-center mb-12">
               <h2 className="text-3xl font-bold text-cream mb-4">Topics Covered</h2>
               <p className="text-lg text-sand">
-                Comprehensive coverage of traditional and blockchain-powered savings systems.
+                How these circles work, where they come from, and what makes one safer to run.
               </p>
             </div>
 
@@ -374,19 +374,19 @@ export default function LearnIndexPage() {
               </div>
 
               <div className="bg-ink-surface rounded-lg p-6 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)]">
-                <h3 className="text-lg font-semibold text-cream mb-3">Blockchain Technology</h3>
+                <h3 className="text-lg font-semibold text-cream mb-3">What Makes One Safer</h3>
                 <ul className="space-y-2 text-sm text-sand">
-                  <li>• Smart contract automation</li>
-                  <li>• Cryptographic security benefits</li>
-                  <li>• Transparent and immutable records</li>
-                  <li>• Global accessibility features</li>
+                  <li>• Nobody holds the pot — not even us</li>
+                  <li>• Every contribution visible to every member</li>
+                  <li>• Members can vote to stop a circle</li>
+                  <li>• No seed phrase, no token to buy first</li>
                 </ul>
               </div>
 
               <div className="bg-ink-surface rounded-lg p-6 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)]">
                 <h3 className="text-lg font-semibold text-cream mb-3">Partner-led Fiat Ramps</h3>
                 <ul className="space-y-2 text-sm text-sand">
-                  <li>• Coinbase, MoonPay, Transak on/off-ramps</li>
+                  <li>• Coinbase, MoonPay and Transak on-ramps</li>
                   <li>• Multi-currency support (USD, EUR, XAF, NGN, KES…)</li>
                   <li>• KYC and AML handled by licensed partners</li>
                   <li>• Geo-aware provider selection</li>
@@ -401,8 +401,8 @@ export default function LearnIndexPage() {
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-center">
             <h2 className="text-3xl font-bold mb-4">Ready to Apply What You&rsquo;ve Learned?</h2>
             <p className="text-xl text-cream-muted mb-8 max-w-3xl mx-auto">
-              Join thousands of people worldwide who are using blockchain technology to enhance
-              their traditional savings circles with non-custodial security and full transparency.
+              Run the circle your family already trusts &mdash; with a pot that nobody, including us,
+              can move, and a record every member can check for themselves.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link 
@@ -426,7 +426,7 @@ export default function LearnIndexPage() {
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             <p className="text-sm text-sand text-center">
               <strong>Educational Disclaimer:</strong> This content is for educational purposes only and does not constitute financial advice. 
-              Always consult with qualified financial advisors before making investment decisions.
+              Njangi On-Chain is coordination software for savings circles: it never holds your money, never offers an investment, and never pays a return. Take part only with an amount your group can commit to the schedule.
             </p>
           </div>
         </footer>

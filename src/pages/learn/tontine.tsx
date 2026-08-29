@@ -60,7 +60,7 @@ export default function TontineBlockchainPage() {
               <span>/</span>
               <Link href="/learn" className="hover:text-gold transition-colors">Learn</Link>
               <span>/</span>
-              <span className="text-cream font-medium">Tontine Blockchain</span>
+              <span className="text-cream font-medium">Tontine</span>
             </div>
           </div>
         </nav>
@@ -72,7 +72,7 @@ export default function TontineBlockchainPage() {
               What is a Tontine? Rotating Savings Circles in Francophone Africa
             </h1>
             <p className="text-xl md:text-2xl mb-8 text-cream-muted">
-              Discover how blockchain technology revolutionizes traditional African tontines—community 
+              How the tontine works across West and Central Africa—community 
               savings circles that have powered grassroots finance across French-speaking Africa for centuries.
             </p>
             <div className="flex flex-col sm:flex-row gap-4">
@@ -99,7 +99,7 @@ export default function TontineBlockchainPage() {
               {[
                 { id: 'overview', label: 'What is Tontine?' },
                 { id: 'regional', label: 'Regional Traditions' },
-                { id: 'blockchain', label: 'Blockchain Benefits' },
+                { id: 'blockchain', label: 'How It Works Here' },
                 { id: 'implementation', label: 'Getting Started' }
               ].map((tab) => (
                 <button 
@@ -268,7 +268,7 @@ export default function TontineBlockchainPage() {
           >
             <section className="space-y-8">
               <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">Blockchain Technology Revolution</h2>
+                <h2 className="text-3xl font-bold mb-6 text-cream">Rules the group cannot quietly change</h2>
                 
                 <div className="grid md:grid-cols-2 gap-8 mb-8">
                   <div>
@@ -299,13 +299,13 @@ export default function TontineBlockchainPage() {
                   </div>
 
                   <div>
-                    <h3 className="text-xl font-bold mb-4 text-gold">Blockchain Solutions</h3>
+                    <h3 className="text-xl font-bold mb-4 text-gold">What changes</h3>
                     <div className="space-y-3">
                       <div className="flex items-start space-x-3">
                         <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
                         <div>
                           <h4 className="font-semibold text-cream">Trustless Architecture</h4>
-                          <p className="text-sm text-sand">Smart contracts eliminate intermediaries</p>
+                          <p className="text-sm text-sand">No treasurer has to hold the cash</p>
                         </div>
                       </div>
                       <div className="flex items-start space-x-3">
@@ -319,7 +319,7 @@ export default function TontineBlockchainPage() {
                         <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
                         <div>
                           <h4 className="font-semibold text-cream">Automated Escrow</h4>
-                          <p className="text-sm text-sand">Contributions held and released by smart contract, on schedule</p>
+                          <p className="text-sm text-sand">Contributions held in escrow and released on schedule, to the scheduled member only</p>
                         </div>
                       </div>
                     </div>
@@ -327,7 +327,7 @@ export default function TontineBlockchainPage() {
                 </div>
 
                 <div className="bg-ink-surface p-4 rounded-lg font-mono text-sm overflow-x-auto mb-6">
-                  <pre>{`// Smart Contract for African Tontine
+                  <pre>{`// A simplified sketch of the tontine rules
 struct AfricanTontine {
     members: vector<TontineMember>,
     contribution_amount: u64,
@@ -350,11 +350,11 @@ public fun make_monthly_contribution(
                 </div>
 
                 <div className="bg-gold/[0.07] p-6 rounded-lg">
-                  <h3 className="text-lg font-semibold text-gold mb-3">Key Blockchain Advantages</h3>
+                  <h3 className="text-lg font-semibold text-gold mb-3">What that gives the circle</h3>
                   <div className="grid md:grid-cols-3 gap-4 text-sm text-gold">
                     <div>
                       <h4 className="font-medium">Enhanced Security</h4>
-                      <p>Cryptographic protection and immutable records</p>
+                      <p>A shared record that no one member can quietly edit</p>
                     </div>
                     <div>
                       <h4 className="font-medium">Cultural Preservation</h4>
@@ -392,7 +392,7 @@ public fun make_monthly_contribution(
                       <div className="border border-ink-border rounded-lg p-4">
                         <h4 className="font-semibold text-gold mb-2">2. Financial Setup</h4>
                         <p className="text-sm text-sand">
-                          Connect your Sui wallet and fund with USDC or local currency equivalent.
+                          Sign in with Google, Facebook or Apple &mdash; no seed phrase &mdash; and add funds when you are ready.
                         </p>
                       </div>
                       <div className="border border-ink-border rounded-lg p-4">
@@ -463,7 +463,7 @@ public fun make_monthly_contribution(
                     What is Njangi? Cameroon&rsquo;s Savings Circle
                   </h3>
                   <p className="text-sm text-sand">
-                    Learn about Cameroon&rsquo;s traditional Njangi system and its blockchain transformation.
+                    Cameroon&rsquo;s savings circle: how it works, and why it has lasted.
                   </p>
                 </div>
               </Link>
@@ -471,10 +471,10 @@ public fun make_monthly_contribution(
               <Link href="/learn/rosca" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    Blockchain ROSCA: The Future of Community Savings
+                    What is a ROSCA? Rotating Savings, Explained
                   </h3>
                   <p className="text-sm text-sand">
-                    Discover how blockchain technology revolutionizes traditional ROSCAs worldwide.
+                    The structure behind njangi, tontine, susu and chit funds.
                   </p>
                 </div>
               </Link>
@@ -482,10 +482,10 @@ public fun make_monthly_contribution(
               <Link href="/learn/susu" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    Sou Sou Crypto: Caribbean Savings Circles
+                    What is a Susu? Caribbean &amp; West African Circles
                   </h3>
                   <p className="text-sm text-sand">
-                    Explore how Caribbean and West African susu traditions meet cryptocurrency.
+                    Susu, sou-sou and Partner &mdash; the same circle under three names.
                   </p>
                 </div>
               </Link>
@@ -521,7 +521,7 @@ public fun make_monthly_contribution(
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             <p className="text-sm text-sand text-center">
               <strong>Disclaimer:</strong> This content is for educational purposes only and does not constitute financial advice. 
-              Cryptocurrency investments carry risks. Always consult with qualified financial advisors before making investment decisions.
+              Njangi On-Chain is coordination software for savings circles: it never holds your money, never offers an investment, and never pays a return. Take part only with an amount your group can commit to the schedule.
             </p>
           </div>
         </footer>
