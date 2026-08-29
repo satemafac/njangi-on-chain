@@ -22,12 +22,12 @@ export default function FAQPage() {
         {
           id: "what-is-njangi",
           question: "What is a Njangi?",
-          answer: "A Njangi is a community-based savings system where members contribute funds together in a rotation for the equal benefit of every member. It's also known as ROSCA (Rotating Savings and Credit Association), Tontine, Sou Sou, or by many other cultural names around the world. Our platform brings this time-tested tradition to the blockchain for enhanced security and transparency."
+          answer: "A Njangi is a community-based savings system where members contribute funds together in a rotation for the equal benefit of every member. It's also known as ROSCA (Rotating Savings and Credit Association), Tontine, Sou Sou, or by many other cultural names around the world. Njangi On-Chain runs that same tradition with the pot held in escrow rather than by a treasurer, so nobody has to hold everyone else's money."
         },
         {
           id: "how-to-start",
           question: "How do I get started with Njangi On-Chain?",
-          answer: "Getting started is simple: 1) Click 'Login' and authenticate with your Google, Facebook, or other social account using zkLogin, 2) Set up your blockchain wallet (we'll guide you through this), 3) Create a new savings circle or join an existing one, 4) Start contributing and participating in your community savings group."
+          answer: "Getting started is simple: 1) Click 'Login' and authenticate with your Google, Facebook, or other social account using zkLogin, 2) Create a new savings circle or join an existing one, 3) Agree the contribution amount and rotation order with your group, 4) Post your security deposit and start contributing. There is no seed phrase to write down and no token to buy first."
         },
         {
           id: "cost-to-use",
@@ -37,7 +37,7 @@ export default function FAQPage() {
         {
           id: "currencies-supported",
           question: "What currencies can I use?",
-          answer: "We support 6+ major cryptocurrencies including USDC, USDT, SUI, BTC, and others. USDC and USDT are stablecoins pegged to the US Dollar, making them ideal for predictable savings amounts. You can also use native cryptocurrencies if your group prefers."
+          answer: "Two: USDC and SUI. USDC is a digital dollar, so a circle spread across countries can agree an amount that holds its value. Do not send any other asset, and do not send over any network other than Sui — funds sent another way cannot be recovered."
         }
       ]
     },
@@ -45,14 +45,14 @@ export default function FAQPage() {
       title: "How It Works",
       faqs: [
         {
-          id: "how-blockchain-different",
+          id: "how-its-different",
           question: "How is Njangi On-Chain different from traditional savings circles?",
-          answer: "While preserving the community spirit of traditional Njangi, our blockchain version offers key advantages: 1) Global accessibility - join circles worldwide, not just locally, 2) Transparent automation - smart contracts handle contributions and payouts fairly, 3) Enhanced security - cryptographic protection against fraud, 4) Permanent records - all transactions are immutably recorded, 5) No geographic limitations - participate from anywhere in the world."
+          answer: "The circle is the same; what changes is who holds the money and who keeps the record. 1) Nobody holds the pot — each cycle's contributions sit in escrow that only the scheduled recipient can open, 2) the rotation runs to the order your circle agreed rather than to memory, 3) every contribution and payout is on a shared record any member can check, 4) members can vote to stop a circle and get their money back, and 5) a circle can span countries, so family abroad can take part."
         },
         {
           id: "smart-contracts-work",
-          question: "How do smart contracts manage our savings circle?",
-          answer: "Smart contracts are automated programs on the blockchain that execute predefined rules without human intervention. In your Njangi circle, they automatically: collect contributions from members, randomly determine payout order fairly, distribute funds to the designated recipient each cycle, track all member participation and payments, and enforce circle rules consistently for everyone."
+          question: "How is the money actually held?",
+          answer: "Each cycle's contributions are held by a contract — a set of rules fixed before anyone pays in, which nobody can quietly change afterwards, including us. It holds the contributions in escrow, release the pot to the member whose turn it is under the rotation order your circle agreed, record every contribution and payout on chain, and apply the same rules to everyone. The rotation order is set by the circle admin before the circle starts, not drawn at random."
         },
         {
           id: "payout-order",
@@ -62,7 +62,7 @@ export default function FAQPage() {
         {
           id: "what-happens-missed-payment",
           question: "What happens if someone misses a payment?",
-          answer: "Smart contracts have built-in penalties for missed payments to protect the group. Depending on your circle's rules: the member may pay a penalty fee, they might be moved later in the payout queue, or in severe cases, they could be removed from the circle. All rules are agreed upon when joining and automatically enforced by the smart contract."
+          answer: "The circle's rules cover missed payments, and they are applied the same way to everyone. Depending on what your circle agreed: the member may pay a penalty fee, they might be moved later in the payout queue, or in severe cases, they could be removed from the circle. All of it is agreed when joining and applied automatically, not decided by a person after the fact."
         }
       ]
     },
@@ -72,27 +72,27 @@ export default function FAQPage() {
         {
           id: "zklogin-secure",
           question: "Is zkLogin secure? How does it work?",
-          answer: "zkLogin is a cutting-edge authentication system that's actually more secure than traditional passwords. It uses zero-knowledge proofs to verify your identity through social accounts (Google, Facebook, etc.) without exposing your personal information to the blockchain. You get the convenience of social login with the security of cryptographic verification."
+          answer: "zkLogin is a cutting-edge authentication system that's actually more secure than traditional passwords. It uses zero-knowledge proofs to verify your identity through social accounts (Google, Facebook, etc.) without putting your personal information on the public record. You get the convenience of a social login without a seed phrase to lose."
         },
         {
           id: "funds-security",
           question: "How secure are my funds?",
-          answer: "Your funds are secured by multiple layers: 1) Sui blockchain's cryptographic security (same level as Bitcoin), 2) Smart contract automation eliminates human error and fraud, 3) Self-custody means you control your own wallet keys, 4) Multi-signature requirements for group actions, 5) Open-source code that's publicly auditable. We never hold your funds - they're always in your control or locked in transparent smart contracts."
+          answer: "Several things work together: 1) contributions sit in a per-cycle escrow contract rather than with a treasurer, 2) each cycle's recipient is fixed when the round opens, so the pot can only be claimed by that member, 3) you sign every transaction yourself — we hold no key that could sign for you, 4) the rotation order and every payment are recorded on chain for the whole circle to see, and 5) the contract code is public and auditable. What this does not do is remove risk: software can contain bugs, and a member who stops contributing can still leave your payout short. See our risk disclosure for what you are taking on."
         },
         {
           id: "what-if-member-leaves",
           question: "What if a member wants to leave the circle?",
-          answer: "Members can leave circles, but there are important considerations: 1) If they haven't received their payout yet, they may forfeit their contributions (depending on circle rules), 2) If they've already been paid, they must complete their remaining contribution obligations, 3) Some circles allow transferring membership to a trusted replacement, 4) All departure rules are set when the circle is created and enforced by smart contracts."
+          answer: "Members can leave circles, but there are important considerations: 1) If they haven't received their payout yet, they may forfeit their contributions (depending on circle rules), 2) If they've already been paid, they must complete their remaining contribution obligations, 3) Some circles allow transferring membership to a trusted replacement, 4) All departure rules are set when the circle is created and applied the same way to everyone."
         },
         {
           id: "identity-verification",
           question: "Why am I asked to complete identity verification before contributing?",
-          answer: "Some circles turn on an identity verification requirement — usually because the circle operates in a region where regulations require it, or because the admin wants an extra layer of trust between members. Verification is a one-time check arranged through your circle admin: once you're verified, an attestation is recorded on-chain against your wallet and your contributions and payouts go through normally until it expires. Njangi On-Chain never sees or stores your identity documents — checks are performed by licensed verification partners, and only the pass/fail attestation touches the blockchain. If you're seeing a verification prompt, ask your circle admin to start your verification."
+          answer: "Some circles turn on an identity verification requirement — usually because the circle operates in a region where regulations require it, or because the admin wants an extra layer of trust between members. Verification is a one-time check arranged through your circle admin: once you're verified, an attestation is recorded on-chain against your account and your contributions and payouts go through normally until it expires. Njangi On-Chain never sees or stores your identity documents — checks are performed by licensed verification partners, and only the pass/fail attestation touches the blockchain. If you're seeing a verification prompt, ask your circle admin to start your verification."
         },
         {
-          id: "blockchain-fails",
-          question: "What happens if the blockchain goes down?",
-          answer: "Blockchain networks like Sui are designed to be highly resilient with thousands of validators worldwide. Even if some nodes go offline, your funds and circle data remain secure and accessible. In the extremely unlikely event of a complete network failure, your funds are still recoverable using your private keys. However, major blockchains have operated continuously for years without such issues."
+          id: "network-or-app-down",
+          question: "What if the network or the app goes down?",
+          answer: "Your circle's money is not held by us and does not depend on our app being up: it sits in the escrow contract on a public network run by thousands of independent operators, and the record stays readable even if this website is unavailable. What this does not do is make your account recoverable if you lose access to the social account you signed in with — sign-in is currently one-way, so keep access to that account."
         }
       ]
     },
@@ -112,7 +112,7 @@ export default function FAQPage() {
         {
           id: "contribution-frequency",
           question: "How often do I need to contribute?",
-          answer: "Contribution frequency is set when creating or joining a circle. Common options include: weekly, bi-weekly, monthly, or quarterly. Most circles use monthly contributions as it aligns with salary cycles and gives everyone predictable payment schedules. The smart contract will automatically track and enforce the chosen frequency."
+          answer: "Contribution frequency is set when creating or joining a circle. Common options include: weekly, bi-weekly, monthly, or quarterly. Most circles use monthly contributions as it aligns with salary cycles and gives everyone predictable payment schedules. The schedule is fixed when the circle is created, and tracked automatically."
         },
         {
           id: "mobile-app",
@@ -137,12 +137,12 @@ export default function FAQPage() {
         {
           id: "global-participation",
           question: "Can I join circles with people from other countries?",
-          answer: "Absolutely! One of blockchain's biggest advantages is enabling global participation. You can join circles with diaspora communities, international friends, or people who share your cultural background but live worldwide. Currency conversion and international transfers are handled seamlessly by the blockchain."
+          answer: "Yes — this is one of the main reasons the product exists. A circle can include family at home and relatives abroad, so a njangi no longer has to end at a border. Contributions are made in a digital dollar so everyone is paying the same agreed amount regardless of where they live."
         },
         {
           id: "regulations-compliance",
           question: "Is this legal in my country?",
-          answer: "Njangi On-Chain operates as a peer-to-peer community savings platform, similar to traditional informal savings groups that are legal worldwide. However, cryptocurrency regulations vary by country. We recommend checking your local laws regarding cryptocurrency use. Our platform complies with applicable regulations and we're committed to working with authorities to ensure compliance."
+          answer: "Njangi On-Chain is non-custodial coordination software for savings groups: we never hold, move, or take a cut of member funds. Rules about crypto and about savings groups differ by country, and whether any particular rule applies to you depends on where you live — please check your local law. We are not able to give you legal advice about your situation."
         }
       ]
     }
@@ -196,8 +196,8 @@ export default function FAQPage() {
               Frequently Asked Questions
             </h1>
             <p className="text-xl md:text-2xl mb-8 text-cream-muted">
-              Everything you need to know about Njangi On-Chain, blockchain savings circles, 
-              and community finance on the Sui blockchain.
+              Everything you need to know about Njangi On-Chain, how a savings circle works,
+              and what happens to your money at each step.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link 
@@ -292,7 +292,7 @@ export default function FAQPage() {
             </h2>
             <p className="text-lg text-sand mb-8 max-w-2xl mx-auto">
               Can&rsquo;t find what you&rsquo;re looking for? We&rsquo;re here to help! 
-              Reach out to our community or learn more about blockchain savings circles.
+              Reach out to our community, or read more about how savings circles work.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link 
@@ -340,7 +340,7 @@ export default function FAQPage() {
               <Link href="/learn/rosca" className="group">
                 <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    Blockchain ROSCA
+                    What is a ROSCA?
                   </h3>
                   <p className="text-sm text-gold">
                     Discover the future of community savings.
@@ -351,10 +351,10 @@ export default function FAQPage() {
               <Link href="/learn/tontine" className="group">
                 <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    Tontine Blockchain
+                    What is a Tontine?
                   </h3>
                   <p className="text-sm text-gold">
-                    African finance meets blockchain technology.
+                    The rotating savings circle across West and Central Africa.
                   </p>
                 </div>
               </Link>
@@ -362,7 +362,7 @@ export default function FAQPage() {
               <Link href="/learn/susu" className="group">
                 <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    Sou Sou Crypto
+                    What is a Susu?
                   </h3>
                   <p className="text-sm text-gold">
                     Caribbean savings circles go digital.
@@ -378,7 +378,7 @@ export default function FAQPage() {
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             <p className="text-sm text-sand text-center">
               <strong>Disclaimer:</strong> This content is for educational purposes only and does not constitute financial advice. 
-              Cryptocurrency investments carry risks. Always consult with qualified financial advisors before making investment decisions.
+              Njangi On-Chain is coordination software for savings circles: it never holds your money, never offers an investment, and never pays a return. Take part only with an amount your group can commit to the schedule.
             </p>
           </div>
         </footer>

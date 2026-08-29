@@ -80,7 +80,7 @@ export default function WhatIsNjangiPage() {
             <p className="text-xl md:text-2xl mb-8 text-cream-muted">
               <strong>Njangi</strong> (pronounced &ldquo;n-JAHN-gee&rdquo;) is a Cameroon-originated rotating savings and credit association 
               where community members pool money regularly and take turns receiving lump sum payouts. Now revolutionized through 
-              blockchain technology, Njangi combines centuries-old financial wisdom with modern transparency and automation.
+              a shared record nobody can quietly edit, Njangi carries centuries of practice into a form that travels.
             </p>
             <div className="flex flex-col sm:flex-row gap-4">
               <Link 
@@ -322,7 +322,7 @@ export default function WhatIsNjangiPage() {
           >
             <section className="space-y-8">
               <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">How Njangi Works: Traditional vs. Blockchain</h2>
+                <h2 className="text-3xl font-bold mb-6 text-cream">How Njangi works: the notebook and the alternative</h2>
                 
                 <div className="grid lg:grid-cols-2 gap-8 mb-8">
                   <div>
@@ -360,13 +360,13 @@ export default function WhatIsNjangiPage() {
                   </div>
 
                   <div>
-                    <h3 className="text-xl font-bold mb-4 text-gold">Blockchain-Powered Revolution</h3>
+                    <h3 className="text-xl font-bold mb-4 text-gold">What changes here</h3>
                     <div className="bg-gold/[0.07] p-6 rounded-lg">
-                      <h4 className="font-semibold text-gold mb-3">Smart Contract Automation</h4>
+                      <h4 className="font-semibold text-gold mb-3">Rules that hold</h4>
                       <ul className="space-y-2 text-gold text-sm">
                         <li>• Contribution tracking happens automatically on-chain</li>
                         <li>• Payout distribution follows predetermined rules</li>
-                        <li>• No single point of failure or fraud risk</li>
+                        <li>• No treasurer holds the pooled cash</li>
                         <li>• Complete transaction history immutably recorded</li>
                       </ul>
                     </div>
@@ -378,7 +378,7 @@ export default function WhatIsNjangiPage() {
                   <div className="grid md:grid-cols-3 gap-4 text-sm">
                     <div>
                       <h4 className="font-medium text-gold">Trust vulnerabilities</h4>
-                      <p className="text-gold">→ Cryptographic guarantees</p>
+                      <p className="text-gold">→ Rules enforced by contract, not by one person</p>
                     </div>
                     <div>
                       <h4 className="font-medium text-gold">Geographic constraints</h4>
@@ -386,7 +386,7 @@ export default function WhatIsNjangiPage() {
                     </div>
                     <div>
                       <h4 className="font-medium text-gold">Record-keeping issues</h4>
-                      <p className="text-gold">→ Immutable blockchain records</p>
+                      <p className="text-gold">→ A record no one can quietly edit</p>
                     </div>
                   </div>
                 </div>
@@ -416,17 +416,17 @@ export default function WhatIsNjangiPage() {
                         </p>
                       </div>
                       <div className="border border-ink-border rounded-lg p-4">
-                        <h4 className="font-semibold text-gold mb-2">2. Wallet Setup</h4>
+                        <h4 className="font-semibold text-gold mb-2">2. Sign In</h4>
                         <p className="text-sand text-sm">
-                          Create or connect existing Sui wallet, fund with initial deposit, 
-                          and complete blockchain tutorial.
+                          Sign in with Google, Facebook or Apple. No seed phrase to write down
+                          and no token to buy first.
                         </p>
                       </div>
                       <div className="border border-ink-border rounded-lg p-4">
                         <h4 className="font-semibold text-gold mb-2">3. Circle Discovery</h4>
                         <p className="text-sand text-sm">
-                          Browse available circles by contribution amount, duration, and location.
-                          Review member reputation scores.
+                          Browse circles by contribution amount, duration and location.
+                          Members are people your group already knows &mdash; we do not score anyone.
                         </p>
                       </div>
                       <div className="border border-ink-border rounded-lg p-4">
@@ -446,8 +446,8 @@ export default function WhatIsNjangiPage() {
                         <h4 className="font-semibold text-cream">Technical</h4>
                         <ul className="text-sm text-sand mt-2 space-y-1">
                           <li>• Smartphone (iOS 12+ or Android 8+)</li>
-                          <li>• Basic cryptocurrency wallet (Sui Wallet)</li>
-                          <li>• Government-issued ID for verification</li>
+                          <li>• A Google, Facebook or Apple account to sign in</li>
+                          <li>• No identity documents &mdash; we do not ask for your ID</li>
                           <li>• Email and phone number</li>
                         </ul>
                       </div>
@@ -483,10 +483,10 @@ export default function WhatIsNjangiPage() {
               <Link href="/learn/rosca" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    Blockchain ROSCA: The Future of Community Savings
+                    What is a ROSCA? Rotating Savings, Explained
                   </h3>
                   <p className="text-sm text-sand">
-                    Discover how blockchain technology revolutionizes traditional ROSCAs worldwide.
+                    The structure behind njangi, tontine, susu and chit funds.
                   </p>
                 </div>
               </Link>
@@ -494,10 +494,10 @@ export default function WhatIsNjangiPage() {
               <Link href="/learn/tontine" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    Tontine Blockchain: Revolutionizing African Finance
+                    What is a Tontine? African Savings Circles
                   </h3>
                   <p className="text-sm text-sand">
-                    Learn about French African tontine traditions and their blockchain evolution.
+                    The rotating savings circle across West and Central Africa.
                   </p>
                 </div>
               </Link>
@@ -505,10 +505,10 @@ export default function WhatIsNjangiPage() {
               <Link href="/learn/susu" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    Sou Sou Crypto: Caribbean Savings Circles
+                    What is a Susu? Caribbean &amp; West African Circles
                   </h3>
                   <p className="text-sm text-sand">
-                    Explore how Caribbean and West African susu traditions meet cryptocurrency.
+                    Susu, sou-sou and Partner &mdash; the same circle under three names.
                   </p>
                 </div>
               </Link>
@@ -555,7 +555,7 @@ export default function WhatIsNjangiPage() {
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             <p className="text-sm text-sand text-center">
               <strong>Disclaimer:</strong> This content is for educational purposes only and does not constitute financial advice. 
-              Always consult with qualified financial advisors before making investment decisions.
+              Njangi On-Chain is coordination software for savings circles: it never holds your money, never offers an investment, and never pays a return. Take part only with an amount your group can commit to the schedule.
             </p>
           </div>
         </footer>
