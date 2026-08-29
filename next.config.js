@@ -224,6 +224,15 @@ const nextConfig = {
       { source: '/learn/blockchain-rosca', destination: '/learn/rosca', permanent: true },
       { source: '/learn/tontine-blockchain', destination: '/learn/tontine', permanent: true },
       { source: '/learn/sou-sou-crypto', destination: '/learn/susu', permanent: true },
+      // Blog slug de-crypto'd 2026-08-24 for the same reason as the three above:
+      // the page's own <title> had already been changed to "…vs. On-Chain" and
+      // only the URL still said "blockchain". Same 308, same purpose — carry the
+      // indexed history across. Do not remove.
+      {
+        source: '/blog/traditional-savings-vs-blockchain',
+        destination: '/blog/traditional-savings-circles-vs-on-chain',
+        permanent: true,
+      },
       {
         source: '/:path*',
         has: [

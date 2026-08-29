@@ -10,7 +10,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
         title="Traditional Savings Circles vs. On-Chain"
         titleAbsolute
         description="What actually changes when a njangi, tontine or susu moves on-chain — and what deliberately does not. A side-by-side on trust, record-keeping, and who holds the money."
-        path="/blog/traditional-savings-vs-blockchain"
+        path="/blog/traditional-savings-circles-vs-on-chain"
         ogType="article"
         image={{
           url: '/og/blog-traditional-savings-vs-blockchain.png',
@@ -33,7 +33,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
             headline: 'Traditional savings circles vs. on-chain: what actually changes',
             description:
               'A side-by-side comparison of how rotating savings circles work traditionally and what changes when the record is shared on-chain.',
-            path: '/blog/traditional-savings-vs-blockchain',
+            path: '/blog/traditional-savings-circles-vs-on-chain',
             image: '/og/blog-traditional-savings-vs-blockchain.png',
             datePublished: '2025-06-05',
             dateModified: '2026-08-02',
@@ -52,7 +52,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
               <span>/</span>
               <Link href="/blog" className="hover:text-gold transition-colors">Blog</Link>
               <span>/</span>
-              <span className="text-cream font-medium">Traditional vs. Blockchain</span>
+              <span className="text-cream font-medium">Traditional vs. On-Chain</span>
             </div>
           </div>
         </nav>
@@ -64,25 +64,25 @@ export default function TraditionalSavingsVsBlockchainPost() {
               <span className="bg-gold/[0.07] text-gold text-sm font-semibold px-3 py-1 rounded-full">
                 Technology
               </span>
-              <span className="text-sand-dim ml-4 text-sm">8 min read • January 15, 2024</span>
+              <span className="text-sand-dim ml-4 text-sm">8 min read &bull; 5 June 2025</span>
             </div>
             
             <h1 className="text-4xl md:text-5xl font-bold text-cream mb-6 leading-tight">
-              Traditional Savings Circles vs. Blockchain: What&rsquo;s the Real Difference?
+              Traditional Savings Circles vs. On-Chain: What Actually Changes
             </h1>
             
             <p className="text-xl text-sand mb-8 leading-relaxed">
-              A comprehensive comparison of how traditional ROSCAs, Njangi, Tontines, and Sou Sou systems 
-              stack up against their blockchain counterparts—and why the differences matter for your community.
+              A side-by-side on how a njangi, tontine or susu works traditionally, what changes when the
+              record is shared, and what deliberately does not.
             </p>
             
             <div className="flex items-center space-x-4 border-b border-ink-border border-ink-border pb-8">
               <div className="w-12 h-12 bg-gradient-to-br from-ink-surface to-ink-deep rounded-full flex items-center justify-center text-cream font-semibold text-lg">
-                AH
+                N
               </div>
               <div>
-                <div className="font-semibold text-cream">Dr. Amina Hassan</div>
-                <div className="text-sm text-sand">Blockchain & Community Finance Researcher</div>
+                <div className="font-semibold text-cream">Njangi On-Chain</div>
+                <div className="text-sm text-sand">Published 5 June 2025 &middot; updated 2 August 2026</div>
               </div>
             </div>
           </header>
@@ -347,16 +347,16 @@ export default function TraditionalSavingsVsBlockchainPost() {
           <section className="mt-16 pt-8 border-t border-ink-border border-ink-border">
             <h3 className="text-2xl font-bold text-cream mb-6">Related Articles</h3>
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-              <Link href="/blog/african-diaspora-remittances" className="group">
+              <Link href="/learn/rosca" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <span className="bg-gold/[0.07] text-gold text-xs font-semibold px-2 py-1 rounded-full">
-                    Diaspora
+                    Learn
                   </span>
                   <h4 className="font-semibold text-cream group-hover:text-gold mt-3 mb-2">
-                    How African Diaspora Communities Are Revolutionizing Remittances
+                    What is a ROSCA? Rotating Savings, Explained
                   </h4>
                   <p className="text-sm text-sand">
-                    The World Bank puts the average cost of sending $200 to Sub-Saharan Africa at 7.9%. What a rotating circle changes about that, and what it does not.
+                    The structure behind njangi, tontine, susu and chit funds.
                   </p>
                 </div>
               </Link>
@@ -395,19 +395,19 @@ export default function TraditionalSavingsVsBlockchainPost() {
           <section className="mt-16 pt-8 border-t border-ink-border border-ink-border">
             <div className="flex items-start space-x-4">
               <div className="w-16 h-16 bg-gradient-to-br from-ink-surface to-ink-deep rounded-full flex items-center justify-center text-cream font-semibold text-xl">
-                AH
+                N
               </div>
               <div className="flex-1">
-                <h4 className="text-lg font-semibold text-cream">Dr. Amina Hassan</h4>
+                <h4 className="text-lg font-semibold text-cream">Njangi On-Chain</h4>
                 <p className="text-sm text-sand mb-3">
-                  Blockchain & Community Finance Researcher with 10+ years studying traditional and 
-                  digital savings systems across Africa and the diaspora.
+                  We build coordination software for rotating savings circles. We write about how
+                  these circles work, what changes when the record is shared, and what deliberately
+                  does not.
                 </p>
                 <div className="flex space-x-4 text-sm">
                   <span className="text-sand-dim">Follow:</span>
-                  <a href="#" className="text-gold hover:text-gold">Twitter</a>
-                  <a href="#" className="text-gold hover:text-gold">LinkedIn</a>
-                  <a href="#" className="text-gold hover:text-gold">Research</a>
+                  <a href="https://x.com/njangi_on_chain" className="text-gold hover:text-gold">X</a>
+                  <a href="https://www.instagram.com/njangionchain" className="text-gold hover:text-gold">Instagram</a>
                 </div>
               </div>
             </div>
@@ -442,7 +442,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             <p className="text-sm text-sand text-center">
               <strong>Disclaimer:</strong> This content is for educational purposes only and does not constitute financial advice. 
-              Always consult with qualified financial advisors before making investment decisions.
+              Njangi On-Chain is coordination software for savings circles: it never holds your money, never offers an investment, and never pays a return. Take part only with an amount your group can commit to the schedule.
             </p>
           </div>
         </footer>

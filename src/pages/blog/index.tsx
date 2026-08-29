@@ -13,15 +13,15 @@ export default function BlogIndexPage() {
   // link rather than being removed, so the planned slate stays visible.
   const blogPosts = [
     {
-      id: 'traditional-savings-vs-blockchain',
-      title: "Traditional Savings Circles vs. Blockchain: What's the Real Difference?",
-      excerpt: "A comprehensive comparison of how traditional ROSCAs, Njangi, Tontines, and Sou Sou systems stack up against their blockchain counterparts.",
+      id: 'traditional-savings-circles-vs-on-chain',
+      title: "Traditional Savings Circles vs. On-Chain: What Actually Changes",
+      excerpt: "A side-by-side on how a njangi, tontine or susu works traditionally, what changes when the record is shared, and what deliberately does not.",
       category: 'Technology',
       readTime: '8 min read',
-      publishDate: '2024-01-15',
-      author: 'Dr. Amina Hassan',
-      tags: ['blockchain', 'traditional-finance', 'comparison'],
-      href: '/blog/traditional-savings-vs-blockchain',
+      publishDate: '2025-06-05',
+      author: 'Njangi On-Chain',
+      tags: ['rosca', 'njangi', 'tontine', 'susu'],
+      href: '/blog/traditional-savings-circles-vs-on-chain',
       available: true
     },
     {
@@ -31,50 +31,38 @@ export default function BlogIndexPage() {
       category: 'Diaspora',
       readTime: '12 min read',
       publishDate: '2024-01-12',
-      author: 'Marcus Thompson',
+      author: 'Njangi On-Chain',
       tags: ['diaspora', 'remittances', 'africa'],
       href: '/blog/african-diaspora-remittances',
       available: false
     },
     {
-      id: 'caribbean-sou-sou-success-stories',
-      title: "5 Caribbean Entrepreneurs Who Built Businesses Through Digital Sou Sou",
-      excerpt: "Real success stories from the Caribbean showing how blockchain savings circles are funding new businesses and preserving culture.",
-      category: 'Success Stories',
-      readTime: '10 min read',
-      publishDate: '2024-01-10',
-      author: 'Maria Rodriguez',
-      tags: ['caribbean', 'entrepreneurship', 'success-stories'],
-      href: '/blog/caribbean-sou-sou-success-stories',
-      available: false
-    },
-    {
       id: 'women-led-savings-circles-africa',
-      title: "Women-Led Savings Circles: The Backbone of African Community Finance",
-      excerpt: "Across chamas, stokvels and tontines, the organiser is very often a woman. What that role actually involves, and what a shared record changes about it.",
+      title: "Women-Led Savings Circles: Who Actually Runs the Money",
+      excerpt: "Across njangis, chamas, stokvels and tontines, the person holding the money is very often a woman. What that role involves, what it costs her, and what a shared record changes.",
       category: 'Social Impact',
       readTime: '9 min read',
-      publishDate: '2024-01-05',
-      author: 'Grace Mbeki',
+      publishDate: '2026-08-24',
+      author: 'Njangi On-Chain',
       tags: ['women', 'leadership', 'social-impact'],
       href: '/blog/women-led-savings-circles-africa',
-      available: false
+      available: true
     },
     {
-      id: 'regulatory-landscape-blockchain-savings',
-      title: "Navigating the Regulatory Landscape for Blockchain Savings Circles",
-      excerpt: "A country-by-country analysis of how regulators are approaching blockchain-based community savings and what it means for users.",
+      id: 'how-regulators-treat-savings-circles',
+      title: "How Regulators Treat Community Savings Circles",
+      excerpt: "A country-by-country look at how rotating savings groups are regulated, and what it means for a circle that spans borders.",
       category: 'Regulation',
       readTime: '11 min read',
       publishDate: '2024-01-03',
-      author: 'David Chen',
+      author: 'Njangi On-Chain',
       tags: ['regulation', 'compliance', 'legal'],
-      href: '/blog/regulatory-landscape-blockchain-savings',
+      href: '/blog/how-regulators-treat-savings-circles',
       available: false
     }
   ];
 
-  const categories = ['all', 'Technology', 'Diaspora', 'Success Stories', 'DeFi', 'Social Impact', 'Regulation'];
+  const categories = ['all', 'Technology', 'Diaspora', 'Social Impact', 'Regulation'];
 
   const filteredPosts = activeCategory === 'all' 
     ? blogPosts 
@@ -85,7 +73,6 @@ export default function BlogIndexPage() {
       'Technology': 'bg-gold/[0.07] text-gold',
       'Diaspora': 'bg-gold/[0.07] text-gold',
       'Success Stories': 'bg-gold/[0.07] text-gold',
-      'DeFi': 'bg-gold/[0.07] text-gold',
       'Social Impact': 'bg-gold/[0.07] text-gold',
       'Regulation': 'bg-ink-surface text-cream'
     };
@@ -119,11 +106,11 @@ export default function BlogIndexPage() {
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="text-center">
               <h1 className="text-4xl md:text-5xl font-bold mb-6">
-                Blockchain Savings Circle Blog
+                The Njangi On-Chain Blog
               </h1>
               <p className="text-xl md:text-2xl mb-8 text-cream-muted max-w-4xl mx-auto">
                 Insights, stories, and education about the future of community finance—from traditional 
-                savings circles to blockchain-powered innovation.
+                savings circles, and what changes when the record is shared.
               </p>
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <Link 
@@ -203,11 +190,11 @@ export default function BlogIndexPage() {
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-3">
                           <div className="w-10 h-10 bg-gradient-to-br from-ink-surface to-ink-deep rounded-full flex items-center justify-center text-cream font-semibold">
-                            {filteredPosts[0].author.split(' ').map(n => n[0]).join('')}
+                            N
                           </div>
                           <div>
                             <div className="font-medium text-cream">{filteredPosts[0].author}</div>
-                            <div className="text-sm text-sand-dim">{filteredPosts[0].publishDate}</div>
+                            <div className="text-sm text-sand-dim">{filteredPosts[0].available ? filteredPosts[0].publishDate : 'Not yet published'}</div>
                           </div>
                         </div>
                         {filteredPosts[0].available ? (
@@ -267,11 +254,11 @@ export default function BlogIndexPage() {
                         <div className="flex items-center justify-between">
                           <div className="flex items-center space-x-2">
                             <div className="w-8 h-8 bg-gradient-to-br from-ink-surface to-ink-deep rounded-full flex items-center justify-center text-cream text-xs font-semibold">
-                              {post.author.split(' ').map(n => n[0]).join('')}
+                              N
                             </div>
                             <div>
                               <div className="text-xs font-medium text-cream">{post.author}</div>
-                              <div className="text-xs text-sand-dim">{post.publishDate}</div>
+                              <div className="text-xs text-sand-dim">{post.available ? post.publishDate : 'Not yet published'}</div>
                             </div>
                           </div>
                           {post.available ? (
@@ -298,7 +285,7 @@ export default function BlogIndexPage() {
         <section className="bg-ink-surface">
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
             <div className="text-center mb-12">
-              <h2 className="text-3xl font-bold text-cream mb-4">New to Blockchain Savings Circles?</h2>
+              <h2 className="text-3xl font-bold text-cream mb-4">New to savings circles?</h2>
               <p className="text-lg text-sand">
                 Start with our comprehensive educational resources to understand the fundamentals.
               </p>
@@ -319,7 +306,7 @@ export default function BlogIndexPage() {
               <Link href="/learn/rosca" className="group">
                 <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    Blockchain ROSCA
+                    What is a ROSCA?
                   </h3>
                   <p className="text-sm text-gold">
                     Discover the future of community savings.
@@ -330,10 +317,10 @@ export default function BlogIndexPage() {
               <Link href="/learn/tontine" className="group">
                 <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    Tontine Blockchain
+                    What is a Tontine?
                   </h3>
                   <p className="text-sm text-gold">
-                    African finance meets blockchain technology.
+                    The rotating savings circle across West and Central Africa.
                   </p>
                 </div>
               </Link>
@@ -341,7 +328,7 @@ export default function BlogIndexPage() {
               <Link href="/learn/susu" className="group">
                 <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    Sou Sou Crypto
+                    What is a Susu?
                   </h3>
                   <p className="text-sm text-gold">
                     Caribbean savings circles go digital.
@@ -357,7 +344,7 @@ export default function BlogIndexPage() {
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-center">
             <h2 className="text-3xl font-bold mb-4">Stay Updated</h2>
             <p className="text-xl text-cream-muted mb-8 max-w-2xl mx-auto">
-              Get the latest insights about blockchain savings circles, success stories, 
+              Get the latest on how savings circles work, 
               and educational content delivered to your inbox.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center max-w-md mx-auto">
@@ -378,7 +365,7 @@ export default function BlogIndexPage() {
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             <p className="text-sm text-sand text-center">
               <strong>Disclaimer:</strong> Content is for educational purposes only and does not constitute financial advice. 
-              Always consult with qualified financial advisors before making investment decisions.
+              Njangi On-Chain is coordination software for savings circles: it never holds your money, never offers an investment, and never pays a return. Take part only with an amount your group can commit to the schedule.
             </p>
           </div>
         </footer>
