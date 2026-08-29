@@ -626,17 +626,22 @@ module njangi::njangi_circles {
         config::attach_milestone_config(&mut circle.id, milestone_config);
         config::attach_penalty_rules(&mut circle.id, penalty_config);
         
-        // Create the circle's custody wallet
+        // Create the circle's custody wallet and record its REAL id on the
+        // circle.
+        //
+        // This field used to be seeded with the circle's own id as a
+        // placeholder, on the assumption that `update_wallet_id` would
+        // overwrite it later. Nothing in the create flow ever called it, so
+        // the field permanently answered "the circle" when asked "which wallet
+        // holds this circle's money", and every client was pushed onto an
+        // event scan to find the wallet instead. That scan is not durable —
+        // it needs an RPC that still serves event history, and it returns an
+        // empty list rather than an error when the event-type filter carries a
+        // post-upgrade package id. A circle that lost the scan lost its
+        // recovery path, with the funds still sitting in custody.
         let circle_id = object::uid_to_inner(&circle.id);
-        custody::create_custody_wallet(circle_id, current_time, ctx);
-        
-        // Wait for the CustodyWalletCreated event to occur
-        // In a real application, we would query for the wallet ID here
-        // Since we can't, the frontend will need to use events to get the wallet ID
-        
-        // We'll create a dynamic field with a known key to access the wallet ID later
-        // This field will be populated by wallet_id_updater or other modules
-        dynamic_field::add(&mut circle.id, string::utf8(b"wallet_id"), circle_id);
+        let wallet_id = custody::create_custody_wallet_returning_id(circle_id, current_time, ctx);
+        dynamic_field::add(&mut circle.id, string::utf8(b"wallet_id"), wallet_id);
 
         // Automatically add the admin as a member
         let admin_member = members::create_member(
