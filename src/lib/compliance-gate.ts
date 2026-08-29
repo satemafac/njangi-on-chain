@@ -13,10 +13,17 @@
 //
 // The server-side `assertComplianceAttestationValid` helper is suitable
 // for API routes and cron jobs; the browser-side `hasValidAttestation`
-// powers the UI preflight. Move-level enforcement is tracked in a
-// follow-up (Phase 6 stops short of adding a Move dependency on the
-// compliance module from the cycle-escrow module so existing escrow
-// objects don't become uncallable when the flag is toggled mid-session).
+// powers the UI preflight.
+//
+// This module is the PREFLIGHT layer only — it exists so the server and
+// UI can fail fast with a friendly error before building a transaction.
+// Authoritative enforcement is on-chain (Phase 7): gated escrows in
+// `njangi_cycle_escrow` pin the exact ComplianceConfig object id at
+// open_cycle time and require every contributor and claimant to present
+// a non-revoked, non-expired ComplianceAttestation validated against
+// that pinned config, and `njangi_circles` carries a per-circle
+// `requires_attestation` flag that cannot be disabled once members have
+// joined. Bypassing this TypeScript check does not bypass the gate.
 
 import type { SuiClient } from '@mysten/sui/client';
 import type { NetworkType } from '../services/whatsapp-registry-service';
