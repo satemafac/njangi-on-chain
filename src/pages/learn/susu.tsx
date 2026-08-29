@@ -62,7 +62,7 @@ export default function SouSouCryptoPage() {
               <span>/</span>
               <Link href="/learn" className="hover:text-gold transition-colors">Learn</Link>
               <span>/</span>
-              <span className="text-cream font-medium">Sou Sou Crypto</span>
+              <span className="text-cream font-medium">Susu</span>
             </div>
           </div>
         </nav>
@@ -75,8 +75,8 @@ export default function SouSouCryptoPage() {
             </h1>
             <p className="text-xl md:text-2xl mb-8 text-cream-muted">
               Explore how traditional Caribbean <strong>Sou Sou</strong>, Jamaican <strong>Partner</strong>, and 
-              West African <strong>Susu</strong> savings circles are being transformed through cryptocurrency 
-              and smart contract technology, connecting diaspora communities worldwide.
+              <strong>Susu</strong>, sou-sou and Partner are the Caribbean and West African names for one
+              practice: everyone pays in, and each member takes the pot in turn.
             </p>
             <div className="flex flex-col sm:flex-row gap-4">
               <Link 
@@ -121,7 +121,7 @@ export default function SouSouCryptoPage() {
               {[
                 { id: 'overview', label: 'What is Sou Sou?' },
                 { id: 'regional', label: 'Regional Variations' },
-                { id: 'blockchain', label: 'Crypto Integration' },
+                { id: 'blockchain', label: 'How It Works Here' },
                 { id: 'diaspora', label: 'Diaspora Communities' }
               ].map((tab) => (
                 <button 
@@ -295,7 +295,7 @@ export default function SouSouCryptoPage() {
                       <ul className="mt-2 space-y-1">
                         <li>• Virtual meetings and ceremonies</li>
                         <li>• Multi-currency support</li>
-                        <li>• Smart contract automation</li>
+                        <li>• The rotation runs to the agreed schedule, not to memory</li>
                         <li>• Insurance and security features</li>
                       </ul>
                     </div>
@@ -312,12 +312,12 @@ export default function SouSouCryptoPage() {
           >
             <section className="space-y-8">
               <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">Cryptocurrency Integration & Smart Contracts</h2>
+                <h2 className="text-3xl font-bold mb-6 text-cream">Rules the group cannot quietly change</h2>
                 
                 <div className="mb-8">
-                  <h3 className="text-2xl font-bold mb-4">Smart Contract Implementation</h3>
+                  <h3 className="text-2xl font-bold mb-4">The rules, written down</h3>
                   <div className="bg-ink-surface p-4 rounded-lg font-mono text-sm overflow-x-auto">
-                    <pre>{`// Caribbean Sou Sou Smart Contract
+                    <pre>{`// A simplified sketch of the sou sou rules
 struct SouSouCircle {
     members: vector<SouSouMember>,
     contribution_amount: Balance<USDC>,
@@ -371,7 +371,7 @@ public fun make_contribution(
                   </div>
 
                   <div>
-                    <h3 className="text-xl font-bold mb-4 text-gold">Blockchain Advantages</h3>
+                    <h3 className="text-xl font-bold mb-4 text-gold">What changes</h3>
                     <div className="space-y-3">
                       <div className="flex items-start space-x-3">
                         <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
@@ -399,11 +399,11 @@ public fun make_contribution(
                 </div>
 
                 <div className="bg-gold/[0.07] p-6 rounded-lg">
-                  <h3 className="text-lg font-semibold text-gold mb-3">Blockchain Features for Caribbean Communities</h3>
+                  <h3 className="text-lg font-semibold text-gold mb-3">Built for circles spread across countries</h3>
                   <div className="grid md:grid-cols-3 gap-4 text-sm text-gold">
                     <div>
                       <h4 className="font-medium">Multi-Currency Support</h4>
-                      <p>USDC, Caribbean dollars, and cryptocurrencies</p>
+                      <p>Digital dollars, so the pot holds its value across borders</p>
                     </div>
                     <div>
                       <h4 className="font-medium">Virtual Ceremonies</h4>
@@ -411,7 +411,7 @@ public fun make_contribution(
                     </div>
                     <div>
                       <h4 className="font-medium">Automated Escrow</h4>
-                      <p>Smart contracts hold and release the pot on schedule</p>
+                      <p>The pot is held in escrow and released on schedule, to the scheduled member only</p>
                     </div>
                   </div>
                 </div>
@@ -539,7 +539,7 @@ public fun make_contribution(
                     What is Njangi? Cameroon&rsquo;s Savings Circle
                   </h3>
                   <p className="text-sm text-sand">
-                    Learn about Cameroon&rsquo;s traditional Njangi system and its blockchain transformation.
+                    Cameroon&rsquo;s savings circle: how it works, and why it has lasted.
                   </p>
                 </div>
               </Link>
@@ -547,10 +547,10 @@ public fun make_contribution(
               <Link href="/learn/rosca" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    Blockchain ROSCA: The Future of Community Savings
+                    What is a ROSCA? Rotating Savings, Explained
                   </h3>
                   <p className="text-sm text-sand">
-                    Discover how blockchain technology revolutionizes traditional ROSCAs worldwide.
+                    The structure behind njangi, tontine, susu and chit funds.
                   </p>
                 </div>
               </Link>
@@ -558,10 +558,10 @@ public fun make_contribution(
               <Link href="/learn/tontine" className="group">
                 <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
                   <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    Tontine Blockchain: African Finance Revolution
+                    What is a Tontine? African Savings Circles
                   </h3>
                   <p className="text-sm text-sand">
-                    Explore how French African tontine traditions meet modern blockchain technology.
+                    The rotating savings circle across West and Central Africa.
                   </p>
                 </div>
               </Link>
@@ -573,7 +573,7 @@ public fun make_contribution(
             <h2 className="text-2xl font-bold mb-4">Ready to Join the Caribbean Savings Revolution?</h2>
             <p className="text-cream-muted mb-6">
               Connect with Caribbean and West African diaspora communities worldwide through 
-              secure, transparent digital Sou Sou circles powered by blockchain technology.
+              sou sou circles where nobody holds the pot and every member can check the record.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link 
@@ -597,7 +597,7 @@ public fun make_contribution(
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             <p className="text-sm text-sand text-center">
               <strong>Disclaimer:</strong> This content is for educational purposes only and does not constitute financial advice. 
-              Cryptocurrency investments carry risks. Always consult with qualified financial advisors before making investment decisions.
+              Njangi On-Chain is coordination software for savings circles: it never holds your money, never offers an investment, and never pays a return. Take part only with an amount your group can commit to the schedule.
             </p>
           </div>
         </footer>
