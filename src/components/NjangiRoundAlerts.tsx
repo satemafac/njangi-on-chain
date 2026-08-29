@@ -61,6 +61,10 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
   const { t } = useTranslation();
   const [alerts, setAlerts] = useState<ActionableAlert[]>([]);
   const [loading, setLoading] = useState(false);
+  // Circles whose scan failed. Their alerts are UNKNOWN, not absent — a
+  // swallowed scan used to silently drop "you have a share to pay" and
+  // "it's your turn to collect", so the member saw nothing due.
+  const [unreadable, setUnreadable] = useState(0);
 
   useEffect(() => {
     if (!userAddress || circles.length === 0) {
@@ -75,6 +79,7 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
         rpcUrl: getNetworkConfig(network).rpcUrl,
       });
       const collected: ActionableAlert[] = [];
+      let failed = 0;
       for (const circle of circles) {
         try {
           const escrow = await findCurrentCycleEscrow(network, circle.id);
@@ -130,10 +135,12 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
           }
         } catch (err) {
           console.warn('[NjangiRoundAlerts] circle scan failed', circle.id, err);
+          failed += 1;
         }
       }
       if (!cancelled) {
         setAlerts(collected);
+        setUnreadable(failed);
         setLoading(false);
       }
     })();
@@ -151,7 +158,8 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
   }, [alerts]);
 
   if (!userAddress || circles.length === 0) return null;
-  if (!loading && alerts.length === 0) return null;
+  // Only claim "nothing due" when every circle was actually readable.
+  if (!loading && alerts.length === 0 && unreadable === 0) return null;
 
   return (
     <section className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4 sm:p-5">
@@ -159,6 +167,14 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
         {t('escrow.sectionTitle')}
       </h2>
       <div className="mt-3 grid gap-3">
+        {unreadable > 0 ? (
+          // Say we could not check, rather than leaving the member to read
+          // an empty panel as "nothing is due".
+          <p className="rounded-xl border border-amber-200 bg-white p-3 text-sm text-amber-900">
+            {t('alerts.unreadable', { count: unreadable })}
+          </p>
+        ) : null}
+
         {grouped.yourTurn.map((a) => (
           <Link
             key={`turn-${a.circleId}`}

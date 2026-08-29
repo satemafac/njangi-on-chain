@@ -515,6 +515,13 @@ interface Circle {
   memberStatus: 'active' | 'suspended' | 'exited';
   isAdmin: boolean;
   isActive: boolean;
+  /**
+   * Paused circles are ACTIVE but not collecting this round. Dropping this
+   * made a paused circle render as plain "Active" and let round alerts
+   * prompt "you have a share to pay" for a circle that is not collecting.
+   */
+  isPausedAfterCycle?: boolean;
+  currentCycle?: number;
   walletId?: string; // Add optional wallet ID
   createdAt?: number; // Add creation timestamp for better sorting
   transactionDigest?: string; // Add transaction digest for reference
@@ -2576,6 +2583,10 @@ export default function Dashboard() {
       memberStatus: 'active' as const,
       isAdmin: admin === userAddress,
       isActive: lifecycle.isActive,
+      // resolveCircleLifecycleState returns all three; listing only
+      // isActive silently dropped the other two (the shape-4 bug).
+      isPausedAfterCycle: lifecycle.isPausedAfterCycle,
+      currentCycle: lifecycle.currentCycle,
       createdAt: transactionTimestamp, // Add creation timestamp
       transactionDigest: transactionDigest, // Add transaction digest for reference
       packageId: extractedPackageId // Store package ID for this circle

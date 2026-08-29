@@ -722,9 +722,18 @@ export default function CircleDetails() {
             parentId: membersTableId,
             name: { type: 'address', value: address },
           });
+          if (memberField.error) {
+            const code = (memberField.error as { code?: string }).code ?? '';
+            // Verified absence => not eligible. Anything else is a failed
+            // read, and returning false there hides the recovery
+            // auto-release control with no explanation — on the one screen
+            // a stuck circle needs.
+            if (code !== 'dynamicFieldNotFound') throw new Error(code || 'read failed');
+          }
           return canMemberTriggerAutoReleaseFromFieldObject(memberField.data?.content);
-        } catch {
-          return false;
+        } catch (err) {
+          console.warn('[recovery] eligibility read failed for', address, err);
+          throw err;
         }
       };
 
@@ -743,9 +752,12 @@ export default function CircleDetails() {
       setViewerCanAutoReleaseFallback(viewerEligible);
       setDelegateCanAutoReleaseFallback(delegateEligible);
     } catch (error) {
+      // Do NOT clobber to false. These flags gate the recovery
+      // auto-release control; setting them false on a failed read hides
+      // the escape hatch on the one screen a stuck circle needs, and says
+      // "you are not eligible" when the truth is "we could not check".
+      // Keep the last known values and let the retry settle it.
       logSuiReadError('Details - Error refreshing recovery liveness state:', error);
-      setViewerCanAutoReleaseFallback(false);
-      setDelegateCanAutoReleaseFallback(false);
     } finally {
       setLoadingRecoveryLiveness(false);
     }

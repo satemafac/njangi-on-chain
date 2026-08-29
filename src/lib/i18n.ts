@@ -93,6 +93,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'alerts.yourShareDue.body':
       'The {circle} circle is waiting on your share — {amount}. Tap to pay into the pot.',
     'alerts.yourTurn.title': "It's your turn to collect",
+    'alerts.unreadable':
+      "We couldn't check {count} of your circles just now, so anything due there isn't shown. Please refresh in a moment.",
     'alerts.yourTurn.body':
       'Everyone in {circle} has paid. Your payout of {amount} is ready — tap to send it to your wallet.',
     'alerts.adminOpenRound.title': 'Ready to start the next round?',
@@ -513,6 +515,8 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'alerts.yourShareDue.body':
       'Le cercle {circle} attend votre part — {amount}. Appuyez pour verser dans la cagnotte.',
     'alerts.yourTurn.title': "C'est à votre tour de récupérer",
+    'alerts.unreadable':
+      "Nous n'avons pas pu vérifier {count} de vos tontines pour le moment ; ce qui y est dû n'est donc pas affiché. Veuillez réessayer dans un instant.",
     'alerts.yourTurn.body':
       "Tous les membres de {circle} ont payé. Votre versement de {amount} est prêt — appuyez pour l'envoyer à votre portefeuille.",
     'alerts.adminOpenRound.title': 'Prêt à lancer le prochain tour ?',
