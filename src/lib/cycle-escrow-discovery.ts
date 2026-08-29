@@ -6,7 +6,7 @@ import type { SuiClient } from '@mysten/sui/client';
 import type { NetworkType } from '../services/whatsapp-registry-service';
 import { getNetworkConfig, getPackageIdForNetwork } from '../services/network-config';
 import { getPublishedPackageMetadata } from './circle-chain';
-import { getPooledSuiClient } from '../services/sui-rpc-failover';
+import { getPooledSuiClient, withSuiRpcFailover } from '../services/sui-rpc-failover';
 
 export interface CycleEscrowSummary {
   escrowId: string;
@@ -103,9 +103,12 @@ function matchesCircle(eventCircle: unknown, target: string): boolean {
  * Queries recent `CycleEscrowOpened` events and returns the most recently
  * opened escrow matching the supplied circle. Optionally filters by a
  * specific cycle number; pass `undefined` to pick the latest regardless.
+ *
+ * Deliberately takes no client: event history is only available on some
+ * endpoints, so this must pick its own via failover rather than inherit the
+ * caller's (which is pinned to the configured primary — see below).
  */
 export async function findCurrentCycleEscrow(
-  client: SuiClient,
   network: NetworkType,
   circleId: string,
   opts?: { cycleNo?: number; limit?: number },
@@ -113,11 +116,27 @@ export async function findCurrentCycleEscrow(
   const packageId = eventTypePackageIdFor(network);
   const limit = opts?.limit ?? 50;
   try {
-    const events = await client.queryEvents({
-      query: { MoveEventType: `${packageId}::njangi_cycle_escrow::CycleEscrowOpened` },
-      limit,
-      order: 'descending',
-    });
+    // Event history must go through the failover chain, NOT the caller's
+    // client. The providers are not interchangeable: publicnode and suiscan
+    // serve object reads but refuse event history, and they are deliberately
+    // tried FIRST so ordinary reads do not burn blockvision's rationed budget
+    // (see RATE_LIMITED_RPC_HOSTS). So a client pinned to the configured
+    // primary — which is what every caller passes — sends the one query that
+    // requires event history to the one endpoint that cannot serve it, and
+    // fails 100% of the time rather than intermittently.
+    //
+    // Observed on production 2026-08-21: publicnode answered
+    // "Could not find the referenced transaction events" for every
+    // CycleEscrowOpened query, so the contribute page could never discover an
+    // open round. That error is already classified retriable, so failover
+    // rotates to blockvision and succeeds on the second attempt.
+    const events = await withSuiRpcFailover(network, 'findCurrentCycleEscrow', (failoverClient) =>
+      failoverClient.queryEvents({
+        query: { MoveEventType: `${packageId}::njangi_cycle_escrow::CycleEscrowOpened` },
+        limit,
+        order: 'descending',
+      }),
+    );
 
     for (const event of events.data) {
       const parsed = (event.parsedJson ?? {}) as Record<string, unknown>;
@@ -144,8 +163,20 @@ export async function findCurrentCycleEscrow(
     }
     return null;
   } catch (err) {
+    // Rethrow rather than reporting a failed read as "no escrow".
+    //
+    // Swallowing this returned null, which is indistinguishable from a circle
+    // whose round genuinely has not been opened — so a rate-limited query
+    // rendered "This round hasn't been opened yet" on a circle whose round WAS
+    // open, telling members to go chase an admin who had already done it.
+    // Same failure shape the recovery-status read was fixed for: a read that
+    // failed must not look like a fact.
+    //
+    // Every caller already handles a throw (the panel surfaces a retry; the
+    // alert and attestation sweeps skip the circle), which is the behaviour
+    // they each wanted anyway.
     console.warn('[cycle-escrow-discovery] Failed to query CycleEscrowOpened', err);
-    return null;
+    throw err;
   }
 }
 
@@ -234,23 +265,20 @@ export async function readCycleEscrowState(
 export async function listContributors(
   escrowId: string,
   network: NetworkType,
-  client?: SuiClient,
 ): Promise<string[]> {
   const packageId = eventTypePackageIdFor(network);
-  const rpcClient =
-    client ??
-    getPooledSuiClient({
-      network,
-      rpcUrl: getNetworkConfig(network).rpcUrl,
-    });
   try {
-    const events = await rpcClient.queryEvents({
-      query: {
-        MoveEventType: `${packageId}::njangi_cycle_escrow::ContributionRecorded`,
-      },
-      limit: 200,
-      order: 'descending',
-    });
+    // Same routing rule as findCurrentCycleEscrow: event history only exists
+    // on some endpoints, and the configured primary is not one of them.
+    const events = await withSuiRpcFailover(network, 'listContributors', (failoverClient) =>
+      failoverClient.queryEvents({
+        query: {
+          MoveEventType: `${packageId}::njangi_cycle_escrow::ContributionRecorded`,
+        },
+        limit: 200,
+        order: 'descending',
+      }),
+    );
     const contributors: string[] = [];
     for (const event of events.data) {
       const parsed = (event.parsedJson ?? {}) as Record<string, unknown>;
@@ -262,7 +290,12 @@ export async function listContributors(
     }
     return contributors;
   } catch (err) {
+    // Rethrow. Returning [] here reads as "nobody has paid this round",
+    // which told members who HAD paid that their share was still due
+    // (NjangiRoundAlerts). The sibling findCurrentCycleEscrow rethrows for
+    // exactly this reason, and every caller already has a per-circle catch
+    // that skips the circle instead of asserting a falsehood about it.
     console.warn('[cycle-escrow-discovery] Failed to list contributors', err);
-    return [];
+    throw err;
   }
 }

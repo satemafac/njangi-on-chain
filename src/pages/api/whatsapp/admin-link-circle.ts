@@ -48,6 +48,10 @@ import {
 } from '../../../lib/walrus-pii';
 import { indexWhatsAppLink } from '../../../lib/whatsapp-link-index';
 import { screenAddress, sanctionsErrorBody } from '../../../lib/sanctions';
+import {
+  getDriftStatusForAddress,
+  addressDriftErrorBody,
+} from '../../../lib/zklogin-address-bindings';
 import { isEmbargoedHeaders, embargoErrorBody } from '../../../lib/embargo';
 import {
   assertEntitled,
@@ -247,6 +251,17 @@ async function handlePost(req: AuthenticatedRequest, res: NextApiResponse) {
     if (sanctionsScreen.blocked) {
       logAdminAction('LINK_CIRCLE_SANCTIONS_BLOCKED', adminAddr, { circleId });
       return res.status(403).json(sanctionsErrorBody());
+    }
+
+    // Address-drift gate. Linking WhatsApp binds notifications and inbound
+    // commands to THIS address; doing that for a drifted identity wires the
+    // circle's routing to an account the admin may not realise is new.
+    // New commitment -> blocked; fail-open on lookup errors, like the
+    // sanctions screen's infrastructure failure mode.
+    const driftScreen = await getDriftStatusForAddress(adminAddr);
+    if (driftScreen.drifted) {
+      logAdminAction('LINK_CIRCLE_ADDRESS_DRIFT_BLOCKED', adminAddr, { circleId });
+      return res.status(409).json(addressDriftErrorBody(driftScreen.previousAddresses));
     }
 
     // Premium gate (ENFORCEABLE): the Walrus PII encryption runs here, and

@@ -10,6 +10,10 @@ import { getPooledSuiClient } from '../../../services/sui-rpc-failover';
 import { screenAddress, sanctionsErrorBody } from '../../../lib/sanctions';
 import { isEmbargoedHeaders, embargoErrorBody } from '../../../lib/embargo';
 import { getZkLoginSessionAccount } from '../../../lib/zklogin-session-registry';
+import {
+  getDriftStatusForIdentity,
+  addressDriftErrorBody,
+} from '../../../lib/zklogin-address-bindings';
 import { hasAcceptedAllLegalDocs } from '../../../lib/legal-acceptance-server';
 
 type ResponseData = {
@@ -146,6 +150,29 @@ export default async function handler(
           error: 'LEGAL_ACCEPTANCE_REQUIRED',
           message: 'Please accept the current terms before joining a circle.',
           data: { missing: legal.missing },
+        });
+      }
+
+      // Address-drift gate. Joining is a new commitment, so it fails closed
+      // for the same reason the sanctions screen above does: a member whose
+      // identity now resolves to a different address would be committing
+      // deposits at an account they may not realise is new, while their
+      // existing funds sit at the old one. Fund-access paths (claim, refund,
+      // recovery, withdrawal) are deliberately never gated this way.
+      const drift = await getDriftStatusForIdentity({
+        iss: identity.iss ?? null,
+        sub: identity.sub,
+        provider: identity.provider,
+        userAddress: identity.userAddr,
+      });
+      if (drift.drifted) {
+        const body = addressDriftErrorBody(drift.previousAddresses);
+        return res.status(409).json({
+          success: false,
+          code: body.error,
+          error: body.error,
+          message: body.message,
+          data: { previousAddresses: body.previousAddresses },
         });
       }
     }

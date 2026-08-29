@@ -1,198 +1,86 @@
+// GET /api/circle-stats — how many circles exist on the active network.
+//
+// Published on the public landing page as a claim about real usage, which
+// sets two rules:
+//
+//  1. NEVER invent the number. This endpoint used to fall back to a
+//     hardcoded 3 ("reasonable fallback for demo") on any failure and
+//     return it with success:true — a fabricated statistic on a marketing
+//     page. `null` means "unknown", and index.tsx already renders a
+//     syncing state for it.
+//  2. Route through the failover chain. Counting every circle needs an
+//     event scan (there is no global object index), and event history is
+//     the least reliable primitive here: publicnode/suiscan serve object
+//     reads but REFUSE event history, while the endpoint that can serve it
+//     is rationed. The hand-rolled two-URL list this file used to carry put
+//     the refusing endpoint first and never recovered, so once the invented
+//     fallback was removed the count read as unknown forever.
+//
+// Cached, because this is a public page: an uncached scan would spend a
+// rationed event budget on every visitor.
+
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getCurrentNetwork, getCurrentNetworkConfig } from '@/services/network-config';
+import { getCurrentNetwork } from '@/services/network-config';
+import { getPublishedPackageMetadata } from '@/lib/circle-chain';
+import { withSuiRpcFailover } from '@/services/sui-rpc-failover';
 
 type ResponseData = {
   success: boolean;
   data?: {
-    circleCount: number;
+    /** null = could not read; the landing page renders a syncing state. */
+    circleCount: number | null;
   };
   message?: string;
 };
 
-type JsonRpcResponse = {
-  result?: {
-    data?: Array<{ type?: string }>;
-  };
-  error?: unknown;
-};
+const CACHE_TTL_MS = 5 * 60_000;
+const MAX_PAGES = 10;
 
-async function callSuiRpc(
-  rpcUrls: string[],
-  body: Record<string, unknown>,
-): Promise<JsonRpcResponse | null> {
-  let lastError: string | null = null;
-
-  for (const rpcUrl of rpcUrls) {
-    try {
-      const response = await fetch(rpcUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify(body),
-      });
-
-      const rawBody = await response.text();
-      const trimmedBody = rawBody.trim();
-      const contentType = response.headers.get('content-type') || 'unknown';
-
-      if (!response.ok) {
-        lastError = `HTTP ${response.status} from ${rpcUrl}`;
-        console.warn('[API] RPC request failed:', {
-          rpcUrl,
-          status: response.status,
-          contentType,
-        });
-        continue;
-      }
-
-      if (!trimmedBody || trimmedBody.startsWith('<')) {
-        lastError = `Non-JSON response from ${rpcUrl}`;
-        console.warn('[API] RPC returned non-JSON response:', {
-          rpcUrl,
-          contentType,
-          preview: trimmedBody.slice(0, 80),
-        });
-        continue;
-      }
-
-      return JSON.parse(trimmedBody) as JsonRpcResponse;
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-      console.warn('[API] RPC request threw an error:', {
-        rpcUrl,
-        error: lastError,
-      });
-    }
-  }
-
-  if (lastError) {
-    console.warn('[API] All RPC candidates failed:', lastError);
-  }
-
-  return null;
-}
+let cached: { value: number; atMs: number } | null = null;
 
 export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse<ResponseData>
+  _req: NextApiRequest,
+  res: NextApiResponse<ResponseData>,
 ) {
-  if (req.method !== 'GET') {
-    return res.status(405).json({
-      success: false,
-      message: 'Method not allowed'
-    });
+  if (cached && Date.now() - cached.atMs < CACHE_TTL_MS) {
+    return res.status(200).json({ success: true, data: { circleCount: cached.value } });
   }
 
-  // Edge-cache the homepage stat: every landing-page mount hits this, and the
-  // count changes slowly. Without this each view fires a fresh suix_queryEvents
-  // at the free public fullnode, which can trip RPC rate-limit cooldowns under
-  // a traffic spike. 60s shared cache + 5min stale-while-revalidate.
-  res.setHeader(
-    'Cache-Control',
-    'public, s-maxage=60, stale-while-revalidate=300',
-  );
+  const network = getCurrentNetwork();
+  // Move event types anchor to the package that DEFINED them, so the
+  // original id is the only filter that matches after an upgrade.
+  const { originalId } = getPublishedPackageMetadata(network);
+  if (!originalId) {
+    return res.status(200).json({ success: true, data: { circleCount: null } });
+  }
 
   try {
-    let circleCount = 0;
-    const currentNetwork = getCurrentNetwork();
-    const networkConfig = getCurrentNetworkConfig();
-    const officialRpcUrl = currentNetwork === 'mainnet'
-      ? 'https://sui-rpc.publicnode.com'
-      : 'https://sui-testnet-rpc.publicnode.com';
-    const rpcUrls = Array.from(new Set([
-      networkConfig.rpcUrl,
-      officialRpcUrl,
-    ].filter(Boolean)));
-    const packageId = networkConfig.packageId;
-
-    console.log('[API] circle-stats using network config:', {
-      network: currentNetwork,
-      rpcUrls,
-      packageId,
-    });
-
-    if (!packageId) {
-      throw new Error(`Missing package ID for ${currentNetwork}`);
-    }
-
-    // Query specifically for CircleCreated events
-    try {
-      const eventsData = await callSuiRpc(rpcUrls, {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'suix_queryEvents',
-        params: [
-          {
-            MoveEventType: `${packageId}::njangi_circles::CircleCreated`
-          },
-          null,
-          null,
-          false
-        ]
-      });
-
-      if (eventsData?.result && eventsData.result.data) {
-        circleCount = eventsData.result.data.length;
-      }
-    } catch (error) {
-      console.error('[API] Error querying CircleCreated events:', error);
-    }
-
-    // Fallback: If specific event query fails, try querying all events from njangi_circles module
-    if (circleCount === 0) {
-      try {
-        const eventsData = await callSuiRpc(rpcUrls, {
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'suix_queryEvents',
-          params: [
-            {
-              MoveModule: {
-                package: packageId,
-                module: 'njangi_circles'
-              }
-            },
-            null,
-            null,
-            false
-          ]
+    const total = await withSuiRpcFailover(network, 'circle-stats', async (client) => {
+      let count = 0;
+      let cursor: { txDigest: string; eventSeq: string } | null | undefined = null;
+      for (let page = 0; page < MAX_PAGES; page += 1) {
+        const events = await client.queryEvents({
+          query: { MoveEventType: `${originalId}::njangi_circles::CircleCreated` },
+          cursor: cursor ?? undefined,
+          limit: 50,
+          order: 'descending',
         });
-
-        if (eventsData?.result && eventsData.result.data) {
-          // Filter for CircleCreated events specifically
-          const circleCreatedEvents = eventsData.result.data.filter((event: { type?: string }) => {
-            return event.type && event.type.includes('CircleCreated');
-          });
-          
-          circleCount = circleCreatedEvents.length;
-        }
-      } catch (error) {
-        console.error('[API] Error querying njangi_circles module events:', error);
+        count += events.data.length;
+        if (!events.hasNextPage || !events.nextCursor) break;
+        cursor = events.nextCursor;
       }
-    }
-
-    // Final fallback to ensure we show at least some activity
-    if (circleCount === 0) {
-      circleCount = 3; // Reasonable fallback for demo
-    }
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        circleCount: circleCount
-      }
+      return count;
     });
 
+    cached = { value: total, atMs: Date.now() };
+    return res.status(200).json({ success: true, data: { circleCount: total } });
   } catch (error) {
-    console.error('[API] Error fetching circle stats:', error);
-    
+    // Every endpoint failed or refused. Serve a stale-but-real number if we
+    // have one; otherwise say unknown. Never a made-up figure.
+    console.error('[circle-stats] event scan failed on every RPC', error);
     return res.status(200).json({
       success: true,
-      data: {
-        circleCount: 3 // Fallback value
-      }
+      data: { circleCount: cached?.value ?? null },
     });
   }
-} 
+}

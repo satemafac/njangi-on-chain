@@ -9,7 +9,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import * as Dialog from '@radix-ui/react-dialog';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
-import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink, ArrowRightLeft, ChevronDown, ChevronUp } from 'lucide-react';
+import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink, ArrowRightLeft, ChevronDown, ChevronUp, ScrollText } from 'lucide-react';
 import RampPicker from '@/components/RampPicker';
 import ReceiveFundsModal from '@/components/ReceiveFundsModal';
 import CashOutGuide from '@/components/CashOutGuide';
@@ -62,6 +62,9 @@ import {
   getSuiRpcErrorMessage,
   isRateLimitedSuiRpcError,
 } from '@/services/sui-rpc-failover';
+import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
+import { isResolvedSuiObjectId } from '@/lib/sui-object-id';
+import { normalizeSuiObjectId } from '@mysten/sui/utils';
 
 // Global type declaration for network config
 declare global {
@@ -512,6 +515,13 @@ interface Circle {
   memberStatus: 'active' | 'suspended' | 'exited';
   isAdmin: boolean;
   isActive: boolean;
+  /**
+   * Paused circles are ACTIVE but not collecting this round. Dropping this
+   * made a paused circle render as plain "Active" and let round alerts
+   * prompt "you have a share to pay" for a circle that is not collecting.
+   */
+  isPausedAfterCycle?: boolean;
+  currentCycle?: number;
   walletId?: string; // Add optional wallet ID
   createdAt?: number; // Add creation timestamp for better sorting
   transactionDigest?: string; // Add transaction digest for reference
@@ -2573,6 +2583,10 @@ export default function Dashboard() {
       memberStatus: 'active' as const,
       isAdmin: admin === userAddress,
       isActive: lifecycle.isActive,
+      // resolveCircleLifecycleState returns all three; listing only
+      // isActive silently dropped the other two (the shape-4 bug).
+      isPausedAfterCycle: lifecycle.isPausedAfterCycle,
+      currentCycle: lifecycle.currentCycle,
       createdAt: transactionTimestamp, // Add creation timestamp
       transactionDigest: transactionDigest, // Add transaction digest for reference
       packageId: extractedPackageId // Store package ID for this circle
@@ -2593,6 +2607,8 @@ export default function Dashboard() {
     memberCursor?: string;
     hasMoreAdmin: boolean;
     hasMoreMember: boolean;
+    /** true = scan failed; empty `circles` means unknown, not none. */
+    degraded?: boolean;
   }> => {
     // Wrap entire function to prevent any errors from escaping
     try {
@@ -2603,7 +2619,11 @@ export default function Dashboard() {
         adminCursor: undefined as string | undefined,
         memberCursor: undefined as string | undefined,
         hasMoreAdmin: false,
-        hasMoreMember: false
+        hasMoreMember: false,
+        // true = the scan failed; an empty `circles` means "unknown", not
+        // "this user has none". Callers must not persist or render it as
+        // an absence.
+        degraded: false,
       };
 
       try {
@@ -2759,7 +2779,13 @@ export default function Dashboard() {
       
       } catch (error) {
         console.error('Error in multi-package fast initial circle loading:', error);
-        // Return empty results but don't throw - let the app handle gracefully
+        // Do NOT report this as a clean empty result. An empty list is a
+        // factual claim ("you have joined no circles") that the dashboard
+        // renders with a Join/Create empty state and then PERSISTS to
+        // localStorage. The outer handler already knows how to keep cached
+        // circles and show a network banner — it just never got the chance,
+        // because this catch made a total failure look like success.
+        results.degraded = true;
       }
 
       console.log(`🚀 Multi-package fast initial load completed: ${results.circles.length} circles found`);
@@ -2772,7 +2798,8 @@ export default function Dashboard() {
         adminCursor: undefined,
         memberCursor: undefined,
         hasMoreAdmin: false,
-        hasMoreMember: false
+        hasMoreMember: false,
+        degraded: true,
       };
     }
   }, []);
@@ -3428,7 +3455,8 @@ export default function Dashboard() {
         adminCursor: undefined as string | undefined,
         memberCursor: undefined as string | undefined,
         hasMoreAdmin: false,
-        hasMoreMember: false
+        hasMoreMember: false,
+        degraded: false as boolean | undefined,
       };
       
       try {
@@ -3500,7 +3528,7 @@ export default function Dashboard() {
           });
         } else {
           console.warn('No cached initial data available, continuing with empty dataset');
-          initialResults = { circles: [], adminCursor: undefined, memberCursor: undefined, hasMoreAdmin: false, hasMoreMember: false };
+          initialResults = { circles: [], adminCursor: undefined, memberCursor: undefined, hasMoreAdmin: false, hasMoreMember: false, degraded: false };
           setPaginationState({
             adminCursor: undefined,
             memberCursor: undefined,
@@ -3597,7 +3625,13 @@ export default function Dashboard() {
             const contentFields = content && typeof content === 'object' && 'fields' in content
               ? (content.fields as { value?: string })
               : null;
-            if (contentFields?.value) {
+            // create_circle seeds this field with the CIRCLE'S OWN id as a
+            // placeholder and only update_wallet_id ever replaces it. Mapping
+            // it through hands the circle id to callers expecting a wallet.
+            const isPlaceholder =
+              typeof contentFields?.value === 'string' &&
+              normalizeSuiObjectId(contentFields.value) === normalizeSuiObjectId(ref.circleId);
+            if (contentFields?.value && !isPlaceholder) {
               circleWalletMapFromDynamic.set(ref.circleId, contentFields.value);
             }
           });
@@ -4054,6 +4088,24 @@ export default function Dashboard() {
       
       console.log(`Final circles array after deduplication: ${freshCirclesArray.length} circles`);
       console.log('Final circle IDs:', freshCirclesArray.map(c => c.id));
+
+      // A degraded scan that produced nothing is UNKNOWN, not "no circles".
+      // Rendering it would show the Join/Create empty state to a member who
+      // has circles, and caching it would persist that lie to localStorage.
+      // Keep whatever we already had and surface the network banner instead
+      // — which is exactly what the error handler below was built to do.
+      if (initialResults.degraded && freshCirclesArray.length === 0) {
+        console.warn('[dashboard] circle scan degraded and empty — keeping cached circles');
+        setNetworkError({
+          type: 'service_unavailable',
+          message:
+            "We couldn't reach the network to load your circles. Anything already saved is still shown below.",
+          canRetry: true,
+          retryCount: networkError.retryCount + 1,
+        });
+        setLoading(false);
+        return;
+      }
 
       // Always update the circles state with fresh data and cache it
       setCircles(freshCirclesArray);
@@ -4691,8 +4743,32 @@ export default function Dashboard() {
 
         // Find the circle to get its wallet ID and package ID
         const circle = circles.find(c => c.id === circleId);
-        const walletId = circle?.walletId;
         const circlePackageId = circle?.packageId; // Get the package ID this circle was created with
+
+        // The dashboard resolves wallets in bulk from events and the wallet_id
+        // dynamic field. Events are served by almost no endpoint, and that
+        // field holds a placeholder, so the bulk map is usually empty — and
+        // delete_circle cannot run without the real id. Resolve this ONE
+        // circle properly here, where the cost is a single lookup rather than
+        // one per circle on every dashboard load.
+        let walletId = circle?.walletId;
+        if (!isResolvedSuiObjectId(walletId) && circlePackageId) {
+          const resolved = await resolveCustodyWalletId({
+            client: getSuiClientFromPool(getJsonRpcUrl()),
+            circleId,
+            packageId: circlePackageId,
+            userAddress: userAddress ?? undefined,
+          });
+          walletId = resolved?.walletId;
+        }
+
+        if (!isResolvedSuiObjectId(walletId)) {
+          toast.error(
+            "This circle's wallet could not be loaded, so it cannot be deleted yet. Refresh and try again.",
+          );
+          setIsDeleting(null);
+          return;
+        }
         
         console.log("🔍 DELETE DIAGNOSTICS:");
         console.log("  Circle to delete:", circle);
@@ -6787,6 +6863,25 @@ export default function Dashboard() {
                   </div>
                 </div>
               </div>
+
+              {/* Circle Record entry point — the /record page existed with no
+                  way to reach it. Free at every tier; see
+                  docs/prd/prd-circle-record.md. */}
+              <button
+                type="button"
+                onClick={() => router.push('/record')}
+                className="flex w-full items-center gap-3 border-b border-stone-200 px-5 py-3.5 text-left transition-colors hover:bg-stone-50 sm:px-6"
+              >
+                <ScrollText className="h-4 w-4 shrink-0 text-slate-500" />
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold text-slate-900">
+                    {t('record.dashboard.title')}
+                  </span>
+                  <span className="block truncate text-xs text-slate-500">
+                    {t('record.dashboard.blurb')}
+                  </span>
+                </span>
+              </button>
 
               <div className="px-5 py-5 sm:px-6 sm:py-6">
                 <div className="grid gap-4 md:hidden">

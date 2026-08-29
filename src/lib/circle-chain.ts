@@ -3,6 +3,14 @@ import type { NetworkType } from '@/config/public-env';
 export type CircleActiveSource = 'field' | 'activation-event' | 'default';
 
 export interface PublishedPackageMetadata {
+  /**
+   * Package version that DEFINED the v1.1 timed-escrow types
+   * (ContributionTimeKey). Types introduced in an upgrade anchor to the
+   * id of the version that introduced them — neither the original id nor
+   * whatever published-at later becomes. Null on lineages that have not
+   * published v1.1 yet (mainnet today).
+   */
+  timedEntriesPackageId?: string | null;
   publishedAt: string | null;
   originalId: string | null;
 }
@@ -61,21 +69,32 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
   mainnet: {
     publishedAt: '0x7bf5274804a6008ebfbd9bfe766defb7fd5aa5fe6777419c2b6531ec99120b55',
     originalId: '0x7bf5274804a6008ebfbd9bfe766defb7fd5aa5fe6777419c2b6531ec99120b55',
+    timedEntriesPackageId: null,
   },
   // Testnet lineage. Original published 2026-06-12; v2 (2026-06-15) added
   // njangi_goal_pool; v3 (2026-06-15) added combined "amount by date" goals;
   // v4 (2026-08-02) locked the rotation order mid-cycle and made
-  // `njangi_cycle_escrow::finalize` recipient-only.
+  // `njangi_cycle_escrow::finalize` recipient-only; v5 (2026-08-20) let a
+  // circle that was already running elsewhere join mid-rotation; v6
+  // (2026-08-22) added the Circle Record v1.1 entries — open_cycle*_indexed
+  // (escrow-history dynamic field on the Circle) and contribute_timed*
+  // (per-member contribution timestamps).
   //
   // published-at = latest package (move-call target); original-id stays v1
-  // (type identity + event filters). v4 was an UPGRADE, not a fresh publish,
-  // so original-id is unchanged and every circle created under v1-v3 remains
-  // reachable — which is why the v4 hardening avoided touching any public
-  // struct's abilities (that would have been upgrade-incompatible and forced
-  // a new lineage).
+  // (type identity + event filters). Every version since has been an UPGRADE,
+  // not a fresh publish, so original-id is unchanged and every circle created
+  // under an earlier version remains reachable — which is why v4 avoided
+  // touching any public struct's abilities, and why v5 put its migration
+  // ledger in a dynamic field rather than adding a field to CircleConfig.
+  // Either would have been upgrade-incompatible and forced a new lineage,
+  // stranding every existing circle.
   testnet: {
-    publishedAt: '0x1a5fd4877f940f637cf4ac95fcd75cb352065de8b9e0acb9dbd29daa09b7846e',
+    publishedAt: '0x859e3add80ce891423d49702b2b3350addf1726ca634000c7394748c0c416c8e',
     originalId: '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
+    // v6 introduced the timed-escrow types; they stay anchored here even
+    // after future upgrades move published-at.
+    timedEntriesPackageId:
+      '0x859e3add80ce891423d49702b2b3350addf1726ca634000c7394748c0c416c8e',
   },
 };
 
@@ -99,9 +118,17 @@ export function getPublishedPackageMetadata(
 ): PublishedPackageMetadata {
   const metadata = PACKAGE_LINEAGE_BY_NETWORK[network];
 
+  // Spread first so a newly added lineage field cannot be silently
+  // dropped by this accessor — timedEntriesPackageId was, and the loss
+  // was invisible until on-time evidence came back empty in production
+  // (2026-08-24) despite the on-chain data being present.
   return {
+    ...metadata,
     publishedAt: normalizePackageId(metadata.publishedAt),
     originalId: normalizePackageId(metadata.originalId),
+    timedEntriesPackageId: metadata.timedEntriesPackageId
+      ? normalizePackageId(metadata.timedEntriesPackageId)
+      : null,
   };
 }
 

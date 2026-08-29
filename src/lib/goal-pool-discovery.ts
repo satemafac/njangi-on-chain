@@ -229,7 +229,11 @@ export async function readContributorAmount(
   who: string,
   network: NetworkType,
   client?: SuiClient,
-): Promise<string> {
+): Promise<string | null> {
+  // Tri-state on purpose. '0' must mean "verified: contributed nothing";
+  // null means "could not read". Collapsing a failed read to '0' hides the
+  // refund control on a CANCELLED pool, which puts a contributor's own
+  // money out of reach through the product.
   const config = getNetworkConfig(network);
   const sui = client ?? getPooledSuiClient({ network, rpcUrl: config.rpcUrl });
   try {
@@ -237,12 +241,16 @@ export async function readContributorAmount(
       parentId: contributionsTableId,
       name: { type: 'address', value: normalizeAddress(who) },
     });
+    if (entry.error) {
+      const code = (entry.error as { code?: string }).code ?? '';
+      return code === 'dynamicFieldNotFound' ? '0' : null;
+    }
     const content = entry.data?.content;
-    if (!content || content.dataType !== 'moveObject') return '0';
+    if (!content || content.dataType !== 'moveObject') return null;
     const f = (content as { fields: Record<string, unknown> }).fields;
     // Table<address,u64> entries store the value under `value`.
     return String(f.value ?? '0');
   } catch {
-    return '0';
+    return null;
   }
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../../../../contexts/AuthContext';
 import { SuiClient } from '@mysten/sui/client';
@@ -17,6 +17,7 @@ import {
 } from '../../../../services/network-config';
 import { cetusService } from '../../../../lib/cetus-service';
 import { ZkLoginClient } from '@/services/zkLoginClient';
+import { resolveCustodyWalletId } from '@/lib/custody-wallet-discovery';
 import { isSwapsEnabled } from '@/config/feature-flags';
 import RampPicker from '@/components/RampPicker';
 import CycleEscrowPanel from '@/components/CycleEscrowPanel';
@@ -32,6 +33,13 @@ import {
 } from '@/lib/onramp-provider';
 import { RAMP_PROVIDER_LABELS, type RampProviderId } from '@/lib/ramp-geo';
 import { getCircleConfigFieldsFromDynamicFields } from '@/lib/circle-config';
+import {
+  getMigrationLedgerFromDynamicFields,
+  hasMemberAcknowledged,
+  isSameMember,
+  resolveMigrationRatification,
+  type MigrationLedger,
+} from '@/lib/circle-migration';
 import { resolveCircleLifecycleState } from '@/lib/circle-chain';
 import { isResolvedSuiObjectId } from '@/lib/sui-object-id';
 import type { CoinbaseAssetIntent } from '@/types/coinbase-onramp';
@@ -401,6 +409,9 @@ const readOutstandingSecurityDepositRaw = async (
 };
 
 
+const shortenAddress = (value: string): string =>
+  value.length > 12 ? `${value.slice(0, 6)}...${value.slice(-4)}` : value;
+
 export default function ContributeToCircle() {
   const router = useRouter();
   const { id } = router.query;
@@ -490,6 +501,12 @@ export default function ContributeToCircle() {
   const [currentPositionInCycle, setCurrentPositionInCycle] = useState<number | null>(null);
   const [totalMembersInRotation, setTotalMembersInRotation] = useState<number | null>(null);
 
+  // Mid-cycle migration: this circle may have been running elsewhere before it
+  // joined. Members confirm the recorded history before it can start.
+  const [migrationLedger, setMigrationLedger] = useState<MigrationLedger | null>(null);
+  const [rotationOrderAddresses, setRotationOrderAddresses] = useState<string[]>([]);
+  const [isConfirmingMigration, setIsConfirmingMigration] = useState(false);
+
   // Add a new state variable to track if a user has had their security deposit returned during the current paused cycle
   const [securityDepositReturnedDuringPause, setSecurityDepositReturnedDuringPause] = useState<boolean>(false);
   
@@ -526,9 +543,9 @@ export default function ContributeToCircle() {
   const requiredContributionUsdc = (circle?.contributionAmountUsd || 0) / 100;
   const requiredSecurityDepositUsdc = (circle?.securityDepositUsd || 0) / 100;
 
-  // The custody wallet id comes from a separate CustodyWalletCreated event
-  // lookup, so `circle` can be fully populated while `walletId` is still an
-  // empty string — an RPC 429 on that one query is enough. An empty id
+  // The custody wallet id comes from a separate discovery step (see
+  // custody-wallet-discovery.ts), so `circle` can be fully populated while
+  // `walletId` is still an empty string — one failed lookup is enough. An empty id
   // normalizes into the all-zero object id downstream, and the payment lands as
   // `The following input objects are invalid: {"code":"0x000...000"}`. Every
   // control that spends the wallet id stays disabled until this reads true.
@@ -601,9 +618,21 @@ export default function ContributeToCircle() {
               console.log('[Membership] User found in members table, access granted');
               return true;
             }
-          } catch {
-            // User not found in members table
-            console.log('[Membership] User not found in members table');
+            // A non-notFound error is an UNKNOWN, not an absence. Falling
+            // through on one told a paid-up member "you are not a member of
+            // this circle" and blocked the contribute page.
+            if (memberField.error) {
+              const code = (memberField.error as { code?: string }).code ?? '';
+              if (code !== 'dynamicFieldNotFound') {
+                throw new Error(`members-table read failed: ${code || 'unknown'}`);
+              }
+            }
+          } catch (err) {
+            // Only a verified absence may fall through to the event scan;
+            // a read failure must not masquerade as "not a member".
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes('members-table read failed')) throw err;
+            console.log('[Membership] User not present in members table (verified absent)');
           }
         }
       }
@@ -1057,6 +1086,7 @@ export default function ContributeToCircle() {
         if (!isNaN(position) && position >= 0 && rotationOrderArray.length > 0) {
           setCurrentPositionInCycle(position);
           setTotalMembersInRotation(rotationOrderArray.length);
+          setRotationOrderAddresses(rotationOrderArray as string[]);
           console.log(`Contribute - Fetched cycle position: ${position + 1} of ${rotationOrderArray.length}`);
           // Phase 6: hydrate the member-name map so the CycleEscrowPanel can
           // show "It's Aminata's turn" instead of a hex address. We fire-
@@ -1177,30 +1207,25 @@ export default function ContributeToCircle() {
           }
         }
         
-        // 3. Fetch CustodyWalletCreated event for walletId. Per-node indexer
-        // gaps can throw "Could not find the referenced transaction events"
-        // here even when the upstream try/catch is in place — isolate so a
-        // failed wallet lookup doesn't surface as a runtime overlay.
+        // 3. Resolve the custody wallet id. Three-tier discovery (dynamic
+        // field -> events -> the member's own deposit history) so a per-node
+        // indexer gap or expired event retention no longer erases the wallet
+        // from the page — deposits build their transaction against this id.
         try {
-          const custodyEvents = await client.queryEvents({
-            query: { MoveEventType: `${determinedPackageId}::njangi_custody::CustodyWalletCreated` },
-            limit: 100
+          const custodyResolution = await resolveCustodyWalletId({
+            client,
+            circleId: id as string,
+            packageId: determinedPackageId,
+            userAddress,
           });
-          const custodyEvent = custodyEvents.data.find(event =>
-            event.parsedJson &&
-                typeof event.parsedJson === 'object' &&
-                'circle_id' in event.parsedJson &&
-                'wallet_id' in event.parsedJson &&
-            event.parsedJson.circle_id === id
-          );
-          if (custodyEvent?.parsedJson) {
-            walletId = (custodyEvent.parsedJson as { wallet_id: string }).wallet_id;
-            console.log('Contribute - Found wallet ID from events:', walletId);
+          if (custodyResolution) {
+            walletId = custodyResolution.walletId;
+            console.log('Contribute - custody wallet resolved via', custodyResolution.source);
           } else {
-            console.warn('Contribute - No CustodyWalletCreated event found for circle:', id);
+            console.warn('Contribute - custody wallet unresolved for circle:', id);
           }
         } catch (walletLookupErr) {
-          console.warn('Contribute - CustodyWalletCreated lookup failed (non-fatal):', walletLookupErr);
+          console.warn('Contribute - custody wallet lookup failed (non-fatal):', walletLookupErr);
         }
 
       } catch (error) {
@@ -1290,6 +1315,7 @@ export default function ContributeToCircle() {
         if (configFields) {
           const resolvedConfigFields = configFields as Record<string, SuiFieldValue>;
           console.log('Contribute - CircleConfig fields:', resolvedConfigFields);
+          setMigrationLedger(await getMigrationLedgerFromDynamicFields(client, dynamicFields));
 
           if (resolvedConfigFields.contribution_amount) {
             configValues.contributionAmount = Number(resolvedConfigFields.contribution_amount) / 1e9;
@@ -2485,6 +2511,7 @@ export default function ContributeToCircle() {
           usdcCoinType: USDC_COIN_TYPE,
           suiCoinType: getCoinType('SUI'),
           network: getCurrentNetwork(),
+          acknowledgeMigrationVersion: migrationVersionOnScreen,
         },
       );
 
@@ -2711,6 +2738,7 @@ export default function ContributeToCircle() {
             suiCoinType: getCoinType('SUI'),
             fallbackSuiAmount: fallbackSui,
             network: getCurrentNetwork(),
+            acknowledgeMigrationVersion: migrationVersionOnScreen,
           },
         );
         responseData = { digest: result.digest };
@@ -3096,6 +3124,7 @@ export default function ContributeToCircle() {
             usdcCoinType: USDC_COIN_TYPE,
             suiCoinType: getCoinType('SUI'),
             network: getCurrentNetwork(),
+            acknowledgeMigrationVersion: migrationVersionOnScreen,
           },
         );
         responseData = { digest: result.digest };
@@ -3153,6 +3182,47 @@ export default function ContributeToCircle() {
   }, [circle, userAddress, currentCycle]);
 
   // Add this function to handle manual refresh
+  // The custody wallet id is resolved by a separate lookup, and every payment
+  // control stays disabled until it lands (see `circleWalletReady`). When that
+  // lookup loses to a rate limit — 429s from the shared RPC are routine under
+  // load — the deposit button sat on "Loading circle details..." until somebody
+  // noticed the retry link. Members read that as the circle being broken.
+  //
+  // Retry it here, bounded and backing off, so the common case heals itself.
+  // Backoff matters: a tight retry would spend the very budget it is waiting
+  // on and keep the page stuck. The manual button remains for the rest.
+  const walletRetryCountRef = useRef(0);
+
+  useEffect(() => {
+    walletRetryCountRef.current = 0;
+  }, [circle?.id]);
+
+  useEffect(() => {
+    // Only once the circle itself has loaded: before that this is not a failed
+    // wallet lookup, it is a page that has not finished its first read.
+    if (!circle?.id || circleWalletReady) {
+      return;
+    }
+
+    const MAX_WALLET_RETRIES = 4;
+    if (walletRetryCountRef.current >= MAX_WALLET_RETRIES) {
+      return;
+    }
+
+    const attempt = walletRetryCountRef.current;
+    const delayMs = 2000 * 2 ** attempt; // 2s, 4s, 8s, 16s
+    const timer = setTimeout(() => {
+      walletRetryCountRef.current = attempt + 1;
+      console.log(
+        `[contribute] custody wallet unresolved, retry ${attempt + 1}/${MAX_WALLET_RETRIES}`,
+      );
+      void fetchCircleDetails();
+    }, delayMs);
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [circle?.id, circleWalletReady]);
+
   const handleRefreshContributionStatus = async () => {
     toast.loading('Refreshing contribution status...', { id: 'refresh-status' });
     try {
@@ -3225,6 +3295,64 @@ export default function ContributeToCircle() {
   const walletSummaryDetail = userAddress
     ? `${userAddress.substring(0, 6)}...${userAddress.substring(userAddress.length - 4)}`
     : 'Wallet unavailable';
+  // This circle may have been running elsewhere before it joined. Marking a
+  // member as already collected takes them out of this round's payout queue,
+  // so nobody's turn is written off until every member confirms the same
+  // picture — including this one. The contract enforces it at activation.
+  const migrationRatification = useMemo(
+    () => resolveMigrationRatification(migrationLedger, rotationOrderAddresses),
+    [migrationLedger, rotationOrderAddresses],
+  );
+
+  const needsMyMigrationConfirmation = Boolean(
+    migrationLedger
+      && !circle?.isActive
+      && userAddress
+      && rotationOrderAddresses.some((address) => isSameMember(address, userAddress))
+      && !hasMemberAcknowledged(migrationLedger, userAddress),
+  );
+
+  // The version the member is looking at right now. Passing this — rather than
+  // re-reading it at signing time — is what makes the contract abort if the
+  // organiser rewrote the history after this page loaded.
+  const migrationVersionOnScreen = needsMyMigrationConfirmation
+    ? migrationLedger?.version
+    : undefined;
+
+  // Members who paid their deposit BEFORE the organiser recorded the history
+  // have no deposit transaction left to ride along with, so they confirm on
+  // its own. Same call, same version guard.
+  const handleConfirmMigrationState = async () => {
+    if (!account || !circle || !migrationLedger) return;
+
+    const toastId = 'confirm-migration';
+    try {
+      setIsConfirmingMigration(true);
+      toast.loading('Confirming...', { id: toastId });
+
+      await new ZkLoginClient().acknowledgeMigrationState(
+        account,
+        circle.id,
+        migrationLedger.version,
+        getCurrentNetwork(),
+      );
+
+      toast.success('Confirmed. Thanks!', { id: toastId });
+      await fetchCircleDetails();
+    } catch (error) {
+      console.error('Error confirming migration state:', error);
+      const message = error instanceof Error ? error.message : 'Could not confirm.';
+      toast.error(
+        /MoveAbort\(.*,\s*77\)/.test(message)
+          ? 'These details changed since this page loaded. Reload and check them again.'
+          : message,
+        { id: toastId },
+      );
+    } finally {
+      setIsConfirmingMigration(false);
+    }
+  };
+
   const cycleSummaryLabel = currentCycle > 0 ? `Cycle ${currentCycle}` : 'Setup';
   const cycleSummaryDetail = circle?.pausedAfterCycle
     ? 'Paused after payout'
@@ -3238,6 +3366,98 @@ export default function ContributeToCircle() {
       : formatUsdCentsAsUsdc(!userDepositPaid ? circle.securityDepositUsd || 0 : circle.contributionAmountUsd || 0);
 
   // Update the renderContributionOptions function to show a message when user is the current recipient
+  // Rendered at page level, NOT inside renderContributionOptions(): that
+  // helper returns null once the deposit is paid, which made this panel —
+  // and with it the standalone confirm button — unreachable for exactly the
+  // members who need it (deposit already paid, so no deposit transaction is
+  // left for the acknowledgement to ride along with).
+  const renderMigrationConfirmation = () => {
+    if (!needsMyMigrationConfirmation || !migrationRatification) {
+      return null;
+    }
+
+    return (
+      <div className="mb-4 rounded-[22px] border border-sky-200 bg-sky-50 p-4 sm:p-5">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+          Before this circle starts
+        </p>
+        <h4 className="mt-2 text-lg font-semibold text-sky-950">
+          Does this match where your circle is?
+        </h4>
+        <p className="mt-2 text-sm leading-6 text-sky-900/80">
+          Your organiser recorded that this circle has been running already.
+          Everyone checks it before the first payout here, because it decides
+          who is still owed a turn in this round.
+        </p>
+
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div className="rounded-[16px] border border-sky-200 bg-white p-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Already collected
+            </p>
+            <ul className="mt-2 space-y-1 text-sm text-slate-700">
+              {migrationRatification.alreadyCollected.length === 0 ? (
+                <li className="text-slate-500">Nobody yet</li>
+              ) : (
+                migrationRatification.alreadyCollected.map((address, index) => (
+                  <li key={address}>
+                    {index + 1}. {memberNameMap[address] || shortenAddress(address)}
+                    {isSameMember(address, userAddress) ? ' — you' : ''}
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
+          <div className="rounded-[16px] border border-sky-200 bg-white p-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Still to collect
+            </p>
+            <ul className="mt-2 space-y-1 text-sm text-slate-700">
+              {migrationRatification.stillWaiting.map((address, index) => (
+                <li key={address}>
+                  {migrationRatification.alreadyCollected.length + index + 1}.{' '}
+                  {memberNameMap[address] || shortenAddress(address)}
+                  {isSameMember(address, userAddress) ? ' — you' : ''}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+
+        <p className="mt-3 text-sm text-sky-900/80">
+          {migrationLedger && migrationLedger.priorRoundsCompleted > 0
+            ? `Your group also recorded ${migrationLedger.priorRoundsCompleted} full ${
+                migrationLedger.priorRoundsCompleted === 1 ? 'round' : 'rounds'
+              } finished before joining. `
+            : ''}
+          Everyone keeps contributing every round. Anyone listed as already
+          collected takes their next turn when the round comes back around.
+        </p>
+
+        {userDepositPaid ? (
+          <button
+            type="button"
+            onClick={handleConfirmMigrationState}
+            disabled={isConfirmingMigration}
+            className={`${primaryActionClass} mt-4 w-full sm:w-auto`}
+          >
+            {isConfirmingMigration ? 'Confirming...' : 'Yes, this is right'}
+          </button>
+        ) : (
+          <p className="mt-4 rounded-[16px] bg-white px-3 py-2 text-sm text-slate-600">
+            You confirm this in the same step as your security deposit below —
+            one signature, both at once.
+          </p>
+        )}
+
+        <p className="mt-3 text-xs text-sky-900/70">
+          Not right? Ask your organiser to correct it. Changing it asks
+          everyone to check again.
+        </p>
+      </div>
+    );
+  };
+
   const renderContributionOptions = () => {
     // Cycle contributions are handled EXCLUSIVELY by the CycleEscrowPanel at the
     // top of the page — it reads/writes the on-chain per-cycle escrow, which is
@@ -3418,6 +3638,10 @@ export default function ContributeToCircle() {
         )}
 
         {/* Add prominent message for cycle paused state */}
+        {/* This circle was already running before it joined. Everyone confirms
+            the recorded history before it can start here — the contract will
+            not activate the circle until they all have. */}
+
         {circle?.pausedAfterCycle && (
           <div className={`${warningPanelClass} mb-4`}>
             <div className="flex items-start space-x-3">
@@ -4513,6 +4737,7 @@ export default function ContributeToCircle() {
                   </div>
                 </div>
 
+                {renderMigrationConfirmation()}
                 {renderContributionOptions()}
               </div>
             ) : (

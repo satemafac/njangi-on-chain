@@ -57,6 +57,15 @@ module njangi::njangi_circles {
     // that requires attestations, the requirement can never be switched
     // off (bait-and-switch guard — members joined under the KYC promise).
     const ECannotDisableAttestationRequirement: u64 = 75;
+
+    // Mid-cycle migration (see `njangi_circle_config::MigrationLedger`).
+    const EMigrationLedgerMissing: u64 = 76;
+    const EMigrationLedgerChanged: u64 = 77;
+    const EMigrationAlreadyAcknowledged: u64 = 78;
+    const EMigrationNotRatified: u64 = 79;
+    const EIncompleteRotationOrder: u64 = 80;
+    const ENothingToMigrate: u64 = 81;
+    const EMigrationRotationChanged: u64 = 82;
     // Mirrors njangi_cycle_escrow::E_COMPLIANCE_ATTESTATION_REQUIRED (216)
     // so the frontend maps a single abort code for "this circle requires a
     // compliance attestation" across both money rails.
@@ -90,6 +99,13 @@ module njangi::njangi_circles {
     // every site that resets `contributions_this_cycle` so the record and
     // the counter always move in lockstep.
     const FIELD_CYCLE_CONTRIBUTORS: vector<u8> = b"cycle_contributors";
+    // Append-only index of every CycleEscrow this circle has opened via the
+    // *_indexed open paths (Circle Record v1.1). Exists so past escrows are
+    // enumerable by OBJECT READ — before this, the only route was a
+    // queryEvents scan, which the read policy forbids and current RPC
+    // endpoints serve unreliably. Lives as a dynamic field because Sui
+    // upgrades cannot add struct fields to Circle.
+    const FIELD_ESCROW_HISTORY: vector<u8> = b"escrow_history";
 
     // Dynamic-field key for the circle-level compliance requirement.
     // Stored as a dynamic field (absent == false) so the Circle struct
@@ -410,6 +426,45 @@ module njangi::njangi_circles {
     }
 
     // ----------------------------------------------------------
+    // Mid-cycle migration events
+    // ----------------------------------------------------------
+    public struct MigrationStateDeclared has copy, drop {
+        circle_id: ID,
+        declared_by: address,
+        version: u64,
+        prior_rounds_completed: u64,
+        start_position: u64,
+        next_recipient: address,
+        rotation_length: u64,
+        timestamp: u64,
+    }
+
+    public struct MigrationStateAcknowledged has copy, drop {
+        circle_id: ID,
+        member: address,
+        version: u64,
+        acks: u64,
+        rotation_length: u64,
+        timestamp: u64,
+    }
+
+    public struct MigrationStateCleared has copy, drop {
+        circle_id: ID,
+        cleared_by: address,
+        timestamp: u64,
+    }
+
+    public struct CircleMigrationActivated has copy, drop {
+        circle_id: ID,
+        start_position: u64,
+        prior_rounds_completed: u64,
+        starting_cycle: u64,
+        ratified_by: u64,
+        already_collected: vector<address>,
+        timestamp: u64,
+    }
+
+    // ----------------------------------------------------------
     // Automation Status Struct
     // ----------------------------------------------------------
     public struct AutomationStatus has copy, drop {
@@ -641,6 +696,12 @@ module njangi::njangi_circles {
         
         // Only admin can activate the circle
         assert!(sender == circle.admin, 7);
+
+        // Activation is once-only. Without this the call re-stamps
+        // next_payout_time and current_cycle on a running circle, and it would
+        // let a migration ledger be re-applied mid-round, moving
+        // current_position after members had already contributed.
+        assert!(!circle.is_active, ECircleIsActive);
         
         // Circle must have at least 3 members (minimum required)
         assert!(circle.current_members >= 3, 22);
@@ -695,8 +756,14 @@ module njangi::njangi_circles {
             tx_context::epoch_timestamp_ms(ctx)
         );
         
-        // Start cycle
-        circle.current_cycle = 1;
+        // Start cycle. A group that migrated mid-rotation resumes at the
+        // position its members ratified and continues its own round
+        // numbering, instead of restarting the rotation from the top.
+        if (config::has_migration_ledger(&circle.id)) {
+            apply_migration_ledger(circle, clock);
+        } else {
+            circle.current_cycle = 1;
+        };
         touch_admin_heartbeat(circle, clock);
         
         event::emit(CircleActivated {
@@ -1188,6 +1255,250 @@ module njangi::njangi_circles {
         ctx: &mut TxContext
     ) {
         reorder_rotation_positions(circle, new_order, clock, ctx);
+    }
+
+    // ----------------------------------------------------------
+    // Mid-cycle migration
+    //
+    // A njangi that ran offline for months is not at the top of its rotation:
+    // some members have already collected, and the next turn belongs to
+    // somebody in the middle of the order. These three calls let such a group
+    // record where it actually stands, have every member confirm it, and then
+    // activate there instead of restarting the rotation from position 0.
+    //
+    // Declaring "positions 0..k already collected" removes those members from
+    // this round's payout queue, so it is fund direction, not bookkeeping.
+    // Two things keep it inside compliance invariant #1: it is refused once
+    // the circle is live (so no funded cycle can be redirected), and it does
+    // nothing until every member in the rotation has ratified it.
+    // ----------------------------------------------------------
+
+    // Positions only mean something if every seat is filled. A @0x0 gap would
+    // also make `get_next_payout_recipient` return none for that turn.
+    fun assert_rotation_order_complete(circle: &Circle) {
+        let rotation_len = vector::length(&circle.rotation_order);
+        assert!(rotation_len == circle.current_members, EIncompleteRotationOrder);
+        let mut i = 0;
+        while (i < rotation_len) {
+            assert!(
+                *vector::borrow(&circle.rotation_order, i) != @0x0,
+                EIncompleteRotationOrder
+            );
+            i = i + 1;
+        };
+    }
+
+    public fun declare_migration_state(
+        circle: &mut Circle,
+        prior_rounds_completed: u64,
+        start_position: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert!(sender == circle.admin, ENotAdmin);
+        // Stricter than the 58 lock the rotation setters use, which relaxes
+        // while paused between cycles. This is a genesis declaration, never a
+        // mid-flight edit, so forbidding it outright on a live circle costs
+        // the feature nothing and removes the whole redirect question.
+        assert!(!circle.is_active, ECircleIsActive);
+
+        assert_rotation_order_complete(circle);
+
+        let rotation_len = vector::length(&circle.rotation_order);
+        assert!(start_position < rotation_len, 29); // EInvalidRotationPosition
+        // A ledger that declares nothing is just an ordinary new circle.
+        // Refuse to create one so the ratification gate never fires for a
+        // group that has no history to record.
+        assert!(start_position > 0 || prior_rounds_completed > 0, ENothingToMigrate);
+
+        let next_recipient = *vector::borrow(&circle.rotation_order, start_position);
+
+        config::begin_migration_ledger(
+            &mut circle.id,
+            sender,
+            prior_rounds_completed,
+            start_position,
+            circle.rotation_order,
+            clock
+        );
+        touch_admin_heartbeat(circle, clock);
+
+        event::emit(MigrationStateDeclared {
+            circle_id: object::uid_to_inner(&circle.id),
+            declared_by: sender,
+            version: config::get_migration_version(&circle.id),
+            prior_rounds_completed,
+            start_position,
+            next_recipient,
+            rotation_length: rotation_len,
+            timestamp: clock::timestamp_ms(clock),
+        });
+    }
+
+    public fun acknowledge_migration_state(
+        circle: &mut Circle,
+        version: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert!(config::has_migration_ledger(&circle.id), EMigrationLedgerMissing);
+        assert!(!circle.is_active, ECircleIsActive);
+        // The caller states which version of the ledger they read. If the
+        // admin rewrote it in the meantime this aborts, rather than recording
+        // agreement to terms the member never saw.
+        assert!(
+            config::get_migration_version(&circle.id) == version,
+            EMigrationLedgerChanged
+        );
+        assert!(vector::contains(&circle.rotation_order, &sender), ENotMember);
+        assert!(
+            !config::has_migration_ack_from(&circle.id, sender),
+            EMigrationAlreadyAcknowledged
+        );
+
+        config::append_migration_ack(&mut circle.id, sender, clock);
+
+        event::emit(MigrationStateAcknowledged {
+            circle_id: object::uid_to_inner(&circle.id),
+            member: sender,
+            version,
+            acks: config::get_migration_ack_count(&circle.id),
+            rotation_length: vector::length(&circle.rotation_order),
+            timestamp: clock::timestamp_ms(clock),
+        });
+    }
+
+    // Drops the declared history so a group can abandon the migration and
+    // start a clean rotation instead.
+    public fun clear_migration_state(
+        circle: &mut Circle,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let sender = tx_context::sender(ctx);
+        assert!(sender == circle.admin, ENotAdmin);
+        assert!(!circle.is_active, ECircleIsActive);
+        assert!(config::has_migration_ledger(&circle.id), EMigrationLedgerMissing);
+
+        config::clear_migration_ledger(&mut circle.id);
+        touch_admin_heartbeat(circle, clock);
+
+        event::emit(MigrationStateCleared {
+            circle_id: object::uid_to_inner(&circle.id),
+            cleared_by: sender,
+            timestamp: clock::timestamp_ms(clock),
+        });
+    }
+
+    // Applies a ratified ledger. Only `activate_circle` calls this, and it
+    // asserts `!is_active` first, so this runs at most once per circle and
+    // can never move `current_position` while a cycle is funded.
+    fun apply_migration_ledger(circle: &mut Circle, clock: &Clock) {
+        // Unanimous. Without this an admin could write off another member's
+        // turn on their own say-so, which is exactly the operator discretion
+        // over fund direction that invariant #1 forbids.
+        assert!(is_migration_ratified(circle), EMigrationNotRatified);
+
+        // Members confirmed a position in a SPECIFIC order. Reordering the
+        // rotation afterwards would hand that position to somebody else while
+        // their confirmations still stood — the same redirect the rotation
+        // lock prevents, just staged before activation instead of during a
+        // cycle. Changing the order means declaring again and re-confirming.
+        assert!(
+            config::get_migration_rotation_snapshot(&circle.id) == circle.rotation_order,
+            EMigrationRotationChanged
+        );
+
+        let start_position = config::get_migration_start_position(&circle.id);
+        let prior_rounds = config::get_migration_prior_rounds_completed(&circle.id);
+        let rotation_len = vector::length(&circle.rotation_order);
+        assert!(start_position < rotation_len, 29);
+
+        // Members who collected off-platform. The per-cycle escrow rail reads
+        // only `current_position`, but the legacy rail checks this flag before
+        // paying, and it is what the UI renders as "already collected".
+        let mut already_collected = vector::empty<address>();
+        let mut i = 0;
+        while (i < start_position) {
+            let member_addr = *vector::borrow(&circle.rotation_order, i);
+            let member = table::borrow_mut(&mut circle.members, member_addr);
+            members::set_received_payout(member, true);
+            vector::push_back(&mut already_collected, member_addr);
+            i = i + 1;
+        };
+
+        set_current_position(circle, start_position);
+        // Continue the group's own round numbering rather than restarting at 1.
+        circle.current_cycle = prior_rounds + 1;
+
+        event::emit(CircleMigrationActivated {
+            circle_id: object::uid_to_inner(&circle.id),
+            start_position,
+            prior_rounds_completed: prior_rounds,
+            starting_cycle: circle.current_cycle,
+            ratified_by: config::get_migration_ack_count(&circle.id),
+            already_collected,
+            timestamp: clock::timestamp_ms(clock),
+        });
+    }
+
+    // ----------------------------------------------------------
+    // Migration ledger getters
+    // ----------------------------------------------------------
+    public fun has_migration_ledger(circle: &Circle): bool {
+        config::has_migration_ledger(&circle.id)
+    }
+
+    public fun get_migration_version(circle: &Circle): u64 {
+        config::get_migration_version(&circle.id)
+    }
+
+    public fun get_migration_start_position(circle: &Circle): u64 {
+        config::get_migration_start_position(&circle.id)
+    }
+
+    public fun get_migration_prior_rounds_completed(circle: &Circle): u64 {
+        config::get_migration_prior_rounds_completed(&circle.id)
+    }
+
+    public fun get_migration_ack_count(circle: &Circle): u64 {
+        config::get_migration_ack_count(&circle.id)
+    }
+
+    // False once the admin reorders the rotation, so the UI can ask for a
+    // fresh declaration instead of letting activation abort.
+    public fun migration_matches_rotation(circle: &Circle): bool {
+        config::has_migration_ledger(&circle.id)
+            && config::get_migration_rotation_snapshot(&circle.id) == circle.rotation_order
+    }
+
+    public fun has_migration_ack_from(circle: &Circle, member: address): bool {
+        config::has_migration_ack_from(&circle.id, member)
+    }
+
+    // True only when every seat in the rotation has confirmed the ledger at
+    // its CURRENT version — re-declaring resets this to false.
+    public fun is_migration_ratified(circle: &Circle): bool {
+        if (!config::has_migration_ledger(&circle.id)) {
+            return false
+        };
+
+        let rotation_len = vector::length(&circle.rotation_order);
+        if (rotation_len == 0) {
+            return false
+        };
+
+        let mut i = 0;
+        while (i < rotation_len) {
+            let member_addr = *vector::borrow(&circle.rotation_order, i);
+            if (!config::has_migration_ack_from(&circle.id, member_addr)) {
+                return false
+            };
+            i = i + 1;
+        };
+        true
     }
     
     // ----------------------------------------------------------
@@ -1689,6 +2000,16 @@ module njangi::njangi_circles {
         // Ensure that only the admin can approve members
         let sender = tx_context::sender(ctx);
         assert!(sender == circle.admin, 7);
+
+        // Same lock as the rotation setters. A member admitted mid-cycle gets
+        // no payout_position and is not in rotation_order, so the funding gate
+        // and any open escrow snapshot cannot see them — yet they can still
+        // contribute on the legacy rail, and they cannot be given a position
+        // until the circle pauses. Admitting them here creates that ghost.
+        assert!(
+            !circle.is_active || circle.paused_after_cycle,
+            ECircleNotPausedForConfigChange
+        );
         
         // Ensure the member isn't already part of the circle
         assert!(!is_member(circle, member_addr), ECircleFull);
@@ -1738,6 +2059,12 @@ module njangi::njangi_circles {
         // Ensure that only the admin can approve members
         let sender = tx_context::sender(ctx);
         assert!(sender == circle.admin, 7);
+
+        // See admin_approve_member for why this is locked while a cycle runs.
+        assert!(
+            !circle.is_active || circle.paused_after_cycle,
+            ECircleNotPausedForConfigChange
+        );
         
         // Get current time once for all members
         let current_time = clock::timestamp_ms(clock);
@@ -2595,6 +2922,38 @@ module njangi::njangi_circles {
         };
     }
     
+    // ----------------------------------------------------------
+    // Escrow history (Circle Record v1.1)
+    // ----------------------------------------------------------
+
+    /// Records a newly opened cycle escrow in the circle's on-chain
+    /// history. package-internal: only sibling modules (the escrow module)
+    /// may write it, so the history can never contain an id the package
+    /// itself did not mint.
+    public(package) fun record_escrow_opened(circle: &mut Circle, escrow_id: ID) {
+        if (dynamic_field::exists_(&circle.id, FIELD_ESCROW_HISTORY)) {
+            let history = dynamic_field::borrow_mut<vector<u8>, vector<ID>>(
+                &mut circle.id,
+                FIELD_ESCROW_HISTORY
+            );
+            vector::push_back(history, escrow_id);
+        } else {
+            dynamic_field::add(&mut circle.id, FIELD_ESCROW_HISTORY, vector[escrow_id]);
+        }
+    }
+
+    /// Every escrow opened through the indexed paths, oldest first. Empty
+    /// for circles that predate the feature or only used the un-indexed
+    /// opens — callers must treat absence as "no data", never as "no
+    /// cycles ran".
+    public fun get_escrow_history(circle: &Circle): vector<ID> {
+        if (dynamic_field::exists_(&circle.id, FIELD_ESCROW_HISTORY)) {
+            *dynamic_field::borrow<vector<u8>, vector<ID>>(&circle.id, FIELD_ESCROW_HISTORY)
+        } else {
+            vector::empty<ID>()
+        }
+    }
+
     // ----------------------------------------------------------
     // Advance rotation position and cycle management
     // ----------------------------------------------------------
@@ -3865,6 +4224,33 @@ module njangi::njangi_circles {
         circle.paused_after_cycle = paused;
     }
 
+    /// The test factory shares an ACTIVE circle; migration happens before
+    /// activation, so these rewind it to the pre-activation shape.
+    #[test_only]
+    public fun set_is_active_for_testing(circle: &mut Circle, active: bool) {
+        circle.is_active = active;
+    }
+
+    /// activate_circle refuses to start until every seat in the rotation has
+    /// posted its security deposit. The factory creates members unpaid.
+    #[test_only]
+    public fun mark_all_deposits_paid_for_testing(circle: &mut Circle) {
+        let rotation = circle.rotation_order;
+        let len = vector::length(&rotation);
+        let mut i = 0;
+        while (i < len) {
+            let addr = *vector::borrow(&rotation, i);
+            let member = table::borrow_mut(&mut circle.members, addr);
+            members::set_deposit_paid(member, true);
+            i = i + 1;
+        };
+    }
+
+    #[test_only]
+    public fun has_received_payout_for_testing(circle: &Circle, member_addr: address): bool {
+        members::has_received_payout(table::borrow(&circle.members, member_addr))
+    }
+
     // ----------------------------------------------------------
     // Rotation-order lifecycle lock
     //
@@ -4178,6 +4564,36 @@ module njangi::njangi_circles {
         assert!(can_active_member_trigger_auto_release_internal(false, true), 9041);
     }
 
+    // The tests above pin the PREDICATES. This one pins the ENFORCEMENT: that
+    // the role resolver actually aborts for a caller the predicates reject,
+    // rather than falling through to a permitted role.
+    //
+    // It matters because the admin exclusion cannot be observed on a live
+    // circle within a test session. The minimum auto-release delay is longer
+    // than one cycle (7 days for a weekly circle) and every signed admin
+    // action refreshes the heartbeat, so reaching an armed fallback means a
+    // week of admin silence. Simulating trigger_auto_release before then
+    // returns ERecoveryExecutionNotReady — "nothing is armed" — which is a
+    // correct refusal for the wrong reason and proves nothing about identity.
+    // This test is therefore the authority for that claim.
+    #[test]
+    #[expected_failure(abort_code = ERecoveryAutoReleaseUnauthorized)]
+    fun test_auto_release_rejects_admin_even_when_member_fallback_is_open() {
+        // has_valid_delegate = false, caller_is_delegate = false,
+        // caller_can_fallback = false (this is the admin — see
+        // can_active_member_trigger_auto_release_internal(true, true) above),
+        // member_fallback_open = true: everything armed, admin still refused.
+        resolve_auto_release_trigger_role_internal(false, false, false, true);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = ERecoveryAutoReleaseUnauthorized)]
+    fun test_auto_release_rejects_non_delegate_during_the_delegate_window() {
+        // A valid delegate exists and the member-fallback window has not
+        // opened yet, so an eligible member is still too early to act.
+        resolve_auto_release_trigger_role_internal(true, false, true, false);
+    }
+
     #[test]
     fun test_auto_release_delegate_priority_and_member_fallback_matrix() {
         assert!(can_trigger_auto_release_internal(true, true, true, false), 9042);
@@ -4266,6 +4682,672 @@ module njangi::njangi_circles {
         assert!(receipt.circle_id == circle_id, 9102);
         burn_membership(receipt);
 
+        sui::test_scenario::end(scenario);
+    }
+
+    // ----------------------------------------------------------
+    // Mid-cycle migration
+    //
+    // A group that has been running offline arrives part-way through its
+    // rotation. Declaring "positions 0..k already collected" writes those
+    // members out of this round's payout queue, so these pin the two things
+    // that keep it inside compliance invariant #1: it cannot touch a live
+    // circle, and it does nothing until every member has ratified it.
+    // ----------------------------------------------------------
+
+    #[test_only]
+    fun ack_migration_as(
+        scenario: &mut sui::test_scenario::Scenario,
+        who: address,
+        version: u64,
+        clock: &Clock
+    ) {
+        sui::test_scenario::next_tx(scenario, who);
+        let mut circle = sui::test_scenario::take_shared<Circle>(scenario);
+        acknowledge_migration_state(&mut circle, version, clock, sui::test_scenario::ctx(scenario));
+        sui::test_scenario::return_shared(circle);
+    }
+
+    /// Rewinds the (active) test factory circle to the pre-activation shape a
+    /// migrating group is actually in: not started, every deposit posted.
+    #[test_only]
+    fun prepare_for_migration(scenario: &mut sui::test_scenario::Scenario, admin: address) {
+        sui::test_scenario::next_tx(scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(scenario);
+        set_is_active_for_testing(&mut circle, false);
+        mark_all_deposits_paid_for_testing(&mut circle);
+        sui::test_scenario::return_shared(circle);
+    }
+
+    #[test]
+    fun test_migration_activates_at_declared_position() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let dave = @0xD;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol, dave],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        prepare_for_migration(&mut scenario, admin);
+
+        // Two rounds finished offline; in this one admin and bob have already
+        // collected, so carol's turn is next.
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        declare_migration_state(&mut circle, 2, 2, &clock, sui::test_scenario::ctx(&mut scenario));
+        let version = get_migration_version(&circle);
+        assert!(version == 1, 9500);
+        assert!(!is_migration_ratified(&circle), 9501);
+        sui::test_scenario::return_shared(circle);
+
+        ack_migration_as(&mut scenario, admin, version, &clock);
+        ack_migration_as(&mut scenario, bob, version, &clock);
+        ack_migration_as(&mut scenario, carol, version, &clock);
+        ack_migration_as(&mut scenario, dave, version, &clock);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        assert!(is_migration_ratified(&circle), 9502);
+        assert!(get_migration_ack_count(&circle) == 4, 9503);
+        activate_circle(&mut circle, &clock, sui::test_scenario::ctx(&mut scenario));
+
+        // The circle resumes at carol, continues the group's round numbering,
+        // and records the two members who already collected.
+        assert!(get_current_position(&circle) == 2, 9504);
+        assert!(get_current_cycle(&circle) == 3, 9505);
+        let recipient = get_next_payout_recipient(&circle);
+        assert!(option::is_some(&recipient), 9506);
+        assert!(*option::borrow(&recipient) == carol, 9507);
+        assert!(has_received_payout_for_testing(&circle, admin), 9508);
+        assert!(has_received_payout_for_testing(&circle, bob), 9509);
+        assert!(!has_received_payout_for_testing(&circle, carol), 9510);
+        assert!(!has_received_payout_for_testing(&circle, dave), 9511);
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = EMigrationNotRatified)]
+    fun test_activate_aborts_when_migration_not_ratified() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        prepare_for_migration(&mut scenario, admin);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        declare_migration_state(&mut circle, 0, 1, &clock, sui::test_scenario::ctx(&mut scenario));
+        let version = get_migration_version(&circle);
+        sui::test_scenario::return_shared(circle);
+
+        // Bob never confirms that admin already collected. The admin must not
+        // be able to write off bob's turn alone.
+        ack_migration_as(&mut scenario, admin, version, &clock);
+        ack_migration_as(&mut scenario, carol, version, &clock);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        activate_circle(&mut circle, &clock, sui::test_scenario::ctx(&mut scenario));
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = EMigrationLedgerChanged)]
+    fun test_ack_at_stale_version_aborts() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        prepare_for_migration(&mut scenario, admin);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        declare_migration_state(&mut circle, 0, 1, &clock, sui::test_scenario::ctx(&mut scenario));
+        let stale_version = get_migration_version(&circle);
+        // The admin rewrites the ledger after bob read it.
+        declare_migration_state(&mut circle, 0, 2, &clock, sui::test_scenario::ctx(&mut scenario));
+        sui::test_scenario::return_shared(circle);
+
+        // Bob confirms what he saw, not what is now on chain.
+        ack_migration_as(&mut scenario, bob, stale_version, &clock);
+
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    fun test_redeclaration_clears_prior_acks() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        prepare_for_migration(&mut scenario, admin);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        declare_migration_state(&mut circle, 0, 1, &clock, sui::test_scenario::ctx(&mut scenario));
+        let version = get_migration_version(&circle);
+        sui::test_scenario::return_shared(circle);
+
+        ack_migration_as(&mut scenario, admin, version, &clock);
+        ack_migration_as(&mut scenario, bob, version, &clock);
+        ack_migration_as(&mut scenario, carol, version, &clock);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        assert!(is_migration_ratified(&circle), 9520);
+
+        // Changing the declared position must send everyone back to confirm.
+        declare_migration_state(&mut circle, 0, 2, &clock, sui::test_scenario::ctx(&mut scenario));
+        assert!(get_migration_version(&circle) == version + 1, 9521);
+        assert!(get_migration_ack_count(&circle) == 0, 9522);
+        assert!(!is_migration_ratified(&circle), 9523);
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = EMigrationRotationChanged)]
+    fun test_reordering_after_confirmation_blocks_activation() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let dave = @0xD;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol, dave],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        prepare_for_migration(&mut scenario, admin);
+
+        // Everyone confirms that carol (position 2) is next.
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        declare_migration_state(&mut circle, 0, 2, &clock, sui::test_scenario::ctx(&mut scenario));
+        let version = get_migration_version(&circle);
+        sui::test_scenario::return_shared(circle);
+
+        ack_migration_as(&mut scenario, admin, version, &clock);
+        ack_migration_as(&mut scenario, bob, version, &clock);
+        ack_migration_as(&mut scenario, carol, version, &clock);
+        ack_migration_as(&mut scenario, dave, version, &clock);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        assert!(is_migration_ratified(&circle), 9570);
+
+        // The admin now swaps carol out of position 2. The confirmations still
+        // stand, but they were given for a different queue — position 2 is
+        // dave now, and activating here would hand him carol's turn.
+        reorder_rotation_positions(
+            &mut circle,
+            vector[admin, bob, dave, carol],
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        assert!(is_migration_ratified(&circle), 9571); // still "ratified"...
+        assert!(!migration_matches_rotation(&circle), 9572); // ...but stale
+
+        activate_circle(&mut circle, &clock, sui::test_scenario::ctx(&mut scenario));
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = ECircleIsActive)]
+    fun test_declare_migration_blocked_while_active() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+
+        // The factory circle is live. Rewriting where the rotation stands now
+        // would redirect a cycle members may already have funded.
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        declare_migration_state(&mut circle, 0, 1, &clock, sui::test_scenario::ctx(&mut scenario));
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = ECircleIsActive)]
+    fun test_activate_blocked_when_already_active() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+
+        // Re-activating used to succeed silently, re-stamping current_cycle
+        // and next_payout_time on a running circle.
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        activate_circle(&mut circle, &clock, sui::test_scenario::ctx(&mut scenario));
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = EIncompleteRotationOrder)]
+    fun test_declare_migration_requires_complete_rotation() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let dave = @0xD;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        prepare_for_migration(&mut scenario, admin);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        config::set_max_members(&mut circle.id, 8);
+        // Dave joins but has no rotation slot yet, so the positions the admin
+        // is about to declare do not describe the whole circle.
+        admin_approve_member(&mut circle, dave, &clock, sui::test_scenario::ctx(&mut scenario));
+        declare_migration_state(&mut circle, 0, 1, &clock, sui::test_scenario::ctx(&mut scenario));
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 29)]
+    fun test_declare_migration_rejects_out_of_range_position() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        prepare_for_migration(&mut scenario, admin);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        // A three-member rotation has no position 3; a circle that has
+        // finished its round is not mid-rotation, it is between rounds.
+        declare_migration_state(&mut circle, 0, 3, &clock, sui::test_scenario::ctx(&mut scenario));
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = ENothingToMigrate)]
+    fun test_declare_migration_rejects_empty_history() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        prepare_for_migration(&mut scenario, admin);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        // Position 0 with no prior rounds is an ordinary new circle; making a
+        // ledger for it would demand ratification for nothing.
+        declare_migration_state(&mut circle, 0, 0, &clock, sui::test_scenario::ctx(&mut scenario));
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = ENotMember)]
+    fun test_non_member_cannot_acknowledge() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let stranger = @0xF;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        prepare_for_migration(&mut scenario, admin);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        declare_migration_state(&mut circle, 0, 1, &clock, sui::test_scenario::ctx(&mut scenario));
+        let version = get_migration_version(&circle);
+        sui::test_scenario::return_shared(circle);
+
+        ack_migration_as(&mut scenario, stranger, version, &clock);
+
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = EMigrationAlreadyAcknowledged)]
+    fun test_double_ack_aborts() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        prepare_for_migration(&mut scenario, admin);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        declare_migration_state(&mut circle, 0, 1, &clock, sui::test_scenario::ctx(&mut scenario));
+        let version = get_migration_version(&circle);
+        sui::test_scenario::return_shared(circle);
+
+        // One member must not be able to stand in for the quorum by confirming
+        // repeatedly.
+        ack_migration_as(&mut scenario, bob, version, &clock);
+        ack_migration_as(&mut scenario, bob, version, &clock);
+
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    fun test_clear_migration_state_removes_ledger() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        prepare_for_migration(&mut scenario, admin);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        declare_migration_state(&mut circle, 1, 1, &clock, sui::test_scenario::ctx(&mut scenario));
+        assert!(has_migration_ledger(&circle), 9530);
+
+        // Abandoning the migration leaves an ordinary circle that starts at
+        // the top of its rotation.
+        clear_migration_state(&mut circle, &clock, sui::test_scenario::ctx(&mut scenario));
+        assert!(!has_migration_ledger(&circle), 9531);
+
+        activate_circle(&mut circle, &clock, sui::test_scenario::ctx(&mut scenario));
+        assert!(get_current_position(&circle) == 0, 9532);
+        assert!(get_current_cycle(&circle) == 1, 9533);
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    fun test_activate_without_ledger_is_unchanged() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        prepare_for_migration(&mut scenario, admin);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        activate_circle(&mut circle, &clock, sui::test_scenario::ctx(&mut scenario));
+
+        assert!(get_current_position(&circle) == 0, 9540);
+        assert!(get_current_cycle(&circle) == 1, 9541);
+        assert!(!has_received_payout_for_testing(&circle, admin), 9542);
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    fun test_migrated_partial_round_pauses_then_resumes_full() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let dave = @0xD;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol, dave],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+        prepare_for_migration(&mut scenario, admin);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        declare_migration_state(&mut circle, 0, 2, &clock, sui::test_scenario::ctx(&mut scenario));
+        let version = get_migration_version(&circle);
+        sui::test_scenario::return_shared(circle);
+
+        ack_migration_as(&mut scenario, admin, version, &clock);
+        ack_migration_as(&mut scenario, bob, version, &clock);
+        ack_migration_as(&mut scenario, carol, version, &clock);
+        ack_migration_as(&mut scenario, dave, version, &clock);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        activate_circle(&mut circle, &clock, sui::test_scenario::ctx(&mut scenario));
+
+        // The migrated round owes only the two turns that were still
+        // outstanding, then the circle pauses like any completed round.
+        advance_rotation_position_and_cycle(&mut circle, carol, &clock);
+        assert!(get_current_position(&circle) == 3, 9550);
+        assert!(!is_paused_after_cycle(&circle), 9551);
+
+        advance_rotation_position_and_cycle(&mut circle, dave, &clock);
+        assert!(is_paused_after_cycle(&circle), 9552);
+
+        // From here it is an ordinary circle: a full round from the top with
+        // everyone eligible again.
+        resume_cycle(&mut circle, &clock, sui::test_scenario::ctx(&mut scenario));
+        assert!(get_current_position(&circle) == 0, 9553);
+        assert!(get_current_cycle(&circle) == 2, 9554);
+        assert!(!has_received_payout_for_testing(&circle, admin), 9555);
+        assert!(!has_received_payout_for_testing(&circle, bob), 9556);
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    // ----------------------------------------------------------
+    // Approval lifecycle lock
+    //
+    // A member admitted mid-cycle gets no rotation slot, so the funding gate
+    // and any open escrow snapshot cannot see them — yet they can still
+    // contribute on the legacy rail, and cannot be given a position until the
+    // circle pauses. These pin the lock that stops that ghost being created.
+    // ----------------------------------------------------------
+
+    #[test]
+    #[expected_failure(abort_code = ECircleNotPausedForConfigChange)]
+    fun test_approve_member_blocked_while_cycle_running() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let dave = @0xD;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        config::set_max_members(&mut circle.id, 8);
+        admin_approve_member(&mut circle, dave, &clock, sui::test_scenario::ctx(&mut scenario));
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = ECircleNotPausedForConfigChange)]
+    fun test_approve_members_batch_blocked_while_cycle_running() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let dave = @0xD;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        config::set_max_members(&mut circle.id, 8);
+        admin_approve_members(&mut circle, vector[dave], &clock, sui::test_scenario::ctx(&mut scenario));
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    fun test_approve_member_allowed_while_paused_between_cycles() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let dave = @0xD;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        config::set_max_members(&mut circle.id, 8);
+        // Between rounds the rotation can still be edited, so a new member can
+        // be given a position before the next round opens.
+        set_paused_after_cycle_for_testing(&mut circle, true);
+        admin_approve_member(&mut circle, dave, &clock, sui::test_scenario::ctx(&mut scenario));
+        assert!(is_member(&circle, dave), 9560);
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
         sui::test_scenario::end(scenario);
     }
 }

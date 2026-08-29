@@ -104,7 +104,7 @@ export async function buildStaleReport(
   for (const circleId of circleIds) {
     let escrowSummary;
     try {
-      escrowSummary = await findCurrentCycleEscrow(client, network, circleId);
+      escrowSummary = await findCurrentCycleEscrow(network, circleId);
     } catch (err) {
       console.warn('[attestation-stale] discovery failed', { circleId, err });
       continue;
@@ -115,7 +115,7 @@ export async function buildStaleReport(
     if (!state.requiresAttestation) continue;
     if (state.claimed) continue;
 
-    const contributors = await listContributors(escrowSummary.escrowId, network, client);
+    const contributors = await listContributors(escrowSummary.escrowId, network);
     const candidates = new Set<string>();
     for (const member of contributors) candidates.add(member.toLowerCase());
     candidates.add(state.recipient.toLowerCase());

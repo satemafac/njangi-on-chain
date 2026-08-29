@@ -29,7 +29,7 @@ import type { SuiClient } from '@mysten/sui/client';
 import type { NetworkType } from '../services/whatsapp-registry-service';
 import { getNetworkConfig, getPackageIdForNetwork } from '../services/network-config';
 import { getPooledSuiClient } from '../services/sui-rpc-failover';
-import { getPackageLookupIds } from './circle-chain';
+import { getPublishedPackageMetadata, getPackageLookupIds } from './circle-chain';
 
 function packageIdFor(network: NetworkType): string {
   const fromConfig = getPackageIdForNetwork(network);
@@ -85,6 +85,34 @@ export async function resolveComplianceConfigId(
       network,
       rpcUrl: getNetworkConfig(network).rpcUrl,
     });
+
+  // Env-pinned fast path. The event replay below depends on queryEvents,
+  // which the current endpoint landscape serves unreliably (provider-
+  // dependent, rate-limited) — and this resolver sits in front of every
+  // gated contribute and collect, where a transient scan failure surfaced
+  // as a false "verification not configured" refusal (live, 2026-08-23).
+  // Per the discovery doctrine the pinned id is VERIFIED on-chain before
+  // it can reach a tx builder; a stale pin falls through to the replay.
+  const pinned =
+    network === 'mainnet'
+      ? process.env.NEXT_PUBLIC_MAINNET_NJANGI_COMPLIANCE_CONFIG_ID
+      : process.env.NEXT_PUBLIC_TESTNET_NJANGI_COMPLIANCE_CONFIG_ID;
+  if (pinned) {
+    try {
+      const obj = await rpcClient.getObject({ id: pinned, options: { showType: true } });
+      const type = obj.data?.type ?? '';
+      if (type.endsWith('::njangi_compliance::ComplianceConfig')) {
+        complianceConfigIdCache.set(network, pinned);
+        return pinned;
+      }
+      console.warn(
+        '[compliance-gate] pinned config id does not verify as a ComplianceConfig; falling back to event replay',
+      );
+    } catch {
+      // Object read failed — fall through to the replay rather than
+      // trusting an unverified pin.
+    }
+  }
   const lookupIds = getPackageLookupIds({
     network,
     packageId: null,
@@ -148,7 +176,13 @@ export async function fetchValidAttestations(
   network: NetworkType,
   client?: SuiClient,
 ): Promise<AttestationRow[]> {
-  const packageId = packageIdFor(network);
+  // Struct types stay anchored to the package's ORIGINAL id across
+  // upgrades (see membership-discovery.ts) — filtering on the current
+  // published-at id silently matches nothing after the first upgrade,
+  // which blinded this preflight to every real attestation (found live
+  // 2026-08-23, one upgrade after the filter was written).
+  const { originalId } = getPublishedPackageMetadata(network);
+  const packageId = originalId ?? packageIdFor(network);
   const rpcClient =
     client ??
     getPooledSuiClient({

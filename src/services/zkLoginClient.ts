@@ -15,6 +15,9 @@ import {
   buildClaimMembershipTx,
   buildDeleteCircleTx,
   buildReorderRotationPositionsTx,
+  buildDeclareMigrationStateTx,
+  buildAcknowledgeMigrationStateTx,
+  buildClearMigrationStateTx,
   buildResumeCycleTx,
   buildSetRotationPositionTx,
   buildCreateCircleTx,
@@ -658,6 +661,14 @@ export class ZkLoginClient {
       suiCoinType: string;
       fallbackSuiAmount?: bigint;
       network?: NetworkOverride;
+      /**
+       * Version of the migration ledger the member has on screen. When set,
+       * their confirmation rides in the SAME transaction as the deposit, so
+       * they sign once — and, because a PTB is all-or-nothing, a stale ledger
+       * aborts the deposit too rather than taking their money against terms
+       * that have since changed.
+       */
+      acknowledgeMigrationVersion?: number;
     },
   ): Promise<{ digest: string; requireRelogin?: boolean }> {
     if (!account?.zkProofs?.proofPoints) {
@@ -678,8 +689,19 @@ export class ZkLoginClient {
     const build = (
       txb: Transaction,
       client: import('@mysten/sui/client').SuiClient,
-    ) =>
-      buildSecurityDepositTx(txb, client, {
+    ) => {
+      // Confirmation first: if the ledger moved under the member, the whole
+      // transaction aborts before any coin is split.
+      if (typeof opts.acknowledgeMigrationVersion === 'number') {
+        buildAcknowledgeMigrationStateTx({
+          packageId,
+          circleId,
+          version: opts.acknowledgeMigrationVersion,
+          txb,
+        });
+      }
+
+      return buildSecurityDepositTx(txb, client, {
         packageId,
         circleId,
         walletId,
@@ -689,6 +711,7 @@ export class ZkLoginClient {
         suiCoinType: opts.suiCoinType,
         fallbackSuiAmount: opts.fallbackSuiAmount,
       });
+    };
 
     const sponsored = await trySponsoredGas({
       action: 'paySecurityDeposit',
@@ -745,6 +768,64 @@ export class ZkLoginClient {
       resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
       build: (packageId) =>
         buildReorderRotationPositionsTx({ packageId, circleId, newOrder }),
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Mid-cycle migration. See src/lib/circle-migration.ts for the read side.
+  // ---------------------------------------------------------------------
+
+  public async declareMigrationState(
+    account: AccountData,
+    circleId: string,
+    priorRoundsCompleted: number,
+    startPosition: number,
+    network?: NetworkOverride,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    return signLocallyWithBuilder({
+      account,
+      network,
+      resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
+      build: (packageId) =>
+        buildDeclareMigrationStateTx({
+          packageId,
+          circleId,
+          priorRoundsCompleted,
+          startPosition,
+        }),
+    });
+  }
+
+  /**
+   * `version` must be the ledger version the member actually saw on screen.
+   * Re-reading it here would defeat the guard: the contract aborts when the
+   * admin has rewritten the ledger since, which is the whole point.
+   */
+  public async acknowledgeMigrationState(
+    account: AccountData,
+    circleId: string,
+    version: number,
+    network?: NetworkOverride,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    return signLocallyWithBuilder({
+      account,
+      network,
+      resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
+      build: (packageId) =>
+        buildAcknowledgeMigrationStateTx({ packageId, circleId, version }),
+    });
+  }
+
+  public async clearMigrationState(
+    account: AccountData,
+    circleId: string,
+    network?: NetworkOverride,
+  ): Promise<{ digest: string; requireRelogin?: boolean }> {
+    return signLocallyWithBuilder({
+      account,
+      network,
+      resolvePackageId: () => getCircleTransactionPackageId(circleId, account.userAddr),
+      build: (packageId) => buildClearMigrationStateTx({ packageId, circleId }),
     });
   }
 

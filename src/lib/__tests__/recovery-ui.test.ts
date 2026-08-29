@@ -1,4 +1,8 @@
-import { getRecoveryProposalUiState, type RecoveryProposalLike } from '@/lib/recovery-ui';
+import {
+  getRecoveryProposalUiState,
+  getRecoveryDelegateCardCopy,
+  type RecoveryProposalLike,
+} from '@/lib/recovery-ui';
 
 const baseProposal = (): RecoveryProposalLike => ({
   deadline: 10_000,
@@ -125,5 +129,83 @@ describe('recovery-ui helpers', () => {
     expect(state.canVote).toBe(false);
     expect(state.closedVoteTone).toBe('neutral');
     expect(state.closedVoteMessage).toBe('Your wallet is not in the eligible voter snapshot for this proposal.');
+  });
+});
+
+describe('getRecoveryDelegateCardCopy', () => {
+  const base = {
+    statusKnown: true as boolean,
+    autoReleaseEnabled: true,
+    delegateStatus: 'none' as 'none' | 'valid' | 'invalid',
+    authorityMode: 'member_fallback' as 'delegate_grace' | 'member_fallback',
+  };
+
+  const allStrings = (copy: Record<string, string>) =>
+    Object.entries(copy)
+      .filter(([key]) => key !== 'requirement')
+      .map(([, value]) => value);
+
+  it('never demands a delegate on a circle where auto-release is off', () => {
+    // The shipped bug: activate_circle only enforces a delegate when
+    // auto-release is enabled, and such a circle can never HAVE one
+    // (njangi_circles.move:555 stores option::none() at creation, and there is
+    // no entry point to change it). Demanding one was unsatisfiable.
+    const copy = getRecoveryDelegateCardCopy({ ...base, autoReleaseEnabled: false });
+
+    expect(copy.requirement).toBe('not_applicable');
+    for (const value of allStrings(copy as unknown as Record<string, string>)) {
+      expect(value).not.toMatch(/required|before activating|must keep/i);
+    }
+  });
+
+  it('asserts nothing about auto-release while the status is unknown', () => {
+    // The regression this guards: getRecoveryAutoReleaseUiState(null) returns
+    // enabled:false, identical to a genuinely disabled circle. Branching on
+    // `enabled` alone would announce "auto-release is off, no delegate needed"
+    // for a circle where it is ON and the delegate is MISSING — a false
+    // all-clear on a safety control.
+    const copy = getRecoveryDelegateCardCopy({ ...base, statusKnown: false });
+
+    expect(copy.requirement).toBe('unknown');
+    for (const value of allStrings(copy as unknown as Record<string, string>)) {
+      expect(value).not.toMatch(/\b(enabled|disabled|not configured|no fallback)\b/i);
+    }
+  });
+
+  it('distinguishes a failed load from a load still in flight', () => {
+    const loading = getRecoveryDelegateCardCopy({ ...base, statusKnown: false });
+    const errored = getRecoveryDelegateCardCopy({ ...base, statusKnown: false, loadError: true });
+
+    expect(loading.requirement).toBe('unknown');
+    expect(errored.requirement).toBe('unknown');
+    expect(errored.summaryBody).not.toBe(loading.summaryBody);
+    expect(errored.summaryBody).toMatch(/refresh/i);
+  });
+
+  it('still demands a delegate when auto-release is genuinely enabled', () => {
+    const copy = getRecoveryDelegateCardCopy(base);
+
+    expect(copy.requirement).toBe('required');
+    expect(copy.summaryTitle).toBe('Delegate required.');
+    expect(copy.formHint).toMatch(/required before activation/i);
+  });
+
+  it('flags a configured but ineligible delegate separately from a missing one', () => {
+    const copy = getRecoveryDelegateCardCopy({ ...base, delegateStatus: 'invalid' });
+
+    expect(copy.requirement).toBe('attention');
+    expect(copy.summaryTitle).not.toBe('Delegate required.');
+  });
+
+  it('reports a healthy delegate without warning language', () => {
+    const copy = getRecoveryDelegateCardCopy({
+      ...base,
+      delegateStatus: 'valid',
+      authorityMode: 'delegate_grace',
+    });
+
+    expect(copy.requirement).toBe('healthy');
+    expect(copy.authorityModeLabel).toBe('24h delegate window');
+    expect(copy.summaryBody).not.toMatch(/required/i);
   });
 });

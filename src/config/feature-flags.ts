@@ -85,6 +85,25 @@ export function isLegacyRailEnabled(): boolean {
  * already did; Coinbase's endpoint never checked its own flag, so the ramp was
  * reachable by direct call while the UI hid it.
  */
+/**
+ * Circle Record v1.1 escrow entry points (indexed opens + timed
+ * contributions). The v6 package adds `open_cycle*_indexed` — which append
+ * the new escrow's id to the circle's on-chain history so past escrows are
+ * enumerable by object read — and `contribute_timed*`, which record a
+ * per-member contribution timestamp so "paid on time" can be an on-chain
+ * fact.
+ *
+ * The flag says WHICH TARGETS THE CLIENT BUILDS, nothing more: flip it on
+ * only after the package version carrying these functions is published on
+ * the active network, or every open/contribute aborts with an unknown-
+ * function error. Old circles and old escrows keep working through the
+ * original entries either way — readers treat missing history/timestamps
+ * as "not recorded", never as "didn't happen".
+ */
+export function isTimedEscrowEntriesEnabled(): boolean {
+  return flagEnabled(process.env.NEXT_PUBLIC_ESCROW_TIMED_ENTRIES_ENABLED);
+}
+
 export function isRampEnabled(provider: 'coinbase' | 'moonpay' | 'transak'): boolean {
   switch (provider) {
     case 'coinbase':

@@ -26,6 +26,7 @@ import {
   isComplianceGateEnabled,
   resolveComplianceConfigId,
 } from '@/lib/compliance-gate';
+import { isTimedEscrowEntriesEnabled } from '@/config/feature-flags';
 import VerificationRequiredModal from '@/components/VerificationRequiredModal';
 import {
   preflightSanctionsCheck,
@@ -72,14 +73,6 @@ interface CycleEscrowPanelProps {
   autoOpenWhenReady?: boolean;
   /** Callback fired once the panel kicks off an auto-open. */
   onAutoOpenFired?: () => void;
-  /**
-   * True only when the circle was created with auto-release enabled.
-   * `activate_circle` enforces the non-admin recovery delegate exclusively in
-   * that case (njangi_circles.move), so the activation checklist must not
-   * mention a delegate for circles without auto-release — those admins cannot
-   * set one at all. Defaults to false to match the plain-circle contract path.
-   */
-  requiresRecoveryDelegate?: boolean;
 }
 
 const DEFAULT_COIN_TYPE =
@@ -131,7 +124,6 @@ export function CycleEscrowPanel({
   circleIsActive = true,
   autoOpenWhenReady = false,
   onAutoOpenFired,
-  requiresRecoveryDelegate = false,
 }: CycleEscrowPanelProps) {
   const { isReady, userAddress, signAndExecute } = useZkLoginSigner();
   const { t } = useTranslation();
@@ -139,6 +131,10 @@ export function CycleEscrowPanel({
   const [liveState, setLiveState] = useState<CycleEscrowLiveState | null>(null);
   const [contributors, setContributors] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  // Distinguishes "could not read this round" from "no round yet". Without
+  // it a rate-limited lookup renders as a confident (and wrong) statement
+  // that the admin has not opened the round.
+  const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState<null | 'open' | 'pay' | 'claim' | 'advance'>(null);
   const [lastDigest, setLastDigest] = useState<string | null>(null);
   // Gated round + no attestation on the caller's wallet: explain the
@@ -157,13 +153,14 @@ export function CycleEscrowPanel({
 
   const refresh = useCallback(async () => {
     setLoading(true);
+    setLoadError(false);
     try {
-      const found = await findCurrentCycleEscrow(rpcClient, network, circleId);
+      const found = await findCurrentCycleEscrow(network, circleId);
       setSummary(found);
       if (found) {
         const state = await readCycleEscrowState(found.escrowId, network, rpcClient);
         setLiveState(state);
-        const paidList = await listContributors(found.escrowId, network, rpcClient);
+        const paidList = await listContributors(found.escrowId, network);
         setContributors(paidList);
       } else {
         setLiveState(null);
@@ -171,6 +168,11 @@ export function CycleEscrowPanel({
       }
     } catch (err) {
       console.warn('[CycleEscrowPanel] refresh failed', err);
+      // Say so, rather than falling through to the "not open yet" copy.
+      setLoadError(true);
+      setSummary(null);
+      setLiveState(null);
+      setContributors([]);
     } finally {
       setLoading(false);
     }
@@ -400,12 +402,9 @@ export function CycleEscrowPanel({
 
   // Phase 8: resolve the member's freshest valid ComplianceAttestation
   // once per session and reuse it for gated contribute/finalize calls.
-  // Returns null when the gate isn't active, 'ABORT' after surfacing a
-  // njangi-friendly explanation when a required piece is missing, or the
-  // pair of object ids the gated entrypoints need.
-  const resolveGateArgsOrAbort = useCallback(async (): Promise<
-    { attestationId: string; complianceConfigId: string } | null | 'ABORT'
-  > => {
+  // Returns null when the attestation isn't required, or throws with a
+  // njangi-friendly toast when it is required and missing.
+  const resolveAttestationIdOrAbort = useCallback(async (): Promise<string | null> => {
     const gateActive =
       !!liveState?.requiresAttestation || isComplianceGateEnabled();
     if (!gateActive) return null;
@@ -418,30 +417,15 @@ export function CycleEscrowPanel({
       setShowVerificationRequired(true);
       return 'ABORT';
     }
-    // The gated entrypoints validate the attestation against the exact
-    // ComplianceConfig the escrow pinned at open time, and take that
-    // config object as an argument right after the attestation. Resolve
-    // it up front (same pattern as onStartRound) — sending the call
-    // without it aborts on-chain with an unfriendly "Incorrect number
-    // of arguments".
-    const complianceConfigId = await resolveComplianceConfigId(network).catch(
-      () => null,
-    );
-    if (!complianceConfigId) {
-      toast.error(
-        'Verification is required in your region but is not configured yet. Please contact support.',
-      );
-      return 'ABORT';
-    }
-    return { attestationId: attestation.objectId, complianceConfigId };
+    return attestation.objectId;
   }, [liveState?.requiresAttestation, userAddress, network]);
 
   const onPayShare = useCallback(async () => {
     if (!summary || !userAddress) return;
-    const gateArgs = await resolveGateArgsOrAbort();
-    if (gateArgs === 'ABORT') return;
+    const attestationId = await resolveAttestationIdOrAbort();
+    if (attestationId === 'ABORT') return;
 
-    if (gateArgs) {
+    if (attestationId) {
       // Gated contribute: we inline the auto-coin + gated moveCall in a
       // single builder so the PTB contains the coin split + the
       // compliance-checked contribute in one atomic transaction.
@@ -453,6 +437,22 @@ export function CycleEscrowPanel({
       const contributionAmount = BigInt(contributionAmountBase);
       const escrowId = summary.escrowId;
       const ownerAddress = userAddress;
+      // The on-chain *_with_attestation entries take the escrow-pinned
+      // ComplianceConfig as an argument; omitting it is an arity abort —
+      // the dormant bug that silently broke every gated contribution
+      // until 2026-08-23. Resolve it up front and refuse with a readable
+      // message rather than aborting on-chain.
+      const complianceConfigId =
+        (await resolveComplianceConfigId(network).catch(() => null)) ?? undefined;
+      if (!complianceConfigId) {
+        toast.error(
+          'Verification is required in your region but is not configured yet. Please contact support.',
+        );
+        return;
+      }
+      const timedTarget = isTimedEscrowEntriesEnabled()
+        ? 'contribute_timed_with_attestation'
+        : 'contribute_with_attestation';
       const build: TransactionBuilder = async (txb, client) => {
         const { coinArg } = await preparePaymentCoin({
           txb,
@@ -462,13 +462,13 @@ export function CycleEscrowPanel({
           amount: contributionAmount,
         });
         txb.moveCall({
-          target: `${packageId}::njangi_cycle_escrow::contribute_with_attestation`,
+          target: `${packageId}::njangi_cycle_escrow::${timedTarget}`,
           typeArguments: [coinType],
           arguments: [
             txb.object(escrowId),
             coinArg,
-            txb.object(gateArgs.attestationId),
-            txb.object(gateArgs.complianceConfigId),
+            txb.object(attestationId),
+            txb.object(complianceConfigId),
             txb.object('0x6'),
           ],
         });
@@ -485,14 +485,29 @@ export function CycleEscrowPanel({
       ownerAddress: userAddress,
     });
     void runWithSigner('pay', build, 100_000_000);
-  }, [summary, userAddress, network, coinType, contributionAmountBase, runWithSigner, resolveGateArgsOrAbort]);
+  }, [summary, userAddress, network, coinType, contributionAmountBase, runWithSigner, resolveAttestationIdOrAbort]);
 
   const onCollectPayout = useCallback(async () => {
     if (!summary) return;
-    const gateArgs = await resolveGateArgsOrAbort();
-    if (gateArgs === 'ABORT') return;
+    const attestationId = await resolveAttestationIdOrAbort();
+    if (attestationId === 'ABORT') return;
 
-    const build = gateArgs
+    // Same arity requirement as the gated contribute: the on-chain entry
+    // takes the escrow-pinned ComplianceConfig, so resolve it or refuse
+    // readably instead of aborting on-chain.
+    let collectConfigId: string | undefined;
+    if (attestationId) {
+      collectConfigId =
+        (await resolveComplianceConfigId(network).catch(() => null)) ?? undefined;
+      if (!collectConfigId) {
+        toast.error(
+          'Verification is required in your region but is not configured yet. Please contact support.',
+        );
+        return;
+      }
+    }
+
+    const build = attestationId
       ? buildFinalizeAndRedeemWithAttestationTx({
           network,
           escrowId: summary.escrowId,
@@ -500,8 +515,8 @@ export function CycleEscrowPanel({
           // Advance the circle's rotation atomically with the payout — without
           // this the cycle stalls on the same recipient.
           circleId,
-          attestationObjectId: gateArgs.attestationId,
-          complianceConfigId: gateArgs.complianceConfigId,
+          attestationObjectId: attestationId,
+          complianceConfigId: collectConfigId as string,
         })
       : buildFinalizeAndRedeemTx({
           network,
@@ -510,7 +525,7 @@ export function CycleEscrowPanel({
           circleId,
         });
     void runWithSigner('claim', build, 120_000_000);
-  }, [summary, network, coinType, circleId, runWithSigner, resolveGateArgsOrAbort]);
+  }, [summary, network, coinType, circleId, runWithSigner, resolveAttestationIdOrAbort]);
 
   // Recovery: advance a circle whose payout was collected but whose rotation
   // never moved on (e.g. claimed before the collect flow chained the advance).
@@ -573,7 +588,9 @@ export function CycleEscrowPanel({
         </div>
       ) : stage === 'no-round-open' ? (
         <div className="mt-5 rounded-lg border border-dashed border-slate-200 p-4">
-          <p className="text-sm text-slate-700">{t('escrow.notOpen')}</p>
+          <p className="text-sm text-slate-700">
+            {loadError ? t('escrow.loadFailed') : t('escrow.notOpen')}
+          </p>
           {isAdmin && showAdminOpenButton ? (
             <>
               <button
@@ -585,11 +602,22 @@ export function CycleEscrowPanel({
                 {busy === 'open' ? t('escrow.openingRound') : t('escrow.openRound')}
               </button>
               {!circleIsActive ? (
+                // Deliberately does NOT enumerate the activation requirements.
+                // It used to, and got them wrong: it claimed a non-admin
+                // recovery delegate was always needed, when activate_circle
+                // only requires one if auto-release is enabled — and a circle
+                // created without auto-release can never have a delegate at
+                // all. The manage page owns that truth via
+                // getActivationRequirementMessage(), which is gated correctly
+                // and lists what is actually outstanding for THIS circle.
+                //
+                // Kept as raw English to match the neighbouring WhatsApp
+                // warning; adding a t() key would oblige EN+FR parity updates
+                // for a string only the admin manage page renders.
                 <p className="mt-2 text-xs text-amber-700">
                   Activate the circle first. Use the <span className="font-semibold">Activate Circle</span> action
-                  in the Circle Management section below — it requires every member&rsquo;s
-                  security deposit and the rotation order set
-                  {requiresRecoveryDelegate ? ', plus a non-admin recovery delegate' : ''}.
+                  in the Circle Management section below — it lists exactly what is still
+                  outstanding for this circle.
                 </p>
               ) : null}
             </>
