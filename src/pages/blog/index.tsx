@@ -54,11 +54,11 @@ export default function BlogIndexPage() {
       excerpt: "A country-by-country look at how rotating savings groups are regulated, and what it means for a circle that spans borders.",
       category: 'Regulation',
       readTime: '11 min read',
-      publishDate: '2024-01-03',
+      publishDate: '2026-08-28',
       author: 'Njangi On-Chain',
       tags: ['regulation', 'compliance', 'legal'],
       href: '/blog/how-regulators-treat-savings-circles',
-      available: false
+      available: true
     }
   ];
 
