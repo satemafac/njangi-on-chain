@@ -3735,9 +3735,75 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           
           // Initialize SUI client for checking coin value
           const suiClient = await createSuiClient();
-          
-          // REMOVED: Backend check for userDepositPaid - rely on frontend status
-          console.log(`Frontend reports deposit status: ${depositIsPaid ? 'PAID' : 'NOT PAID'}`);
+
+          // Deposit status decides WHERE THE MONEY GOES a few lines below
+          // (isSecurityDeposit vs isContribution selects the Move call), so
+          // it is verified server-side against chain. It previously read
+          // `depositIsPaid` straight from the request body — a
+          // client-supplied, unverified flag choosing a fund destination —
+          // and the client kept a STALE value whenever its own refresh
+          // failed. A member whose refresh 429'd could have a contribution
+          // routed in as a second security deposit, or vice versa.
+          //
+          // Unreadable is not "unpaid": refuse rather than guess.
+          let membersTableIdForDeposit: string | undefined;
+          try {
+            const circleObj = await suiClient.getObject({
+              id: circleId,
+              options: { showContent: true },
+            });
+            const content = circleObj.data?.content;
+            if (content && content.dataType === 'moveObject') {
+              const circleFields = (content as {
+                fields?: { members?: { fields?: { id?: { id?: string } } } };
+              }).fields;
+              membersTableIdForDeposit = circleFields?.members?.fields?.id?.id;
+            }
+          } catch (err) {
+            console.error('[depositStablecoin] circle read failed:', err);
+          }
+
+          let verifiedDepositPaid: boolean | null = null;
+          if (membersTableIdForDeposit) {
+            try {
+              const memberField = await suiClient.getDynamicFieldObject({
+                parentId: membersTableIdForDeposit,
+                name: { type: 'address', value: session.account.userAddr },
+              });
+              if (memberField.error) {
+                const code = (memberField.error as { code?: string }).code ?? '';
+                verifiedDepositPaid = code === 'dynamicFieldNotFound' ? false : null;
+              } else {
+                const content = memberField.data?.content;
+                if (content && content.dataType === 'moveObject') {
+                  const outer = (content as { fields?: Record<string, unknown> }).fields ?? {};
+                  const value = (outer.value ?? {}) as { fields?: Record<string, unknown> };
+                  const inner = value.fields ?? (outer as Record<string, unknown>);
+                  verifiedDepositPaid = Boolean(
+                    (inner as { deposit_paid?: unknown }).deposit_paid,
+                  );
+                }
+              }
+            } catch (err) {
+              console.error('[depositStablecoin] deposit-status read failed:', err);
+              verifiedDepositPaid = null;
+            }
+          }
+
+          if (verifiedDepositPaid === null) {
+            return res.status(503).json({
+              error: 'DEPOSIT_STATUS_UNAVAILABLE',
+              message:
+                'We could not confirm your security deposit status just now, so we have not moved any funds. Please try again shortly.',
+            });
+          }
+
+          if (typeof depositIsPaid === 'boolean' && depositIsPaid !== verifiedDepositPaid) {
+            console.warn(
+              `[depositStablecoin] client deposit flag (${depositIsPaid}) disagreed with chain (${verifiedDepositPaid}); using chain.`,
+            );
+          }
+          const depositAlreadyPaid = verifiedDepositPaid;
           
           // Get the coin value to check balance/verify amount
           let coinValue = 0;
@@ -3801,8 +3867,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               requiredDepositAmount,
               coinValue,
               coinType: stablecoinType,
-              isSecurityDeposit: !depositIsPaid,
-              isContribution: depositIsPaid
+              isSecurityDeposit: !depositAlreadyPaid,
+              isContribution: depositAlreadyPaid
             });
             
             // Validate that the coin has sufficient value

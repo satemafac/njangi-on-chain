@@ -2596,6 +2596,8 @@ export default function Dashboard() {
     memberCursor?: string;
     hasMoreAdmin: boolean;
     hasMoreMember: boolean;
+    /** true = scan failed; empty `circles` means unknown, not none. */
+    degraded?: boolean;
   }> => {
     // Wrap entire function to prevent any errors from escaping
     try {
@@ -2606,7 +2608,11 @@ export default function Dashboard() {
         adminCursor: undefined as string | undefined,
         memberCursor: undefined as string | undefined,
         hasMoreAdmin: false,
-        hasMoreMember: false
+        hasMoreMember: false,
+        // true = the scan failed; an empty `circles` means "unknown", not
+        // "this user has none". Callers must not persist or render it as
+        // an absence.
+        degraded: false,
       };
 
       try {
@@ -2762,7 +2768,13 @@ export default function Dashboard() {
       
       } catch (error) {
         console.error('Error in multi-package fast initial circle loading:', error);
-        // Return empty results but don't throw - let the app handle gracefully
+        // Do NOT report this as a clean empty result. An empty list is a
+        // factual claim ("you have joined no circles") that the dashboard
+        // renders with a Join/Create empty state and then PERSISTS to
+        // localStorage. The outer handler already knows how to keep cached
+        // circles and show a network banner — it just never got the chance,
+        // because this catch made a total failure look like success.
+        results.degraded = true;
       }
 
       console.log(`🚀 Multi-package fast initial load completed: ${results.circles.length} circles found`);
@@ -2775,7 +2787,8 @@ export default function Dashboard() {
         adminCursor: undefined,
         memberCursor: undefined,
         hasMoreAdmin: false,
-        hasMoreMember: false
+        hasMoreMember: false,
+        degraded: true,
       };
     }
   }, []);
@@ -3431,7 +3444,8 @@ export default function Dashboard() {
         adminCursor: undefined as string | undefined,
         memberCursor: undefined as string | undefined,
         hasMoreAdmin: false,
-        hasMoreMember: false
+        hasMoreMember: false,
+        degraded: false as boolean | undefined,
       };
       
       try {
@@ -3503,7 +3517,7 @@ export default function Dashboard() {
           });
         } else {
           console.warn('No cached initial data available, continuing with empty dataset');
-          initialResults = { circles: [], adminCursor: undefined, memberCursor: undefined, hasMoreAdmin: false, hasMoreMember: false };
+          initialResults = { circles: [], adminCursor: undefined, memberCursor: undefined, hasMoreAdmin: false, hasMoreMember: false, degraded: false };
           setPaginationState({
             adminCursor: undefined,
             memberCursor: undefined,
@@ -4063,6 +4077,24 @@ export default function Dashboard() {
       
       console.log(`Final circles array after deduplication: ${freshCirclesArray.length} circles`);
       console.log('Final circle IDs:', freshCirclesArray.map(c => c.id));
+
+      // A degraded scan that produced nothing is UNKNOWN, not "no circles".
+      // Rendering it would show the Join/Create empty state to a member who
+      // has circles, and caching it would persist that lie to localStorage.
+      // Keep whatever we already had and surface the network banner instead
+      // — which is exactly what the error handler below was built to do.
+      if (initialResults.degraded && freshCirclesArray.length === 0) {
+        console.warn('[dashboard] circle scan degraded and empty — keeping cached circles');
+        setNetworkError({
+          type: 'service_unavailable',
+          message:
+            "We couldn't reach the network to load your circles. Anything already saved is still shown below.",
+          canRetry: true,
+          retryCount: networkError.retryCount + 1,
+        });
+        setLoading(false);
+        return;
+      }
 
       // Always update the circles state with fresh data and cache it
       setCircles(freshCirclesArray);

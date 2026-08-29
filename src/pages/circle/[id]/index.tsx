@@ -239,9 +239,20 @@ export default function CircleDetails() {
               console.log('[Membership] User found in members table, access granted');
               return true;
             }
-          } catch {
-            // User not found in members table
-            console.log('[Membership] User not found in members table');
+            // Only a verified absence may fall through to the event scan.
+            // Any other error is UNKNOWN — and the caller turns a false
+            // answer into "You are no longer a member of this circle" plus
+            // a forced redirect off the page.
+            if (memberField.error) {
+              const code = (memberField.error as { code?: string }).code ?? '';
+              if (code !== 'dynamicFieldNotFound') {
+                throw new Error(`members-table read failed: ${code || 'unknown'}`);
+              }
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes('members-table read failed')) throw err;
+            console.log('[Membership] User not present in members table (verified absent)');
           }
         }
       }
