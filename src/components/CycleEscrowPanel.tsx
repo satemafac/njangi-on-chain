@@ -14,10 +14,15 @@ import { useTranslation } from '@/hooks/useTranslation';
 import {
   findCurrentCycleEscrow,
   listContributors,
+  readCircleRotationPointer,
   readCycleEscrowState,
   type CycleEscrowLiveState,
   type CycleEscrowSummary,
 } from '@/lib/cycle-escrow-discovery';
+import {
+  resolveNextRoundAction,
+  type CircleRotationPointer,
+} from '@/lib/cycle-round-progression';
 import { getNetworkConfig, getPackageIdForNetwork } from '@/services/network-config';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
@@ -145,6 +150,12 @@ export function CycleEscrowPanel({
   // they can ask the admin to add them. We check this lazily after a
   // successful action so it doesn't slow down the initial render.
   const [whatsAppLinked, setWhatsAppLinked] = useState<boolean | null>(null);
+  // Where the circle's rotation pointer stands. Only read once a round has
+  // been claimed, because that is the only stage whose next action depends
+  // on it — see `nextRound` below. Null covers both "not needed yet" and
+  // "the read failed", which resolveNextRoundAction treats as unknown
+  // rather than guessing.
+  const [rotationPointer, setRotationPointer] = useState<CircleRotationPointer | null>(null);
 
   const rpcClient = useMemo(
     () => getPooledSuiClient({ network, rpcUrl: getNetworkConfig(network).rpcUrl }),
@@ -162,9 +173,28 @@ export function CycleEscrowPanel({
         setLiveState(state);
         const paidList = await listContributors(found.escrowId, network);
         setContributors(paidList);
+        // A settled round is the one stage where the escrow alone cannot say
+        // what happens next: the circle may have rotated on (open the next
+        // round) or stalled (run the recovery advance). Kept out of the hot
+        // path — an in-progress round never needs this extra read.
+        if (state?.claimed) {
+          try {
+            setRotationPointer(await readCircleRotationPointer(circleId, network, rpcClient));
+          } catch (pointerErr) {
+            // Scoped catch on purpose: a pointer read that fails must not
+            // blank the whole panel, and it must not be mistaken for a
+            // rotation state either. Null → "unknown", which offers no
+            // control rather than a wrong one.
+            console.warn('[CycleEscrowPanel] rotation pointer read failed', pointerErr);
+            setRotationPointer(null);
+          }
+        } else {
+          setRotationPointer(null);
+        }
       } else {
         setLiveState(null);
         setContributors([]);
+        setRotationPointer(null);
       }
     } catch (err) {
       console.warn('[CycleEscrowPanel] refresh failed', err);
@@ -173,6 +203,7 @@ export function CycleEscrowPanel({
       setSummary(null);
       setLiveState(null);
       setContributors([]);
+      setRotationPointer(null);
     } finally {
       setLoading(false);
     }
@@ -223,6 +254,22 @@ export function CycleEscrowPanel({
     if (paidSoFar >= totalRequired && totalRequired > 0) return 'full-waiting-for-claim';
     return 'in-progress';
   }, [loading, summary, liveState, paidSoFar, totalRequired]);
+
+  // What a settled round can do next. Only meaningful in the `completed`
+  // stage; everywhere else the escrow itself already says what happens.
+  const nextRound = useMemo(
+    () =>
+      resolveNextRoundAction({
+        escrowRecipient: liveState?.recipient ?? null,
+        escrowCycleNo: liveState?.cycleNo ?? 0,
+        pointer: rotationPointer,
+      }),
+    [liveState?.recipient, liveState?.cycleNo, rotationPointer],
+  );
+
+  // The admin's round controls, gated exactly like the `no-round-open`
+  // open button so the two agree about who may drive a round.
+  const showAdminRoundControls = isAdmin && showAdminOpenButton;
 
   const recipientLabel = useMemo(() => {
     if (!recipient) return '—';
@@ -832,21 +879,70 @@ export function CycleEscrowPanel({
               )
             ) : null}
 
+            {/* A settled round. Which control belongs here depends on where
+                the circle's rotation pointer stands, NOT on the escrow — the
+                escrow looks identical in every case. Getting this wrong is
+                how the panel got stuck: it only ever offered the recovery
+                advance, which aborts 221 on a circle whose claim already
+                rotated it, so no circle could reach round 2 from the UI.
+
+                Exactly one control is offered, and never a control that
+                cannot work. In particular `open` is withheld whenever the
+                circle still points at the member who just collected, since
+                opening there would snapshot them again and pay them twice. */}
             {stage === 'completed' ? (
               <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm font-medium text-emerald-700">
-                  {t('escrow.completed', {
-                    cycle: summary?.cycleNo ?? '—',
-                    recipient: recipientLabel,
-                  })}
-                </p>
-                {showAdminOpenButton ? (
+                <div className="sm:max-w-md">
+                  <p className="text-sm font-medium text-emerald-700">
+                    {t('escrow.completed', {
+                      cycle: summary?.cycleNo ?? '—',
+                      recipient: recipientLabel,
+                    })}
+                  </p>
+                  {showAdminRoundControls && nextRound.action === 'resume-cycle' ? (
+                    <p className="mt-2 text-xs text-amber-700">
+                      That was the last member of this rotation — everyone has now
+                      been paid once. Use{' '}
+                      <span className="font-semibold">Resume Cycle</span> in the
+                      Circle Management section below to start the next lap, then
+                      open its first round here.
+                    </p>
+                  ) : null}
+                  {showAdminRoundControls && nextRound.action === 'advance-rotation' ? (
+                    <p className="mt-2 text-xs text-amber-700">
+                      This payout was collected but the circle never moved on to the
+                      next member. Advance it below, then open the next round.
+                    </p>
+                  ) : null}
+                  {showAdminRoundControls && nextRound.action === 'unknown' ? (
+                    <p className="mt-2 text-xs text-amber-700">
+                      {nextRound.reason === 'pointer-unavailable'
+                        ? "We couldn't read where this circle's rotation stands, so we're not offering an action that might be the wrong one. Refresh to try again."
+                        : 'This circle’s rotation is in a state we can’t safely act on from here. Please contact support before opening another round.'}
+                    </p>
+                  ) : null}
+                </div>
+                {showAdminRoundControls && nextRound.action === 'open-next-round' ? (
+                  <button
+                    type="button"
+                    onClick={onStartRound}
+                    disabled={!isReady || busy === 'open' || !circleIsActive}
+                    title="Open the next member's round so everyone can pay in."
+                    className="inline-flex shrink-0 items-center justify-center rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
+                  >
+                    {busy === 'open' ? t('escrow.openingRound') : 'Open the next round'}
+                  </button>
+                ) : null}
+                {/* Recovery only, and only while it can actually succeed:
+                    the circle still sits on this escrow's round. Shown
+                    unconditionally it was a button that always aborted. */}
+                {showAdminRoundControls && nextRound.action === 'advance-rotation' ? (
                   <button
                     type="button"
                     onClick={onAdvanceCycle}
                     disabled={!isReady || busy === 'advance'}
-                    title="If the rotation didn't move to the next recipient after this payout was collected, click to advance the circle."
-                    className="inline-flex items-center justify-center rounded-full border border-emerald-300 bg-white px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm hover:bg-emerald-50 disabled:opacity-50"
+                    title="This payout was collected but the rotation never moved on. Click to advance the circle to the next recipient."
+                    className="inline-flex shrink-0 items-center justify-center rounded-full border border-emerald-300 bg-white px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm hover:bg-emerald-50 disabled:opacity-50"
                   >
                     {busy === 'advance' ? 'Advancing…' : 'Advance to next round'}
                   </button>
