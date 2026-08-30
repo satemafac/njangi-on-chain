@@ -7,6 +7,7 @@ import type { NetworkType } from '../services/whatsapp-registry-service';
 import { getNetworkConfig, getPackageIdForNetwork } from '../services/network-config';
 import { getPublishedPackageMetadata } from './circle-chain';
 import { getPooledSuiClient, withSuiRpcFailover } from '../services/sui-rpc-failover';
+import type { CircleRotationPointer } from './cycle-round-progression';
 
 export interface CycleEscrowSummary {
   escrowId: string;
@@ -298,4 +299,55 @@ export async function listContributors(
     console.warn('[cycle-escrow-discovery] Failed to list contributors', err);
     throw err;
   }
+}
+
+/**
+ * Reads where a circle's rotation pointer stands. Needed to tell a settled
+ * round that the circle has moved on (so the admin can open the next one)
+ * from one whose rotation stalled (so the recovery advance is the right
+ * call) — a settled escrow alone cannot distinguish them, which is why the
+ * UI was stuck on round 1. See `resolveNextRoundAction` for the decision.
+ *
+ * Mirrors `njangi_circles::get_next_payout_recipient`: the pointer is
+ * `rotation_order[current_position]`, and a past-the-end index or the 0x0
+ * placeholder both mean "no valid recipient".
+ *
+ * Throws on RPC failure rather than returning null. Null means "read the
+ * circle, and it is not a Move object" — a genuine fact. Collapsing the two
+ * would let an outage present as a rotation state and put a control in
+ * front of the admin that double-pays a member.
+ */
+export async function readCircleRotationPointer(
+  circleId: string,
+  network: NetworkType,
+  client?: SuiClient,
+): Promise<CircleRotationPointer | null> {
+  const rpcClient =
+    client ??
+    getPooledSuiClient({
+      network,
+      rpcUrl: getNetworkConfig(network).rpcUrl,
+    });
+  const obj = await rpcClient.getObject({ id: circleId, options: { showContent: true } });
+  if (!obj.data?.content || obj.data.content.dataType !== 'moveObject') return null;
+  const fields = (obj.data.content as { fields: Record<string, unknown> }).fields;
+
+  const currentCycle = Number(fields.current_cycle ?? 0);
+  const currentPosition = Number(fields.current_position ?? 0);
+  const rotationRaw = fields.rotation_order;
+  const rotationOrder = Array.isArray(rotationRaw) ? rotationRaw.map((a) => String(a)) : [];
+
+  const at =
+    Number.isInteger(currentPosition) && currentPosition >= 0
+      ? rotationOrder[currentPosition]
+      : undefined;
+  const nextRecipient =
+    typeof at === 'string' && at.trim() !== '' && !/^0x0+$/.test(at.trim()) ? at : null;
+
+  return {
+    currentCycle,
+    currentPosition,
+    nextRecipient,
+    pausedAfterCycle: Boolean(fields.paused_after_cycle),
+  };
 }
