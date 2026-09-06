@@ -55,6 +55,7 @@ import CycleEscrowPanel from '@/components/CycleEscrowPanel';
 import MilestonesManageCard from '@/components/milestones/MilestonesManageCard';
 import { resolveCircleSettlementCoin } from '@/lib/circle-settlement';
 import { readObject, queryEventsCached, invalidateObject, invalidateSuiRead } from '@/lib/sui-read';
+import { allDepositsHeldForRounds, depositsHeldButFlagsCleared } from '@/lib/deposit-status';
 import { logSuiReadError } from '@/services/sui-rpc-failover';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
 
@@ -701,6 +702,12 @@ export default function ManageCircle() {
     confirmButtonVariant: 'primary' as 'primary' | 'danger' | 'warning',
   });
   const [allDepositsPaid, setAllDepositsPaid] = useState(false);
+  // Round-open gate only. A resumed circle (resume_cycle) has every
+  // deposit_paid flag cleared while the deposit balances stay held, so the
+  // flag-based allDepositsPaid is false for the rest of the circle's life
+  // even though open_cycle* never checks deposits. Activation keeps using
+  // allDepositsPaid; see src/lib/deposit-status.ts.
+  const [depositsHeldForRounds, setDepositsHeldForRounds] = useState(false);
   const [suiSecurityDepositBalance, setSuiSecurityDepositBalance] = useState<number | null>(null);
   const [suiContributionBalance, setSuiContributionBalance] = useState<number | null>(null);
   const [usdcSecurityDepositBalance, setUsdcSecurityDepositBalance] = useState<number | null>(null);
@@ -1277,6 +1284,13 @@ export default function ManageCircle() {
       const allPaid = sortedMembers.length > 0 && sortedMembers.every(m => m.depositPaid);
       setAllDepositsPaid(allPaid);
       console.log('Manage - All deposits paid status (based on depositPaid flag): ', allPaid);
+      // Held-or-flagged variant for the round-open gate (resumed circles keep
+      // their balances in custody with the flag cleared).
+      const heldForRounds = allDepositsHeldForRounds(sortedMembers);
+      setDepositsHeldForRounds(heldForRounds);
+      if (heldForRounds !== allPaid) {
+        console.log('Manage - Deposits held in custody for round opening (deposit_paid flags cleared by resume_cycle): ', heldForRounds);
+      }
           
       // Set final circle state
       const finalAutoSwapValue = configValues.autoSwapEnabled;
@@ -3947,6 +3961,10 @@ export default function ManageCircle() {
           
           // Trigger a refresh of circle details to ensure we have the latest data
           fetchCircleDetails();
+        } else if (depositsHeldButFlagsCleared(members)) {
+          // Resumed circle: resume_cycle cleared the flags but every deposit
+          // balance is still held. Not an issue — rounds can open.
+          console.log("ℹ️ Deposit flags cleared by resume_cycle but all deposit balances are still held; round opening is not blocked:", depositStatuses);
         } else {
           console.log("⚠️ Deposit issue detected. Not all deposits are paid according to UI:", depositStatuses);
           console.log("Members without deposits:", members.filter(m => !m.depositPaid).map(m => m.address));
@@ -7314,7 +7332,7 @@ export default function ManageCircle() {
                       isAdmin
                       memberNames={memberNameMap}
                       showAdminOpenButton
-                      circleIsActive={circle.isActive && allDepositsPaid}
+                      circleIsActive={circle.isActive && depositsHeldForRounds}
                       autoOpenWhenReady={autoOpenFirstRound}
                       onAutoOpenFired={() => setAutoOpenFirstRound(false)}
                       {...resolveCircleSettlementCoin(circle.autoSwapEnabled)}
