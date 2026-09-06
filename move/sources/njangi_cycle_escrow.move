@@ -2247,4 +2247,241 @@ module njangi::njangi_cycle_escrow {
         open_cycle_stable<SUI>(&circle, 18, &clock, ts::ctx(&mut scenario));
         abort 0
     }
+
+    // ----------------------------------------------------------
+    // End-to-end: the escrow rail across the lap-1 -> lap-2 boundary.
+    //
+    // Every step is a real entrypoint: security deposits through
+    // circles::member_deposit_security_deposit into a real custody wallet,
+    // each round through open_cycle_indexed -> contribute ->
+    // finalize_and_redeem -> advance_circle_after_claim, the pause produced
+    // by the last advance of the lap, and circles::resume_cycle. Before the
+    // 2026-09 fix resume_cycle cleared deposit_paid on everyone, so these
+    // would fail at the first deposit assertion after resume.
+    // ----------------------------------------------------------
+
+    #[test_only] use njangi::njangi_custody::{Self as custody, CustodyWallet};
+    #[test_only] use njangi::njangi_members as members;
+
+    #[test_only] const TEST_DAVE: address = @0xDA4E;
+    // share_circle_for_testing sets security_deposit = contribution / 2.
+    #[test_only] const TEST_DEPOSIT: u64 = 500_000_000;
+
+    /// tx1 (admin): share the ACTIVE circle plus its custody wallet.
+    #[test_only]
+    fun setup_circle_with_wallet(scenario: &mut ts::Scenario, roster: vector<address>): Clock {
+        let mut clock = clock::create_for_testing(ts::ctx(scenario));
+        clock::set_for_testing(&mut clock, TEST_START_MS);
+        let circle_id = circles::share_circle_for_testing(
+            roster,
+            TEST_CONTRIBUTION,
+            TEST_USD_CENTS,
+            &clock,
+            ts::ctx(scenario)
+        );
+        custody::create_custody_wallet(circle_id, TEST_START_MS, ts::ctx(scenario));
+        clock
+    }
+
+    #[test_only]
+    fun deposit_security_sui_as(scenario: &mut ts::Scenario, who: address, clock: &Clock) {
+        ts::next_tx(scenario, who);
+        let mut circle = ts::take_shared<Circle>(scenario);
+        let mut wallet = ts::take_shared<CustodyWallet>(scenario);
+        let deposit = coin::mint_for_testing<SUI>(TEST_DEPOSIT, ts::ctx(scenario));
+        circles::member_deposit_security_deposit<SUI>(
+            &mut circle, &mut wallet, deposit, clock, ts::ctx(scenario)
+        );
+        ts::return_shared(circle);
+        ts::return_shared(wallet);
+    }
+
+    #[test_only]
+    fun assert_deposit_held(circle: &Circle, who: address, code: u64) {
+        let member = circles::get_member(circle, who);
+        assert!(members::has_paid_deposit(member), code);
+        assert!(members::get_deposit_balance(member) == TEST_DEPOSIT, code + 1);
+    }
+
+    #[test_only]
+    fun assert_all_deposits_held(circle: &Circle, roster: &vector<address>, code: u64) {
+        let mut i = 0;
+        while (i < vector::length(roster)) {
+            assert_deposit_held(circle, *vector::borrow(roster, i), code + (i * 2));
+            i = i + 1;
+        };
+    }
+
+    /// One complete round on the escrow rail for the circle's current
+    /// recipient: open, every other seated member pays in, the recipient
+    /// collects (asserting the pot is one contribution per payer), and a
+    /// bystander advances the rotation. Checks the round is the expected
+    /// (cycle, recipient) pair before opening so a wrong pointer is caught
+    /// where it happens, not three rounds later.
+    #[test_only]
+    fun run_escrow_round(
+        scenario: &mut ts::Scenario,
+        roster: &vector<address>,
+        expected_cycle: u64,
+        expected_recipient: address,
+        clock: &Clock
+    ) {
+        ts::next_tx(scenario, expected_recipient);
+        let mut circle = ts::take_shared<Circle>(scenario);
+        assert!(circles::get_current_cycle(&circle) == expected_cycle, 9700);
+        assert!(!circles::is_paused_after_cycle(&circle), 9701);
+        let recipient_opt = circles::get_next_payout_recipient(&circle);
+        assert!(option::is_some(&recipient_opt), 9702);
+        assert!(*option::borrow(&recipient_opt) == expected_recipient, 9703);
+        open_cycle_indexed<SUI>(&mut circle, clock, ts::ctx(scenario));
+        ts::return_shared(circle);
+
+        let n = vector::length(roster);
+        let mut i = 0;
+        while (i < n) {
+            let who = *vector::borrow(roster, i);
+            if (who != expected_recipient) {
+                contribute_as(scenario, who);
+            };
+            i = i + 1;
+        };
+
+        ts::next_tx(scenario, expected_recipient);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(scenario);
+        assert!(cycle_no(&escrow) == expected_cycle, 9704);
+        assert!(recipient(&escrow) == expected_recipient, 9705);
+        assert!(required_contributors(&escrow) == n - 1, 9706);
+        finalize_and_redeem(&mut escrow, clock, ts::ctx(scenario));
+        assert!(is_claimed(&escrow), 9707);
+        ts::return_shared(escrow);
+        assert_received_refund(scenario, expected_recipient, (n - 1) * TEST_CONTRIBUTION);
+
+        // Whoever is first in the roster and not the recipient pays the gas.
+        let bystander = if (*vector::borrow(roster, 0) == expected_recipient) {
+            *vector::borrow(roster, 1)
+        } else {
+            *vector::borrow(roster, 0)
+        };
+        ts::next_tx(scenario, bystander);
+        let mut circle = ts::take_shared<Circle>(scenario);
+        let escrow = ts::take_shared<CycleEscrow<SUI>>(scenario);
+        advance_circle_after_claim(&mut circle, &escrow, clock, ts::ctx(scenario));
+        ts::return_shared(escrow);
+        ts::return_shared(circle);
+    }
+
+    #[test]
+    fun test_escrow_rail_runs_lap_two_after_resume_with_deposits_held() {
+        let roster = vector[TEST_ADMIN, TEST_BOB, TEST_CAROL];
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let mut clock = setup_circle_with_wallet(&mut scenario, roster);
+        deposit_security_sui_as(&mut scenario, TEST_ADMIN, &clock);
+        deposit_security_sui_as(&mut scenario, TEST_BOB, &clock);
+        deposit_security_sui_as(&mut scenario, TEST_CAROL, &clock);
+
+        // Lap 1: three rounds, one per seat, a week apart.
+        run_escrow_round(&mut scenario, &roster, 1, TEST_ADMIN, &clock);
+        clock::increment_for_testing(&mut clock, TEST_SEVEN_DAYS_MS);
+        run_escrow_round(&mut scenario, &roster, 1, TEST_BOB, &clock);
+        clock::increment_for_testing(&mut clock, TEST_SEVEN_DAYS_MS);
+        run_escrow_round(&mut scenario, &roster, 1, TEST_CAROL, &clock);
+
+        // The last advance pauses the circle. Deposits are untouched.
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        assert!(circles::is_paused_after_cycle(&circle), 9710);
+        assert!(circles::get_current_cycle(&circle) == 1, 9711);
+        assert!(circles::get_current_position(&circle) == 2, 9712);
+        assert_all_deposits_held(&circle, &roster, 9720);
+
+        // Resume: cycle 2 from the top, and NOBODY owes a new deposit.
+        circles::resume_cycle(&mut circle, &clock, ts::ctx(&mut scenario));
+        assert!(!circles::is_paused_after_cycle(&circle), 9730);
+        assert!(circles::get_current_cycle(&circle) == 2, 9731);
+        assert!(circles::get_current_position(&circle) == 0, 9732);
+        assert_all_deposits_held(&circle, &roster, 9740);
+        ts::return_shared(circle);
+
+        // Lap 2 on the same rail, with no deposit step for anyone.
+        clock::increment_for_testing(&mut clock, TEST_SEVEN_DAYS_MS);
+        run_escrow_round(&mut scenario, &roster, 2, TEST_ADMIN, &clock);
+        clock::increment_for_testing(&mut clock, TEST_SEVEN_DAYS_MS);
+        run_escrow_round(&mut scenario, &roster, 2, TEST_BOB, &clock);
+        clock::increment_for_testing(&mut clock, TEST_SEVEN_DAYS_MS);
+        run_escrow_round(&mut scenario, &roster, 2, TEST_CAROL, &clock);
+
+        // Lap 2 completes exactly like lap 1: paused again, deposits still
+        // held, six escrows in the circle's record.
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let circle = ts::take_shared<Circle>(&scenario);
+        assert!(circles::is_paused_after_cycle(&circle), 9750);
+        assert!(circles::get_current_cycle(&circle) == 2, 9751);
+        assert_all_deposits_held(&circle, &roster, 9760);
+        assert!(vector::length(&circles::get_escrow_history(&circle)) == 6, 9770);
+        ts::return_shared(circle);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_member_admitted_between_laps_deposits_after_resume_and_joins_lap_two() {
+        let lap_one = vector[TEST_ADMIN, TEST_BOB, TEST_CAROL];
+        let lap_two = vector[TEST_ADMIN, TEST_BOB, TEST_CAROL, TEST_DAVE];
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let mut clock = setup_circle_with_wallet(&mut scenario, lap_one);
+        deposit_security_sui_as(&mut scenario, TEST_ADMIN, &clock);
+        deposit_security_sui_as(&mut scenario, TEST_BOB, &clock);
+        deposit_security_sui_as(&mut scenario, TEST_CAROL, &clock);
+
+        run_escrow_round(&mut scenario, &lap_one, 1, TEST_ADMIN, &clock);
+        clock::increment_for_testing(&mut clock, TEST_SEVEN_DAYS_MS);
+        run_escrow_round(&mut scenario, &lap_one, 1, TEST_BOB, &clock);
+        clock::increment_for_testing(&mut clock, TEST_SEVEN_DAYS_MS);
+        run_escrow_round(&mut scenario, &lap_one, 1, TEST_CAROL, &clock);
+
+        // Between laps the admin admits DAVE and seats them last.
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let mut circle = ts::take_shared<Circle>(&scenario);
+        assert!(circles::is_paused_after_cycle(&circle), 9780);
+        circles::set_max_members_for_testing(&mut circle, 4);
+        circles::admin_approve_member(&mut circle, TEST_DAVE, &clock, ts::ctx(&mut scenario));
+        circles::set_rotation_position(&mut circle, TEST_DAVE, 3, &clock, ts::ctx(&mut scenario));
+        assert!(!members::has_paid_deposit(circles::get_member(&circle, TEST_DAVE)), 9781);
+
+        // Resume keeps the newcomer's obligation and everyone else's deposit.
+        circles::resume_cycle(&mut circle, &clock, ts::ctx(&mut scenario));
+        assert!(circles::get_current_cycle(&circle) == 2, 9782);
+        assert!(!members::has_paid_deposit(circles::get_member(&circle, TEST_DAVE)), 9783);
+        assert_all_deposits_held(&circle, &lap_one, 9790);
+        ts::return_shared(circle);
+
+        // DAVE can post it now (balance 0) and is then held like the others.
+        deposit_security_sui_as(&mut scenario, TEST_DAVE, &clock);
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let circle = ts::take_shared<Circle>(&scenario);
+        assert_all_deposits_held(&circle, &lap_two, 9800);
+        ts::return_shared(circle);
+
+        // Lap 2 has four seats: DAVE pays into the first three rounds and
+        // collects the fourth, after which the circle pauses again.
+        clock::increment_for_testing(&mut clock, TEST_SEVEN_DAYS_MS);
+        run_escrow_round(&mut scenario, &lap_two, 2, TEST_ADMIN, &clock);
+        clock::increment_for_testing(&mut clock, TEST_SEVEN_DAYS_MS);
+        run_escrow_round(&mut scenario, &lap_two, 2, TEST_BOB, &clock);
+        clock::increment_for_testing(&mut clock, TEST_SEVEN_DAYS_MS);
+        run_escrow_round(&mut scenario, &lap_two, 2, TEST_CAROL, &clock);
+        clock::increment_for_testing(&mut clock, TEST_SEVEN_DAYS_MS);
+        run_escrow_round(&mut scenario, &lap_two, 2, TEST_DAVE, &clock);
+
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let circle = ts::take_shared<Circle>(&scenario);
+        assert!(circles::is_paused_after_cycle(&circle), 9810);
+        assert!(circles::get_current_cycle(&circle) == 2, 9811);
+        assert_all_deposits_held(&circle, &lap_two, 9820);
+        ts::return_shared(circle);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
 }

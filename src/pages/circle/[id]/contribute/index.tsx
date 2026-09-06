@@ -507,9 +507,6 @@ export default function ContributeToCircle() {
   const [rotationOrderAddresses, setRotationOrderAddresses] = useState<string[]>([]);
   const [isConfirmingMigration, setIsConfirmingMigration] = useState(false);
 
-  // Add a new state variable to track if a user has had their security deposit returned during the current paused cycle
-  const [securityDepositReturnedDuringPause, setSecurityDepositReturnedDuringPause] = useState<boolean>(false);
-  
   // Add dynamic package ID state
   const [circlePackageId, setCirclePackageId] = useState<string>(PACKAGE_ID);
 
@@ -1696,10 +1693,13 @@ export default function ContributeToCircle() {
       if (!memberFoundInTable) try {
         console.log(`[ContributePage] Checking SecurityDepositReturned events for ${userAddress} in circle ${circle.id}...`);
         const securityReturnedEvents = await client.queryEvents({
-          query: { MoveEventType: `${circlePackageId}::njangi_payments::SecurityDepositReturned` }, 
+          // Emitted by njangi_circles::admin_remove_member. The njangi_payments
+          // rail that used to emit this was deleted in the Phase 1 redesign, so
+          // the old `njangi_payments::` type name matched nothing on chain.
+          query: { MoveEventType: `${circlePackageId}::njangi_circles::SecurityDepositReturned` },
           limit: 50
         });
-        
+
         // Find all return events for this user/circle
         const relevantReturnEvents = securityReturnedEvents.data.filter(event => {
           const parsed = event.parsedJson as { circle_id?: string; member?: string };
@@ -1941,99 +1941,6 @@ export default function ContributeToCircle() {
       return false;
     }
   };
-
-  // Add a function to check if the user has received a security deposit payout
-  const checkSecurityDepositReturned = async () => {
-    if (!circle || !circle.id || !userAddress) return false;
-    
-    try {
-      const client = getSuiClientFromPool(getJsonRpcUrl());
-      console.log(`[SecurityDepositCheck] Checking if ${userAddress} has received security deposit payout in circle ${circle.id}`);
-      
-      // Look for SecurityDepositReturned events for this user and circle
-      const securityReturnedEvents = await client.queryEvents({
-        query: { MoveEventType: `${circlePackageId}::njangi_payments::SecurityDepositReturned` }, 
-        limit: 50
-      });
-      
-      // Filter events by circle and user
-      const relevantEvents = securityReturnedEvents.data.filter(event => {
-        const parsed = event.parsedJson as { circle_id?: string; member?: string; };
-        return parsed?.circle_id === circle.id && 
-               parsed?.member?.toLowerCase() === userAddress.toLowerCase();
-      });
-      
-      if (relevantEvents.length === 0) {
-        console.log(`[SecurityDepositCheck] No security deposit return events found for ${userAddress}`);
-        setSecurityDepositReturnedDuringPause(false);
-        return false;
-      }
-      
-      // Find the most recent return event
-      const mostRecentEvent = relevantEvents.sort((a, b) => {
-        return (Number(b.timestampMs) || 0) - (Number(a.timestampMs) || 0);
-      })[0];
-      
-      // Check if the event happened during the current cycle 
-      // and after the most recent CycleResumed event (if any)
-      const returnTimestamp = Number(mostRecentEvent.timestampMs);
-      console.log(`[SecurityDepositCheck] Found security deposit return event at ${new Date(returnTimestamp).toISOString()}`);
-      
-      // Check for the most recent CycleResumed event
-      const cycleResumedEvents = await client.queryEvents({
-        query: { MoveEventType: `${circlePackageId}::njangi_circles::CycleResumed` },
-        limit: 20
-      });
-      
-      // Filter and sort to find the most recent resume event for this circle
-      const circleResumeEvents = cycleResumedEvents.data
-        .filter(event => {
-          const parsedJson = event.parsedJson as { circle_id?: string };
-          return parsedJson?.circle_id === circle.id;
-        })
-        .sort((a, b) => {
-          return (Number(b.timestampMs) || 0) - (Number(a.timestampMs) || 0);
-        });
-      
-      // If there's a resume event, check if the deposit return happened after it
-      if (circleResumeEvents.length > 0) {
-        const lastResumeTimestamp = Number(circleResumeEvents[0].timestampMs);
-        console.log(`[SecurityDepositCheck] Last cycle resume was at ${new Date(lastResumeTimestamp).toISOString()}`);
-        
-        // If the return happened after the last resume, and the circle is currently paused,
-        // then the user has received their deposit during the current pause period
-        if (returnTimestamp > lastResumeTimestamp && circle.pausedAfterCycle) {
-          console.log(`[SecurityDepositCheck] User received security deposit payout during current pause period`);
-          setSecurityDepositReturnedDuringPause(true);
-          return true;
-        }
-      } else if (circle.pausedAfterCycle) {
-        // If there are no resume events but the circle is paused, assume the return
-        // happened during the current pause (since there's no previous pause to compare with)
-        console.log(`[SecurityDepositCheck] No resume events found, but circle is paused. Assuming security deposit was returned during current pause.`);
-        setSecurityDepositReturnedDuringPause(true);
-        return true;
-      }
-      
-      console.log(`[SecurityDepositCheck] Security deposit was not returned during current pause period`);
-      setSecurityDepositReturnedDuringPause(false);
-      return false;
-      
-    } catch (error) {
-      logSuiReadError('[SecurityDepositCheck] Error checking security deposit return status:', error);
-      return false;
-    }
-  };
-
-  // Update useEffect to call the new function
-  useEffect(() => {
-    if (circle && userAddress && circle.pausedAfterCycle) {
-      checkSecurityDepositReturned();
-    }
-    // `checkSecurityDepositReturned` is a stable component closure; deps
-    // captured via circle/userAddress already.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [circle, userAddress]);
 
   // Legacy custody contribute retired 2026-04-28. Members now contribute
   // through the CycleEscrowPanel rendered at the top of this page, which
@@ -2382,11 +2289,6 @@ export default function ContributeToCircle() {
       return;
     }
 
-    if (!userDepositPaid && circle.pausedAfterCycle && securityDepositReturnedDuringPause) {
-      toast.error('Your prior security deposit was already returned for this paused cycle.');
-      return;
-    }
-
     const usdcShortfall = getCurrentUsdcShortfallForOneClickSwap();
     if (usdcShortfall <= 0) {
       toast.error('Your wallet already has enough USDC for this payment.');
@@ -2658,19 +2560,12 @@ export default function ContributeToCircle() {
     };
   };
 
-  // Modify the handlePaySecurityDeposit function to check if deposit was returned during pause
   const handlePaySecurityDeposit = async () => {
     if (!circle || !userAddress || !isResolvedSuiObjectId(circle.walletId)) {
       toast.error('Circle information incomplete. Cannot process deposit.');
       return;
     }
-    
-    // Check if security deposit was already returned during the current pause
-    if (circle.pausedAfterCycle && securityDepositReturnedDuringPause) {
-      toast.error('You have already received your security deposit for this cycle. Please wait for the admin to resume the cycle before paying a new deposit.');
-      return;
-    }
-    
+
     // Use the calculated amount that includes slippage and fees
     const requiredAmount = getRequiredDepositAmount();
     const isSuiFlow = selectedPaymentCurrency === 'SUI';
@@ -3049,12 +2944,6 @@ export default function ContributeToCircle() {
     const securityDepositUSDCents = circle.securityDepositUsd || 0;
     const contributionUSDCents = circle.contributionAmountUsd || 0;
 
-    // If it's a security deposit, check if it was already returned during the current pause
-    if (isSecurityDeposit && circle.pausedAfterCycle && securityDepositReturnedDuringPause) {
-      toast.error('You have already received your security deposit for this cycle. Please wait for the admin to resume the cycle before paying a new deposit.');
-      return;
-    }
-    
     // If it's a contribution, check if the circle is paused
     if (!isSecurityDeposit && circle.pausedAfterCycle) {
       toast.error('Contributions are disabled while the circle is paused. Please wait for the admin to resume the cycle.');
@@ -3500,8 +3389,7 @@ export default function ContributeToCircle() {
       (
         userDepositPaid
           ? circle.isActive && !circle.pausedAfterCycle && !userHasContributed && !isCurrentRecipient
-          : (!circle.pausedAfterCycle || !securityDepositReturnedDuringPause) &&
-            (circle.securityDepositUsd || 0) > 0
+          : (circle.securityDepositUsd || 0) > 0
       );
     const showSuiSwapAssist =
       circle &&
@@ -3656,18 +3544,13 @@ export default function ContributeToCircle() {
                 <p className="mt-2 text-sm leading-6 text-amber-900/80">
                   Cycle {currentCycle} has been completed, and the circle is now paused. New contributions are disabled until the admin resumes the circle to start the next cycle.
                 </p>
-                {!userDepositPaid && !securityDepositReturnedDuringPause && (
+                {!userDepositPaid && (
                   <p className="mt-3 text-sm font-medium text-amber-900">
                     You can still pay your security deposit while the circle is paused to prepare for the next cycle.
                   </p>
                 )}
-                {!userDepositPaid && securityDepositReturnedDuringPause && (
-                  <p className="mt-3 text-sm font-medium text-amber-900">
-                    Your security deposit has been returned. You&apos;ll need to wait for the admin to resume the cycle before paying a new deposit.
-                  </p>
-                )}
                 <p className="mt-3 text-sm text-amber-800">
-                  <span className="font-medium">Note:</span> When the admin resumes the circle, all members will need to pay a new security deposit for the next cycle.
+                  <span className="font-medium">Note:</span> Security deposits stay in the circle&apos;s custody wallet between cycles. If yours is already paid, you will not be asked for it again when the admin resumes the circle.
                 </p>
               </div>
             </div>
@@ -3736,7 +3619,6 @@ export default function ContributeToCircle() {
                     disabled={
                       !circleWalletReady ||
                       (userDepositPaid && (!circle?.isActive || circle?.pausedAfterCycle || userHasContributed || isCurrentRecipient)) ||
-                      (!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause) ||
                       (!userDepositPaid && (circle?.securityDepositUsd || 0) <= 0) ||
                       !hasEnoughSuiForCurrentPayment ||
                       isProcessing ||
@@ -3800,7 +3682,6 @@ export default function ContributeToCircle() {
                     onClick={handleDirectUsdcDeposit}
                     disabled={!circleWalletReady ||
                             (userDepositPaid && (!circle?.isActive || circle?.pausedAfterCycle || userHasContributed || isCurrentRecipient)) ||
-                            (!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause) ||
                             (!userDepositPaid && (circle?.securityDepositUsd || 0) <= 0)}
                     className={`${primaryActionClass} w-full sm:w-auto`}
                   >
@@ -4063,7 +3944,6 @@ export default function ContributeToCircle() {
                 checkUserContribution();
               }}
               disabled={userDepositPaid && (!circle?.isActive || circle?.pausedAfterCycle || userHasContributed || isCurrentRecipient) ||
-                      (!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause) || 
                       (!userDepositPaid && (circle?.securityDepositUsd || 0) <= 0)}
               circleCurrencyType={circle?.currencyType || 'USD'} // Pass the circle's currency type
             />
@@ -4158,8 +4038,8 @@ export default function ContributeToCircle() {
                       before contributing.
                     </p>
                     <p className="text-xs text-amber-500 mt-2 italic">
-                      Note: A new security deposit is required for each cycle after the circle is reset. This ensures
-                      continued commitment and participation from all members.
+                      Note: You post the security deposit once. It stays in the circle&apos;s custody wallet for every
+                      cycle and is not collected again when the admin resumes the circle.
                     </p>
                   </div>
                   
@@ -4194,8 +4074,7 @@ export default function ContributeToCircle() {
                     disabled={isPayingDeposit || !circle || !circleWalletReady || (circle.securityDepositUsd || 0) <= 0 ||
                              (selectedPaymentCurrency === 'SUI' && !isSuiCircleModeEnabled) ||
                              (selectedPaymentCurrency === 'SUI' && userBalance !== null && userBalance < getRequiredDepositAmount()) ||
-                             (selectedPaymentCurrency === 'USDC' && userUsdcBalance !== null && userUsdcBalance < requiredSecurityDepositUsdc) ||
-                             (circle.pausedAfterCycle && securityDepositReturnedDuringPause)}
+                             (selectedPaymentCurrency === 'USDC' && userUsdcBalance !== null && userUsdcBalance < requiredSecurityDepositUsdc)}
                     className={`${primaryActionClass} w-full`}
                   >
                     {isPayingDeposit ? (
@@ -4219,21 +4098,6 @@ export default function ContributeToCircle() {
                     The deposit is refundable if you decide to leave the circle later.
                   </p>
                 </div>
-              </div>
-            )}
-
-            {/* Add info message explaining why security deposit button is disabled */}
-              {!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause && (
-              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3">
-                <p className="text-sm text-red-700 font-medium flex items-center">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                  Security deposit already returned
-                </p>
-                <p className="text-xs text-red-600 mt-1">
-                  You have already received your security deposit for this cycle. You must wait for the admin to resume the cycle before paying a new deposit.
-                </p>
               </div>
             )}
 
@@ -4309,20 +4173,6 @@ export default function ContributeToCircle() {
 
           {showPrimaryWalletActionCard && (
             <div className="space-y-3">
-              {!userDepositPaid && circle?.pausedAfterCycle && securityDepositReturnedDuringPause && (
-                <div className="rounded-lg border border-red-200 bg-red-50 p-3">
-                  <p className="text-sm text-red-700 font-medium flex items-center">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                    Security deposit already returned
-                  </p>
-                  <p className="text-xs text-red-600 mt-1">
-                    You have already received your security deposit for this cycle. You must wait for the admin to resume the cycle before paying a new deposit.
-                  </p>
-                </div>
-              )}
-
               {circle && (!circle.isActive || circle.pausedAfterCycle) && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
                   <p className="text-sm text-amber-700 font-medium">

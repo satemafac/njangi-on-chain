@@ -384,11 +384,25 @@ module njangi::njangi_circles {
         new_cycle: u64,
     }
 
-    // Member Deposits Reset Event - Emitted when all members' deposit status is reset
+    // Member Deposits Reset Event - RETIRED 2026-09. resume_cycle no longer
+    // clears deposit status: security deposits persist across laps (see
+    // reconcile_deposit_paid for the history). The struct stays because a
+    // compatible upgrade cannot remove a published type; nothing emits it.
+    #[allow(unused_field)]
     public struct MemberDepositsReset has copy, drop {
         circle_id: ID,
         admin: address,
         cycle: u64,
+        timestamp: u64,
+    }
+
+    // Deposit Paid Reconciled Event - Emitted by reconcile_deposit_paid when a
+    // member's still-held deposit has its `deposit_paid` flag restored. No
+    // funds move.
+    public struct DepositPaidReconciled has copy, drop {
+        circle_id: ID,
+        member: address,
+        deposit_balance: u64,
         timestamp: u64,
     }
 
@@ -2863,33 +2877,50 @@ module njangi::njangi_circles {
     }
     
     // ----------------------------------------------------------
-    // Reset deposit status for all members in the rotation (for a new cycle)
+    // Security deposits persist across rotation laps
+    //
+    // A member posts their deposit once (member_deposit_security_deposit).
+    // It sits in the circle's custody wallet and only leaves when the member
+    // is removed from an INACTIVE circle (admin_remove_member) or a recovery
+    // refunds everyone. `deposit_paid` is therefore true for exactly as long
+    // as the deposit is held, and the pause/resume path must not touch it.
+    //
+    // History: until 2026-09 resume_cycle called a reset that flipped
+    // deposit_paid to false on every rotation member while leaving
+    // deposit_balance in place. That mirrored a legacy njangi_payments rail
+    // which returned deposits at the end of each lap; the rail was deleted in
+    // the Phase 1 compliance redesign, the reset was not. A resumed circle
+    // then demanded a deposit that member_deposit_security_deposit refuses
+    // (abort 21: balance already > 0) and that nothing could release
+    // (admin_remove_member aborts 55 on an active circle), so no circle could
+    // run a second lap. Testnet circle 0xa3fada18...675ed is stuck in that
+    // state on the pre-fix package.
     // ----------------------------------------------------------
-    public(package) fun reset_all_members_deposit_status(circle: &mut Circle, ctx: &TxContext) {
-        // Get all the non-zero addresses from rotation_order
-        let rotation = &circle.rotation_order;
-        let len = vector::length(rotation);
-        let mut i = 0;
 
-        while (i < len) {
-            let member_addr = *vector::borrow(rotation, i);
-
-            // Skip placeholder addresses
-            if (member_addr != @0x0 && table::contains(&circle.members, member_addr)) {
-                let member = table::borrow_mut(&mut circle.members, member_addr);
-                // Reset deposit status to false for all members
-                members::set_deposit_paid(member, false);
-            };
-            i = i + 1;
+    /// Repair path for circles that resumed under the pre-fix package: if
+    /// `member_addr`'s deposit is still held (`deposit_balance > 0`) but
+    /// `deposit_paid` was cleared, restore the flag. Permissionless because
+    /// it moves no funds and only re-derives the flag from state already on
+    /// chain. It never CLEARS the flag (a zero-deposit circle legitimately
+    /// holds deposit_paid with an empty balance) and it is idempotent.
+    public fun reconcile_deposit_paid(
+        circle: &mut Circle,
+        member_addr: address,
+        clock: &Clock
+    ) {
+        assert!(is_member(circle, member_addr), ENotMember);
+        let circle_id = object::uid_to_inner(&circle.id);
+        let member = table::borrow_mut(&mut circle.members, member_addr);
+        let held = members::get_deposit_balance(member);
+        if (held > 0 && !members::has_paid_deposit(member)) {
+            members::set_deposit_paid(member, true);
+            event::emit(DepositPaidReconciled {
+                circle_id,
+                member: member_addr,
+                deposit_balance: held,
+                timestamp: clock::timestamp_ms(clock),
+            });
         };
-        
-        // Emit the member deposits reset event
-        event::emit(MemberDepositsReset {
-            circle_id: object::uid_to_inner(&circle.id),
-            admin: circle.admin,
-            cycle: circle.current_cycle,
-            timestamp: tx_context::epoch_timestamp_ms(ctx)
-        });
     }
     
     // ----------------------------------------------------------
@@ -3083,10 +3114,12 @@ module njangi::njangi_circles {
         
         // Reset all member payout status
         reset_all_members_payout_status(circle);
-        
-        // Reset all member deposit status for new security deposits
-        reset_all_members_deposit_status(circle, ctx);
-        
+
+        // Security deposits are deliberately NOT reset: they stay in custody
+        // for the life of the membership (see reconcile_deposit_paid). A
+        // member admitted while paused still owes theirs and can post it now,
+        // because their deposit_balance is 0.
+
         // Calculate next payout time based on the cycle configuration
         circle.next_payout_time = core::calculate_next_payout_time(
             config::get_cycle_length(&circle.id),
@@ -4231,6 +4264,14 @@ module njangi::njangi_circles {
         circle.is_active = active;
     }
 
+    /// The factory sizes max_members to the initial roster, and the public
+    /// setter (admin_set_max_members) only works on an inactive circle, so
+    /// lifecycle tests that admit a member between laps raise the cap here.
+    #[test_only]
+    public fun set_max_members_for_testing(circle: &mut Circle, max_members: u64) {
+        config::set_max_members(&mut circle.id, max_members);
+    }
+
     /// activate_circle refuses to start until every seat in the rotation has
     /// posted its security deposit. The factory creates members unpaid.
     #[test_only]
@@ -5346,6 +5387,258 @@ module njangi::njangi_circles {
         admin_approve_member(&mut circle, dave, &clock, sui::test_scenario::ctx(&mut scenario));
         assert!(is_member(&circle, dave), 9560);
 
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    // ----------------------------------------------------------
+    // Security deposits persist across laps (resume_cycle liveness)
+    //
+    // Deposits are posted through the real entrypoint against a real custody
+    // wallet, so every member starts exactly as a production member does:
+    // deposit_paid = true and deposit_balance = the held amount.
+    // ----------------------------------------------------------
+
+    // share_circle_for_testing sets security_deposit = contribution / 2.
+    #[test_only] const TEST_DEPOSIT_SUI: u64 = 500_000_000;
+
+    #[test_only]
+    fun share_circle_with_wallet_for_testing(
+        scenario: &mut sui::test_scenario::Scenario,
+        member_addrs: vector<address>,
+        clock: &Clock
+    ) {
+        let circle_id = share_circle_for_testing(
+            member_addrs,
+            1_000_000_000,
+            100,
+            clock,
+            sui::test_scenario::ctx(scenario)
+        );
+        custody::create_custody_wallet(
+            circle_id,
+            clock::timestamp_ms(clock),
+            sui::test_scenario::ctx(scenario)
+        );
+    }
+
+    #[test_only]
+    fun deposit_sui_as(scenario: &mut sui::test_scenario::Scenario, who: address, clock: &Clock) {
+        sui::test_scenario::next_tx(scenario, who);
+        let mut circle = sui::test_scenario::take_shared<Circle>(scenario);
+        let mut wallet = sui::test_scenario::take_shared<CustodyWallet>(scenario);
+        let deposit = coin::mint_for_testing<SUI>(TEST_DEPOSIT_SUI, sui::test_scenario::ctx(scenario));
+        member_deposit_security_deposit<SUI>(
+            &mut circle,
+            &mut wallet,
+            deposit,
+            clock,
+            sui::test_scenario::ctx(scenario)
+        );
+        sui::test_scenario::return_shared(circle);
+        sui::test_scenario::return_shared(wallet);
+    }
+
+    #[test_only]
+    fun assert_deposit_held(circle: &Circle, addr: address, code: u64) {
+        let member = get_member(circle, addr);
+        assert!(members::has_paid_deposit(member), code);
+        assert!(members::get_deposit_balance(member) == TEST_DEPOSIT_SUI, code + 1);
+    }
+
+    #[test]
+    fun test_resume_cycle_keeps_held_security_deposits() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_with_wallet_for_testing(&mut scenario, vector[admin, bob, carol], &clock);
+        deposit_sui_as(&mut scenario, admin, &clock);
+        deposit_sui_as(&mut scenario, bob, &clock);
+        deposit_sui_as(&mut scenario, carol, &clock);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        assert_deposit_held(&circle, admin, 9600);
+        assert_deposit_held(&circle, bob, 9602);
+        assert_deposit_held(&circle, carol, 9604);
+
+        // End of lap 1: the circle pauses, the admin resumes it.
+        set_paused_after_cycle_for_testing(&mut circle, true);
+        resume_cycle(&mut circle, &clock, sui::test_scenario::ctx(&mut scenario));
+        assert!(!is_paused_after_cycle(&circle), 9606);
+        assert!(get_current_cycle(&circle) == 2, 9607);
+        assert!(get_current_position(&circle) == 0, 9608);
+
+        // Lap 2 starts with every deposit still held AND still recognised:
+        // nobody is asked to post a deposit they cannot post.
+        assert_deposit_held(&circle, admin, 9610);
+        assert_deposit_held(&circle, bob, 9612);
+        assert_deposit_held(&circle, carol, 9614);
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    // The abort the live circle hit is the correct refusal of a DOUBLE
+    // deposit; the fix is that resume no longer asks for one.
+    #[test]
+    #[expected_failure(abort_code = 21)]
+    fun test_second_deposit_after_resume_is_refused_as_already_paid() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_with_wallet_for_testing(&mut scenario, vector[admin, bob, carol], &clock);
+        deposit_sui_as(&mut scenario, admin, &clock);
+        deposit_sui_as(&mut scenario, bob, &clock);
+        deposit_sui_as(&mut scenario, carol, &clock);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        set_paused_after_cycle_for_testing(&mut circle, true);
+        resume_cycle(&mut circle, &clock, sui::test_scenario::ctx(&mut scenario));
+        sui::test_scenario::return_shared(circle);
+
+        deposit_sui_as(&mut scenario, bob, &clock);
+
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    // The genuine re-deposit path: a member admitted between laps owes a
+    // deposit and can post it after resume because their balance is 0.
+    #[test]
+    fun test_member_admitted_while_paused_deposits_after_resume() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let dave = @0xD;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_with_wallet_for_testing(&mut scenario, vector[admin, bob, carol], &clock);
+        deposit_sui_as(&mut scenario, admin, &clock);
+        deposit_sui_as(&mut scenario, bob, &clock);
+        deposit_sui_as(&mut scenario, carol, &clock);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        config::set_max_members(&mut circle.id, 8);
+        set_paused_after_cycle_for_testing(&mut circle, true);
+        admin_approve_member(&mut circle, dave, &clock, sui::test_scenario::ctx(&mut scenario));
+        assert!(!members::has_paid_deposit(get_member(&circle, dave)), 9620);
+        assert!(members::get_deposit_balance(get_member(&circle, dave)) == 0, 9621);
+
+        resume_cycle(&mut circle, &clock, sui::test_scenario::ctx(&mut scenario));
+        // Resume leaves the newcomer's obligation in place ...
+        assert!(!members::has_paid_deposit(get_member(&circle, dave)), 9622);
+        sui::test_scenario::return_shared(circle);
+
+        // ... and they can meet it, while everyone else's deposit is untouched.
+        deposit_sui_as(&mut scenario, dave, &clock);
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        assert_deposit_held(&circle, dave, 9624);
+        assert_deposit_held(&circle, admin, 9626);
+        assert_deposit_held(&circle, bob, 9628);
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    fun test_reconcile_deposit_paid_restores_flag_for_held_deposit() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_with_wallet_for_testing(&mut scenario, vector[admin, bob, carol], &clock);
+        deposit_sui_as(&mut scenario, admin, &clock);
+        deposit_sui_as(&mut scenario, bob, &clock);
+        deposit_sui_as(&mut scenario, carol, &clock);
+
+        // Reproduce what the pre-fix resume_cycle left behind: flag cleared,
+        // funds still held.
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        members::set_deposit_paid(get_member_mut(&mut circle, bob), false);
+        assert!(!members::has_paid_deposit(get_member(&circle, bob)), 9630);
+        assert!(members::get_deposit_balance(get_member(&circle, bob)) == TEST_DEPOSIT_SUI, 9631);
+        sui::test_scenario::return_shared(circle);
+
+        // Anyone may repair it - here a non-admin member.
+        sui::test_scenario::next_tx(&mut scenario, carol);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        reconcile_deposit_paid(&mut circle, bob, &clock);
+        assert_deposit_held(&circle, bob, 9632);
+        // Idempotent, and a no-op on members that were never affected.
+        reconcile_deposit_paid(&mut circle, bob, &clock);
+        reconcile_deposit_paid(&mut circle, admin, &clock);
+        assert_deposit_held(&circle, bob, 9634);
+        assert_deposit_held(&circle, admin, 9636);
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    fun test_reconcile_deposit_paid_never_clears_flag_or_invents_a_deposit() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        // Flag set with nothing held (how a zero-deposit circle looks): kept.
+        mark_all_deposits_paid_for_testing(&mut circle);
+        reconcile_deposit_paid(&mut circle, bob, &clock);
+        assert!(members::has_paid_deposit(get_member(&circle, bob)), 9640);
+        assert!(members::get_deposit_balance(get_member(&circle, bob)) == 0, 9641);
+
+        // Flag clear with nothing held (a member who still owes): kept clear.
+        members::set_deposit_paid(get_member_mut(&mut circle, carol), false);
+        reconcile_deposit_paid(&mut circle, carol, &clock);
+        assert!(!members::has_paid_deposit(get_member(&circle, carol)), 9642);
+
+        sui::test_scenario::return_shared(circle);
+        clock::destroy_for_testing(clock);
+        sui::test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = ENotMember)]
+    fun test_reconcile_deposit_paid_rejects_non_member() {
+        let admin = @0xA;
+        let bob = @0xB;
+        let carol = @0xC;
+        let mut scenario = sui::test_scenario::begin(admin);
+        let clock = clock::create_for_testing(sui::test_scenario::ctx(&mut scenario));
+        share_circle_for_testing(
+            vector[admin, bob, carol],
+            1_000_000_000,
+            100,
+            &clock,
+            sui::test_scenario::ctx(&mut scenario)
+        );
+
+        sui::test_scenario::next_tx(&mut scenario, admin);
+        let mut circle = sui::test_scenario::take_shared<Circle>(&scenario);
+        reconcile_deposit_paid(&mut circle, @0xDEAD, &clock);
         sui::test_scenario::return_shared(circle);
         clock::destroy_for_testing(clock);
         sui::test_scenario::end(scenario);
