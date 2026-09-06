@@ -4264,6 +4264,14 @@ module njangi::njangi_circles {
         circle.is_active = active;
     }
 
+    /// The factory sizes max_members to the initial roster, and the public
+    /// setter (admin_set_max_members) only works on an inactive circle, so
+    /// lifecycle tests that admit a member between laps raise the cap here.
+    #[test_only]
+    public fun set_max_members_for_testing(circle: &mut Circle, max_members: u64) {
+        config::set_max_members(&mut circle.id, max_members);
+    }
+
     /// activate_circle refuses to start until every seat in the rotation has
     /// posted its security deposit. The factory creates members unpaid.
     #[test_only]
