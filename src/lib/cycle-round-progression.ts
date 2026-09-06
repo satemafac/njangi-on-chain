@@ -126,3 +126,26 @@ export function resolveNextRoundAction(params: {
   // circle is ready for that member's round to be opened.
   return { action: 'open-next-round' };
 }
+
+const COMPLETED_ROUND_COPY_KEYS: Readonly<Record<NextRoundAction, string>> = {
+  'open-next-round': 'escrow.completed.openNextRound',
+  'resume-cycle': 'escrow.completed.resumeCycle',
+  'advance-rotation': 'escrow.completed.advanceRotation',
+  unknown: 'escrow.completed.unknown',
+};
+
+/**
+ * The `escrow.completed.*` i18n key for the sentence a settled round shows.
+ * One key per action, so the sentence and the control it sits above cannot
+ * disagree.
+ *
+ * They did: a single `escrow.completed` string promised "the circle admin
+ * can open the next round" whatever the action, and on a paused circle it
+ * sat directly above the Resume Cycle instruction — which starts a new lap
+ * and resets every member's security deposit, nothing like opening a round
+ * (0xa3fada…675ed, paused_after_cycle = true, 2026-08-30). The `unknown`
+ * variant deliberately suggests nothing: a failed read is not a fact.
+ */
+export function completedRoundCopyKey(action: NextRoundAction): string {
+  return COMPLETED_ROUND_COPY_KEYS[action];
+}
