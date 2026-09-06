@@ -14,7 +14,10 @@ import { getPooledSuiClient } from './sui-rpc-failover';
 import { getNetworkConfig, getPackageIdForNetwork } from './network-config';
 import type { NetworkType } from './whatsapp-registry-service';
 import { preparePaymentCoin } from '../lib/payment-coin-builder';
-import { isTimedEscrowEntriesEnabled } from '@/config/feature-flags';
+import {
+  isEscrowRoundGuardEnabled,
+  isTimedEscrowEntriesEnabled,
+} from '@/config/feature-flags';
 
 const CLOCK_OBJECT_ID = '0x6';
 
@@ -65,6 +68,17 @@ export interface OpenCycleParams extends CycleEscrowCallBase {
    * SUI-settled circles, which use the circle's raw SUI (MIST) amount.
    */
   stableDecimals?: number;
+  /**
+   * Circle Record v1.2: an escrow to release before opening. Pass the
+   * current round's escrow when it can no longer pay out (refunded, or
+   * empty past its cancel window) so the on-chain duplicate-open guard
+   * lets the SAME round open again. `release_open_round` ignores a marker
+   * that names some other escrow and aborts `E_ROUND_STILL_OPEN` (235) for
+   * a live one, so passing it is safe whenever the panel shows a refunded
+   * round. Only built when `isEscrowRoundGuardEnabled()` says the published
+   * package carries the function; dropped silently otherwise.
+   */
+  releaseEscrowId?: string;
 }
 
 export interface ContributeParams extends CycleEscrowCallBase {
@@ -127,7 +141,16 @@ export function buildOpenCycleTx(params: OpenCycleParams): BuildTransactionFn {
     : params.withComplianceGate
       ? `${packageId}::njangi_cycle_escrow::open_cycle${indexed}_with_gate`
       : `${packageId}::njangi_cycle_escrow::open_cycle${indexed}`;
+  // v1.2: a refunded/abandoned escrow still pins its round on chain; the
+  // release has to land in the same PTB, ahead of the open, or the open
+  // aborts E_ROUND_ALREADY_OPEN. Flag-gated on the published package like
+  // the indexed targets above.
+  const releaseEscrowId =
+    params.releaseEscrowId && isEscrowRoundGuardEnabled() ? params.releaseEscrowId : null;
   return (txb: Transaction) => {
+    if (releaseEscrowId) {
+      appendReleaseOpenRound(txb, packageId, params.coinType, circleId, releaseEscrowId);
+    }
     const gateArgs = complianceConfigId ? [txb.object(complianceConfigId)] : [];
     txb.moveCall({
       target,
@@ -142,6 +165,44 @@ export function buildOpenCycleTx(params: OpenCycleParams): BuildTransactionFn {
         : [txb.object(circleId), ...gateArgs, txb.object(CLOCK_OBJECT_ID)],
     });
   };
+}
+
+export interface ReleaseOpenRoundParams extends CycleEscrowCallBase {
+  circleId: string;
+  /** The abandoned escrow whose round should be unpinned. */
+  escrowId: string;
+}
+
+/**
+ * Standalone `release_open_round` (Circle Record v1.2): clears the circle's
+ * open-round marker for an escrow that can no longer pay out — refunded, or
+ * unfinalized and empty past its cancel window — so the same round can be
+ * opened again. Permissionless and fact-checked on chain; aborts
+ * `E_ROUND_STILL_OPEN` (235) for a live escrow and is a no-op when the
+ * marker names some other escrow. `buildOpenCycleTx` chains this for you
+ * via `releaseEscrowId`; use this only to release without re-opening.
+ */
+export function buildReleaseOpenRoundTx(params: ReleaseOpenRoundParams): BuildTransactionFn {
+  const packageId = packageIdFor(params.network);
+  const circleId = requireAddr(params.circleId, 'circleId');
+  const escrowId = requireAddr(params.escrowId, 'escrowId');
+  return (txb: Transaction) => {
+    appendReleaseOpenRound(txb, packageId, params.coinType, circleId, escrowId);
+  };
+}
+
+function appendReleaseOpenRound(
+  txb: Transaction,
+  packageId: string,
+  coinType: string,
+  circleId: string,
+  escrowId: string,
+): void {
+  txb.moveCall({
+    target: `${packageId}::njangi_cycle_escrow::release_open_round`,
+    typeArguments: [coinType],
+    arguments: [txb.object(circleId), txb.object(escrowId), txb.object(CLOCK_OBJECT_ID)],
+  });
 }
 
 export interface ContributeWithAttestationParams extends ContributeParams {
