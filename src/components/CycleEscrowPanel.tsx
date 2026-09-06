@@ -166,12 +166,12 @@ export function CycleEscrowPanel({
     setLoading(true);
     setLoadError(false);
     try {
-      const found = await findCurrentCycleEscrow(network, circleId);
+      const found = await findCurrentCycleEscrow(network, circleId, { client: rpcClient });
       setSummary(found);
       if (found) {
         const state = await readCycleEscrowState(found.escrowId, network, rpcClient);
         setLiveState(state);
-        const paidList = await listContributors(found.escrowId, network);
+        const paidList = await listContributors(found.escrowId, network, rpcClient);
         setContributors(paidList);
         // A settled round is the one stage where the escrow alone cannot say
         // what happens next: the circle may have rotated on (open the next
