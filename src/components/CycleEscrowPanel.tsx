@@ -20,6 +20,7 @@ import {
   type CycleEscrowSummary,
 } from '@/lib/cycle-escrow-discovery';
 import {
+  completedRoundCopyKey,
   resolveNextRoundAction,
   type CircleRotationPointer,
 } from '@/lib/cycle-round-progression';
@@ -889,35 +890,37 @@ export function CycleEscrowPanel({
                 Exactly one control is offered, and never a control that
                 cannot work. In particular `open` is withheld whenever the
                 circle still points at the member who just collected, since
-                opening there would snapshot them again and pay them twice. */}
+                opening there would snapshot them again and pay them twice.
+
+                The sentence above the control is keyed by the same action
+                (completedRoundCopyKey). One sentence used to serve every
+                action, promising "the admin can open the next round" above a
+                Resume Cycle instruction (0xa3fada…675ed, 2026-08-30). */}
             {stage === 'completed' ? (
               <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="sm:max-w-md">
                   <p className="text-sm font-medium text-emerald-700">
-                    {t('escrow.completed', {
+                    {t(completedRoundCopyKey(nextRound.action), {
                       cycle: summary?.cycleNo ?? '—',
                       recipient: recipientLabel,
                     })}
                   </p>
                   {showAdminRoundControls && nextRound.action === 'resume-cycle' ? (
                     <p className="mt-2 text-xs text-amber-700">
-                      That was the last member of this rotation — everyone has now
-                      been paid once. Use{' '}
-                      <span className="font-semibold">Resume Cycle</span> in the
+                      Use <span className="font-semibold">Resume Cycle</span> in the
                       Circle Management section below to start the next lap, then
                       open its first round here.
                     </p>
                   ) : null}
                   {showAdminRoundControls && nextRound.action === 'advance-rotation' ? (
                     <p className="mt-2 text-xs text-amber-700">
-                      This payout was collected but the circle never moved on to the
-                      next member. Advance it below, then open the next round.
+                      Advance it below, then open the next round here.
                     </p>
                   ) : null}
                   {showAdminRoundControls && nextRound.action === 'unknown' ? (
                     <p className="mt-2 text-xs text-amber-700">
                       {nextRound.reason === 'pointer-unavailable'
-                        ? "We couldn't read where this circle's rotation stands, so we're not offering an action that might be the wrong one. Refresh to try again."
+                        ? 'Refresh to try again. No control is offered until the rotation can be read, rather than one that might be the wrong one.'
                         : 'This circle’s rotation is in a state we can’t safely act on from here. Please contact support before opening another round.'}
                     </p>
                   ) : null}
