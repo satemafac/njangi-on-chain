@@ -4945,7 +4945,8 @@ export default function ManageCircle() {
    *
    * Runs the transaction directly rather than opening a second dialog. The
    * button that reaches here already confirms, with strictly more detail (it
-   * spells out the deposit reset); the dialog this used to chain only
+   * spells out that deposits stay in custody across laps — since package v7
+   * `resume_cycle` no longer clears them); the dialog this used to chain only
    * restated it. Chaining was also what broke it: a dialog opened from inside
    * another dialog's confirm handler is closed again by the dialog that is
    * dismissing itself, so the transaction was never built and every circle

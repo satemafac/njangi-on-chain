@@ -108,6 +108,24 @@ Frontend → zkLogin API (/api/zkLogin) → Move Contract → Event Parsing → 
 - Never hand-edit `move/Move.toml` — it is a copy of `move/config/{testnet,mainnet}.toml`.
   Switch networks with `bash move/scripts/switch-network.sh {testnet|mainnet}` and
   verify the active manifest with `npm run validate:move-network` (CI guard).
+- **Package lineage**: object TYPES stay pinned to the ORIGINAL package id
+  (testnet `0x89cddf4d…`); CALLS and `devInspect` must target the LATEST
+  version (`NEXT_PUBLIC_TESTNET_PACKAGE_ID`). The authoritative "what is live"
+  is the UpgradeCap `0xc590f7b3…` (`package` / `version` fields), not
+  `move/Published.toml` — a publish does not update that file by itself.
+- **After ANY Move upgrade, five things must move together or chain and
+  source drift**: merge the branch you published from, bump
+  `move/Published.toml` (`published-at`, `version`), bump the in-code
+  lineage table in `src/lib/circle-chain.ts` (`publishedAt`; keep every
+  version that DEFINED types/events reachable — `getPackageLookupIds` feeds
+  event filters keyed by defining package), set the new id in `.env.local`
+  AND the Vercel Production env (a Move publish never redeploys the web app —
+  verify with a bundle fingerprint), then run any repair entrypoints the
+  release introduced. On 2026-09-06 v7 (`0x9250490b…`, PR #19)
+  was published ~1h before the merge and the env flip; the gap is recorded in
+  the `testnet-package-v7-drift` memory.
+- Publish one PR per upgrade and merge it before the next one: building v8
+  from a tree that never contained v7's code is how upgrades get lost.
 
 **zkLogin Integration**:
 - Development uses Docker services (ports 5001, 5003)
@@ -132,6 +150,33 @@ Frontend → zkLogin API (/api/zkLogin) → Move Contract → Event Parsing → 
 - Move contracts: `sui move test` for unit tests
 - Frontend: Uses real testnet integration for development
 - zkLogin: Docker services provide isolated auth environment
+- Live E2E on production testnet follows `docs/e2e-browser-runbook.md` with
+  three Google-signed-in accounts (admin, MEMBER-1, MEMBER-2 on circle
+  `0xa3fada18…`). Hard-won rules:
+  - A healthy signature is ZERO `/api/zkLogin` POSTs; the signer lives in
+    tab-scoped `sessionStorage['njangi.zklogin.signer']`. In the Browser pane
+    the `navigate` tool re-creates the tab and wipes it — move between pages
+    with `location.assign(...)` from `javascript_tool` instead. Google's
+    account chooser only takes coordinate clicks at `preset: desktop`.
+  - Open a round ONCE and wait: `open_cycle_*` has no already-open guard until
+    PR #20 ships, and a second click makes an orphan escrow (this circle's
+    #4). When polling, read the LAST entry of the circle's `escrow_history`
+    dynamic field, never an escrow id captured earlier.
+  - Admin round controls live on `/circle/<id>/manage` (the contribute page
+    never passes `showAdminOpenButton`). The open button is gated on deposits
+    HELD (`src/lib/deposit-status.ts`), because `resume_cycle` on v6 clears
+    `deposit_paid` while balances stay in custody and the contract refuses a
+    re-deposit (abort 21); contributions and claims never check the flag.
+  - `current_cycle` counts laps, not rounds; `current_position` is the
+    recipient pointer; `paused_after_cycle` flips when the last member of a
+    lap collects and the pointer stays on them. Admin flow at end of lap:
+    Resume Cycle → Open the next round.
+  - Assert contract behaviour without signing via
+    `devInspectTransactionBlock` (abort codes: 21 deposit already paid,
+    55 circle active, 58 not paused, 205/206 already finalized/claimed,
+    207 not recipient, 221 already advanced, 222 not finalized, 223 claim
+    not expired). Read chain state from publicnode (object reads only —
+    `queryEvents` 429s/fails there and blockvision rate-limits the app).
 
 ### Environment Configuration
 Key environment variables:
@@ -308,6 +353,15 @@ for the legacy worker-process deployment.
    `/circle/<id>/contribute`, confirm the "Link your WhatsApp" prompt
    shows when the circle has no link.
 10. Re-run `npm run preflight` once more before pushing.
+
+**Testnet package versions** (read the UpgradeCap `0xc590f7b3…` for truth):
+| version | package id | contents / status |
+|---|---|---|
+| 1 | `0x89cddf4d…` (original; all object types) | — |
+| 6 | `0x859e3add…` | superseded 2026-09-06 |
+| 7 | `0x9250490b…` | PR #19 (`resume_cycle` keeps deposits, `reconcile_deposit_paid`); published 2026-09-06 19:14Z, tx `HXPdLZJB…`; merged `d98787f`, lineage table `5c72e17`, `Published.toml` + `.env.local` + Vercel Production env all point here; test circle reconciled |
+PR #20 (duplicate-open guard) and PR #14 (real custody `wallet_id`) are not in
+v7 and each need their own upgrade (v8+), built from a tree that includes v7.
 
 **Re-running the bootstrap manually**:
 `node scripts/bootstrap-package.mjs <packageId>` — re-issues the registry
