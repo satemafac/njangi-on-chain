@@ -4,6 +4,10 @@ import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 import { CallbackStatusShell } from '@/components/ui/CallbackStatusShell';
 import { claimCallbackToken } from '@/lib/auth-callback-guard';
+import {
+  clearAuthCallbackFragment,
+  readAuthCallbackFragment,
+} from '@/lib/auth-callback-fragment';
 
 export default function AuthCallback() {
   const router = useRouter();
@@ -52,6 +56,7 @@ export default function AuthCallback() {
     // authenticated user belongs on the dashboard, not the landing page.
     const redirectAfterFailure = () => {
       redirectTimeoutRef.current = setTimeout(() => {
+        clearAuthCallbackFragment();
         if (
           window.localStorage.getItem('isAuthenticated') === 'true' &&
           window.localStorage.getItem('account')
@@ -71,8 +76,10 @@ export default function AuthCallback() {
         let idToken = null;
         let appleUserData = null;
         
-        // 1. Try URL hash (fragment)
-        const hash = window.location.hash.substring(1);
+        // 1. Try the URL fragment. _document parks it off the address bar
+        //    before Next boots (see auth-callback-fragment.ts); this reads
+        //    the stash and falls back to the live hash.
+        const hash = readAuthCallbackFragment();
         const hashParams = new URLSearchParams(hash);
         idToken = hashParams.get('id_token');
         const hashError = hashParams.get('error');
@@ -117,10 +124,11 @@ export default function AuthCallback() {
           }
         }
         
-        // 3. Try extracting from full URL if token format is recognizable
+        // 3. Try extracting from the raw fragment / full URL if the token
+        //    format is recognizable
         if (!idToken) {
           console.log('Attempting to extract token from full URL');
-          const fullUrl = window.location.href;
+          const fullUrl = `${window.location.href}#${hash}`;
           const tokenMatch = fullUrl.match(/id_token=([^&]+)/);
           if (tokenMatch && tokenMatch[1]) {
             idToken = tokenMatch[1];
@@ -128,11 +136,12 @@ export default function AuthCallback() {
           }
         }
         
+        // Shape only — never the URL, fragment or query themselves, which
+        // carry the id_token (and with it the user's email and sub).
         console.log('URL information:', {
-          fullUrl: window.location.href,
-          hash: window.location.hash,
-          search: window.location.search,
+          pathname: window.location.pathname,
           hashLength: hash.length,
+          searchLength: window.location.search.length,
           idTokenFound: !!idToken
         });
 
@@ -156,6 +165,11 @@ export default function AuthCallback() {
         
         // Complete the zkLogin flow
         await handleCallback(idToken);
+
+        // Every effect run has read the fragment by now (the StrictMode
+        // duplicate returned synchronously above); stop the JWT from
+        // outliving this page on the window object.
+        clearAuthCallbackFragment();
         
         // Set progress to 100% when done
         setProgress(100);
@@ -232,6 +246,7 @@ export default function AuthCallback() {
           setIsError(false);
           setStatus('Authentication successful! Redirecting...');
           redirectTimeoutRef.current = setTimeout(() => {
+            clearAuthCallbackFragment();
             const stored = localStorage.getItem('redirectAfterLogin');
             if (stored) {
               localStorage.removeItem('redirectAfterLogin');

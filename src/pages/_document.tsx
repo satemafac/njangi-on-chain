@@ -1,4 +1,5 @@
 import { Html, Head, Main, NextScript } from 'next/document';
+import { AUTH_CALLBACK_FRAGMENT_SCRIPT } from '@/lib/auth-callback-fragment';
 
 export default function Document() {
   return (
@@ -27,6 +28,14 @@ export default function Document() {
         {/* theme-color is set per-page via next/head (the landing uses #0a0a0c);
             no global default here so it can't conflict / force a tint on light pages. */}
         <meta name="google-site-verification" content="f6bd3c31267ded21" />
+
+        {/* Parks the OAuth fragment (#id_token=...) off the URL BEFORE Next's
+            client boots. Next replays location.href through router.replace
+            during hydration, and `iss=https://` trips its `//` check, so the
+            full JWT was console.error'd on every login. Must be a plain
+            synchronous script here — anything bundled runs too late. See
+            src/lib/auth-callback-fragment.ts. */}
+        <script dangerouslySetInnerHTML={{ __html: AUTH_CALLBACK_FRAGMENT_SCRIPT }} />
       </Head>
       <body>
         <Main />
