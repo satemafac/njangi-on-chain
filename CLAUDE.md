@@ -359,9 +359,13 @@ for the legacy worker-process deployment.
 |---|---|---|
 | 1 | `0x89cddf4d…` (original; all object types) | — |
 | 6 | `0x859e3add…` | superseded 2026-09-06 |
-| 7 | `0x9250490b…` | PR #19 (`resume_cycle` keeps deposits, `reconcile_deposit_paid`); published 2026-09-06 19:14Z, tx `HXPdLZJB…`; merged `d98787f`, lineage table `5c72e17`, `Published.toml` + `.env.local` + Vercel Production env all point here; test circle reconciled |
-PR #20 (duplicate-open guard) and PR #14 (real custody `wallet_id`) are not in
-v7 and each need their own upgrade (v8+), built from a tree that includes v7.
+| 7 | `0x9250490b…` | PR #19 (`resume_cycle` keeps deposits, `reconcile_deposit_paid`); published 2026-09-06 19:14Z, tx `HXPdLZJB…`; superseded the same night |
+| 8 | `0x401ed420…` | PR #20 (open-round marker, abort 234 `E_ROUND_ALREADY_OPEN`, `release_open_round`); published 2026-09-06 ~20:20Z with `sui` 1.79.0 (suiup), tx `H87Dirpn…`, from `main` b309d0c; `Published.toml`, lineage table, `.env.local`, Vercel Production + Preview all point here; `NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED=true` |
+PR #14 (real custody `wallet_id`) is not in v8 and needs its own upgrade (v9),
+built from a tree that includes v8. Upgrade with the CLI: `suiup install
+sui@testnet -y` when it lags the network, then `sui client upgrade
+--upgrade-capability <cap from Published.toml>` from `move/` — the CLI holds
+the deployer key and rewrites `Published.toml` itself.
 
 **Re-running the bootstrap manually**:
 `node scripts/bootstrap-package.mjs <packageId>` — re-issues the registry
