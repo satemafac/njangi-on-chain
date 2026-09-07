@@ -80,7 +80,9 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
   // (escrow-history dynamic field on the Circle) and contribute_timed*
   // (per-member contribution timestamps); v7 (2026-09-06) stopped
   // `resume_cycle` from clearing held security deposits and added the
-  // permissionless `reconcile_deposit_paid` repair (PR #19).
+  // permissionless `reconcile_deposit_paid` repair (PR #19); v8 (2026-09-06)
+  // added the open-round marker so a round cannot be opened twice, plus
+  // `release_open_round` for abandoned escrows (PR #20).
   //
   // published-at = latest package (move-call target); original-id stays v1
   // (type identity + event filters). Every version since has been an UPGRADE,
@@ -91,7 +93,7 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
   // Either would have been upgrade-incompatible and forced a new lineage,
   // stranding every existing circle.
   testnet: {
-    publishedAt: '0x9250490bb46ae2376b26513026a93362d2cad415ac6374bc9c4aa0ae71e64579',
+    publishedAt: '0x401ed4202913c9a91a98b029bddb91c78532b24e3c5cf8700fd0b2544e7ec10b',
     originalId: '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
     // v6 introduced the timed-escrow types; they stay anchored here even
     // after future upgrades move published-at.
