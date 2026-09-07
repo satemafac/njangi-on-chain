@@ -82,7 +82,10 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
   // `resume_cycle` from clearing held security deposits and added the
   // permissionless `reconcile_deposit_paid` repair (PR #19); v8 (2026-09-06)
   // added the open-round marker so a round cannot be opened twice, plus
-  // `release_open_round` for abandoned escrows (PR #20).
+  // `release_open_round` for abandoned escrows (PR #20); v9 (2026-09-06)
+  // made `create_circle` store the real custody wallet id instead of the
+  // circle's own id (PR #14) — circles created from v9 on resolve their
+  // wallet from the `wallet_id` field alone.
   //
   // published-at = latest package (move-call target); original-id stays v1
   // (type identity + event filters). Every version since has been an UPGRADE,
@@ -93,7 +96,7 @@ const PACKAGE_LINEAGE_BY_NETWORK: Record<NetworkType, PublishedPackageMetadata> 
   // Either would have been upgrade-incompatible and forced a new lineage,
   // stranding every existing circle.
   testnet: {
-    publishedAt: '0x401ed4202913c9a91a98b029bddb91c78532b24e3c5cf8700fd0b2544e7ec10b',
+    publishedAt: '0xf8afd3dfcf94f152ec9d1f8cb870b77525353a20564bb0224bcad5520d621614',
     originalId: '0x89cddf4dfe654e7c7b16333096d9e750cf04bb96f7de934403a512d460594f02',
     // v6 introduced the timed-escrow types; they stay anchored here even
     // after future upgrades move published-at.

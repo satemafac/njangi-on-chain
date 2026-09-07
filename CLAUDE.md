@@ -360,9 +360,9 @@ for the legacy worker-process deployment.
 | 1 | `0x89cddf4d…` (original; all object types) | — |
 | 6 | `0x859e3add…` | superseded 2026-09-06 |
 | 7 | `0x9250490b…` | PR #19 (`resume_cycle` keeps deposits, `reconcile_deposit_paid`); published 2026-09-06 19:14Z, tx `HXPdLZJB…`; superseded the same night |
-| 8 | `0x401ed420…` | PR #20 (open-round marker, abort 234 `E_ROUND_ALREADY_OPEN`, `release_open_round`); published 2026-09-06 ~20:20Z with `sui` 1.79.0 (suiup), tx `H87Dirpn…`, from `main` b309d0c; `Published.toml`, lineage table, `.env.local`, Vercel Production + Preview all point here; `NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED=true` |
-PR #14 (real custody `wallet_id`) is not in v8 and needs its own upgrade (v9),
-built from a tree that includes v8. Upgrade with the CLI: `suiup install
+| 8 | `0x401ed420…` | PR #20 (open-round marker, abort 234 `E_ROUND_ALREADY_OPEN`, `release_open_round`); published 2026-09-06 ~20:20Z, tx `H87Dirpn…`; guard verified live in lap 5; `NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED=true`; superseded by v9 the same night |
+| 9 | `0xf8afd3df…` | PR #14 (`create_circle` stores the real custody `wallet_id`; `create_custody_wallet_returning_id`); published 2026-09-06 with `sui` 1.79.0, tx `Ap9Xpvx2…`, from `main` 5864d5f; all references point here |
+No Move PR is waiting on a publish. Upgrade with the CLI: `suiup install
 sui@testnet -y` when it lags the network, then `sui client upgrade
 --upgrade-capability <cap from Published.toml>` from `move/` — the CLI holds
 the deployer key and rewrites `Published.toml` itself.
