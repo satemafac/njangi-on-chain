@@ -104,6 +104,25 @@ export function isTimedEscrowEntriesEnabled(): boolean {
   return flagEnabled(process.env.NEXT_PUBLIC_ESCROW_TIMED_ENTRIES_ENABLED);
 }
 
+/**
+ * Circle Record v1.2 duplicate-open guard. The package version carrying it
+ * refuses a second escrow for a round that already has a live one
+ * (`E_ROUND_ALREADY_OPEN`, 234) and adds `release_open_round`, which
+ * unpins a round whose escrow can no longer pay out (refunded, or empty
+ * past its cancel window) so the same round can be opened again.
+ *
+ * Same rule as `isTimedEscrowEntriesEnabled`: this says which targets the
+ * client BUILDS. Flip it on only after that package is published on the
+ * active network — before then the release call names a function that does
+ * not exist and the whole open aborts. Left off after the publish, a
+ * re-open of a refunded round aborts 234 instead, because nothing released
+ * the marker; the panel explains that refusal, but flipping the flag is the
+ * fix.
+ */
+export function isEscrowRoundGuardEnabled(): boolean {
+  return flagEnabled(process.env.NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED);
+}
+
 export function isRampEnabled(provider: 'coinbase' | 'moonpay' | 'transak'): boolean {
   switch (provider) {
     case 'coinbase':

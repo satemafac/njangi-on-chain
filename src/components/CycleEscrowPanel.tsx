@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
 import {
   buildAdvanceCircleAfterClaimTx,
@@ -23,6 +23,17 @@ import {
   resolveNextRoundAction,
   type CircleRotationPointer,
 } from '@/lib/cycle-round-progression';
+import {
+  beginOpenRound,
+  classifyOpenRoundError,
+  IDLE_OPEN_ROUND_LOCK,
+  isOpenRoundLocked,
+  OPEN_ROUND_CONFIRM_POLL_MS,
+  openRoundResolved,
+  settleOpenRoundLock,
+  type ObservedRound,
+  type OpenRoundLock,
+} from '@/lib/cycle-open-round-lock';
 import { getNetworkConfig, getPackageIdForNetwork } from '@/services/network-config';
 import { getPooledSuiClient } from '@/services/sui-rpc-failover';
 import type { NetworkType } from '@/services/whatsapp-registry-service';
@@ -114,7 +125,9 @@ type Stage =
   | 'no-round-open'
   | 'in-progress'
   | 'full-waiting-for-claim'
-  | 'completed';
+  | 'completed'
+  /** Refunds began on chain; only a re-open (by the admin) moves the round on. */
+  | 'refunded';
 
 export function CycleEscrowPanel({
   circleId,
@@ -140,7 +153,18 @@ export function CycleEscrowPanel({
   // it a rate-limited lookup renders as a confident (and wrong) statement
   // that the admin has not opened the round.
   const [loadError, setLoadError] = useState(false);
-  const [busy, setBusy] = useState<null | 'open' | 'pay' | 'claim' | 'advance'>(null);
+  const [busy, setBusy] = useState<null | 'pay' | 'claim' | 'advance'>(null);
+  // The one in-flight flag for every control that opens a round. Held past
+  // the transaction's resolution until discovery shows the new escrow (or
+  // a bounded timeout) — see cycle-open-round-lock.ts for the incident
+  // this closes. The ref mirrors the state so a click handler can check
+  // the CURRENT lock, not the one rendered when it was created.
+  const [openLock, setOpenLock] = useState<OpenRoundLock>(IDLE_OPEN_ROUND_LOCK);
+  const openLockRef = useRef<OpenRoundLock>(IDLE_OPEN_ROUND_LOCK);
+  // Bumped after every refresh, successful or not, so the confirm-poll
+  // effect re-evaluates even when a re-read leaves the summary identical
+  // (null again, most often) and React skips the re-render.
+  const [refreshSeq, setRefreshSeq] = useState(0);
   const [lastDigest, setLastDigest] = useState<string | null>(null);
   // Gated round + no attestation on the caller's wallet: explain the
   // verification requirement instead of a dead-end error toast.
@@ -206,6 +230,7 @@ export function CycleEscrowPanel({
       setRotationPointer(null);
     } finally {
       setLoading(false);
+      setRefreshSeq((n) => n + 1);
     }
   }, [circleId, network, rpcClient]);
 
@@ -249,6 +274,9 @@ export function CycleEscrowPanel({
   const stage: Stage = useMemo(() => {
     if (loading) return 'loading';
     if (!summary || !liveState) return 'no-round-open';
+    // Checked first: a refunded escrow is unfinalized/unclaimed on chain and
+    // would otherwise render as an in-progress round whose "pay" aborts.
+    if (liveState.refunded) return 'refunded';
     if (liveState.claimed) return 'completed';
     if (liveState.finalized) return 'full-waiting-for-claim';
     if (paidSoFar >= totalRequired && totalRequired > 0) return 'full-waiting-for-claim';
@@ -270,6 +298,17 @@ export function CycleEscrowPanel({
   // The admin's round controls, gated exactly like the `no-round-open`
   // open button so the two agree about who may drive a round.
   const showAdminRoundControls = isAdmin && showAdminOpenButton;
+
+  // Every control that opens a round shares this gate and this label, so no
+  // two of them can be enabled at once — the 2026-08-30 duplicate open came
+  // from two controls with two separate ideas of "in flight".
+  const openControlDisabled = !isReady || isOpenRoundLocked(openLock) || !circleIsActive;
+  const openControlLabel = (idleLabel: string): string =>
+    openLock.kind === 'submitting'
+      ? t('escrow.openingRound')
+      : openLock.kind === 'confirming'
+        ? t('escrow.confirmingRound')
+        : idleLabel;
 
   const recipientLabel = useMemo(() => {
     if (!recipient) return '—';
@@ -318,31 +357,21 @@ export function CycleEscrowPanel({
   const friendlyAmount = formatAmount(contributionAmountBase, coinDecimals, coinSymbol);
 
   const runWithSigner = useCallback(
-    async (
-      action: Stage | 'open' | 'pay' | 'claim' | 'advance',
-      build: TransactionBuilder,
-      gasBudget: number,
-    ) => {
+    async (action: 'pay' | 'claim' | 'advance', build: TransactionBuilder, gasBudget: number) => {
       if (!isReady) {
         toast.error(t('toast.signInAgain'));
         return;
       }
-      setBusy(
-        action === 'open' || action === 'pay' || action === 'claim' || action === 'advance'
-          ? action
-          : null,
-      );
+      setBusy(action);
       try {
         const result = await signAndExecute({ build, gasBudget });
         setLastDigest(result.digest);
         toast.success(
-          action === 'open'
-            ? t('toast.roundOpened')
-            : action === 'pay'
-              ? t('toast.sharePaid')
-              : action === 'advance'
-                ? 'Cycle advanced to the next recipient.'
-                : t('toast.payoutSent'),
+          action === 'pay'
+            ? t('toast.sharePaid')
+            : action === 'advance'
+              ? 'Cycle advanced to the next recipient.'
+              : t('toast.payoutSent'),
         );
         // Wait for the fullnode to finish indexing this tx so the
         // follow-up reads see fresh state. Without this, refresh() can
@@ -380,7 +409,22 @@ export function CycleEscrowPanel({
   // short `0x2::sui::SUI` or the long zero-padded address.
   const isStableSettlement = !coinType.toLowerCase().endsWith('::sui::sui');
 
+  const updateOpenLock = useCallback((next: OpenRoundLock) => {
+    openLockRef.current = next;
+    setOpenLock(next);
+  }, []);
+
+  // Every open control funnels through here. The open does NOT go through
+  // runWithSigner: its busy flag clears when the transaction resolves, and
+  // that is exactly the window the duplicate open slipped through.
   const onStartRound = useCallback(async () => {
+    // The ref, not the rendered value: two clicks inside one render must
+    // not both get past this line.
+    if (isOpenRoundLocked(openLockRef.current)) return;
+    if (!isReady) {
+      toast.error(t('toast.signInAgain'));
+      return;
+    }
     // Escrow opens sign client-side (straight to RPC), so the server
     // choke points never see this flow — courtesy OFAC preflight; the
     // server screens stay authoritative (docs/sanctions-program.md).
@@ -409,6 +453,13 @@ export function CycleEscrowPanel({
         return;
       }
     }
+    // The awaits above yielded; another control may have taken the lock.
+    if (isOpenRoundLocked(openLockRef.current)) return;
+    const priorEscrowId = summary?.escrowId ?? null;
+    // A refunded escrow keeps its round pinned on chain once the
+    // duplicate-open guard is published; the builder chains the release
+    // ahead of the open (flag-gated on that publish, see the service).
+    const releaseEscrowId = summary && liveState?.refunded ? summary.escrowId : undefined;
     const build = buildOpenCycleTx({
       network,
       circleId,
@@ -416,9 +467,55 @@ export function CycleEscrowPanel({
       withComplianceGate: gated,
       complianceConfigId,
       stableDecimals: isStableSettlement ? coinDecimals : undefined,
+      releaseEscrowId,
     });
-    void runWithSigner('open', build, 80_000_000);
-  }, [network, circleId, coinType, coinDecimals, isStableSettlement, runWithSigner, userAddress]);
+    const submitting = beginOpenRound(priorEscrowId);
+    updateOpenLock(submitting);
+    try {
+      const result = await signAndExecute({ build, gasBudget: 80_000_000 });
+      setLastDigest(result.digest);
+      toast.success(t('toast.roundOpened'));
+      // Resolved is not confirmed: keep the lock until discovery shows the
+      // new escrow (the confirm-poll effect below) or the timeout passes.
+      updateOpenLock(openRoundResolved(submitting, result.digest, Date.now()));
+      try {
+        await rpcClient.waitForTransaction({
+          digest: result.digest,
+          options: { showEffects: false },
+          timeout: 15_000,
+        });
+      } catch (waitErr) {
+        console.warn('[CycleEscrowPanel] waitForTransaction timed out', waitErr);
+      }
+      await refresh();
+    } catch (err) {
+      const refusal = classifyOpenRoundError(err);
+      toast.error(
+        refusal === 'round-already-open'
+          ? t('escrow.roundAlreadyOpen')
+          : t('toast.genericError', { error: explain(err) }),
+      );
+      updateOpenLock(IDLE_OPEN_ROUND_LOCK);
+      // The chain refused because a round IS open (or its escrow is still
+      // live): this panel's view is stale, so re-read it.
+      if (refusal) void refresh();
+    }
+  }, [
+    isReady,
+    userAddress,
+    network,
+    circleId,
+    coinType,
+    coinDecimals,
+    isStableSettlement,
+    summary,
+    liveState?.refunded,
+    signAndExecute,
+    rpcClient,
+    refresh,
+    updateOpenLock,
+    t,
+  ]);
 
   // Auto-chain: when the manage page sets `autoOpenWhenReady` after a
   // successful Activate Circle call, fire onStartRound exactly once as
@@ -427,7 +524,7 @@ export function CycleEscrowPanel({
     if (!autoOpenWhenReady) return;
     if (!isAdmin || !showAdminOpenButton) return;
     if (!isReady || !circleIsActive) return;
-    if (busy === 'open') return;
+    if (isOpenRoundLocked(openLock)) return;
     if (loading) return;
     // Stage check: only when no round is currently open.
     if (summary || liveState) return;
@@ -439,13 +536,43 @@ export function CycleEscrowPanel({
     showAdminOpenButton,
     isReady,
     circleIsActive,
-    busy,
+    openLock,
     loading,
     summary,
     liveState,
     onAutoOpenFired,
     onStartRound,
   ]);
+
+  // While an open is confirming, keep re-reading until discovery shows a
+  // live escrow the panel did not know before the click, or the bounded
+  // timeout hands the controls back with a warning.
+  useEffect(() => {
+    if (openLock.kind !== 'confirming' || loading) return;
+    const observed: ObservedRound | null =
+      summary && liveState
+        ? {
+            escrowId: summary.escrowId,
+            finalized: liveState.finalized,
+            claimed: liveState.claimed,
+            refunded: liveState.refunded,
+          }
+        : null;
+    const settled = settleOpenRoundLock(openLock, observed, Date.now());
+    if (settled.outcome === 'confirmed') {
+      updateOpenLock(settled.lock);
+      return;
+    }
+    if (settled.outcome === 'timed-out') {
+      updateOpenLock(settled.lock);
+      toast(t('escrow.confirmTimedOut'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      void refresh();
+    }, OPEN_ROUND_CONFIRM_POLL_MS);
+    return () => clearTimeout(timer);
+  }, [openLock, loading, summary, liveState, refreshSeq, refresh, updateOpenLock, t]);
 
   // Phase 8: resolve the member's freshest valid ComplianceAttestation
   // once per session and reuse it for gated contribute/finalize calls.
@@ -636,17 +763,21 @@ export function CycleEscrowPanel({
       ) : stage === 'no-round-open' ? (
         <div className="mt-5 rounded-lg border border-dashed border-slate-200 p-4">
           <p className="text-sm text-slate-700">
-            {loadError ? t('escrow.loadFailed') : t('escrow.notOpen')}
+            {openLock.kind === 'confirming'
+              ? t('escrow.confirmingRoundNotice')
+              : loadError
+                ? t('escrow.loadFailed')
+                : t('escrow.notOpen')}
           </p>
           {isAdmin && showAdminOpenButton ? (
             <>
               <button
                 type="button"
                 onClick={onStartRound}
-                disabled={!isReady || busy === 'open' || !circleIsActive}
+                disabled={openControlDisabled}
                 className="mt-3 inline-flex items-center justify-center rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
               >
-                {busy === 'open' ? t('escrow.openingRound') : t('escrow.openRound')}
+                {openControlLabel(t('escrow.openRound'))}
               </button>
               {!circleIsActive ? (
                 // Deliberately does NOT enumerate the activation requirements.
@@ -707,7 +838,7 @@ export function CycleEscrowPanel({
             </div>
           </div>
 
-          {liveState && totalRequired > 0 ? (
+          {liveState && totalRequired > 0 && stage !== 'refunded' ? (
             <div className="mt-6 flex flex-col items-center">
               <div className="relative h-36 w-36">
                 <svg className="h-full w-full" viewBox="0 0 100 100">
@@ -879,6 +1010,29 @@ export function CycleEscrowPanel({
               )
             ) : null}
 
+            {/* Refunds began on chain (cancelled, or an expired claim): pay,
+                finalize and redeem all abort now, so the only way forward is
+                to open the round again. The refunded escrow still pins its
+                round once the duplicate-open guard is published, so the
+                re-open chains release_open_round (see onStartRound). */}
+            {stage === 'refunded' ? (
+              <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm font-medium text-amber-700 sm:max-w-md">
+                  {t('escrow.refunded', { cycle: summary?.cycleNo ?? '—' })}
+                </p>
+                {showAdminRoundControls ? (
+                  <button
+                    type="button"
+                    onClick={onStartRound}
+                    disabled={openControlDisabled}
+                    className="inline-flex shrink-0 items-center justify-center rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
+                  >
+                    {openControlLabel(t('escrow.reopenRound'))}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
             {/* A settled round. Which control belongs here depends on where
                 the circle's rotation pointer stands, NOT on the escrow — the
                 escrow looks identical in every case. Getting this wrong is
@@ -926,11 +1080,11 @@ export function CycleEscrowPanel({
                   <button
                     type="button"
                     onClick={onStartRound}
-                    disabled={!isReady || busy === 'open' || !circleIsActive}
+                    disabled={openControlDisabled}
                     title="Open the next member's round so everyone can pay in."
                     className="inline-flex shrink-0 items-center justify-center rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
                   >
-                    {busy === 'open' ? t('escrow.openingRound') : 'Open the next round'}
+                    {openControlLabel('Open the next round')}
                   </button>
                 ) : null}
                 {/* Recovery only, and only while it can actually succeed:

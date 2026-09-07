@@ -76,6 +76,15 @@ module njangi::njangi_cycle_escrow {
     const E_COMPLIANCE_CONFIG_MISMATCH: u64 = 232;
     // A gated escrow cannot be opened without a config pin to enforce.
     const E_COMPLIANCE_CONFIG_NOT_PINNED: u64 = 233;
+    // Duplicate-open guard (Circle Record v1.2): the circle's open-round
+    // marker already names a live escrow for this exact round — same cycle
+    // number, same scheduled recipient. Production 2026-08-30 minted two
+    // escrows for one round 34s apart and split the members across them.
+    const E_ROUND_ALREADY_OPEN: u64 = 234;
+    // `release_open_round` refused: the escrow can still collect a payout
+    // (not refunded, and not an empty escrow past its cancel window), so
+    // releasing its round would invite exactly the duplicate above.
+    const E_ROUND_STILL_OPEN: u64 = 235;
 
     const CLAIM_WINDOW_MS: u64 = 30 * 24 * 60 * 60 * 1000; // 30 days
     /// Grace period after the cycle's snapshot due date before anyone may
@@ -337,7 +346,7 @@ module njangi::njangi_cycle_escrow {
     ) {
         let amount = circles::get_contribution_amount_raw(circle);
         let escrow_id = open_cycle_internal<T>(circle, amount, clock, option::none(), ctx);
-        circles::record_escrow_opened(circle, escrow_id);
+        index_open(circle, escrow_id);
     }
 
     public fun open_cycle_stable_indexed<T>(
@@ -348,7 +357,7 @@ module njangi::njangi_cycle_escrow {
     ) {
         let amount = stable_contribution_amount(circle, stable_decimals);
         let escrow_id = open_cycle_internal<T>(circle, amount, clock, option::none(), ctx);
-        circles::record_escrow_opened(circle, escrow_id);
+        index_open(circle, escrow_id);
     }
 
     public fun open_cycle_indexed_with_gate<T>(
@@ -361,7 +370,7 @@ module njangi::njangi_cycle_escrow {
         let escrow_id = open_cycle_internal<T>(
             circle, amount, clock, option::some(object::id(compliance_config)), ctx
         );
-        circles::record_escrow_opened(circle, escrow_id);
+        index_open(circle, escrow_id);
     }
 
     public fun open_cycle_stable_indexed_with_gate<T>(
@@ -375,7 +384,16 @@ module njangi::njangi_cycle_escrow {
         let escrow_id = open_cycle_internal<T>(
             circle, amount, clock, option::some(object::id(compliance_config)), ctx
         );
+        index_open(circle, escrow_id);
+    }
+
+    /// Everything an indexed open writes to the circle after minting the
+    /// escrow: the append-only history entry (v1.1) and the open-round
+    /// marker the duplicate-open guard reads (v1.2). One helper so the
+    /// four indexed entries cannot drift apart.
+    fun index_open(circle: &mut Circle, escrow_id: ID) {
         circles::record_escrow_opened(circle, escrow_id);
+        circles::record_round_opened(circle, escrow_id);
     }
 
     /// `contribute`, plus a per-member timestamp so "paid on time" can be
@@ -486,6 +504,27 @@ module njangi::njangi_cycle_escrow {
         let recipient_opt = circles::get_next_payout_recipient(circle);
         assert!(option::is_some(&recipient_opt), E_RECIPIENT_NOT_FOUND);
         let recipient = *option::borrow(&recipient_opt);
+
+        // Duplicate-open guard (Circle Record v1.2). The circle's open-round
+        // marker names the escrow most recently opened through the indexed
+        // entries; while it names THIS round — same cycle number and same
+        // scheduled recipient — a second escrow would split the members'
+        // contributions across two pots so that neither can fill
+        // (production 2026-08-30, circle 0xa3fada…675ed). A marker for an
+        // earlier round is stale by construction (the rotation moved on)
+        // and does not block. Read-only, so it protects the original
+        // `&Circle` opens as well; only the indexed opens can WRITE it,
+        // which is why the frontend must build those. The round unlocks
+        // through `advance_circle_after_claim` (paid out and rotated) or
+        // `release_open_round` (refunded / abandoned) — never by a plain
+        // second open.
+        let live_round = circles::open_round(circle);
+        if (option::is_some(&live_round)) {
+            let live = option::borrow(&live_round);
+            let same_round = circles::open_round_cycle_no(live) == cycle_no
+                && circles::open_round_recipient(live) == recipient;
+            assert!(!same_round, E_ROUND_ALREADY_OPEN);
+        };
 
         let members = filter_active_members(&rotation_order);
         let member_count = vector::length(&members);
@@ -830,6 +869,54 @@ module njangi::njangi_cycle_escrow {
         assert!(option::is_some(&recipient_opt), E_ALREADY_ADVANCED);
         assert!(*option::borrow(&recipient_opt) == escrow.snapshot.recipient, E_ALREADY_ADVANCED);
         circles::advance_rotation_position_and_cycle(circle, escrow.snapshot.recipient, clock);
+        // The round is settled and the circle has moved on: drop the
+        // open-round marker so it can never pin the circle to a paid-out
+        // escrow (a rotation edit could otherwise bring the same recipient
+        // back under the same cycle number and find the round "still
+        // open"). No-op for escrows opened through the un-indexed entries.
+        circles::clear_open_round(circle, object::uid_to_inner(&escrow.id));
+    }
+
+    /// Releases the circle's open-round marker for an escrow that can no
+    /// longer pay out, so the SAME round (same cycle, same recipient) can
+    /// be opened again. Permissionless and fact-checked: the escrow must
+    /// belong to this circle and must be abandoned — refunded through
+    /// either refund path, or unfinalized and empty with its cancel window
+    /// elapsed (an escrow nobody paid into cannot be cancelled, since
+    /// cancel aborts with nothing to refund, yet the round must not stay
+    /// pinned to it forever). A live escrow aborts `E_ROUND_STILL_OPEN`.
+    ///
+    /// Idempotent: a marker that names some other escrow — or no marker at
+    /// all — is left untouched and the call succeeds, so a client can
+    /// chain it ahead of the re-open in one PTB without first reading the
+    /// marker. Settled escrows are not released here: their exit is
+    /// `advance_circle_after_claim`, which rotates the circle AND clears
+    /// the marker, and releasing a claimed escrow instead would re-offer
+    /// the round to the member who was just paid.
+    public fun release_open_round<T>(
+        circle: &mut Circle,
+        escrow: &CycleEscrow<T>,
+        clock: &Clock,
+    ) {
+        assert!(escrow.circle_id == circles::get_id(circle), E_CYCLE_MISMATCH);
+        assert!(is_abandoned(escrow, clock), E_ROUND_STILL_OPEN);
+        circles::clear_open_round(circle, object::uid_to_inner(&escrow.id));
+    }
+
+    /// True when this escrow can no longer collect a payout for its round:
+    /// refunds began (cancel of an unfinalized escrow, or an expired
+    /// claim), or it never finalized, holds nothing, and its cancel window
+    /// (snapshot due date + grace) has opened. Exactly the set of escrows
+    /// `release_open_round` accepts; exposed so a client can decide
+    /// whether to chain the release before re-opening.
+    public fun is_abandoned<T>(escrow: &CycleEscrow<T>, clock: &Clock): bool {
+        if (escrow.refunded) {
+            return true
+        };
+        !escrow.finalized
+            && escrow.contributors_count == 0
+            && balance::value(&escrow.balance) == 0
+            && clock::timestamp_ms(clock) >= escrow.snapshot.due_at_ms + CANCEL_GRACE_MS
     }
 
     // ----------------------------------------------------------
@@ -1257,6 +1344,13 @@ module njangi::njangi_cycle_escrow {
         let history = circles::get_escrow_history(&circle);
         assert!(vector::length(&history) == 1, 9300);
         assert!(*vector::borrow(&history, 0) == object::id(&escrow), 9301);
+        // v1.2: the same open also pins the round as live.
+        let marker = circles::open_round(&circle);
+        assert!(option::is_some(&marker), 9302);
+        let live = option::borrow(&marker);
+        assert!(circles::open_round_escrow_id(live) == object::id(&escrow), 9303);
+        assert!(circles::open_round_cycle_no(live) == cycle_no(&escrow), 9304);
+        assert!(circles::open_round_recipient(live) == TEST_ADMIN, 9305);
 
         ts::return_shared(escrow);
         ts::return_shared(circle);
@@ -1274,6 +1368,8 @@ module njangi::njangi_cycle_escrow {
         ts::next_tx(&mut scenario, TEST_ADMIN);
         let circle = ts::take_shared<Circle>(&mut scenario);
         assert!(vector::length(&circles::get_escrow_history(&circle)) == 0, 9310);
+        // ...and no open-round marker either: only the indexed opens write it.
+        assert!(option::is_none(&circles::open_round(&circle)), 9311);
         ts::return_shared(circle);
 
         clock::destroy_for_testing(clock);
@@ -1334,17 +1430,223 @@ module njangi::njangi_cycle_escrow {
         ts::end(scenario);
     }
 
+    /// Runs the current round to completion: BOB and CAROL pay in, the
+    /// recipient collects, and anyone rotates the circle forward (which
+    /// also clears the open-round marker).
+    #[test_only]
+    fun settle_round_and_advance(scenario: &mut ts::Scenario, clock: &Clock, recipient: address) {
+        contribute_as(scenario, TEST_BOB);
+        contribute_as(scenario, TEST_CAROL);
+
+        ts::next_tx(scenario, recipient);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(scenario);
+        finalize_and_redeem(&mut escrow, clock, ts::ctx(scenario));
+        ts::return_shared(escrow);
+        assert_received_refund(scenario, recipient, 2 * TEST_CONTRIBUTION);
+
+        ts::next_tx(scenario, TEST_BOB);
+        let mut circle = ts::take_shared<Circle>(scenario);
+        let escrow = ts::take_shared<CycleEscrow<SUI>>(scenario);
+        advance_circle_after_claim(&mut circle, &escrow, clock, ts::ctx(scenario));
+        ts::return_shared(escrow);
+        ts::return_shared(circle);
+    }
+
     #[test]
     fun test_indexed_open_appends() {
-        // Two indexed opens -> two history entries, append-only.
+        // Two rounds -> two history entries, append-only. The second open
+        // is legal only because the first round settled and the rotation
+        // moved on (which clears the open-round marker); an open for the
+        // SAME round is the duplicate the guard exists to refuse.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_indexed_escrow(&mut scenario);
+        settle_round_and_advance(&mut scenario, &clock, TEST_ADMIN);
+
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let mut circle = ts::take_shared<Circle>(&mut scenario);
+        assert!(option::is_none(&circles::open_round(&circle)), 9341);
+        open_cycle_indexed<SUI>(&mut circle, &clock, ts::ctx(&mut scenario));
+        let history = circles::get_escrow_history(&circle);
+        assert!(vector::length(&history) == 2, 9340);
+        // The marker moved on to BOB's round.
+        let marker = option::destroy_some(circles::open_round(&circle));
+        assert!(circles::open_round_escrow_id(&marker) == *vector::borrow(&history, 1), 9342);
+        assert!(circles::open_round_recipient(&marker) == TEST_BOB, 9343);
+        ts::return_shared(circle);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    // ----------------------------------------------------------
+    // Circle Record v1.2: duplicate-open guard + release
+    // ----------------------------------------------------------
+
+    #[test]
+    #[expected_failure(abort_code = E_ROUND_ALREADY_OPEN)]
+    fun test_indexed_open_twice_for_same_round_aborts() {
+        // The 2026-08-30 incident, replayed: the same admin opens the same
+        // round again while the first escrow is live. Must abort, and
+        // must abort BEFORE the second escrow is minted (expected_failure
+        // covers both: an escrow shared before the abort would still be
+        // rolled back with the tx).
         let mut scenario = ts::begin(TEST_ADMIN);
         let clock = setup_circle_and_indexed_escrow(&mut scenario);
 
         ts::next_tx(&mut scenario, TEST_ADMIN);
         let mut circle = ts::take_shared<Circle>(&mut scenario);
         open_cycle_indexed<SUI>(&mut circle, &clock, ts::ctx(&mut scenario));
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_ROUND_ALREADY_OPEN)]
+    fun test_plain_open_after_indexed_open_aborts() {
+        // The guard is a READ of the marker, so the original `&Circle`
+        // entries are covered too: a hand-rolled `open_cycle` cannot slip
+        // a second escrow past it.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_indexed_escrow(&mut scenario);
+
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let circle = ts::take_shared<Circle>(&mut scenario);
+        open_cycle<SUI>(&circle, &clock, ts::ctx(&mut scenario));
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_ROUND_STILL_OPEN)]
+    fun test_release_live_escrow_aborts() {
+        // Just opened, nothing wrong with it: release must refuse, or the
+        // guard could be talked out of the way by anyone.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_indexed_escrow(&mut scenario);
+
+        ts::next_tx(&mut scenario, TEST_BOB);
+        let mut circle = ts::take_shared<Circle>(&mut scenario);
+        let escrow = ts::take_shared<CycleEscrow<SUI>>(&mut scenario);
+        release_open_round(&mut circle, &escrow, &clock);
+        abort 0
+    }
+
+    #[test]
+    #[expected_failure(abort_code = E_ROUND_STILL_OPEN)]
+    fun test_release_funded_escrow_past_grace_aborts() {
+        // Past the cancel window but holding a contribution: the money
+        // must go back through `cancel_unfinalized_escrow` first. Release
+        // is for escrows that have nothing left to pay out.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let mut clock = setup_circle_and_indexed_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+        clock::set_for_testing(&mut clock, TEST_START_MS + TEST_SEVEN_DAYS_MS + CANCEL_GRACE_MS);
+
+        ts::next_tx(&mut scenario, TEST_CAROL);
+        let mut circle = ts::take_shared<Circle>(&mut scenario);
+        let escrow = ts::take_shared<CycleEscrow<SUI>>(&mut scenario);
+        assert!(!is_abandoned(&escrow, &clock), 9350);
+        release_open_round(&mut circle, &escrow, &clock);
+        abort 0
+    }
+
+    #[test]
+    fun test_release_after_cancel_allows_reopen() {
+        // A stalled round: BOB paid, CAROL never did, the cancel window
+        // passed and the escrow was refunded. The round is still this
+        // circle's current round (same cycle, same recipient), so it has
+        // to be openable again — release clears the marker, the re-open
+        // appends a second history entry, and the new marker names it.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let mut clock = setup_circle_and_indexed_escrow(&mut scenario);
+        contribute_as(&mut scenario, TEST_BOB);
+
+        clock::set_for_testing(&mut clock, TEST_START_MS + TEST_SEVEN_DAYS_MS + CANCEL_GRACE_MS);
+        ts::next_tx(&mut scenario, TEST_CAROL);
+        let mut escrow = ts::take_shared<CycleEscrow<SUI>>(&mut scenario);
+        cancel_unfinalized_escrow(&mut escrow, &clock, ts::ctx(&mut scenario));
+        assert!(is_refunded(&escrow), 9360);
+        ts::return_shared(escrow);
+        assert_received_refund(&mut scenario, TEST_BOB, TEST_CONTRIBUTION);
+
+        // Release + re-open in one tx, the way the client chains them.
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let mut circle = ts::take_shared<Circle>(&mut scenario);
+        let escrow = ts::take_shared<CycleEscrow<SUI>>(&mut scenario);
+        let first_id = object::id(&escrow);
+        assert!(is_abandoned(&escrow, &clock), 9361);
+        release_open_round(&mut circle, &escrow, &clock);
+        assert!(option::is_none(&circles::open_round(&circle)), 9362);
+        open_cycle_indexed<SUI>(&mut circle, &clock, ts::ctx(&mut scenario));
+
         let history = circles::get_escrow_history(&circle);
-        assert!(vector::length(&history) == 2, 9340);
+        assert!(vector::length(&history) == 2, 9363);
+        assert!(*vector::borrow(&history, 0) == first_id, 9364);
+        let marker = option::destroy_some(circles::open_round(&circle));
+        let second_id = circles::open_round_escrow_id(&marker);
+        assert!(second_id != first_id, 9365);
+        assert!(second_id == *vector::borrow(&history, 1), 9366);
+        // Same round as the one that was refunded.
+        assert!(circles::open_round_recipient(&marker) == TEST_ADMIN, 9367);
+        assert!(circles::open_round_cycle_no(&marker) == cycle_no(&escrow), 9368);
+        ts::return_shared(escrow);
+        ts::return_shared(circle);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_release_abandoned_empty_escrow_allows_reopen() {
+        // Nobody paid in, so there is nothing to cancel — `cancel` aborts
+        // E_NOTHING_TO_REFUND and `refunded` never flips. The round must
+        // still come back once the cancel window has passed, or the
+        // marker would pin the circle to a dead escrow forever.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let mut clock = setup_circle_and_indexed_escrow(&mut scenario);
+
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let escrow = ts::take_shared<CycleEscrow<SUI>>(&mut scenario);
+        // Not yet: the window has not opened.
+        assert!(!is_abandoned(&escrow, &clock), 9370);
+        clock::set_for_testing(&mut clock, TEST_START_MS + TEST_SEVEN_DAYS_MS + CANCEL_GRACE_MS);
+        assert!(is_abandoned(&escrow, &clock), 9371);
+        ts::return_shared(escrow);
+
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let mut circle = ts::take_shared<Circle>(&mut scenario);
+        let escrow = ts::take_shared<CycleEscrow<SUI>>(&mut scenario);
+        release_open_round(&mut circle, &escrow, &clock);
+        open_cycle_indexed<SUI>(&mut circle, &clock, ts::ctx(&mut scenario));
+        assert!(vector::length(&circles::get_escrow_history(&circle)) == 2, 9372);
+        ts::return_shared(escrow);
+        ts::return_shared(circle);
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_release_of_stale_escrow_leaves_newer_round_pinned() {
+        // Round 1 settled and rotated; round 2 is open. Releasing round
+        // 1's (claimed) escrow is refused, and even a genuinely abandoned
+        // OLD escrow could not unpin round 2: the marker names the newer
+        // escrow, and clear_open_round only removes a matching one.
+        let mut scenario = ts::begin(TEST_ADMIN);
+        let clock = setup_circle_and_indexed_escrow(&mut scenario);
+        settle_round_and_advance(&mut scenario, &clock, TEST_ADMIN);
+
+        ts::next_tx(&mut scenario, TEST_ADMIN);
+        let mut circle = ts::take_shared<Circle>(&mut scenario);
+        let first = ts::take_shared<CycleEscrow<SUI>>(&mut scenario);
+        let first_id = object::id(&first);
+        open_cycle_indexed<SUI>(&mut circle, &clock, ts::ctx(&mut scenario));
+        // A settled escrow is not abandoned: its exit was the advance.
+        assert!(!is_abandoned(&first, &clock), 9380);
+        // Clearing by the stale id is a no-op; the round-2 marker stands.
+        assert!(!circles::clear_open_round(&mut circle, first_id), 9381);
+        let marker = option::destroy_some(circles::open_round(&circle));
+        assert!(circles::open_round_recipient(&marker) == TEST_BOB, 9382);
+        assert!(circles::open_round_escrow_id(&marker) != first_id, 9383);
+        ts::return_shared(first);
         ts::return_shared(circle);
 
         clock::destroy_for_testing(clock);

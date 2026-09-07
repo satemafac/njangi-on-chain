@@ -106,6 +106,13 @@ module njangi::njangi_circles {
     // endpoints serve unreliably. Lives as a dynamic field because Sui
     // upgrades cannot add struct fields to Circle.
     const FIELD_ESCROW_HISTORY: vector<u8> = b"escrow_history";
+    // The round the circle currently has an escrow open for, as written by
+    // the *_indexed escrow opens and read back by the escrow module's
+    // duplicate-open guard (Circle Record v1.2). Absent == no marker, which
+    // for circles that predate it or only used the un-indexed opens means
+    // "no data", never "no round open". Dynamic field for the same reason
+    // as escrow_history: an upgrade cannot add a struct field to Circle.
+    const FIELD_OPEN_ROUND: vector<u8> = b"open_round";
 
     // Dynamic-field key for the circle-level compliance requirement.
     // Stored as a dynamic field (absent == false) so the Circle struct
@@ -2984,6 +2991,83 @@ module njangi::njangi_circles {
             vector::empty<ID>()
         }
     }
+
+    // ----------------------------------------------------------
+    // Open-round marker (Circle Record v1.2 — duplicate-open guard)
+    //
+    // Production 2026-08-30 (circle 0xa3fada…675ed): the admin's client
+    // opened two escrows for ONE round 34 seconds apart and members split
+    // their contributions across them. `escrow_history` is append-only and
+    // says nothing about which entry is live, and the open path holds only
+    // a `&Circle`, so it cannot read the previous escrow object to find
+    // out. This marker is the fact it needs: the (cycle, recipient, escrow)
+    // of the round most recently opened through the indexed entries.
+    //
+    // Lifecycle: written by every indexed open (overwriting whatever was
+    // there — by then the previous round has either settled and rotated
+    // on, or been released), cleared by `advance_circle_after_claim` once
+    // the round's payout has rotated the circle, and cleared by
+    // `release_open_round` for an escrow that can no longer pay out
+    // (refunded, or empty past its cancel window). The escrow module owns
+    // every write; this module only stores and reads it.
+    // ----------------------------------------------------------
+
+    /// The escrow round a circle currently has open. `copy` + `drop` so
+    /// readers take it by value; only the escrow module can mint one.
+    public struct OpenRound has store, copy, drop {
+        cycle_no: u64,
+        recipient: address,
+        escrow_id: ID,
+    }
+
+    /// Marks `escrow_id` as the live escrow for the circle's CURRENT round
+    /// — its current cycle number and scheduled recipient, which is exactly
+    /// what the escrow just snapshotted. package-internal, like
+    /// `record_escrow_opened`, so the marker can never name an id the
+    /// package did not mint.
+    public(package) fun record_round_opened(circle: &mut Circle, escrow_id: ID) {
+        // The open path asserted a recipient exists before minting the
+        // escrow; destroy_some re-asserts it rather than storing a
+        // placeholder.
+        let recipient = option::destroy_some(get_next_payout_recipient(circle));
+        let marker = OpenRound { cycle_no: circle.current_cycle, recipient, escrow_id };
+        if (dynamic_field::exists_(&circle.id, FIELD_OPEN_ROUND)) {
+            *dynamic_field::borrow_mut<vector<u8>, OpenRound>(&mut circle.id, FIELD_OPEN_ROUND) = marker;
+        } else {
+            dynamic_field::add(&mut circle.id, FIELD_OPEN_ROUND, marker);
+        }
+    }
+
+    /// Removes the marker if — and only if — it names `escrow_id`, and
+    /// says whether it did. A marker naming some other escrow is left
+    /// alone: settling or abandoning an OLD escrow must never unlock the
+    /// round a newer one is holding.
+    public(package) fun clear_open_round(circle: &mut Circle, escrow_id: ID): bool {
+        if (!dynamic_field::exists_(&circle.id, FIELD_OPEN_ROUND)) {
+            return false
+        };
+        let current = dynamic_field::borrow<vector<u8>, OpenRound>(&circle.id, FIELD_OPEN_ROUND);
+        if (current.escrow_id != escrow_id) {
+            return false
+        };
+        let _removed: OpenRound = dynamic_field::remove(&mut circle.id, FIELD_OPEN_ROUND);
+        true
+    }
+
+    /// The marker, if any. `none` is "no marker" — for a circle that
+    /// predates the feature or only ever used the un-indexed opens it
+    /// carries no information about whether a round is open.
+    public fun open_round(circle: &Circle): Option<OpenRound> {
+        if (dynamic_field::exists_(&circle.id, FIELD_OPEN_ROUND)) {
+            option::some(*dynamic_field::borrow<vector<u8>, OpenRound>(&circle.id, FIELD_OPEN_ROUND))
+        } else {
+            option::none()
+        }
+    }
+
+    public fun open_round_cycle_no(marker: &OpenRound): u64 { marker.cycle_no }
+    public fun open_round_recipient(marker: &OpenRound): address { marker.recipient }
+    public fun open_round_escrow_id(marker: &OpenRound): ID { marker.escrow_id }
 
     // ----------------------------------------------------------
     // Advance rotation position and cycle management

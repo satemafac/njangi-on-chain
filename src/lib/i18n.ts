@@ -59,6 +59,16 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "This round hasn't been opened yet. Once the circle admin opens it, members can pay their share and the first person on the list will be ready to collect.",
     'escrow.openRound': 'Open this round',
     'escrow.openingRound': 'Opening round…',
+    'escrow.confirmingRound': 'Confirming the round opened…',
+    'escrow.confirmingRoundNotice':
+      'Your transaction to open this round went through. Waiting for the network to show the new pot — opening stays off until it does, so the round cannot be opened twice.',
+    'escrow.confirmTimedOut':
+      "We still can't see the new pot. Refresh and check that the round isn't already open before opening it again.",
+    'escrow.roundAlreadyOpen':
+      'A pot for this round is already open on the blockchain. Refreshing so you can see it.',
+    'escrow.refunded':
+      'Round {cycle} was cancelled and every contribution went back to the member who paid it. The circle admin can open this round again.',
+    'escrow.reopenRound': 'Open this round again',
     'escrow.onlyAdminOpens': 'Only the circle admin can open the round.',
     'escrow.yourShare': 'Your share this round',
     'escrow.whoseTurn': 'Whose turn it is',
@@ -478,6 +488,16 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
       "Ce tour n'est pas encore ouvert. Une fois que l'administrateur du cercle l'ouvre, les membres peuvent verser leur part et la première personne de la liste sera prête à recevoir.",
     'escrow.openRound': 'Ouvrir ce tour',
     'escrow.openingRound': 'Ouverture en cours…',
+    'escrow.confirmingRound': "Confirmation de l'ouverture du tour…",
+    'escrow.confirmingRoundNotice':
+      "Votre transaction pour ouvrir ce tour est passée. En attente que le réseau affiche la nouvelle cagnotte — l'ouverture reste désactivée jusque-là, pour que le tour ne puisse pas être ouvert deux fois.",
+    'escrow.confirmTimedOut':
+      "Nous ne voyons toujours pas la nouvelle cagnotte. Actualisez et vérifiez que le tour n'est pas déjà ouvert avant de l'ouvrir à nouveau.",
+    'escrow.roundAlreadyOpen':
+      'Une cagnotte est déjà ouverte pour ce tour sur la blockchain. Actualisation pour vous la montrer.',
+    'escrow.refunded':
+      "Le tour {cycle} a été annulé et chaque versement est revenu au membre qui l'avait fait. L'administrateur du cercle peut rouvrir ce tour.",
+    'escrow.reopenRound': 'Rouvrir ce tour',
     'escrow.onlyAdminOpens': "Seul l'administrateur du cercle peut ouvrir le tour.",
     'escrow.yourShare': 'Votre part ce tour',
     'escrow.whoseTurn': "C'est le tour de",

@@ -123,6 +123,53 @@ Enoki application itself — treat THOSE as address migrations: never change
 them once users exist, and record any change in the deploy log so step 2
 has something to find.
 
+## Scenario 5 — Two escrows for one round (duplicate open)
+
+Signal: a member reports paying in but the round's pot still shows them as
+pending; or the circle's `escrow_history` has two entries whose snapshots
+carry the same `cycle_no` AND the same `recipient`, the older one open,
+empty or part-funded, never finalized. First seen 2026-08-30 on circle
+`0xa3fada…675ed`: two `open_cycle_stable_indexed` transactions 34 seconds
+apart (`7WSGJFyerF…`, `8hpKgUeYg1…`), members paid into the second, the
+first is a permanent orphan.
+
+**What it means.** Until the package carrying the v1.2 duplicate-open guard
+(`E_ROUND_ALREADY_OPEN`, 234) is published, the chain accepts a second
+escrow for a round it already has one for, and the escrow panel used to
+offer the second open the moment the first resolved. A page that read
+history before the second open landed pays into the FIRST escrow; split
+across two pots, neither can fill, and the contributions sit until a refund
+path runs. Nobody can move those funds anywhere but back to the members who
+paid them.
+
+1. **Name the live escrow.** It is the LAST entry of the circle's
+   `escrow_history` — discovery resolves newest-first by design, so every
+   page that reloads converges on it. Do not "prefer the unfinalized one";
+   that resurrects the orphan.
+2. **Get the members onto it.** Anyone who paid into the older escrow pays
+   again into the live one (their share is not lost — see step 3). The
+   recipient collects from the live one as normal.
+3. **Drain the orphan.** If it holds contributions: once its snapshot due
+   date plus the 7-day grace has passed, anyone can call
+   `cancel_unfinalized_escrow` and every recorded contributor gets exactly
+   their contribution back. If it is empty there is nothing to do — it
+   stays in `escrow_history` as an inert entry.
+4. **After the guard is published**, a refunded (or empty, past-window)
+   escrow still pins its round on chain: re-opening that round needs
+   `release_open_round` chained ahead of the open. The panel does this
+   when `NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED` is on; a re-open that
+   aborts 234 on a refunded round means the flag was not flipped after the
+   publish. A 235 means the release named an escrow that can still pay
+   out — check whether it was actually refunded before assuming a bug.
+5. Record in the log below: circle, both escrow ids, which one the members
+   converged on, and whether the orphan held funds.
+
+**Prevention.** Both layers are in the repo: the panel holds one in-flight
+lock across every open control until discovery confirms the new escrow
+(`src/lib/cycle-open-round-lock.ts`), and the Move guard refuses the second
+open outright once published. Watching a round in an E2E run: poll the last
+`escrow_history` entry, not an escrow id captured earlier.
+
 ## Contact chain
 
 - Counsel: {{COUNSEL_CONTACT}} (fill when the A6 engagement closes)

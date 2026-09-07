@@ -9,6 +9,17 @@
 //      escrow opened for the circle through the v1.1 indexed entries, oldest
 //      first, so the LAST id is the current round. One object read, served
 //      by every RPC endpoint, immune to event retention.
+//
+//      Tie-break: the NEWEST entry wins, unconditionally — never an older
+//      entry that happens to be unfinalized. Production 2026-08-30 (circle
+//      0xa3fada…675ed) minted two escrows for one round 34 seconds apart; the
+//      newer one is the admin's latest intent, and resolving to it converges
+//      every member's page onto a single pot, while "prefer the unfinalized
+//      one" would resurrect the empty orphan the moment the real round
+//      settled. The orphan reads as abandoned and its funds (if any) go back
+//      through the ordinary cancel path. Once the package carrying the
+//      duplicate-open guard (`E_ROUND_ALREADY_OPEN`) is published, two live
+//      escrows for one round cannot exist and the tie-break is moot.
 //   2. `CycleEscrowOpened` events — the historical path, kept as the fallback
 //      for circles whose history field does not exist: they predate the
 //      indexed opens, or their rounds were opened through the original
@@ -63,6 +74,15 @@ export interface CycleEscrowLiveState {
   assetType: string;
   finalized: boolean;
   claimed: boolean;
+  /**
+   * Terminal: refunds began (cancel of an unfinalized escrow, or an expired
+   * claim). Contributions, finalize and redeem all abort on chain from
+   * here, so the panel must stop offering "pay your share" and instead let
+   * the admin open the round again — chaining `release_open_round` once the
+   * duplicate-open guard is published, because the refunded escrow still
+   * pins its round until released.
+   */
+  refunded: boolean;
   contributedMembers: string[];
   /** Full rotation member list from the frozen snapshot (includes the
    *  recipient). The UI uses this to render a per-member progress ring. */
@@ -413,10 +433,12 @@ export async function findCurrentCycleEscrow(
   const history = await readCircleEscrowHistory(client, circleId);
   let historyUnknown = history.kind === 'unknown';
   if (history.kind === 'found') {
-    // Newest last on chain. Without a cycle filter only the last id can be
-    // the current round, so only it is read; with one, walk back to the
-    // newest escrow of that cycle (a cycle number spans a whole rotation
-    // lap, so several escrows share it).
+    // Newest last on chain, and newest wins — see the tie-break in the
+    // header: an older unfinalized entry is an orphan, not the round.
+    // Without a cycle filter only the last id can be the current round, so
+    // only it is read; with one, walk back to the newest escrow of that
+    // cycle (a cycle number spans a whole rotation lap, so several escrows
+    // share it).
     const newestFirst = [...history.escrowIds].reverse();
     const candidates = wantedCycle === undefined ? newestFirst.slice(0, 1) : newestFirst;
     for (const escrowId of candidates) {
@@ -536,6 +558,7 @@ export async function readCycleEscrowState(
     assetType: bytesToCanonicalType(assetBytes),
     finalized: Boolean(fields.finalized),
     claimed: Boolean(fields.claimed),
+    refunded: Boolean(fields.refunded),
     contributedMembers,
     members,
     requiresAttestation: Boolean(fields.requires_attestation),

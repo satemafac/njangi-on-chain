@@ -48,6 +48,22 @@ contract change.
   UI. Delivering it needs a new `contribute`-style entry function taking a `&Clock` plus a
   per-member timestamp dynamic field on the escrow — a genuine v1.1, specced but not built.
 
+**Status since (2026-09-06).** v1.1 was later built as *new* entry functions — `open_cycle*_indexed`
+(`&mut Circle`, appends `FIELD_ESCROW_HISTORY`) and `contribute_timed*` — which is the route §3.0
+said an upgrade permits; see `docs/build-roadmap-2026-08.md`. v1.2 adds the **duplicate-open guard**
+on top of the same history: production 2026-08-30 minted two escrows for one round 34 seconds apart
+(`docs/incident-playbook.md` Scenario 5). Every indexed open now also writes a `FIELD_OPEN_ROUND`
+marker `(cycle_no, recipient, escrow_id)` on the Circle; `open_cycle_internal` aborts
+`E_ROUND_ALREADY_OPEN` (234) while the marker names the round being opened;
+`advance_circle_after_claim` clears it once the payout has rotated the circle; and the new
+permissionless `release_open_round` clears it for an escrow that can no longer pay out (refunded, or
+empty past its cancel window — `is_abandoned`), aborting `E_ROUND_STILL_OPEN` (235) otherwise. The
+client chains the release ahead of a re-open behind `NEXT_PUBLIC_ESCROW_ROUND_GUARD_ENABLED`, and
+the escrow panel holds one in-flight lock across every open control until discovery confirms the
+new escrow (`src/lib/cycle-open-round-lock.ts`). Discovery's tie-break is documented in
+`src/lib/cycle-escrow-discovery.ts`: the newest `escrow_history` entry wins, never an older
+unfinalized one.
+
 ---
 
 ## 1. The problem

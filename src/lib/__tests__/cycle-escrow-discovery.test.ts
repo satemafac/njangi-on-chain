@@ -23,6 +23,7 @@ import {
   listContributors,
   readCircleEscrowHistory,
   readCircleRotationPointer,
+  readCycleEscrowState,
   verifyCycleEscrowForCircle,
 } from '@/lib/cycle-escrow-discovery';
 import { getPooledSuiClient, withSuiRpcFailover } from '@/services/sui-rpc-failover';
@@ -60,7 +61,14 @@ const ESCROW_HISTORY_BYTES = [101, 115, 99, 114, 111, 119, 95, 104, 105, 115, 11
 
 const CYCLE_ESCROW_TYPE = `${ORIGINAL_PKG}::njangi_cycle_escrow::CycleEscrow<${USDC}>`;
 
-const escrowObject = (opts: { id: string; circleId?: string; cycleNo?: number }) => ({
+const escrowObject = (opts: {
+  id: string;
+  circleId?: string;
+  cycleNo?: number;
+  finalized?: boolean;
+  claimed?: boolean;
+  refunded?: boolean;
+}) => ({
   data: {
     objectId: opts.id,
     type: CYCLE_ESCROW_TYPE,
@@ -69,9 +77,9 @@ const escrowObject = (opts: { id: string; circleId?: string; cycleNo?: number })
       type: CYCLE_ESCROW_TYPE,
       fields: {
         circle_id: opts.circleId ?? CIRCLE,
-        claimed: false,
-        finalized: false,
-        refunded: false,
+        claimed: opts.claimed ?? false,
+        finalized: opts.finalized ?? false,
+        refunded: opts.refunded ?? false,
         snapshot: {
           type: `${ORIGINAL_PKG}::njangi_cycle_escrow::CycleSnapshot`,
           fields: {
@@ -246,6 +254,73 @@ describe('findCurrentCycleEscrow — escrow_history tier', () => {
 
     expect(found?.escrowId).toBe(ESCROW_3);
     expect(pooled).toHaveBeenCalledWith({ network: 'testnet', rpcUrl: expect.any(String) });
+  });
+});
+
+/**
+ * Two escrows for ONE round. Production 2026-08-30: the admin's panel opened
+ * lap-2 round-1 twice, 34 seconds apart; members paid into the second and
+ * the first is a permanent orphan in escrow_history — open, empty, never
+ * finalized. The tie-break is "newest wins", unconditionally: the newer
+ * escrow is the admin's latest intent and resolving to it converges every
+ * member's page onto one pot. "Prefer the unfinalized one" would resurrect
+ * the orphan the moment the real round settled.
+ */
+describe('findCurrentCycleEscrow — tie-break between two escrows for one round', () => {
+  it('resolves the newest entry even when an older one is still unfinalized', async () => {
+    const client = makeClient(
+      {
+        // The orphan: opened first, never funded, still "live" on chain.
+        [ESCROW_2]: escrowObject({ id: ESCROW_2, cycleNo: 2 }),
+        // The real round: opened 34s later, funded, collected.
+        [ESCROW_3]: escrowObject({ id: ESCROW_3, cycleNo: 2, finalized: true, claimed: true }),
+      },
+      withHistory([ESCROW_1, ESCROW_2, ESCROW_3]),
+    );
+
+    const found = await findCurrentCycleEscrow('testnet', CIRCLE, { client });
+
+    expect(found?.escrowId).toBe(ESCROW_3);
+    expect(found?.source).toBe('escrow_history');
+    // The orphan is never even read.
+    expect(readOrderOf(client)).toEqual([ESCROW_3]);
+    expect(failover).not.toHaveBeenCalled();
+  });
+
+  it('with a cycle filter, still the newest of that cycle — never the older unfinalized one', async () => {
+    const client = makeClient(
+      {
+        [ESCROW_1]: escrowObject({ id: ESCROW_1, cycleNo: 1, finalized: true, claimed: true }),
+        [ESCROW_2]: escrowObject({ id: ESCROW_2, cycleNo: 2 }),
+        [ESCROW_3]: escrowObject({ id: ESCROW_3, cycleNo: 2, finalized: true, claimed: true }),
+      },
+      withHistory([ESCROW_1, ESCROW_2, ESCROW_3]),
+    );
+
+    expect((await findCurrentCycleEscrow('testnet', CIRCLE, { client, cycleNo: 2 }))?.escrowId).toBe(
+      ESCROW_3,
+    );
+    expect((await findCurrentCycleEscrow('testnet', CIRCLE, { client, cycleNo: 1 }))?.escrowId).toBe(
+      ESCROW_1,
+    );
+  });
+});
+
+/**
+ * `refunded` is terminal on chain (contribute, finalize and redeem all
+ * abort once it is set), so the panel must see it: a refunded escrow reads
+ * as unfinalized + unclaimed and would otherwise render as an in-progress
+ * round whose "pay your share" aborts.
+ */
+describe('readCycleEscrowState', () => {
+  it('surfaces the terminal refunded flag', async () => {
+    const client = makeClient({
+      [ESCROW_2]: escrowObject({ id: ESCROW_2, refunded: true }),
+      [ESCROW_3]: escrowObject({ id: ESCROW_3 }),
+    });
+
+    expect((await readCycleEscrowState(ESCROW_2, 'testnet', client))?.refunded).toBe(true);
+    expect((await readCycleEscrowState(ESCROW_3, 'testnet', client))?.refunded).toBe(false);
   });
 });
 
