@@ -4,6 +4,7 @@ import { ArrowRight, Coins, Hourglass } from 'lucide-react';
 import { useTranslation } from '@/hooks/useTranslation';
 import {
   findCurrentCycleEscrow,
+  readCircleIsActive,
   readCycleEscrowState,
   listContributors,
 } from '@/lib/cycle-escrow-discovery';
@@ -82,6 +83,15 @@ export function NjangiRoundAlerts({ circles, userAddress, network }: NjangiRound
       let failed = 0;
       for (const circle of circles) {
         try {
+          // A circle that is not active cannot have a live round, so nothing
+          // is due there — skip the escrow discovery entirely. Its event tier
+          // is served by one rate-limited RPC, and an old never-activated
+          // circle was tripping it on every load, which surfaced as "we
+          // couldn't check 1 of your circles". Only an explicit `false`
+          // skips; an unreadable flag (null) falls through so a failed read
+          // is still reported as unknown rather than as "nothing due".
+          const active = await readCircleIsActive(circle.id, network, client);
+          if (active === false) continue;
           const escrow = await findCurrentCycleEscrow(network, circle.id);
           if (!escrow) continue;
           const state = await readCycleEscrowState(escrow.escrowId, network, client);
