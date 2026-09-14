@@ -158,15 +158,19 @@ Frontend → zkLogin API (/api/zkLogin) → Move Contract → Event Parsing → 
     the `navigate` tool re-creates the tab and wipes it — move between pages
     with `location.assign(...)` from `javascript_tool` instead. Google's
     account chooser only takes coordinate clicks at `preset: desktop`.
-  - Open a round ONCE and wait: `open_cycle_*` has no already-open guard until
-    PR #20 ships, and a second click makes an orphan escrow (this circle's
-    #4). When polling, read the LAST entry of the circle's `escrow_history`
-    dynamic field, never an escrow id captured earlier.
+  - Open a round ONCE and wait. Since v8 the contract refuses a second open
+    of the same round (abort 234 `E_ROUND_ALREADY_OPEN`, verified live) and
+    the panel holds an in-flight lock, but the orphan escrow #4 from the
+    pre-guard days is still in this circle's history. When polling, read the
+    LAST entry of the circle's `escrow_history` dynamic field, never an
+    escrow id captured earlier.
   - Admin round controls live on `/circle/<id>/manage` (the contribute page
     never passes `showAdminOpenButton`). The open button is gated on deposits
-    HELD (`src/lib/deposit-status.ts`), because `resume_cycle` on v6 clears
-    `deposit_paid` while balances stay in custody and the contract refuses a
-    re-deposit (abort 21); contributions and claims never check the flag.
+    HELD (`src/lib/deposit-status.ts`): before v7, `resume_cycle` cleared
+    `deposit_paid` while balances stayed in custody and the contract refused a
+    re-deposit (abort 21). v7 keeps the flags across laps and
+    `reconcile_deposit_paid` repairs circles that resumed under v6;
+    contributions and claims never check the flag.
   - `current_cycle` counts laps, not rounds; `current_position` is the
     recipient pointer; `paused_after_cycle` flips when the last member of a
     lap collects and the pointer stays on them. Admin flow at end of lap:
@@ -177,6 +181,20 @@ Frontend → zkLogin API (/api/zkLogin) → Move Contract → Event Parsing → 
     207 not recipient, 221 already advanced, 222 not finalized, 223 claim
     not expired). Read chain state from publicnode (object reads only —
     `queryEvents` 429s/fails there and blockvision rate-limits the app).
+  - The dashboard's round scanner (`NjangiRoundAlerts`) reads a circle's
+    `is_active` first and skips discovery for inactive circles; only an
+    explicit `false` skips — an unreadable flag still ends up reported as
+    "we couldn't check N of your circles", never as "nothing due".
+- **Shared URLs are judged by crawlers, not browsers.** A link card
+  (WhatsApp, iMessage, Facebook) is built from the SERVER-rendered `<meta>`
+  tags; anything a page sets after hydration is invisible to it. Any URL
+  people share (`/circle/<id>/join` above all) must emit its `<Seo>` from
+  `getServerSideProps` on EVERY render path, including loading and error
+  branches (`src/lib/invite-preview.ts` is the pattern). Verify with
+  `curl -s -A "facebookexternalhit/1.1" <url> | grep og:title` — and only
+  on production: Vercel preview deployments are SSO-gated (302 to
+  `vercel.com/sso-api`). Messaging apps cache cards per link, so a link
+  pasted before a fix keeps its old card until shared fresh.
 
 ### Environment Configuration
 Key environment variables:
@@ -234,6 +252,22 @@ Project-specific slash commands available in `.claude/skills/`:
 - Check signed-URL secret keys are set server-side (`MOONPAY_SECRET_KEY`,
   `TRANSAK_API_SECRET`)
 - Inspect webhook payload signatures via `pages/api/onramp/<provider>/webhook.ts`
+
+**"Get test SUI" says "already received" / faucet keeps failing**:
+- The public testnet faucet throttles by SOURCE IP with a short
+  `retry-after` (3–60s observed), and Vercel's egress IP is shared, so a
+  server-side drip often meets a 429 on the first try. Since 2026-09-14
+  `/api/faucet/drip` peeks both rate limits, retries the upstream inside a
+  25s budget honoring `retry-after`, and spends the 12h per-address slot
+  ONLY after a 200; a persistent throttle returns 429 with `retryAfterMs`
+  and the UI says how long to wait. Before that, one throttled attempt
+  burned the slot and every retry said "already received" with no SUI
+  delivered.
+- Rule for any rate limit that guards a fallible upstream call:
+  `peekRateLimit` → do the work → `consumeRateLimit` on success. Never
+  consume-then-do. Both helpers live in `src/lib/rate-limit.ts`.
+- A dedicated faucet key or egress would remove the residual flakiness;
+  until then "faucet is busy, try again in ~Ns" is the honest outcome.
 
 **RPC Connection Issues**:
 - Use `sui-rpc-failover` service for reliability
