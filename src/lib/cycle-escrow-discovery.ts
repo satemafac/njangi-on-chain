@@ -701,6 +701,43 @@ export async function listContributors(
 }
 
 /**
+ * Whether the circle is active on chain, as a tri-state:
+ *   true  — `is_active` is set;
+ *   false — the circle has never been activated (or was deactivated), so no
+ *           round can be live and nothing is due from anyone;
+ *   null  — the object could not be read or is not a Circle. NOT "inactive":
+ *           a caller must keep looking rather than conclude nothing is due.
+ *
+ * One `getObject` on any RPC. Used by the dashboard's round scanner to skip
+ * the escrow discovery (whose event tier only blockvision serves, and
+ * rate-limits) for dormant circles — a member's old, never-activated circle
+ * was making the whole "this round's pot" card report an unreadable circle
+ * on every dashboard load.
+ */
+export async function readCircleIsActive(
+  circleId: string,
+  network: NetworkType,
+  client?: SuiClient,
+): Promise<boolean | null> {
+  const rpcClient =
+    client ??
+    getPooledSuiClient({
+      network,
+      rpcUrl: getNetworkConfig(network).rpcUrl,
+    });
+  try {
+    const obj = await rpcClient.getObject({ id: circleId, options: { showContent: true } });
+    if (!obj.data?.content || obj.data.content.dataType !== 'moveObject') return null;
+    const fields = (obj.data.content as { fields: Record<string, unknown> }).fields;
+    if (typeof fields.is_active !== 'boolean') return null;
+    return fields.is_active;
+  } catch (err) {
+    console.warn('[cycle-escrow-discovery] could not read is_active for', circleId, err);
+    return null;
+  }
+}
+
+/**
  * Reads where a circle's rotation pointer stands. Needed to tell a settled
  * round that the circle has moved on (so the admin can open the next one)
  * from one whose rotation stalled (so the recovery advance is the right

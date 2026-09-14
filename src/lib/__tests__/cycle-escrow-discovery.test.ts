@@ -23,6 +23,7 @@ import {
   listContributors,
   readCircleEscrowHistory,
   readCircleRotationPointer,
+  readCircleIsActive,
   readCycleEscrowState,
   verifyCycleEscrowForCircle,
 } from '@/lib/cycle-escrow-discovery';
@@ -749,5 +750,45 @@ describe('listContributors — contributed table tier', () => {
 
     expect(await listContributors(ESCROW_3, 'testnet')).toEqual(PAID);
     expect(pooled).toHaveBeenCalledWith({ network: 'testnet', rpcUrl: expect.any(String) });
+  });
+});
+
+/**
+ * The dashboard round scanner skips escrow discovery for circles that are
+ * not active — nothing can be due there — but only on an explicit `false`.
+ * An unreadable flag must come back as null so the scanner keeps looking
+ * and, if that also fails, reports the circle as unknown rather than quiet.
+ */
+describe('readCircleIsActive', () => {
+  const clientWith = (data: unknown, reject = false) =>
+    ({
+      getObject: reject ? jest.fn().mockRejectedValue(new Error('429')) : jest.fn().mockResolvedValue(data),
+    }) as never;
+  const circle = (fields: Record<string, unknown>) => ({
+    data: { content: { dataType: 'moveObject', fields } },
+  });
+
+  it('returns true for an active circle', async () => {
+    await expect(readCircleIsActive(CIRCLE, 'testnet', clientWith(circle({ is_active: true })))).resolves.toBe(true);
+  });
+
+  it('returns false for a circle that was never activated', async () => {
+    await expect(readCircleIsActive(CIRCLE, 'testnet', clientWith(circle({ is_active: false })))).resolves.toBe(false);
+  });
+
+  it('returns null, not false, when the object is not a circle', async () => {
+    const notMove = { data: { content: { dataType: 'package' } } };
+    await expect(readCircleIsActive(CIRCLE, 'testnet', clientWith(notMove))).resolves.toBeNull();
+  });
+
+  it('returns null, not false, when the flag is missing from the object', async () => {
+    await expect(readCircleIsActive(CIRCLE, 'testnet', clientWith(circle({ name: 'x' })))).resolves.toBeNull();
+  });
+
+  it('returns null, not false, when the read throws (rate limit, outage)', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await expect(readCircleIsActive(CIRCLE, 'testnet', clientWith(null, true))).resolves.toBeNull();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
