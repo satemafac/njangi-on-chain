@@ -7,6 +7,7 @@ import * as Select from '@radix-ui/react-select';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
+import { copyToClipboard, manualCopyMessage } from '@/lib/copy-to-clipboard';
 import { ZkLoginClient, ZkLoginError } from '../services/zkLoginClient';
 import {
   autoReleaseDelayMsToDays,
@@ -2905,13 +2906,13 @@ The Njangi On-Chain Team`;
                           type="button"
                           onClick={() => {
                             if (inviteLink) {
-                              navigator.clipboard.writeText(inviteLink)
-                                .then(() => {
-                                  toast.success('Invite link copied to clipboard!');
-                                })
-                                .catch(() => {
-                                  toast.error('Failed to copy invite link');
-                                });
+                              void copyToClipboard(inviteLink).then((outcome) => {
+                                if (outcome === 'failed') {
+                                  toast.error(manualCopyMessage('invite link', inviteLink), { duration: 12000 });
+                                  return;
+                                }
+                                toast.success('Invite link copied to clipboard!');
+                              });
                             }
                           }}
                           className="w-full sm:w-auto px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"

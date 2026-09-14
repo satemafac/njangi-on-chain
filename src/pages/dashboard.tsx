@@ -9,6 +9,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import * as Dialog from '@radix-ui/react-dialog';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
+import { copyToClipboard as copyTextToClipboard, manualCopyMessage } from '@/lib/copy-to-clipboard';
 import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink, ArrowRightLeft, ChevronDown, ChevronUp, ScrollText } from 'lucide-react';
 import RampPicker from '@/components/RampPicker';
 import ReceiveFundsModal from '@/components/ReceiveFundsModal';
@@ -5155,7 +5156,10 @@ export default function Dashboard() {
     if (!text) return;
     
     try {
-      await navigator.clipboard.writeText(text);
+      if ((await copyTextToClipboard(text)) === 'failed') {
+        toast.error(manualCopyMessage('text', text), { duration: 12000 });
+        return;
+      }
       
       if (type === 'address') {
         setShowToast(true);
@@ -5172,14 +5176,16 @@ export default function Dashboard() {
   };
 
   const copyShareLink = async (circleId: string) => {
-    try {
-      const shareLink = `${window.location.origin}/circle/${circleId}/join`;
-      await navigator.clipboard.writeText(shareLink);
-      toast.success('Invite link copied to clipboard!');
-    } catch (err) {
-      console.error('Failed to copy share link:', err);
-      toast.error('Failed to copy invite link');
+    const shareLink = `${window.location.origin}/circle/${circleId}/join`;
+    // No await before the copy: the click's user-activation must still be live.
+    const outcome = await copyTextToClipboard(shareLink);
+    if (outcome === 'failed') {
+      // Both clipboard paths refused (unfocused document, in-app browser,
+      // permission policy). Hand the user the link instead of a dead end.
+      toast.error(manualCopyMessage('invite link', shareLink), { duration: 12000 });
+      return;
     }
+    toast.success('Invite link copied to clipboard!');
   };
 
   // Format cycle lengths and days for display

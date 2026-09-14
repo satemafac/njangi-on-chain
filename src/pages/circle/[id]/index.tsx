@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '../../../contexts/AuthContext';
 import { toast } from 'react-hot-toast';
+import { copyToClipboard as copyTextToClipboard, manualCopyMessage } from '@/lib/copy-to-clipboard';
 import {
   ArrowLeft,
   AlertTriangle,
@@ -978,13 +979,19 @@ export default function CircleDetails() {
   const copyToClipboard = async (text: string, type: 'id' | 'link') => {
     try {
       if (type === 'id') {
-        await navigator.clipboard.writeText(text);
+        if ((await copyTextToClipboard(text)) === 'failed') {
+          toast.error(manualCopyMessage('text', text), { duration: 12000 });
+          return;
+        }
         setCopiedId(true);
         toast.success('Circle ID copied to clipboard!');
         setTimeout(() => setCopiedId(false), 2000);
       } else if (type === 'link') {
         const shareLink = `${window.location.origin}/circle/${text}/join`;
-        await navigator.clipboard.writeText(shareLink);
+        if ((await copyTextToClipboard(shareLink)) === 'failed') {
+          toast.error(manualCopyMessage('invite link', shareLink), { duration: 12000 });
+          return;
+        }
         toast.success('Invite link copied to clipboard!');
       }
     } catch (err: unknown) {
