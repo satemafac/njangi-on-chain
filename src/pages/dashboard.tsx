@@ -2183,6 +2183,15 @@ export default function Dashboard() {
     }
   };
 
+  // Human wait for a faucet 429: "try again in ~3h 10m" / "~40s".
+  const formatFaucetWait = (ms: number): string => {
+    const totalSeconds = Math.ceil(ms / 1000);
+    if (totalSeconds < 90) return `try again in ~${totalSeconds}s`;
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.ceil((totalSeconds % 3600) / 60);
+    return hours > 0 ? `try again in ~${hours}h ${minutes}m` : `try again in ~${minutes}m`;
+  };
+
   // In-app testnet gas drip. zkLogin users pay their own gas, so a 0-balance
   // new account stalls on every action; this drips test SUI to the session's
   // own address (server-verified, rate-limited; testnet-only — 404s on mainnet)
@@ -2201,7 +2210,15 @@ export default function Dashboard() {
         // Faucet settlement isn't instant; refresh shortly after.
         setTimeout(() => { void fetchBalance(false); }, 4000);
       } else {
-        toast.error(data.error || 'Faucet request failed. Try faucet.sui.io directly.', { id: pending });
+        // 429s carry a wait: `resetMs` for our own window, `retryAfterMs` for
+        // the public faucet's throttle. Say when, not just "later".
+        const waitMs = Number(data.resetMs ?? data.retryAfterMs);
+        const waitHint =
+          Number.isFinite(waitMs) && waitMs > 0 ? ` (${formatFaucetWait(waitMs)})` : '';
+        toast.error(
+          `${data.error || 'Faucet request failed. Try faucet.sui.io directly.'}${waitHint}`,
+          { id: pending },
+        );
       }
     } catch {
       toast.error('Could not reach the faucet. Try faucet.sui.io directly.', { id: pending });
