@@ -3,6 +3,7 @@ import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 import { SuiClient, SuiEvent } from '@mysten/sui/client';
 import { toast } from 'react-hot-toast';
+import { copyToClipboard as copyTextToClipboard, manualCopyMessage } from '@/lib/copy-to-clipboard';
 import { ArrowLeft, Copy, Link, Check, X, Pause, ListOrdered, CheckCircle, AlertTriangle, Edit3, Users, Crown, RefreshCw, Info } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -2742,13 +2743,19 @@ export default function ManageCircle() {
   const copyToClipboard = async (text: string, type: 'id' | 'link') => {
     try {
       if (type === 'id') {
-        await navigator.clipboard.writeText(text);
+        if ((await copyTextToClipboard(text)) === 'failed') {
+          toast.error(manualCopyMessage('text', text), { duration: 12000 });
+          return;
+        }
         setCopiedId(true);
         toast.success('Circle ID copied to clipboard!');
         setTimeout(() => setCopiedId(false), 2000);
       } else if (type === 'link') {
         const shareLink = `${window.location.origin}/circle/${text}/join`;
-        await navigator.clipboard.writeText(shareLink);
+        if ((await copyTextToClipboard(shareLink)) === 'failed') {
+          toast.error(manualCopyMessage('invite link', shareLink), { duration: 12000 });
+          return;
+        }
         toast.success('Invite link copied to clipboard!');
       }
     } catch (err: unknown) {
@@ -2759,7 +2766,10 @@ export default function ManageCircle() {
 
   const copyPlainText = useCallback(async (text: string, successMessage: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      if ((await copyTextToClipboard(text)) === 'failed') {
+        toast.error(manualCopyMessage('text', text), { duration: 12000 });
+        return;
+      }
       toast.success(successMessage);
     } catch (err: unknown) {
       console.error('Failed to copy:', err);
@@ -7148,8 +7158,14 @@ export default function ManageCircle() {
                     />
                     <button
                       onClick={() => {
-                        navigator.clipboard.writeText(`${window.location.origin}/circle/${circle.id}/join`);
-                        toast.success('Invite link copied to clipboard');
+                        const shareLink = `${window.location.origin}/circle/${circle.id}/join`;
+                        void copyTextToClipboard(shareLink).then((outcome) => {
+                          if (outcome === 'failed') {
+                            toast.error(manualCopyMessage('invite link', shareLink), { duration: 12000 });
+                            return;
+                          }
+                          toast.success('Invite link copied to clipboard');
+                        });
                       }}
                       className={`${primaryActionClass} w-full px-4 py-2 sm:w-auto`}
                     >

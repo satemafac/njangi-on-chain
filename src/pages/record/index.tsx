@@ -6,6 +6,7 @@
 // the core mechanics are never behind a paywall.
 
 import { useCallback, useEffect, useState } from 'react';
+import { copyToClipboard, manualCopyMessage } from '@/lib/copy-to-clipboard';
 import Link from 'next/link';
 import { Loader2, Download, Link2, Printer, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -82,7 +83,10 @@ export default function RecordPage() {
       await loadLinks();
       const url = `${window.location.origin}/record/s/${data.link.token}`;
       try {
-        await navigator.clipboard.writeText(url);
+        if ((await copyToClipboard(url)) === 'failed') {
+          toast.error(manualCopyMessage('link', url), { duration: 12000 });
+          return;
+        }
         toast.success(t('record.share.createdCopied'));
       } catch {
         toast.success(t('record.share.created'));
