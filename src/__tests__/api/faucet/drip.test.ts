@@ -99,7 +99,8 @@ describe('POST /api/faucet/drip', () => {
     const res = mockRes();
     await handler(req, res);
     expect(res.statusCode).toBe(429);
-    expect(res.body.error).toMatch(/about 600s/);
+    expect(res.body.retryAfterMs).toBe(600_000);
+    expect(res.body.error).toMatch(/faucet is busy/i);
     expect((global.fetch as jest.Mock).mock.calls.length).toBe(1);
     expect(consume).not.toHaveBeenCalled();
   });

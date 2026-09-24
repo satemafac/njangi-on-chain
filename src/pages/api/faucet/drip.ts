@@ -166,13 +166,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (!outcome.ok) {
     if (outcome.status === 429) {
-      const seconds = outcome.retryAfterMs === null ? null : Math.ceil(outcome.retryAfterMs / 1000);
       return res.status(429).json({
         success: false,
         error:
-          seconds === null
+          outcome.retryAfterMs === null
             ? 'The public testnet faucet is rate-limiting right now. Try again shortly or use faucet.sui.io.'
-            : `The public testnet faucet is busy. Try again in about ${seconds}s, or use faucet.sui.io.`,
+            : 'The public testnet faucet is busy right now.',
         retryAfterMs: outcome.retryAfterMs,
         detail: outcome.detail,
       });
