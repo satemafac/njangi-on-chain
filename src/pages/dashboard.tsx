@@ -10,7 +10,6 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { priceService } from '../services/price-service';
 import { toast } from 'react-hot-toast';
 import { copyToClipboard as copyTextToClipboard, manualCopyMessage } from '@/lib/copy-to-clipboard';
-import { requestTestSuiWithRetry, formatFaucetWait } from '@/lib/faucet-request';
 import { Eye, EyeOff, Settings, Trash2, CreditCard, RefreshCw, Users, X, Copy, Link, AlertCircle, Send, Shield, Clock, CheckCircle, ExternalLink, ArrowRightLeft, ChevronDown, ChevronUp, ScrollText } from 'lucide-react';
 import RampPicker from '@/components/RampPicker';
 import ReceiveFundsModal from '@/components/ReceiveFundsModal';
@@ -2182,40 +2181,6 @@ export default function Dashboard() {
       toast.error('Failed to refresh balance');
     } finally {
       setIsRefreshingBalance(false);
-    }
-  };
-
-  // In-app testnet gas drip. zkLogin users pay their own gas, so a 0-balance
-  // new account stalls on every action; this drips test SUI to the session's
-  // own address (server-verified, rate-limited; testnet-only — 404s on mainnet)
-  // so onboarding can proceed without the captcha-gated external faucet.
-  // The public faucet throttles by IP for seconds to a minute; the loop in
-  // requestTestSuiWithRetry waits that out with a countdown instead of
-  // asking the user to.
-  const [isDrippingFaucet, setIsDrippingFaucet] = useState(false);
-  const requestTestSui = async () => {
-    if (isDrippingFaucet) return;
-    setIsDrippingFaucet(true);
-    const pending = toast.loading('Requesting test SUI…');
-    try {
-      const outcome = await requestTestSuiWithRetry({
-        onWaiting: (secondsLeft) =>
-          toast.loading(`The public faucet is busy — retrying in ${secondsLeft}s…`, { id: pending }),
-      });
-      if (outcome.ok) {
-        toast.success('Test SUI sent — refreshing your balance…', { id: pending });
-        if (userAddress) clearWalletBalanceCache(userAddress);
-        // Faucet settlement isn't instant; refresh shortly after.
-        setTimeout(() => { void fetchBalance(false); }, 4000);
-        return;
-      }
-      const hint = outcome.waitMs !== null && outcome.waitMs > 0 ? ` (${formatFaucetWait(outcome.waitMs)})` : '';
-      const prefix = outcome.retried ? 'Still busy after retrying. ' : '';
-      toast.error(`${prefix}${outcome.error}${hint} Or use faucet.sui.io.`, { id: pending, duration: 8000 });
-    } catch {
-      toast.error('Could not reach the faucet. Try faucet.sui.io directly.', { id: pending });
-    } finally {
-      setIsDrippingFaucet(false);
     }
   };
 
@@ -6513,18 +6478,15 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={requestTestSui}
-                disabled={isDrippingFaucet}
-                className="inline-flex items-center rounded-full border border-amber-400 bg-amber-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-600 disabled:opacity-60"
-              >
-                {isDrippingFaucet ? 'Sending…' : 'Get test SUI'}
-              </button>
+              {/* The public faucet gates every request on a browser-side
+                  proof-of-work challenge (2026-09), so the one-click in-app
+                  drip that used to sit here could never deliver; the web
+                  faucet, with the address prefilled, is the working path. */}
               <a
                 href={`https://faucet.sui.io/?address=${userAddress || ''}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center rounded-full border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-900 transition hover:bg-amber-100"
+                className="inline-flex items-center rounded-full border border-amber-400 bg-amber-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-600"
               >
                 <ExternalLink className="mr-2 h-4 w-4" />
                 Open faucet

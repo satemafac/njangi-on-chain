@@ -253,21 +253,22 @@ Project-specific slash commands available in `.claude/skills/`:
   `TRANSAK_API_SECRET`)
 - Inspect webhook payload signatures via `pages/api/onramp/<provider>/webhook.ts`
 
-**"Get test SUI" says "already received" / faucet keeps failing**:
-- The public testnet faucet throttles by SOURCE IP with a short
-  `retry-after` (3–60s observed), and Vercel's egress IP is shared, so a
-  server-side drip often meets a 429 on the first try. Since 2026-09-14
-  `/api/faucet/drip` peeks both rate limits, retries the upstream inside a
-  25s budget honoring `retry-after`, and spends the 12h per-address slot
-  ONLY after a 200; a persistent throttle returns 429 with `retryAfterMs`
-  and the UI says how long to wait. Before that, one throttled attempt
-  burned the slot and every retry said "already received" with no SUI
-  delivered.
-- Rule for any rate limit that guards a fallible upstream call:
-  `peekRateLimit` → do the work → `consumeRateLimit` on success. Never
-  consume-then-do. Both helpers live in `src/lib/rate-limit.ts`.
-- A dedicated faucet key or egress would remove the residual flakiness;
-  until then "faucet is busy, try again in ~Ns" is the honest outcome.
+**Testnet SUI for new accounts (no in-app faucet)**:
+- The dashboard's testnet banner links to `https://faucet.sui.io/?address=<addr>`.
+  That is the only path: since 2026-09 Sui's public faucet gates every
+  request on a browser-side proof-of-work challenge (a WASM miner in a web
+  worker) plus Cloudflare's bot check, and the bare `/v2/gas` API answers
+  429 with a moving `retry-after` from ANY IP — waiting it out never yields a
+  token. The community faucets are captcha forms or paywalled.
+- The in-app `POST /api/faucet/drip` + "Get test SUI" button (2026-06 →
+  2026-09-23) were removed for that reason; do not reintroduce a drip that
+  calls the public faucet, and do not automate its proof-of-work or Turnstile
+  (that is anti-bot machinery). If one-click gas is wanted again, the options
+  are a project-funded testnet drip from a server-held key, or Enoki gas
+  sponsorship (built, behind `GAS_SPONSORSHIP_ENABLED`).
+- Rule kept from that work, for any rate limit guarding a fallible upstream:
+  `peekRateLimit` → do the work → `consumeRateLimit` on success
+  (`src/lib/rate-limit.ts`). Never consume-then-do.
 
 **RPC Connection Issues**:
 - Use `sui-rpc-failover` service for reliability
