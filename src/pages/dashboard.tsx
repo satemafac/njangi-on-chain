@@ -6528,7 +6528,12 @@ export default function Dashboard() {
                         {t('dashboard.eyebrow')}
                       </p>
                       <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950 sm:mt-4 sm:text-4xl">
-                        {t('dashboard.welcome', { name: account.name ? `, ${account.name}` : '' })}
+                        {t(
+                          // "Welcome back" to someone who has never been here
+                          // reads as a mistake; greet a first-timer as one.
+                          !loading && circles.length === 0 ? 'dashboard.welcomeFirst' : 'dashboard.welcome',
+                          { name: account.name ? `, ${account.name}` : '' },
+                        )}
                       </h1>
                       <p className="mt-3 max-w-xl text-sm leading-7 text-slate-600 sm:mt-4 sm:text-base">
                         {t('dashboard.blurb')}
@@ -7684,15 +7689,9 @@ export default function Dashboard() {
                     <p className="mt-2 text-sm text-slate-500">
                       {t('dashboard.emptyBody')}
                     </p>
+                    {/* Create first: on a phone the buttons stack, and the
+                        primary action should be the one the eye lands on. */}
                     <div className="mt-6 flex flex-wrap justify-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setIsJoinDialogOpen(true)}
-                        className={secondaryActionClass}
-                      >
-                        <Users className="mr-2 h-4 w-4" />
-                        {t('dashboard.emptyJoin')}
-                      </button>
                       <button
                         type="button"
                         onClick={() => {
@@ -7715,6 +7714,14 @@ export default function Dashboard() {
                           />
                         </svg>
                         {t('dashboard.emptyCreate')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsJoinDialogOpen(true)}
+                        className={secondaryActionClass}
+                      >
+                        <Users className="mr-2 h-4 w-4" />
+                        {t('dashboard.emptyJoin')}
                       </button>
                     </div>
                   </div>

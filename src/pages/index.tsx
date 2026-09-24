@@ -28,6 +28,10 @@ import { LocaleSwitcher } from '../components/ui/LocaleSwitcher';
 import { useTranslation } from '../hooks/useTranslation';
 import { getNetworkConfig, setCurrentNetwork } from '../services/network-config';
 import { SUPPORT_MAILTO } from '../lib/constants';
+import {
+  clearPostLoginDestination,
+  rememberPostLoginDestination,
+} from '../lib/post-login-redirect';
 import { webApplication, website } from '../lib/structured-data';
 import { Seo } from '../components/Seo';
 import { Reveal, RevealItem } from '../components/landing/Reveal';
@@ -803,7 +807,12 @@ export default function Home() {
                   ) : (
                     <button
                       type="button"
-                      onClick={() => setIsAuthDialogOpen(true)}
+                      onClick={() => {
+                        // A plain login lands on the dashboard: drop any
+                        // "start a circle" intent left by an earlier click.
+                        clearPostLoginDestination();
+                        setIsAuthDialogOpen(true);
+                      }}
                       className={goldButtonClass}
                     >
                       {t('nav.login')}
@@ -896,7 +905,13 @@ export default function Home() {
                         ) : (
                           <button
                             type="button"
-                            onClick={() => setIsAuthDialogOpen(true)}
+                            onClick={() => {
+                              // "Start a circle" means start a circle: the
+                              // OAuth callback honours this and skips the
+                              // dashboard detour.
+                              rememberPostLoginDestination('/create-circle');
+                              setIsAuthDialogOpen(true);
+                            }}
                             className={goldButtonClass}
                           >
                             {t('landing.heroPrimaryCta')}

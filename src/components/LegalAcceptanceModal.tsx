@@ -33,6 +33,7 @@ import {
   type LegalLocale,
 } from '../lib/legal-acceptance';
 import { getLocale, setLocale } from '../lib/i18n';
+import { trackFunnel } from '../lib/funnel-events';
 
 // ---------------------------------------------------------------------------
 // Localised UI strings (the legal documents themselves ship EN+FR only)
@@ -534,7 +535,17 @@ export function LegalAcceptanceGate({ active }: LegalAcceptanceGateProps) {
     return null;
   }
 
-  return <LegalAcceptanceModal missing={missing} onAccepted={() => setMissing([])} />;
+  return (
+    <LegalAcceptanceModal
+      missing={missing}
+      onAccepted={() => {
+        // Funnel measurement only; the modal itself is unchanged (its UX is
+        // fixed by docs/legal-drafts/ACCEPTANCE-GATE-SPEC.md).
+        trackFunnel('legal_accepted');
+        setMissing([]);
+      }}
+    />
+  );
 }
 
 export default LegalAcceptanceModal;

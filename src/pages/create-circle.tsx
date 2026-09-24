@@ -51,6 +51,20 @@ import {
 } from '../services/goal-pool-service';
 import { isValidSuiAddress } from '@mysten/sui/utils';
 import type { NetworkType } from '../services/whatsapp-registry-service';
+import {
+  MAX_MEMBERS,
+  MIN_MEMBERS,
+  QUICK_START_FREQUENCIES,
+  QUICK_START_MEMBERS,
+  buildWhatsAppShareUrl,
+  clampMembers,
+  defaultCycleDay,
+  deriveSecurityDeposit,
+  type QuickStartFrequency,
+} from '../lib/circle-quick-start';
+import { rememberPostLoginDestination } from '../lib/post-login-redirect';
+import { trackFunnel } from '../lib/funnel-events';
+import { refreshSuiBalance } from '../lib/wallet';
 
 // Curated emoji set for giving a Smart Goal pot a bit of personality. The
 // chosen emoji is prepended to the on-chain circle name so it travels with the
@@ -180,9 +194,8 @@ interface CircleFormData {
   goalBeneficiary?: string; // Frontend-only: smart-goal pool beneficiary (blank = creator)
 }
 
-// Contract-specific constants
-const MIN_MEMBERS = 3;
-const MAX_MEMBERS = 20;
+// Contract member limits come from src/lib/circle-quick-start.ts (MIN_MEMBERS /
+// MAX_MEMBERS) so the one-screen defaults and this validation cannot drift.
 
 // Type conversion maps for contract interaction
 const CYCLE_LENGTH_MAP = {
@@ -420,9 +433,22 @@ export default function CreateCircle() {
   const { isAuthenticated, isLoading: authLoading, account, userAddress } = useAuth();
   const { isReady: signerReady, signAndExecute: signGoalPool } = useZkLoginSigner();
   const { t } = useTranslation();
-  const [currentStep, setCurrentStep] = useState(0); // Start at step 0 for circle type selection
-  const [useCustomContribution, setUseCustomContribution] = useState(false);
+  // Two screens: 0 = set up (one form), 1 = invite (the circle exists).
+  const [currentStep, setCurrentStep] = useState(0);
   const [useCustomDeposit, setUseCustomDeposit] = useState(false);
+  // "More settings" reveals the controls the quick path derives for you.
+  const [showMoreSettings, setShowMoreSettings] = useState(false);
+  // Once the organizer edits the deposit by hand, stop deriving it from the
+  // contribution — their number wins.
+  const [depositOverridden, setDepositOverridden] = useState(false);
+  // Submit is disabled while the creation transaction is in flight; before
+  // this there was no pending state and a double-click could mean two circles.
+  const [isCreating, setIsCreating] = useState(false);
+  // Testnet only: a fresh account has nothing to pay its first transaction
+  // with. Surfaced above the submit button rather than as a raw RPC error.
+  const [needsTestnetFunds, setNeedsTestnetFunds] = useState(false);
+  // Invite screen: the link resolves on entry; this flags a failed attempt.
+  const [linkResolveFailed, setLinkResolveFailed] = useState(false);
   const [formData, setFormData] = useState<CircleFormData>({
     name: '',
     selectedCurrency: 'USD',
@@ -433,7 +459,7 @@ export default function CreateCircle() {
     cycleDay: 1, // Default to 1st of month/Monday
     cycleType: 'rotational', // Default to rotational
     rotationStyle: 'fixed', // Default to fixed rotation
-    numberOfMembers: 3,
+    numberOfMembers: QUICK_START_MEMBERS,
     securityDeposit: 0,
     securityDepositUSD: 0,
     securityDepositLocal: 0,
@@ -603,6 +629,16 @@ export default function CreateCircle() {
     return () => clearInterval(interval);
   }, [formData.selectedCurrency]);
 
+  // The amount can now be typed BEFORE the currency is picked (they sit on
+  // the same screen), so a currency switch re-converts what is already there.
+  useEffect(() => {
+    if (formData.contributionAmountLocal > 0) {
+      void handleLocalInputChange('contributionAmountLocal', formData.contributionAmountLocal);
+    }
+    // Re-run on currency change only; the converter reads the current amount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.selectedCurrency]);
+
   const handleInputChange = (name: keyof Omit<CircleFormData, 'penaltyRules'>, value: string | number) => {
     setFormData(prev => ({
       ...prev,
@@ -628,11 +664,24 @@ export default function CreateCircle() {
     }
     
     if (field === 'contributionAmountLocal') {
+      // The security deposit follows the contribution at exactly half (the
+      // contract minimum, njangi_core::min_security_deposit) until the
+      // organizer overrides it under "More settings". Local and USD halves
+      // round UP to the cent; the SUI half is exact so the client-side
+      // `deposit >= contribution / 2` check can never lose to rounding.
+      const derived = depositOverridden
+        ? {}
+        : {
+            securityDepositLocal: deriveSecurityDeposit(snappedValue),
+            securityDepositUSD: deriveSecurityDeposit(usdValue),
+            securityDeposit: suiValue / 2,
+          };
       setFormData(prev => ({
         ...prev,
         contributionAmountLocal: snappedValue,
         contributionAmountUSD: usdValue, // Proper USD conversion
-        contributionAmount: suiValue
+        contributionAmount: suiValue,
+        ...derived,
       }));
     } else {
       setFormData(prev => ({
@@ -642,6 +691,64 @@ export default function CreateCircle() {
         securityDeposit: suiValue
       }));
     }
+  };
+
+  // Cadence change resets the day-of-cycle to the matching kind (weekday vs
+  // day-of-month) and keeps any liveness delay legal for the new cadence.
+  const handleCycleLengthChange = (value: QuickStartFrequency) => {
+    setFormData((prev) => ({
+      ...prev,
+      cycleLength: value,
+      cycleDay: defaultCycleDay(value),
+      autoReleaseDelayMs:
+        prev.autoReleaseEnabled && !isValidAutoReleaseDelayMs(value, prev.autoReleaseDelayMs)
+          ? getDefaultAutoReleaseDelayMs(value)
+          : prev.autoReleaseDelayMs,
+    }));
+  };
+
+  // The two other kinds of circle are doors off the setup screen, not a step
+  // in front of it.
+  const toggleMigrating = () => {
+    setFormData((prev) => ({
+      ...prev,
+      cycleType: 'rotational',
+      smartGoal: undefined,
+      isMigrating: !prev.isMigrating,
+    }));
+  };
+
+  const chooseRotational = () => {
+    // Drop any smart-goal config so a rotational circle never ships a
+    // goal_type on chain.
+    setFormData((prev) => ({ ...prev, cycleType: 'rotational', smartGoal: undefined }));
+  };
+
+  const chooseSmartGoal = () => {
+    if (checkingSmartGoalAccess) return;
+    setCheckingSmartGoalAccess(true);
+    hasFeaturePreflight('smartGoals')
+      .then((entitled) => {
+        if (!entitled) {
+          setShowSmartGoalUpsell(true);
+          return;
+        }
+        setFormData((prev) => ({
+          ...prev,
+          cycleType: 'smart-goal',
+          isMigrating: false,
+          // Initialize the goal config to match the visual default of the
+          // Smart Goal Settings select ('amount'). Without this, accepting
+          // the default and submitting would send goal_type: none on chain
+          // and permanently lock out milestones (create_circle_milestones
+          // aborts with E_GOAL_NOT_CONFIGURED).
+          smartGoal: prev.smartGoal ?? {
+            goalType: 'amount',
+            verificationRequired: false,
+          },
+        }));
+      })
+      .finally(() => setCheckingSmartGoalAccess(false));
   };
 
   const handlePenaltyChange = (name: string, checked: boolean) => {
@@ -814,11 +921,12 @@ export default function CreateCircle() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isCreating) return;
 
     // Clear previous errors
     setValidationErrors([]);
     setError(null);
-    
+
     // Validate form data
     const errors = validateFormData(formData);
     if (errors.length > 0) {
@@ -829,7 +937,12 @@ export default function CreateCircle() {
     // Smart-goal circles are now non-rotating GoalPools (no deposit, no
     // rotation). They take a completely different creation path.
     if (formData.cycleType === 'smart-goal') {
-      await handleCreateGoalPool();
+      setIsCreating(true);
+      try {
+        await handleCreateGoalPool();
+      } finally {
+        setIsCreating(false);
+      }
       return;
     }
 
@@ -843,7 +956,8 @@ export default function CreateCircle() {
       setError('Authentication is required before creating a circle.');
       return;
     }
-    
+
+    setIsCreating(true);
     try {
       // Prepare data for contract with current SUI price
       const contractData = prepareCircleCreationData(formData);
@@ -910,8 +1024,9 @@ export default function CreateCircle() {
         setCreatedCircleDigest(result.digest);
       }
 
-      // Move to invite step on success
-      setCurrentStep(3); // Updated to step 3 for invite members
+      trackFunnel('circle_created');
+      // Move to the invite screen on success
+      setCurrentStep(1);
     } catch (err) {
       console.error('Error creating circle:', err);
       if (err instanceof ZkLoginError && err.requireRelogin) {
@@ -920,10 +1035,23 @@ export default function CreateCircle() {
           const cacheKey = `cache_${userAddress}_${currentNetwork}_circles`;
           localStorage.removeItem(cacheKey);
         }
+        // Keep what they typed and bring them straight back here after the
+        // fresh sign-in: the restore effect below reads this key, and the
+        // OAuth callback honours the destination. Until now the key was
+        // read but never written, so a session expiry mid-form lost
+        // everything and landed on the dashboard.
+        try {
+          sessionStorage.setItem('createCircleFormData', JSON.stringify(formData));
+        } catch {
+          // Storage unavailable: they start over, which is what happened before.
+        }
+        rememberPostLoginDestination('/create-circle');
         router.push('/dashboard');
         return;
       }
       setError(err instanceof Error ? err.message : 'Failed to create circle. Please try again.');
+    } finally {
+      setIsCreating(false);
     }
   };
 
@@ -1118,25 +1246,122 @@ The Njangi On-Chain Team`;
     });
   };
 
+  // --- Invite screen: resolve the link on entry, no click required ---------
+  const resolveInviteLink = async () => {
+    setLinkResolveFailed(false);
+    try {
+      const id = await fetchCircleId();
+      if (id) {
+        setCreatedCircleId(id);
+        setInviteLink(`${window.location.origin}/circle/${id}/join`);
+      } else {
+        setLinkResolveFailed(true);
+      }
+    } catch (resolveError) {
+      console.warn('Could not resolve the invite link yet:', resolveError);
+      setLinkResolveFailed(true);
+    }
+  };
+
+  useEffect(() => {
+    if (currentStep === 1 && !createdCircleId) {
+      void resolveInviteLink();
+    }
+    // The resolver closes over the freshly stored digest; re-running it on
+    // every render would spam the RPC, so key on the screen change only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentStep]);
+
+  const copyInviteLink = () => {
+    if (!inviteLink) return;
+    // Synchronous call from the click handler: the user activation the
+    // Clipboard API needs must still be current (src/lib/copy-to-clipboard.ts).
+    void copyToClipboard(inviteLink).then((outcome) => {
+      if (outcome === 'failed') {
+        toast.error(manualCopyMessage('invite link', inviteLink), { duration: 12000 });
+        return;
+      }
+      trackFunnel('invite_link_copied');
+      toast.success(t('create.copied'));
+    });
+  };
+
+  const clearDashboardCaches = () => {
+    if (typeof window === 'undefined' || !userAddress) return;
+    const currentNetwork = getCurrentNetwork();
+    localStorage.removeItem(`cache_${userAddress}_${currentNetwork}_circles`);
+    const eventsCachePattern = `cache_${userAddress}_${currentNetwork}_events`;
+    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(eventsCachePattern)) {
+        localStorage.removeItem(key);
+      }
+    }
+  };
+
+  const finalizeInvites = () => {
+    const pendingEmails = inviteMembers.filter(
+      (member) => member.type === 'email' && member.status === 'pending',
+    );
+    if (pendingEmails.length > 0 && createdCircleId) {
+      sendAllEmailInvites();
+    }
+    clearDashboardCaches();
+  };
+
+  const openCreatedCircle = () => {
+    if (!createdCircleId) return;
+    finalizeInvites();
+    router.push(`/circle/${createdCircleId}`);
+  };
+
+  const finishToDashboard = () => {
+    finalizeInvites();
+    router.push('/dashboard?refreshCircles=true');
+  };
+
+  // --- Testnet gas: say it before the button, not after the failure --------
+  useEffect(() => {
+    if (!userAddress || getCurrentNetwork() !== 'testnet') {
+      setNeedsTestnetFunds(false);
+      return;
+    }
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const { totalBalance } = await refreshSuiBalance(userAddress, {
+          network: 'testnet',
+          forceRefresh: true,
+        });
+        if (!cancelled) setNeedsTestnetFunds(BigInt(totalBalance) === BigInt(0));
+      } catch (balanceError) {
+        // A read failure is not a fact: leave the notice as it was, but say so.
+        console.warn('Could not read the account balance for the funds notice:', balanceError);
+      }
+    };
+    void check();
+    // They open the faucet in a new tab and come back — re-check on return.
+    const onReturn = () => {
+      if (document.visibilityState === 'visible') void check();
+    };
+    window.addEventListener('focus', onReturn);
+    document.addEventListener('visibilitychange', onReturn);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', onReturn);
+      document.removeEventListener('visibilitychange', onReturn);
+    };
+  }, [userAddress]);
+
   if (authLoading || !isAuthenticated) {
     return null;
   }
 
   const stepDefinitions = [
     {
-      label: t('create.step.type.label'),
-      title: t('create.step.type.title'),
-      description: t('create.step.type.description'),
-    },
-    {
-      label: t('create.step.currency.label'),
-      title: t('create.step.currency.title'),
-      description: t('create.step.currency.description'),
-    },
-    {
-      label: t('create.step.config.label'),
-      title: t('create.step.config.title'),
-      description: t('create.step.config.description'),
+      label: t('create.step.setup.label'),
+      title: t('create.step.setup.title'),
+      description: t('create.step.setup.description'),
     },
     {
       label: t('create.step.invites.label'),
@@ -1241,329 +1466,17 @@ The Njangi On-Chain Team`;
 
           <div className="p-5 sm:p-8">
           {currentStep === 0 ? (
-            <div className="space-y-6">
-              <div className="max-w-2xl">
-                <p className="text-sm leading-6 text-[#5f6674]">
-                  Pick the structure before you move into currency and scheduling.
-                  Smart-goal circles add shared milestones and are part of Premium.
-                </p>
-              </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
-                {/* Rotational Circle Card */}
-                <button
-                  onClick={() => {
-                    // Drop any smart-goal config from a previous selection so a
-                    // rotational circle never ships a goal_type on chain.
-                    setFormData(prev => ({ ...prev, cycleType: 'rotational', smartGoal: undefined }));
-                    setCurrentStep(1); // Go to currency selection step
-                  }}
-                  className="group rounded-[28px] border border-[#d7cec1] bg-[#fbfaf7] p-6 text-center transition-all duration-200 hover:-translate-y-0.5 hover:border-[#c9c0b2] hover:bg-white hover:shadow-[0_24px_70px_-58px_rgba(15,23,42,0.34)]"
-                >
-                  <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#d8e2f0] bg-white text-[#5f708a]">
-                    <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                  </div>
-                  <p className={stepLabelClass}>Available now</p>
-                  <h3 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-[#171923]">Rotational Circle</h3>
-                  <p className="mt-3 text-sm leading-6 text-[#5f6674]">Members contribute regularly and take turns receiving the full pot in a predetermined order.</p>
-                </button>
-
-                {/* Smart Goal Circle Card (Premium) */}
-                <button
-                  onClick={() => {
-                    if (checkingSmartGoalAccess) return;
-                    setCheckingSmartGoalAccess(true);
-                    hasFeaturePreflight('smartGoals')
-                      .then((entitled) => {
-                        if (!entitled) {
-                          setShowSmartGoalUpsell(true);
-                          return;
-                        }
-                        setFormData(prev => ({
-                          ...prev,
-                          cycleType: 'smart-goal',
-                          // Initialize the goal config to match the visual
-                          // default of the Smart Goal Settings select
-                          // ('amount'). Without this, accepting the default
-                          // and submitting would send goal_type: none on
-                          // chain and permanently lock out milestones
-                          // (create_circle_milestones aborts with
-                          // E_GOAL_NOT_CONFIGURED).
-                          smartGoal: prev.smartGoal ?? {
-                            goalType: 'amount',
-                            verificationRequired: false,
-                          },
-                        }));
-                        setCurrentStep(1); // Go to currency selection step
-                      })
-                      .finally(() => setCheckingSmartGoalAccess(false));
-                  }}
-                  disabled={checkingSmartGoalAccess}
-                  className="group relative rounded-[28px] border border-[#d7cec1] bg-[#fbfaf7] p-6 text-center transition-all duration-200 hover:-translate-y-0.5 hover:border-[#c9c0b2] hover:bg-white hover:shadow-[0_24px_70px_-58px_rgba(15,23,42,0.34)] disabled:opacity-60"
-                >
-                  {/* Premium badge */}
-                  <div className="absolute top-2 right-2">
-                    <span className="rounded-full border border-[#e2d3ae] bg-[#fdf6e7] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#a07b2f] shadow-sm">
-                      Premium
-                    </span>
-                  </div>
-
-                  <div className="relative mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#d8e2f0] bg-white text-[#5f708a]">
-                    <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </div>
-                  <p className={`${stepLabelClass} relative`}>Available now</p>
-                  <h3 className="relative mt-3 text-xl font-semibold tracking-[-0.03em] text-[#171923]">Smart Goal Circle</h3>
-                  <p className="relative mt-3 text-sm leading-6 text-[#5f6674]">Members contribute toward a shared savings goal and celebrate milestones together along the way.</p>
-                </button>
-              </div>
-
-              {/* An already-running group is not a third kind of circle — it
-                  is a rotational one that starts part-way through its order.
-                  Giving it its own door matters because the alternative is
-                  restarting the rotation, which costs somebody their turn. */}
-              <button
-                type="button"
-                onClick={() => {
-                  setFormData(prev => ({
-                    ...prev,
-                    cycleType: 'rotational',
-                    smartGoal: undefined,
-                    isMigrating: true,
-                  }));
-                  setCurrentStep(1);
-                }}
-                className="mt-6 flex w-full items-start gap-4 rounded-[24px] border border-[#d7cec1] bg-white p-5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-[#c9c0b2] hover:shadow-[0_24px_70px_-58px_rgba(15,23,42,0.34)]"
-              >
-                <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full border border-[#d8e2f0] bg-[#fbfaf7] text-[#5f708a]">
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                <div>
-                  <p className={stepLabelClass}>Already running</p>
-                  <h3 className="mt-2 text-lg font-semibold tracking-[-0.03em] text-[#171923]">
-                    Bring a circle that has already started
-                  </h3>
-                  <p className="mt-2 text-sm leading-6 text-[#5f6674]">
-                    Halfway through your rotation? Set it up the same way, then
-                    record who has already collected and whose turn is next. Your
-                    circle carries on from there — no waiting for the round to end,
-                    and nobody loses their place.
-                  </p>
-                </div>
-              </button>
-
-              {/* Cancel Button */}
-              <div className="flex justify-center mt-8">
-                <button
-                  onClick={() => {
-                    // Clear dashboard cache to ensure fresh data is loaded
-                    if (typeof window !== 'undefined' && userAddress) {
-                      const currentNetwork = getCurrentNetwork();
-                      const cacheKey = `cache_${userAddress}_${currentNetwork}_circles`;
-                      localStorage.removeItem(cacheKey);
-                    }
-                    router.push('/dashboard');
-                  }}
-                  className={secondaryActionClass}
-                >
-                  <svg 
-                    className="mr-2 h-4 w-4 text-slate-400 transition-colors duration-200 group-hover:text-slate-500" 
-                    fill="none" 
-                    viewBox="0 0 24 24" 
-                    stroke="currentColor"
-                  >
-                    <path 
-                      strokeLinecap="round" 
-                      strokeLinejoin="round" 
-                      strokeWidth={2} 
-                      d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0 9 9 0 01-18 0z"
-                    />
-                  </svg>
-                  Return to Dashboard
-                </button>
-              </div>
-            </div>
-          ) : currentStep === 1 ? (
-            // NEW: Currency Selection Step
-            <div className="space-y-6">
-              <div className="max-w-2xl">
-                <p className="text-sm leading-6 text-[#5f6674]">
-                  Choose the currency members will reason about when they plan
-                  contributions and deposits.
-                </p>
-              </div>
-
-              {/* Currency Selection */}
-              <div className="space-y-6">
-                {/* Western Currencies */}
-                <div>
-                  <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
-                    <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center mr-3">
-                      <svg className="w-4 h-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
-                      </svg>
-                    </div>
-                    Western Currencies
-                  </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {getSupportedCurrencies().western.map((currency: SupportedCurrency) => (
-                      <button
-                        key={currency.code}
-                        onClick={() => handleInputChange('selectedCurrency', currency.code)}
-                        className={`rounded-[22px] border p-4 text-left transition-all ${
-                          formData.selectedCurrency === currency.code
-                            ? 'border-[#d5dde8] bg-white shadow-[0_24px_60px_-54px_rgba(15,23,42,0.32)]'
-                            : 'border-[#e3dbcf] bg-[#fbfaf7] hover:border-[#d2c8ba] hover:bg-white'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <h4 className="font-medium text-[#171923]">{currency.name}</h4>
-                            <p className="text-sm text-[#667085]">{currency.symbol} • {currency.code}</p>
-                          </div>
-                          {formData.selectedCurrency === currency.code && (
-                            <div className="h-5 w-5 text-[#51627b]">
-                              <CheckIcon />
-                            </div>
-                          )}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* African Currencies */}
-                <div>
-                  <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
-                    <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center mr-3">
-                      <svg className="w-4 h-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                    </div>
-                    African Currencies
-                  </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {getSupportedCurrencies().african.map((currency: SupportedCurrency) => (
-                      <button
-                        key={currency.code}
-                        onClick={() => handleInputChange('selectedCurrency', currency.code)}
-                        className={`rounded-[22px] border p-4 text-left transition-all ${
-                          formData.selectedCurrency === currency.code
-                            ? 'border-[#d5dde8] bg-white shadow-[0_24px_60px_-54px_rgba(15,23,42,0.32)]'
-                            : 'border-[#e3dbcf] bg-[#fbfaf7] hover:border-[#d2c8ba] hover:bg-white'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <h4 className="font-medium text-[#171923]">{currency.name}</h4>
-                            <p className="text-sm text-[#667085]">{currency.symbol} • {currency.code}</p>
-                          </div>
-                          {formData.selectedCurrency === currency.code && (
-                            <div className="h-5 w-5 text-[#51627b]">
-                              <CheckIcon />
-                            </div>
-                          )}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Currency Information */}
-                <div className={sectionCardClass}>
-                  <div className="flex items-start">
-                    <div className="mr-3 mt-1">
-                      <svg className="h-5 w-5 text-[#70819a]" fill="none" viewBox="0 0 20 20" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="text-sm font-medium text-[#171923]">Stable Value Pegging</h4>
-                      <p className="mt-1 text-sm leading-6 text-[#5f6674]">
-                        All contributions and deposits will be pegged to your selected currency. 
-                        While transactions are processed in SUI, the equivalent value in {SUPPORTED_CURRENCIES[formData.selectedCurrency]?.name || 'your currency'} remains stable, 
-                        protecting members from cryptocurrency price volatility.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Navigation Buttons */}
-              <div className="flex flex-col sm:flex-row justify-between pt-6 space-y-3 sm:space-y-0">
-                <button
-                  onClick={() => setCurrentStep(0)}
-                  className={secondaryActionClass}
-                >
-                  <svg 
-                    className="mr-2 h-4 w-4 text-slate-400 transition-colors duration-200 group-hover:text-slate-500" 
-                    fill="none" 
-                    viewBox="0 0 24 24" 
-                    stroke="currentColor"
-                  >
-                    <path 
-                      strokeLinecap="round" 
-                      strokeLinejoin="round" 
-                      strokeWidth={2} 
-                      d="M15 19l-7-7 7-7"
-                    />
-                  </svg>
-                  Back to Circle Type
-                </button>
-                <button
-                  onClick={() => setCurrentStep(2)} // Go to main form step
-                  className={primaryActionClass}
-                >
-                  Continue to Circle Setup
-                  <svg 
-                    className="ml-2 h-4 w-4 text-slate-300 transition-colors duration-200 group-hover:text-white" 
-                    fill="none" 
-                    viewBox="0 0 24 24" 
-                    stroke="currentColor"
-                  >
-                    <path 
-                      strokeLinecap="round" 
-                      strokeLinejoin="round" 
-                      strokeWidth={2} 
-                      d="M9 5l7 7-7 7"
-                    />
-                  </svg>
-                </button>
-              </div>
-            </div>
-          ) : currentStep === 2 ? (
             <form onSubmit={handleSubmit} className="space-y-8">
-              <div className={sectionCardClass}>
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="max-w-2xl">
-                    <p className={stepLabelClass}>Circle setup</p>
-                    <h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-[#171923]">
-                      Configure how this circle should run
-                    </h2>
-                    <p className="mt-2 text-sm leading-6 text-[#5f6674]">
-                      Define the core economics and cadence first. The invite
-                      step comes immediately after the circle is created.
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <span className="inline-flex items-center rounded-full border border-[#dde5ef] bg-white px-3 py-2 text-sm font-medium text-[#51627b]">
-                      {formData.cycleType === 'rotational' ? 'Rotational' : 'Smart Goal'}
-                    </span>
-                    <span className="inline-flex items-center rounded-full border border-[#dde5ef] bg-white px-3 py-2 text-sm font-medium text-[#51627b]">
-                      {formData.selectedCurrency}
-                    </span>
-                    <span className="inline-flex items-center rounded-full border border-[#dde5ef] bg-white px-3 py-2 text-sm font-medium text-[#51627b]">
-                      {formData.numberOfMembers} members
-                    </span>
-                  </div>
+              {/* The page header above already carries the title; this card
+                  only appears when the organizer took the "already running"
+                  door, so the screen says so. (The goal-pot branch has its
+                  own banner below.) */}
+              {formData.cycleType === 'rotational' && formData.isMigrating && (
+                <div className={sectionCardClass}>
+                  <p className={stepLabelClass}>Already running</p>
+                  <p className="mt-2 text-sm leading-6 text-[#5f6674]">{t('create.altMigratingOn')}</p>
                 </div>
-              </div>
+              )}
 
               {/* Error Display */}
               {error && (
@@ -1895,182 +1808,154 @@ The Njangi On-Chain Team`;
               </div>
               ) : (
               <>
-              {/* Group Name */}
-              <div className="space-y-2">
-                <div className="flex items-center flex-wrap">
+              {/* The quick path: name, amount, cadence, headcount. Everything
+                  else the contract needs (deposit, day of cycle, rotation
+                  style, penalties, liveness fallback) is derived and lives
+                  under "More settings", so a first-time organizer never meets
+                  a slider that starts at zero. */}
+              <div className="space-y-6">
+                <div className="space-y-2">
                   <label htmlFor="name" className="block text-sm font-medium text-gray-700">
                     {t('create.circleNameLabel')}
                   </label>
-                  <InfoTooltip>
-                    <p>Choose a unique and memorable name for your Njangi circle</p>
-                    <p className="text-gray-300 text-xs mt-1">Example: &ldquo;Monthly Savings Group 2024&rdquo;</p>
-                  </InfoTooltip>
-                </div>
-                <input
-                  type="text"
-                  name="name"
-                  id="name"
-                  required
-                  value={formData.name}
-                  onChange={(e) => handleInputChange('name', e.target.value)}
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 bg-white"
-                  placeholder={t('create.circleNamePlaceholder')}
-                />
-              </div>
-
-              {/* Contribution Amount */}
-              <div className="space-y-4">
-                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-2 sm:space-y-0">
-                  <div className="flex items-center flex-wrap">
-                    <label className="block text-sm font-medium text-gray-700">
-                      Contribution Amount
-                    </label>
-                    <InfoTooltip>
-                      <p>The {formData.selectedCurrency} amount each member contributes per cycle</p>
-                      <p className="text-gray-300 text-xs mt-1">This amount will remain stable in {formData.selectedCurrency} value</p>
-                      <p className="text-gray-300 text-xs mt-1">The SUI amount will adjust based on current price</p>
-                    </InfoTooltip>
-                  </div>
-                  <div className="flex items-center space-x-2 flex-wrap">
-                    <SuiAmountDisplay 
-                      sui={formData.contributionAmount}
-                      local={formData.contributionAmountLocal}
-                      className="text-sm text-blue-600 font-medium"
-                    />
-                    {useCustomContribution ? (
-                      <button
-                        type="button"
-                        onClick={() => setUseCustomContribution(false)}
-                        className="text-xs sm:text-sm text-blue-600 hover:text-blue-700 font-medium whitespace-nowrap"
-                      >
-                        Use Slider
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setUseCustomContribution(true)}
-                        className="text-xs sm:text-sm text-blue-600 hover:text-blue-700 font-medium whitespace-nowrap"
-                      >
-                        Custom Amount
-                      </button>
-                    )}
-                  </div>
-                </div>
-                
-                {/* Currency Pegging Explanation */}
-                <div className="px-3 py-2 bg-blue-50 border border-blue-200 rounded-md text-sm text-blue-700">
-                  <div className="flex items-start">
-                    <div className="mr-2 mt-0.5">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                    </div>
-                    <div>
-                      <p className="font-medium">{formData.selectedCurrency}-Pegged Contributions</p>
-                      <p className="mt-1 text-xs">All contributions and security deposits are stored in {formData.selectedCurrency} value and converted to SUI at the current exchange rate when transactions occur. This provides stability against SUI price fluctuations.</p>
-                    </div>
-                  </div>
-                </div>
-                
-                {useCustomContribution ? (
-                  <div className="flex items-center space-x-2">
-                    <span className="text-gray-500">{SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || '$'}</span>
-                    <input
-                      type="number"
-                      value={formData.contributionAmountLocal || ''}
-                      onChange={async (e) => {
-                        const value = e.target.value === '' ? 0 : parseFloat(e.target.value);
-                        if (!isNaN(value)) {
-                          await handleLocalInputChange('contributionAmountLocal', value);
-                        }
-                      }}
-                      placeholder={`Enter amount in ${formData.selectedCurrency}`}
-                      className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                      min="0"
-                      step="0.01"
-                    />
-                    <span className="text-gray-500">{formData.selectedCurrency}</span>
-                  </div>
-                ) : (
-                  <Tooltip.Provider>
-                    <Tooltip.Root>
-                      <Tooltip.Trigger asChild>
-                        <div className="px-2">
-                          <Slider.Root
-                            className="relative flex items-center select-none touch-none w-full h-5"
-                            value={[formData.contributionAmountLocal]}
-                            max={getCurrencyMaximum(formData.selectedCurrency)}
-                            step={getCurrencyIncrement(formData.selectedCurrency)}
-                            onValueChange={async ([value]) => await handleLocalInputChange('contributionAmountLocal', value)}
-                          >
-                            <Slider.Track className="bg-gray-200 relative grow rounded-full h-2">
-                              <Slider.Range className="absolute bg-blue-500 rounded-full h-full" />
-                            </Slider.Track>
-                            <Slider.Thumb
-                              className="block w-5 h-5 bg-white shadow-lg rounded-full border-2 border-blue-500 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                              aria-label="Contribution amount"
-                            />
-                          </Slider.Root>
-                        </div>
-                      </Tooltip.Trigger>
-                      <Tooltip.Portal>
-                        <Tooltip.Content
-                          className="bg-gray-900 text-white px-3 py-2 rounded text-sm"
-                          sideOffset={5}
-                        >
-                          <div className="space-y-1">
-                            <p>Drag to adjust contribution amount</p>
-                            <p className="text-gray-300">
-                              {SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || formData.selectedCurrency} {formData.contributionAmountLocal.toFixed(2)} per cycle
-                            </p>
-                            <p className="text-xs text-gray-400">≈ {formData.contributionAmount.toFixed(2)} SUI at current price</p>
-                          </div>
-                          <Tooltip.Arrow className="fill-gray-900" />
-                        </Tooltip.Content>
-                      </Tooltip.Portal>
-                    </Tooltip.Root>
-                  </Tooltip.Provider>
-                )}
-              </div>
-
-              {/* How many people are in the circle.
-                  Until now this was pinned at MIN_MEMBERS with no input, so
-                  every circle was created with room for three and the organiser
-                  had to raise the cap afterwards from the manage page. A group
-                  moving here part-way through its rotation cannot do that: it
-                  needs all its seats before the payout order means anything. */}
-              {formData.cycleType === 'rotational' && (
-                <div className="space-y-2">
-                  <div className="flex items-center flex-wrap">
-                    <label htmlFor="number-of-members" className="block text-sm font-medium text-gray-700">
-                      How many members?
-                    </label>
-                    <InfoTooltip>
-                      <p>Everyone who takes a turn receiving the pot</p>
-                      <p className="text-gray-300 text-xs mt-1">Between {MIN_MEMBERS} and {MAX_MEMBERS}. You can change this later, before the circle starts.</p>
-                    </InfoTooltip>
-                  </div>
                   <input
-                    id="number-of-members"
-                    type="number"
-                    min={MIN_MEMBERS}
-                    max={MAX_MEMBERS}
-                    value={formData.numberOfMembers}
-                    onChange={(event) => {
-                      const parsed = Number(event.target.value);
-                      handleInputChange(
-                        'numberOfMembers',
-                        Number.isFinite(parsed) ? Math.trunc(parsed) : MIN_MEMBERS,
-                      );
-                    }}
-                    className="w-full px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    type="text"
+                    name="name"
+                    id="name"
+                    required
+                    autoFocus
+                    value={formData.name}
+                    onChange={(e) => handleInputChange('name', e.target.value)}
+                    className="block w-full rounded-xl border-gray-300 bg-white px-3 py-3 text-base shadow-sm focus:border-[#1d2533] focus:ring-[#1d2533]"
+                    placeholder={t('create.circleNamePlaceholder')}
                   />
-                  <p className="text-xs text-gray-500">
-                    Counting you. One full round is one turn each.
-                  </p>
                 </div>
-              )}
 
+                <div className="space-y-2">
+                  <label htmlFor="contribution-amount" className="block text-sm font-medium text-gray-700">
+                    {t('create.amountLabel')}
+                  </label>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-gray-500">
+                        {SUPPORTED_CURRENCIES[formData.selectedCurrency]?.symbol || formData.selectedCurrency}
+                      </span>
+                      <input
+                        id="contribution-amount"
+                        type="number"
+                        inputMode="decimal"
+                        min="0"
+                        step="0.01"
+                        required
+                        value={formData.contributionAmountLocal || ''}
+                        onChange={(e) => {
+                          const value = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                          if (!isNaN(value)) {
+                            void handleLocalInputChange('contributionAmountLocal', value);
+                          }
+                        }}
+                        className="block w-full rounded-xl border-gray-300 bg-white py-3 pl-14 pr-3 text-base shadow-sm focus:border-[#1d2533] focus:ring-[#1d2533]"
+                        placeholder="0"
+                      />
+                    </div>
+                    <select
+                      aria-label={t('create.currencyLabel')}
+                      value={formData.selectedCurrency}
+                      onChange={(e) => handleInputChange('selectedCurrency', e.target.value)}
+                      className="rounded-xl border-gray-300 bg-white py-3 pl-3 pr-8 text-sm font-medium text-[#171923] shadow-sm focus:border-[#1d2533] focus:ring-[#1d2533]"
+                    >
+                      <optgroup label="Western">
+                        {getSupportedCurrencies().western.map((currency: SupportedCurrency) => (
+                          <option key={currency.code} value={currency.code}>
+                            {currency.code}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="African">
+                        {getSupportedCurrencies().african.map((currency: SupportedCurrency) => (
+                          <option key={currency.code} value={currency.code}>
+                            {currency.code}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </div>
+                  <p className="text-xs text-gray-500">{t('create.amountHint')}</p>
+                </div>
+
+                <div className="grid gap-6 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <span className="block text-sm font-medium text-gray-700">{t('create.frequencyLabel')}</span>
+                    <div role="radiogroup" aria-label={t('create.frequencyLabel')} className="grid grid-cols-2 gap-2">
+                      {QUICK_START_FREQUENCIES.map((option) => {
+                        const selected = formData.cycleLength === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            onClick={() => handleCycleLengthChange(option.value)}
+                            className={`rounded-xl border px-3 py-2.5 text-sm font-medium transition-colors ${
+                              selected
+                                ? 'border-[#1d2533] bg-[#1d2533] text-white'
+                                : 'border-stone-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-stone-50'
+                            }`}
+                          >
+                            {t(option.labelKey)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label htmlFor="number-of-members" className="block text-sm font-medium text-gray-700">
+                      {t('create.membersLabel')}
+                    </label>
+                    <input
+                      id="number-of-members"
+                      type="number"
+                      inputMode="numeric"
+                      min={MIN_MEMBERS}
+                      max={MAX_MEMBERS}
+                      value={formData.numberOfMembers || ''}
+                      onChange={(event) => {
+                        const parsed = Number(event.target.value);
+                        handleInputChange('numberOfMembers', Number.isFinite(parsed) ? Math.trunc(parsed) : 0);
+                      }}
+                      onBlur={() => handleInputChange('numberOfMembers', clampMembers(formData.numberOfMembers))}
+                      className="block w-full rounded-xl border-gray-300 bg-white px-3 py-3 text-base shadow-sm focus:border-[#1d2533] focus:ring-[#1d2533]"
+                    />
+                    <p className="text-xs text-gray-500">
+                      {t('create.membersHint', { min: MIN_MEMBERS, max: MAX_MEMBERS })}
+                    </p>
+                  </div>
+                </div>
+
+                <p className="rounded-xl border border-[#e6dccd] bg-[#fcfaf6] px-4 py-3 text-sm leading-6 text-[#5f6674]">
+                  {formData.securityDepositLocal > 0
+                    ? t('create.depositAuto', {
+                        amount: formatCurrency(formData.securityDepositLocal, formData.selectedCurrency),
+                      })
+                    : t('create.depositAutoEmpty')}
+                </p>
+
+                <button
+                  type="button"
+                  onClick={() => setShowMoreSettings((open) => !open)}
+                  aria-expanded={showMoreSettings}
+                  className="inline-flex items-center gap-2 text-sm font-medium text-[#1d2533] underline-offset-4 hover:underline"
+                >
+                  <span className={`transition-transform ${showMoreSettings ? 'rotate-180' : ''}`}>
+                    <ChevronDownIcon />
+                  </span>
+                  {showMoreSettings ? t('create.lessSettings') : t('create.moreSettings')}
+                </button>
+              </div>
+
+              {showMoreSettings && (
+              <div className="space-y-8 rounded-[24px] border border-[#e7dfd4] bg-white p-4 sm:p-5">
               {/* Add Rotation Style selector when cycleType is rotational */}
               {formData.cycleType === 'rotational' && (
                 <div className="space-y-2">
@@ -2125,87 +2010,6 @@ The Njangi On-Chain Team`;
                 </div>
               )}
 
-              {/* Cycle Length Select */}
-              <div className="space-y-2">
-                <div className="flex items-center flex-wrap">
-                  <label className="block text-sm font-medium text-gray-700">
-                    Cycle Length
-                  </label>
-                  <InfoTooltip>
-                    <p>How often the group meets and contributions are made</p>
-                    <p className="text-gray-300 text-xs mt-1">Weekly: More frequent, smaller amounts</p>
-                    <p className="text-gray-300 text-xs mt-1">Bi-weekly: Twice a month</p>
-                    <p className="text-gray-300 text-xs mt-1">Monthly: Most common option</p>
-                    <p className="text-gray-300 text-xs mt-1">Quarterly: Larger amounts, less frequent</p>
-                  </InfoTooltip>
-                </div>
-                <Select.Root
-                  value={formData.cycleLength}
-                  onValueChange={(value: CycleLength) => {
-                    setFormData((prev) => ({
-                      ...prev,
-                      cycleLength: value,
-                      cycleDay: (value === 'weekly' || value === 'bi-weekly') ? 'monday' : 1,
-                      autoReleaseDelayMs:
-                        prev.autoReleaseEnabled && !isValidAutoReleaseDelayMs(value, prev.autoReleaseDelayMs)
-                          ? getDefaultAutoReleaseDelayMs(value)
-                          : prev.autoReleaseDelayMs,
-                    }));
-                  }}
-                >
-                  <Select.Trigger
-                    className="inline-flex items-center justify-between w-full px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    aria-label="Cycle length"
-                  >
-                    <Select.Value />
-                    <Select.Icon className="ml-2">
-                      <ChevronDownIcon />
-                    </Select.Icon>
-                  </Select.Trigger>
-                  <Select.Portal>
-                    <Select.Content className="overflow-hidden bg-white rounded-md shadow-lg">
-                      <Select.Viewport className="p-1">
-                        <Select.Item
-                          value="weekly"
-                          className="relative flex items-center px-8 py-2 text-sm text-gray-700 rounded-md hover:bg-blue-50 hover:text-blue-700 focus:bg-blue-50 focus:text-blue-700 outline-none cursor-pointer"
-                        >
-                          <Select.ItemText>Weekly</Select.ItemText>
-                          <Select.ItemIndicator className="absolute left-2 inline-flex items-center">
-                            <CheckIcon />
-                          </Select.ItemIndicator>
-                        </Select.Item>
-                        <Select.Item
-                          value="bi-weekly"
-                          className="relative flex items-center px-8 py-2 text-sm text-gray-700 rounded-md hover:bg-blue-50 hover:text-blue-700 focus:bg-blue-50 focus:text-blue-700 outline-none cursor-pointer"
-                        >
-                          <Select.ItemText>Bi-weekly</Select.ItemText>
-                          <Select.ItemIndicator className="absolute left-2 inline-flex items-center">
-                            <CheckIcon />
-                          </Select.ItemIndicator>
-                        </Select.Item>
-                        <Select.Item
-                          value="monthly"
-                          className="relative flex items-center px-8 py-2 text-sm text-gray-700 rounded-md hover:bg-blue-50 hover:text-blue-700 focus:bg-blue-50 focus:text-blue-700 outline-none cursor-pointer"
-                        >
-                          <Select.ItemText>Monthly</Select.ItemText>
-                          <Select.ItemIndicator className="absolute left-2 inline-flex items-center">
-                            <CheckIcon />
-                          </Select.ItemIndicator>
-                        </Select.Item>
-                        <Select.Item
-                          value="quarterly"
-                          className="relative flex items-center px-8 py-2 text-sm text-gray-700 rounded-md hover:bg-blue-50 hover:text-blue-700 focus:bg-blue-50 focus:text-blue-700 outline-none cursor-pointer"
-                        >
-                          <Select.ItemText>Quarterly</Select.ItemText>
-                          <Select.ItemIndicator className="absolute left-2 inline-flex items-center">
-                            <CheckIcon />
-                          </Select.ItemIndicator>
-                        </Select.Item>
-                      </Select.Viewport>
-                    </Select.Content>
-                  </Select.Portal>
-                </Select.Root>
-              </div>
 
               {/* Cycle Day Select */}
               <div className="space-y-2">
@@ -2325,20 +2129,6 @@ The Njangi On-Chain Team`;
                   </div>
                 </div>
                 
-                {/* Currency Pegging Explanation for Security Deposit */}
-                <div className="px-3 py-2 bg-green-50 border border-green-200 rounded-md text-sm text-green-700">
-                  <div className="flex items-start">
-                    <div className="mr-2 mt-0.5">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                    </div>
-                    <div>
-                      <p className="font-medium">Stable Security Deposit</p>
-                      <p className="mt-1 text-xs">The security deposit is stored as a {formData.selectedCurrency} value on-chain. Members will always deposit the same {formData.selectedCurrency} value regardless of SUI price, ensuring fairness across time.</p>
-                    </div>
-                  </div>
-                </div>
                 
                 {useCustomDeposit ? (
                   <div className="flex items-center space-x-2">
@@ -2349,6 +2139,7 @@ The Njangi On-Chain Team`;
                       onChange={async (e) => {
                         const value = e.target.value === '' ? 0 : parseFloat(e.target.value);
                         if (!isNaN(value)) {
+                          setDepositOverridden(true);
                           await handleLocalInputChange('securityDepositLocal', value);
                         }
                       }}
@@ -2369,7 +2160,10 @@ The Njangi On-Chain Team`;
                             value={[formData.securityDepositLocal]}
                             max={getCurrencyMaximum(formData.selectedCurrency)}
                             step={getCurrencyIncrement(formData.selectedCurrency)}
-                            onValueChange={async ([value]) => await handleLocalInputChange('securityDepositLocal', value)}
+                            onValueChange={async ([value]) => {
+                              setDepositOverridden(true);
+                              await handleLocalInputChange('securityDepositLocal', value);
+                            }}
                           >
                             <Slider.Track className="bg-gray-200 relative grow rounded-full h-2">
                               <Slider.Range className="absolute bg-blue-500 rounded-full h-full" />
@@ -2574,63 +2368,146 @@ The Njangi On-Chain Team`;
                   </div>
                 )}
               </div>
-
-              {/* Final Currency Peg Summary */}
-              <div className="mt-8 mb-6 rounded-[24px] border border-[#dbe2ec] bg-[#f3f6fb] p-4 text-[#51627b] sm:p-5">
-                <h3 className="font-semibold text-sm flex items-center">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="mr-2 h-5 w-5 text-[#5f708a]" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm1-11a1 1 0 1 1-2 0v2H7a1 1 0 1 0 0 2h2v2a1 1 0 1 0 2 0v-2h2a1 1 0 1 0 0-2h-2V7z" clipRule="evenodd" />
-                  </svg>
-                  {formData.selectedCurrency}-Pegged Njangi Feature
-                </h3>
-                <div className="mt-2 text-sm">
-                  <p>This circle will store all monetary values in {formData.selectedCurrency}. Key benefits:</p>
-                  <ul className="mt-2 list-disc list-inside space-y-1 text-xs">
-                    <li>Contribution amounts remain stable in {formData.selectedCurrency} terms regardless of SUI price</li>
-                    <li>Members joining at different times pay the same real-world value</li>
-                    <li>Security deposits maintain consistent value over time</li>
-                    <li>The UI will always show both {formData.selectedCurrency} and equivalent SUI amounts</li>
-                  </ul>
-                  <p className="mt-2 text-xs">Current SUI price: {suiPrice ? formatCurrency(suiPrice, formData.selectedCurrency) : "Loading..."}</p>
-                </div>
               </div>
+              )}
+
               </>
               )}
 
-              <div className="flex justify-end space-x-3 pt-6">
+              {needsTestnetFunds && formData.cycleType === 'rotational' && (
+                /* Creating a circle is the organizer's first transaction, and on
+                   testnet a fresh account has nothing to pay it with. Say so
+                   here, before the button, with the same wording and faucet
+                   link as the dashboard banner — instead of letting the
+                   transaction fail afterwards with a raw RPC error. */
+                <div className="rounded-[22px] border border-amber-200 bg-amber-50/90 p-4">
+                  <p className="text-sm font-medium text-amber-900">{t('create.needsFundsTitle')}</p>
+                  <p className="mt-1 text-sm text-amber-800">{t('create.needsFundsBody')}</p>
+                  <a
+                    href={`https://faucet.sui.io/?address=${userAddress || ''}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-3 inline-flex items-center rounded-full border border-amber-400 bg-amber-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-600"
+                  >
+                    {t('create.openFaucet')}
+                  </a>
+                </div>
+              )}
+
+              <div className="flex flex-col-reverse gap-3 pt-6 sm:flex-row sm:justify-end">
                 <button
                   type="button"
-                  onClick={() => router.back()}
+                  onClick={() => router.push('/dashboard')}
+                  disabled={isCreating}
                   className={secondaryActionClass}
                 >
                   {t('create.cancel')}
                 </button>
                 <button
                   type="submit"
-                  className={primaryActionClass}
+                  disabled={isCreating}
+                  className={`${primaryActionClass} disabled:cursor-not-allowed disabled:opacity-60`}
                 >
-                  {formData.cycleType === 'smart-goal' ? 'Create goal pool' : t('create.nextInvite')}
+                  {formData.cycleType === 'smart-goal'
+                    ? (isCreating ? 'Creating goal pool…' : 'Create goal pool')
+                    : (isCreating ? t('create.submitting') : t('create.submit'))}
                 </button>
               </div>
+
+              {/* The other two kinds of circle are doors off this screen, not
+                  a step in front of it. */}
+              {formData.cycleType === 'rotational' ? (
+                <div className="flex flex-col gap-2 border-t border-[#e7dfd4] pt-5 text-sm sm:flex-row sm:flex-wrap sm:gap-6">
+                  <button
+                    type="button"
+                    onClick={toggleMigrating}
+                    className="text-left font-medium text-[#51627b] underline-offset-4 hover:text-[#171923] hover:underline"
+                  >
+                    {formData.isMigrating ? t('create.altMigratingOff') : t('create.altMigrating')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={chooseSmartGoal}
+                    disabled={checkingSmartGoalAccess}
+                    className="text-left font-medium text-[#51627b] underline-offset-4 hover:text-[#171923] hover:underline disabled:opacity-60"
+                  >
+                    {t('create.altGoal')}
+                  </button>
+                </div>
+              ) : (
+                <div className="border-t border-[#e7dfd4] pt-5 text-sm">
+                  <button
+                    type="button"
+                    onClick={chooseRotational}
+                    className="font-medium text-[#51627b] underline-offset-4 hover:text-[#171923] hover:underline"
+                  >
+                    {t('create.altBackToCircle')}
+                  </button>
+                </div>
+              )}
             </form>
           ) : (
             <div className="space-y-8">
-              <div className={sectionCardClass}>
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="max-w-2xl">
-                    <p className={stepLabelClass}>Invites</p>
-                    <h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-[#171923]">
-                      Invite members into the circle
-                    </h2>
-                    <p className="mt-2 text-sm leading-6 text-[#5f6674]">
-                      Add direct invites, generate the share link, and finish the
-                      flow once the circle ID is available.
-                    </p>
+              {/* The finish line. The circle exists; the one thing an organizer
+                  needs from this screen is the link to forward to their group,
+                  so it is resolved on entry (from the creation digest) and
+                  shown first — no "fetch manually" scavenger hunt. */}
+              <div className="rounded-[24px] border border-emerald-200/70 bg-gradient-to-br from-emerald-50 to-[#fbfaf7] p-5 sm:p-6">
+                <p className={stepLabelClass}>{t('create.step.invites.label')}</p>
+                <h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-[#171923]">
+                  {formData.name.trim()
+                    ? t('create.doneTitle', { name: formData.name.trim() })
+                    : t('create.doneTitleNoName')}
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-[#5f6674]">{t('create.doneBody')}</p>
+
+                {inviteLink ? (
+                  <div className="mt-5 space-y-3">
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <input
+                        type="text"
+                        readOnly
+                        value={inviteLink}
+                        onFocus={(e) => e.currentTarget.select()}
+                        aria-label="Invite link"
+                        className="block w-full rounded-xl border-gray-300 bg-white text-sm shadow-sm focus:border-[#1d2533] focus:ring-[#1d2533]"
+                      />
+                      <button
+                        type="button"
+                        onClick={copyInviteLink}
+                        className={`${primaryActionClass} whitespace-nowrap`}
+                      >
+                        {t('create.copyInvite')}
+                      </button>
+                    </div>
+                    <a
+                      href={buildWhatsAppShareUrl(
+                        t('create.whatsappText', { name: formData.name, link: inviteLink }),
+                      )}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => trackFunnel('invite_link_shared')}
+                      className="inline-flex items-center justify-center rounded-full border border-[#25D366] bg-[#25D366] px-5 py-3 text-sm font-medium text-white transition hover:bg-[#1ebe5d] focus:outline-none focus:ring-2 focus:ring-[#25D366] focus:ring-offset-2"
+                    >
+                      {t('create.shareWhatsApp')}
+                    </a>
                   </div>
-                  <span className="inline-flex items-center rounded-full border border-[#dde5ef] bg-white px-3 py-2 text-sm font-medium text-[#51627b]">
-                    {formData.numberOfMembers - 1} member slots to fill
-                  </span>
-                </div>
+                ) : linkResolveFailed ? (
+                  <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" role="alert">
+                    {t('create.linkFailed')}{' '}
+                    <button
+                      type="button"
+                      onClick={() => void resolveInviteLink()}
+                      className="font-semibold underline underline-offset-2"
+                    >
+                      {t('create.linkRetry')}
+                    </button>
+                  </div>
+                ) : (
+                  <p className="mt-5 text-sm text-[#5f6674]" role="status">
+                    {t('create.linkPending')}
+                  </p>
+                )}
 
                 {/* An already-running group has one more step than a new one:
                     the history can only be recorded once every member is in and
@@ -2638,7 +2515,7 @@ The Njangi On-Chain Team`;
                     rather than here. Point at it, or it gets missed and the
                     circle starts over from position one. */}
                 {formData.isMigrating && (
-                  <div className="mt-5 rounded-[22px] border border-[#d8e2f0] bg-[#f7fafc] p-4">
+                  <div className="mt-5 rounded-[22px] border border-[#d8e2f0] bg-white p-4">
                     <p className={stepLabelClass}>Next, for a circle already running</p>
                     <p className="mt-2 text-sm leading-6 text-[#5f6674]">
                       Once everyone has joined and you have set the payout order,
@@ -2660,6 +2537,13 @@ The Njangi On-Chain Team`;
                 )}
               </div>
 
+              {/* Email / phone invites are the long way round; the link above
+                  is how a njangi actually gets shared. Keep them, folded. */}
+              <details className="rounded-[24px] border border-[#e7dfd4] bg-[#fbfaf7] p-4 sm:p-5">
+                <summary className="cursor-pointer text-sm font-medium text-[#1d2533] underline-offset-4 hover:underline">
+                  {t('create.moreInviteOptions')}
+                </summary>
+                <div className="mt-4">
               {/* Direct Invites Section */}
               <div className={sectionCardClass}>
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-3 sm:space-y-0">
@@ -2699,7 +2583,7 @@ The Njangi On-Chain Team`;
                       </svg>
                       <div className="min-w-0 text-sm text-[#5f6674]">
                         <p className="font-medium text-[#171923]">Email Invites</p>
-                        <p className="mt-1">Adding an email will automatically fetch your circle ID and generate the invite link. Email invites will then open in your default email client with a pre-written message containing the circle details and join link.</p>
+                        <p className="mt-1">Email invites open in your default email client with a pre-written message containing the circle details and the join link.</p>
                       </div>
                     </div>
                   </div>
@@ -2813,195 +2697,23 @@ The Njangi On-Chain Team`;
                   </div>
                 )}
               </div>
-
-              {/* Shareable Link Section */}
-              <div className={sectionCardClass}>
-                <h3 className="text-lg font-medium text-[#171923]">Shareable Invite Link</h3>
-                <p className="text-sm text-[#667085]">
-                  {createdCircleId 
-                    ? "Your circle ID has been fetched and invite link is ready to share"
-                    : "Add an email above to automatically fetch the circle ID and generate the invite link"
-                  }
-                </p>
-                
-                {/* Auto-fetch explanation - Only show when no circle ID yet */}
-                {!createdCircleId && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 sm:p-4">
-                    <div className="flex items-start space-x-3">
-                      <div className="flex-shrink-0">
-                        <svg className="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 20 20" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h4 className="text-sm font-medium text-blue-800">Circle Created Successfully!</h4>
-                        <p className="mt-1 text-sm text-blue-700">
-                          Your circle has been created on the blockchain. When you add an email address above, we&apos;ll automatically fetch the circle ID and generate your shareable invite link.
-                        </p>
-                        
-                        {/* Manual fetch button as fallback */}
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            try {
-                              toast.loading('Fetching circle ID...', { id: 'manual-fetch' });
-                              const fetchedCircleId = await fetchCircleId();
-                              if (fetchedCircleId) {
-                                setCreatedCircleId(fetchedCircleId);
-                                const shareLink = `${window.location.origin}/circle/${fetchedCircleId}/join`;
-                                setInviteLink(shareLink);
-                                toast.success('Circle ID fetched successfully!', { id: 'manual-fetch' });
-                              } else {
-                                toast.error('No circle found. Please try again in a few moments.', { id: 'manual-fetch' });
-                              }
-                            } catch {
-                              toast.error('Failed to fetch circle ID. Please try again.', { id: 'manual-fetch' });
-                            }
-                          }}
-                          className="mt-3 inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded text-blue-700 bg-blue-100 hover:bg-blue-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                        >
-                          <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                          </svg>
-                          Or fetch manually
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                
-                {/* Invite Link Display - Only show after circle ID is fetched */}
-                {createdCircleId && (
-                  <div className="space-y-3">
-                    {/* Circle ID Display - Mobile Responsive */}
-                    <div className="bg-green-50 border border-green-200 rounded-lg p-3">
-                      <div className="flex items-start space-x-2">
-                        <svg className="h-5 w-5 text-green-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                        <div className="min-w-0 flex-1">
-                          <span className="text-sm font-medium text-green-800 block mb-1">Circle ID:</span>
-                          <div className="bg-white rounded border p-2">
-                            <code className="text-xs text-gray-800 break-all font-mono leading-relaxed">
-                              {createdCircleId}
-                            </code>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    
-                    {/* Invite Link Input - Mobile Responsive */}
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium text-gray-700 block">Invite Link:</label>
-                      <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">
-                        <div className="flex-grow">
-                          <input
-                            type="text"
-                            readOnly
-                            value={inviteLink || ''}
-                            className="block w-full rounded-md border-gray-300 bg-gray-50 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
-                          />
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (inviteLink) {
-                              void copyToClipboard(inviteLink).then((outcome) => {
-                                if (outcome === 'failed') {
-                                  toast.error(manualCopyMessage('invite link', inviteLink), { duration: 12000 });
-                                  return;
-                                }
-                                toast.success('Invite link copied to clipboard!');
-                              });
-                            }
-                          }}
-                          className="w-full sm:w-auto px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
-                        >
-                          Copy Link
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                
-                {/* Show placeholder when no circle ID yet */}
-                {!createdCircleId && (
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-gray-700 block">Invite Link:</label>
-                    <div className="flex-grow">
-                      <input
-                        type="text"
-                        readOnly
-                        value="Add an email address above to automatically generate your invite link..."
-                        className="block w-full rounded-md border-gray-300 bg-gray-100 text-gray-500 shadow-sm text-sm"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex flex-col sm:flex-row justify-between pt-6 space-y-3 sm:space-y-0 sm:space-x-3">
-                <Tooltip.Provider>
-                  <Tooltip.Root>
-                    <Tooltip.Trigger asChild>
-                      <button
-                        type="button"
-                        disabled
-                        className="w-full sm:w-auto rounded-full border border-stone-200 bg-stone-50 px-5 py-3 text-sm font-medium text-stone-400 cursor-not-allowed"
-                      >
-                        Back
-                      </button>
-                    </Tooltip.Trigger>
-                    <Tooltip.Portal>
-                      <Tooltip.Content
-                        className="bg-gray-900 text-white px-3 py-2 rounded text-sm max-w-xs"
-                        sideOffset={5}
-                      >
-                        <p>Circle already created. Going back is not allowed to prevent duplicate creation.</p>
-                        <Tooltip.Arrow className="fill-gray-900" />
-                      </Tooltip.Content>
-                    </Tooltip.Portal>
-                  </Tooltip.Root>
-                </Tooltip.Provider>
+                </div>
+              </details>
+              <div className="flex flex-col-reverse gap-3 pt-2 sm:flex-row sm:justify-end">
                 <button
                   type="button"
-                  onClick={() => {
-                    // Send all pending email invites first
-                    const emailInvites = inviteMembers.filter(member => member.type === 'email' && member.status === 'pending');
-                    if (emailInvites.length > 0 && createdCircleId) {
-                      sendAllEmailInvites();
-                      toast.success(`Opened ${emailInvites.length} email invites in your email client`);
-                    }
-                    
-                    // Clear dashboard cache to ensure fresh data is loaded
-                    if (typeof window !== 'undefined' && userAddress) {
-                      // Clear circles cache for the current network
-                      const currentNetwork = getCurrentNetwork();
-                      const cacheKey = `cache_${userAddress}_${currentNetwork}_circles`;
-                      localStorage.removeItem(cacheKey);
-                      
-                      // Also clear events cache to get fresh data
-                      const eventsCachePattern = `cache_${userAddress}_${currentNetwork}_events`;
-                      for (let i = 0; i < localStorage.length; i++) {
-                        const key = localStorage.key(i);
-                        if (key && key.startsWith(eventsCachePattern)) {
-                          localStorage.removeItem(key);
-                        }
-                      }
-                    }
-                    
-                    // Then redirect to dashboard with delay to allow blockchain processing
-                    setTimeout(() => {
-                      router.push('/dashboard?refreshCircles=true');
-                    }, 3000); // Increased delay to allow blockchain to process transaction
-                  }}
-                  className={`w-full sm:w-auto ${primaryActionClass}`}
+                  onClick={finishToDashboard}
+                  className={secondaryActionClass}
                 >
-                  {inviteMembers.filter(member => member.type === 'email' && member.status === 'pending').length > 0 && createdCircleId
-                    ? 'Send Email Invites & Finish'
-                    : 'Finish & Go to Dashboard'
-                  }
+                  {t('create.backToDashboard')}
+                </button>
+                <button
+                  type="button"
+                  onClick={openCreatedCircle}
+                  disabled={!createdCircleId}
+                  className={`${primaryActionClass} disabled:cursor-not-allowed disabled:opacity-60`}
+                >
+                  {t('create.openCircle')}
                 </button>
               </div>
             </div>
