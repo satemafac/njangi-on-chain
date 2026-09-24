@@ -4,6 +4,8 @@ import { useRouter } from 'next/router';
 import { useAuth } from '@/contexts/AuthContext';
 import { CallbackStatusShell } from '@/components/ui/CallbackStatusShell';
 import { claimCallbackToken } from '@/lib/auth-callback-guard';
+import { isAppPath, takePostLoginDestination } from '@/lib/post-login-redirect';
+import { trackFunnel } from '@/lib/funnel-events';
 
 export default function AuthCallback() {
   const router = useRouter();
@@ -197,17 +199,20 @@ export default function AuthCallback() {
           }
         }
         
-        // Check if there's a stored redirect URL for non-WhatsApp users
-        const redirectUrl = localStorage.getItem('redirectAfterLogin');
-        
+        trackFunnel('signin_completed');
+
+        // Where to next: the landing page's "Start a circle" stores
+        // /create-circle, the join page stores its own URL; both are validated
+        // as same-origin before use (src/lib/post-login-redirect.ts).
+        const destination = takePostLoginDestination();
+
         // Short delay before redirecting to show completion
         redirectTimeoutRef.current = setTimeout(() => {
-          if (redirectUrl) {
-            // Clear the stored redirect URL
-            localStorage.removeItem('redirectAfterLogin');
-            console.log('Redirecting to stored URL:', redirectUrl);
-            // Use window.location.href for external URLs or different origins
-            window.location.href = redirectUrl;
+          if (destination && isAppPath(destination)) {
+            router.replace(destination);
+          } else if (destination) {
+            // Same-origin absolute URL (join page): a full navigation, as before.
+            window.location.href = destination;
           } else {
             // Default redirect to dashboard
             router.replace('/dashboard');
@@ -232,9 +237,10 @@ export default function AuthCallback() {
           setIsError(false);
           setStatus('Authentication successful! Redirecting...');
           redirectTimeoutRef.current = setTimeout(() => {
-            const stored = localStorage.getItem('redirectAfterLogin');
-            if (stored) {
-              localStorage.removeItem('redirectAfterLogin');
+            const stored = takePostLoginDestination();
+            if (stored && isAppPath(stored)) {
+              router.replace(stored);
+            } else if (stored) {
               window.location.href = stored;
             } else {
               router.replace('/dashboard');

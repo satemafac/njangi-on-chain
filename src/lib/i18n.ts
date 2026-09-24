@@ -259,6 +259,51 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'create.cancel': 'Cancel',
     'create.nextInvite': 'Next: Invite Members',
     'create.backToDashboard': 'Back to dashboard',
+    // One-screen setup (the quick path a first-time organizer walks)
+    'create.step.setup.label': 'Set up',
+    'create.step.setup.title': 'Set up your circle',
+    'create.step.setup.description':
+      'A name, an amount, and how often. Everything else starts with a sensible default you can change now or later.',
+    'create.amountLabel': 'Contribution per person',
+    'create.amountHint': 'What each member puts in each time.',
+    'create.currencyLabel': 'Currency',
+    'create.frequencyLabel': 'How often',
+    'create.frequency.weekly': 'Every week',
+    'create.frequency.biweekly': 'Every 2 weeks',
+    'create.frequency.monthly': 'Every month',
+    'create.frequency.quarterly': 'Every 3 months',
+    'create.membersLabel': 'How many people',
+    'create.membersHint': 'Counting you. Between {min} and {max}; you can change it before the circle starts.',
+    'create.depositAuto':
+      'Each member also puts down a refundable security deposit of {amount}, half of one contribution. Adjust it under More settings.',
+    'create.depositAutoEmpty':
+      'Each member also puts down a refundable security deposit, half of one contribution. Adjust it under More settings.',
+    'create.moreSettings': 'More settings',
+    'create.lessSettings': 'Fewer settings',
+    'create.submit': 'Create circle',
+    'create.submitting': 'Creating your circle…',
+    'create.altMigrating': "Bringing a circle that's already running?",
+    'create.altMigratingOn':
+      "Good: set it up the same way. Once everyone has joined you'll record who has already collected, and the circle carries on from there.",
+    'create.altMigratingOff': 'Actually, this is a new circle',
+    'create.altGoal': 'Saving toward one goal instead?',
+    'create.altBackToCircle': 'Back to a rotating circle',
+    'create.needsFundsTitle': 'This account has no test SUI yet.',
+    'create.needsFundsBody':
+      'You are on Sui Testnet. Open the faucet, come back to this tab, and press Create circle.',
+    'create.openFaucet': 'Open faucet',
+    'create.doneTitle': '{name} is ready.',
+    'create.doneTitleNoName': 'Your circle is ready.',
+    'create.doneBody': 'Share this link with your group. Anyone who opens it can ask to join.',
+    'create.copyInvite': 'Copy invite link',
+    'create.copied': 'Invite link copied',
+    'create.shareWhatsApp': 'Share on WhatsApp',
+    'create.openCircle': 'Open your circle',
+    'create.linkPending': 'Preparing your invite link…',
+    'create.linkFailed': "We couldn't fetch your invite link yet.",
+    'create.linkRetry': 'Try again',
+    'create.whatsappText': 'Join my circle "{name}" on Njangi On-Chain: {link}',
+    'create.moreInviteOptions': 'Invite by email or phone instead',
     // Join / discovery
     'join.eyebrow': 'Join circle',
     'join.reviewTerms':
@@ -289,6 +334,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     // Dashboard chrome
     'dashboard.eyebrow': 'Njangi On-Chain Dashboard',
     'dashboard.welcome': 'Welcome back{name}.',
+    'dashboard.welcomeFirst': 'Welcome{name}.',
     'dashboard.blurb':
       'Keep your circles, contributions, and cash movement organized in one quiet workspace.',
     'dashboard.refreshCircles': 'Refresh circles',
@@ -691,6 +737,51 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'create.cancel': 'Annuler',
     'create.nextInvite': 'Suivant : inviter des membres',
     'create.backToDashboard': 'Retour au tableau de bord',
+    // Configuration en un écran (le chemin rapide d'un premier organisateur)
+    'create.step.setup.label': 'Configurer',
+    'create.step.setup.title': 'Configurez votre cercle',
+    'create.step.setup.description':
+      'Un nom, un montant et une fréquence. Tout le reste part d’une valeur raisonnable que vous pouvez modifier maintenant ou plus tard.',
+    'create.amountLabel': 'Versement par personne',
+    'create.amountHint': 'Ce que chaque membre verse à chaque fois.',
+    'create.currencyLabel': 'Devise',
+    'create.frequencyLabel': 'À quelle fréquence',
+    'create.frequency.weekly': 'Chaque semaine',
+    'create.frequency.biweekly': 'Toutes les 2 semaines',
+    'create.frequency.monthly': 'Chaque mois',
+    'create.frequency.quarterly': 'Tous les 3 mois',
+    'create.membersLabel': 'Combien de personnes',
+    'create.membersHint': 'Vous compris. Entre {min} et {max} ; modifiable avant le démarrage du cercle.',
+    'create.depositAuto':
+      'Chaque membre verse aussi un dépôt de garantie remboursable de {amount}, soit la moitié d’un versement. Ajustez-le sous Plus de réglages.',
+    'create.depositAutoEmpty':
+      'Chaque membre verse aussi un dépôt de garantie remboursable, soit la moitié d’un versement. Ajustez-le sous Plus de réglages.',
+    'create.moreSettings': 'Plus de réglages',
+    'create.lessSettings': 'Moins de réglages',
+    'create.submit': 'Créer le cercle',
+    'create.submitting': 'Création de votre cercle…',
+    'create.altMigrating': 'Vous transférez un cercle déjà en cours ?',
+    'create.altMigratingOn':
+      'Parfait : configurez-le de la même façon. Une fois tout le monde inscrit, vous indiquerez qui a déjà collecté, et le cercle reprend là où il en était.',
+    'create.altMigratingOff': 'En fait, c’est un nouveau cercle',
+    'create.altGoal': 'Vous épargnez plutôt vers un objectif ?',
+    'create.altBackToCircle': 'Revenir à un cercle rotatif',
+    'create.needsFundsTitle': 'Ce compte n’a pas encore de SUI de test.',
+    'create.needsFundsBody':
+      'Vous êtes sur le Testnet Sui. Ouvrez le robinet, revenez sur cet onglet, puis appuyez sur Créer le cercle.',
+    'create.openFaucet': 'Ouvrir le robinet',
+    'create.doneTitle': '{name} est prêt.',
+    'create.doneTitleNoName': 'Votre cercle est prêt.',
+    'create.doneBody': 'Partagez ce lien avec votre groupe. Toute personne qui l’ouvre peut demander à rejoindre.',
+    'create.copyInvite': 'Copier le lien d’invitation',
+    'create.copied': 'Lien d’invitation copié',
+    'create.shareWhatsApp': 'Partager sur WhatsApp',
+    'create.openCircle': 'Ouvrir votre cercle',
+    'create.linkPending': 'Préparation de votre lien d’invitation…',
+    'create.linkFailed': 'Nous n’avons pas encore pu récupérer votre lien d’invitation.',
+    'create.linkRetry': 'Réessayer',
+    'create.whatsappText': 'Rejoins mon cercle « {name} » sur Njangi On-Chain : {link}',
+    'create.moreInviteOptions': 'Inviter par e-mail ou par téléphone',
     // Adhésion / découverte
     'join.eyebrow': 'Rejoindre le cercle',
     'join.reviewTerms':
@@ -721,6 +812,7 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     // Habillage du tableau de bord
     'dashboard.eyebrow': 'Tableau de bord Njangi On-Chain',
     'dashboard.welcome': 'Bon retour{name}.',
+    'dashboard.welcomeFirst': 'Bienvenue{name}.',
     'dashboard.blurb':
       "Gardez vos cercles, vos versements et vos mouvements d'argent organisés dans un espace de travail apaisé.",
     'dashboard.refreshCircles': 'Actualiser les cercles',
