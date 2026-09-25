@@ -509,6 +509,22 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'record.share.createFailed': 'Could not create the link. Please try again.',
     'record.share.revoked': 'Link turned off',
     'record.share.revokeFailed': 'Could not turn off that link.',
+    'record.badges.heading': 'Facts about your history',
+    'record.badges.foundingCircle.title': 'Founding Circle',
+    'record.badges.foundingCircle.body':
+      'You started {circle}, and it completed its first full round on {date}.',
+    'record.badges.note':
+      'This is a fact from your own history, shown only to you. It is not a score or a rating, and it never appears on a shared link.',
+    'record.stories.heading': 'Your stories',
+    'record.stories.blurb':
+      'Stories you chose to share at a payout moment. A person reads each one before it is used anywhere. Withdraw one at any time and it will not be used after that.',
+    'record.stories.withdraw': 'Withdraw',
+    'record.stories.withdrawn': 'Story withdrawn.',
+    'record.stories.withdrawFailed': 'Could not withdraw that story.',
+    'record.stories.status.pending': 'awaiting review',
+    'record.stories.status.approved': 'approved',
+    'record.stories.status.used': 'used',
+    'record.stories.status.withdrawn': 'withdrawn',
     'record.shared.missingTitle': 'This link isn’t available',
     'record.shared.missingBody':
       'It may have expired or been turned off by the person who shared it. Ask them for a new link.',
@@ -984,6 +1000,22 @@ export const DICTIONARIES: Record<Locale, StringDict> = {
     'record.share.createFailed': 'Impossible de créer le lien. Veuillez réessayer.',
     'record.share.revoked': 'Lien désactivé',
     'record.share.revokeFailed': 'Impossible de désactiver ce lien.',
+    'record.badges.heading': 'Faits sur votre parcours',
+    'record.badges.foundingCircle.title': 'Cercle fondateur',
+    'record.badges.foundingCircle.body':
+      'Vous avez lancé {circle}, qui a terminé son premier tour complet le {date}.',
+    'record.badges.note':
+      'Ceci est un fait tiré de votre propre historique, visible par vous seul. Ce n’est ni une note ni un classement, et cela n’apparaît jamais sur un lien partagé.',
+    'record.stories.heading': 'Vos témoignages',
+    'record.stories.blurb':
+      'Les témoignages que vous avez choisi de partager lors d’un versement. Une personne lit chacun d’eux avant toute utilisation. Retirez-en un à tout moment : il ne sera plus utilisé ensuite.',
+    'record.stories.withdraw': 'Retirer',
+    'record.stories.withdrawn': 'Témoignage retiré.',
+    'record.stories.withdrawFailed': 'Impossible de retirer ce témoignage.',
+    'record.stories.status.pending': 'en attente de relecture',
+    'record.stories.status.approved': 'approuvé',
+    'record.stories.status.used': 'utilisé',
+    'record.stories.status.withdrawn': 'retiré',
     'record.shared.missingTitle': 'Ce lien n’est pas disponible',
     'record.shared.missingBody':
       'Il a peut-être expiré ou été désactivé par la personne qui l’a partagé. Demandez-lui un nouveau lien.',

@@ -44,6 +44,7 @@ import {
 } from '@/lib/compliance-gate';
 import { isTimedEscrowEntriesEnabled } from '@/config/feature-flags';
 import VerificationRequiredModal from '@/components/VerificationRequiredModal';
+import PayoutCelebration from '@/components/PayoutCelebration';
 import {
   preflightSanctionsCheck,
   SANCTIONS_BLOCKED_MESSAGE,
@@ -166,6 +167,13 @@ export function CycleEscrowPanel({
   // (null again, most often) and React skips the re-render.
   const [refreshSeq, setRefreshSeq] = useState(0);
   const [lastDigest, setLastDigest] = useState<string | null>(null);
+  // The payout moment (PayoutCelebration). Set once per successful claim,
+  // keyed by the claim digest so a re-render or refresh never re-fires it.
+  const [celebration, setCelebration] = useState<{
+    digest: string;
+    amount: string;
+    cycleNo: number | string;
+  } | null>(null);
   // Gated round + no attestation on the caller's wallet: explain the
   // verification requirement instead of a dead-end error toast.
   const [showVerificationRequired, setShowVerificationRequired] = useState(false);
@@ -373,6 +381,21 @@ export function CycleEscrowPanel({
               ? 'Cycle advanced to the next recipient.'
               : t('toast.payoutSent'),
         );
+        if (action === 'claim') {
+          // The member just collected their own turn: open the payout
+          // moment. friendlyAmount is the per-member contribution; the pot
+          // itself is contributionAmount × contributors, which the summary
+          // carries when it is known.
+          const potBase = liveState?.totalContributed;
+          setCelebration({
+            digest: result.digest,
+            amount:
+              potBase && potBase !== '0'
+                ? formatAmount(potBase, coinDecimals, coinSymbol)
+                : friendlyAmount,
+            cycleNo: liveState?.cycleNo ?? summary?.cycleNo ?? '—',
+          });
+        }
         // Wait for the fullnode to finish indexing this tx so the
         // follow-up reads see fresh state. Without this, refresh() can
         // hit stale data and the pot counter doesn't move until the
@@ -399,7 +422,19 @@ export function CycleEscrowPanel({
         setBusy(null);
       }
     },
-    [isReady, signAndExecute, refresh, rpcClient, t],
+    [
+      isReady,
+      signAndExecute,
+      refresh,
+      rpcClient,
+      t,
+      friendlyAmount,
+      summary?.cycleNo,
+      liveState?.totalContributed,
+      liveState?.cycleNo,
+      coinDecimals,
+      coinSymbol,
+    ],
   );
 
   // SUI is the only non-stablecoin settlement token. Any other coin type
@@ -1116,6 +1151,15 @@ export function CycleEscrowPanel({
       <VerificationRequiredModal
         open={showVerificationRequired}
         onClose={() => setShowVerificationRequired(false)}
+      />
+      <PayoutCelebration
+        open={celebration !== null}
+        onClose={() => setCelebration(null)}
+        amount={celebration?.amount ?? friendlyAmount}
+        cycleNo={celebration?.cycleNo ?? summary?.cycleNo ?? '—'}
+        circleName={circleName}
+        circleId={circleId}
+        txDigest={celebration?.digest ?? null}
       />
     </section>
   );
