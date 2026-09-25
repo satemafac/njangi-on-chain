@@ -9,10 +9,10 @@
 // removes the story from every list.
 
 import React, { useCallback, useEffect, useState } from 'react';
-import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '@/contexts/AuthContext';
+import { Seo } from '@/components/Seo';
 import type { Testimonial, TestimonialStatus } from '@/lib/testimonials';
 
 const STATUSES: TestimonialStatus[] = ['pending', 'approved', 'used', 'withdrawn'];
@@ -81,10 +81,13 @@ export default function AdminTestimonialsPage() {
 
   return (
     <>
-      <Head>
-        <title>Member stories · Njangi On-Chain</title>
-        <meta name="robots" content="noindex,nofollow" />
-      </Head>
+      <Seo
+        title="Member stories"
+        description="Operator review queue for member stories."
+        path="/admin/testimonials"
+        noindex
+        nofollow
+      />
       <main className="mx-auto max-w-3xl px-4 py-10 text-[#171923]">
         <h1 className="text-2xl font-semibold tracking-[-0.03em]">Member stories</h1>
         <p className="mt-2 text-sm leading-6 text-[#5d6674]">
