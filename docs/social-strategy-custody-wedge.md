@@ -43,10 +43,10 @@ The default SaaS answer (LinkedIn + X) is wrong for this audience. Split by pers
 | **Instagram Reels** — `@njangionchain` *(live)* | The nephew; diaspora | Vertical demo video. Same asset cross-posts to TikTok. | **Primary** |
 | **TikTok** — *no account* | The nephew (22–35, Douala/Dallas) | Highest organic reach for the exact segment that installs things. Biggest gap in the current setup. | **Open it** |
 | **Facebook groups** | The organizer (45–70) | Cameroon's dominant platform; hometown associations live in groups. **Not a broadcast channel — a listening and relationship channel.** Join and participate; do not post ads. | **Listen only, pre-launch** |
-| **LinkedIn** | Partners, investors | Low volume. Use for the partner/counsel/ramp conversations, not for member acquisition. | Low |
+| **LinkedIn** — *no page yet* | The nephew persona; partners; press | **Revised up from "low" (2026-08-29).** Three reasons: the regulation and Farepak material is native to LinkedIn's register and will outperform there; the diaspora professional aged 25&ndash;40 in Maryland, London or Paris *is* the LinkedIn demographic, which the first pass under-weighted; and the mobile-money partner outreach (Yellow Card, Transak) starts with warm intros that happen there. Different mix from X: fewer posts, longer, first-person founder POV. | **Secondary** |
 | **WhatsApp** | Everyone | Where njangis already live — but it is the *product surface*, not a marketing channel. Do not market into it. | N/A |
 
-**Focus two, seed one, listen in one.** X and Reels are primary; open TikTok and cross-post the same
+**Focus two, seed one, add LinkedIn at low volume, listen in one.** X and Reels are primary; open TikTok and cross-post the same
 vertical asset; be present in Facebook groups without selling. Spreading across five channels
 pre-launch is the standard way to do none of them.
 

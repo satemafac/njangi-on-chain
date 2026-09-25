@@ -40,6 +40,7 @@ import {
   type SubscriptionPlan,
 } from '../services/stripe-service';
 import { discoverMemberCircleIds } from './membership-discovery';
+import { hasActivePremiumReward } from './member-rewards';
 import {
   fetchCircleAdminAddress,
   suiAddressesEqual,
@@ -186,7 +187,21 @@ export async function getEntitlements(
     return entitlementsForPlan('free');
   }
   const record = await getSubscriptionForUser(toSubscriptionIdentity(identity));
-  return entitlementsForPlan(record?.plan ?? 'free');
+  const plan = record?.plan ?? 'free';
+  if (plan === 'free' && identity.userAddress) {
+    // A platform-granted Premium window (e.g. the Founding Circle month)
+    // counts as Premium while it lasts. Best-effort: a rewards-store blip
+    // must not turn a paying member's lookup into an error, so any failure
+    // here simply leaves the member on the tier the billing row said.
+    try {
+      if (await hasActivePremiumReward(identity.userAddress)) {
+        return entitlementsForPlan('premium');
+      }
+    } catch {
+      // fall through to the billing-row plan
+    }
+  }
+  return entitlementsForPlan(plan);
 }
 
 /**

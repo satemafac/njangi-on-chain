@@ -14,6 +14,7 @@
 
 import { useTranslation } from '@/hooks/useTranslation';
 import type { CircleRecord } from '@/lib/circle-record';
+import type { MemberBadge } from '@/lib/member-badges';
 
 function formatDate(ms: number | null | undefined, locale: string): string {
   if (!ms || ms <= 0) return '—';
@@ -38,12 +39,20 @@ export interface CircleRecordViewProps {
   record: CircleRecord;
   /** Shown on the member's own page; hidden on a shared view. */
   headerNote?: string;
+  /**
+   * Facts about the member's own history (e.g. Founding Circle). Passed
+   * ONLY by the member's own page; the shared view never receives them,
+   * and they are deliberately not part of the CircleRecord object so a
+   * share link cannot carry them. A badge is a fact, never a grade.
+   */
+  badges?: MemberBadge[];
 }
 
-export function CircleRecordView({ record, headerNote }: CircleRecordViewProps) {
+export function CircleRecordView({ record, headerNote, badges }: CircleRecordViewProps) {
   const { t, locale } = useTranslation();
   const { summary, circles } = record;
   const hasHistory = circles.length > 0;
+  const circleNameById = new Map(circles.map((c) => [c.circleId.toLowerCase(), c.circleName]));
 
   return (
     <div className="mx-auto w-full max-w-3xl">
@@ -88,6 +97,37 @@ export function CircleRecordView({ record, headerNote }: CircleRecordViewProps) 
       <p className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs leading-relaxed text-emerald-900">
         {t('record.fullFundingNote')}
       </p>
+
+      {badges && badges.length > 0 ? (
+        <section className="mt-8">
+          <h2 className="text-sm font-bold uppercase tracking-wide text-[#111827]">
+            {t('record.badges.heading')}
+          </h2>
+          <ul className="mt-3 space-y-2">
+            {badges.map((b) => (
+              <li
+                key={b.id}
+                className="rounded-xl border border-[#e9dcb8] bg-[#fbf3df] p-4"
+              >
+                <p className="text-sm font-semibold text-[#111827]">
+                  {t('record.badges.foundingCircle.title')}
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-[#556070]">
+                  {t('record.badges.foundingCircle.body', {
+                    circle:
+                      circleNameById.get(b.circleId.toLowerCase()) ??
+                      t('record.circle.untitled'),
+                    date: formatDate(b.awardedAtMs, locale),
+                  })}
+                </p>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[11px] leading-relaxed text-[#8a8578]">
+            {t('record.badges.note')}
+          </p>
+        </section>
+      ) : null}
 
       <section className="mt-8">
         <h2 className="text-sm font-bold uppercase tracking-wide text-[#111827]">

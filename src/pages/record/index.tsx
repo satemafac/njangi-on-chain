@@ -14,6 +14,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useTranslation } from '@/hooks/useTranslation';
 import { CircleRecordView } from '@/components/CircleRecordView';
 import type { CircleRecord } from '@/lib/circle-record';
+import type { MemberBadge } from '@/lib/member-badges';
+import type { Testimonial } from '@/lib/testimonials';
 
 interface ShareLink {
   token: string;
@@ -32,6 +34,8 @@ export default function RecordPage() {
   const [links, setLinks] = useState<ShareLink[]>([]);
   const [creating, setCreating] = useState(false);
   const [ttlDays, setTtlDays] = useState(30);
+  const [badges, setBadges] = useState<MemberBadge[]>([]);
+  const [stories, setStories] = useState<Testimonial[]>([]);
 
   const loadRecord = useCallback(async () => {
     setLoading(true);
@@ -61,11 +65,52 @@ export default function RecordPage() {
     }
   }, []);
 
+  // Badges and stories are the member's own, session-bound, and shown only
+  // here (never on a shared view). Both are non-fatal if unavailable.
+  const loadBadges = useCallback(async () => {
+    try {
+      const res = await fetch('/api/me/badges');
+      const data = await res.json();
+      if (res.ok && data?.success) setBadges(data.badges ?? []);
+    } catch {
+      // Non-fatal.
+    }
+  }, []);
+
+  const loadStories = useCallback(async () => {
+    try {
+      const res = await fetch('/api/testimonials');
+      const data = await res.json();
+      if (res.ok && data?.success) setStories(data.testimonials ?? []);
+    } catch {
+      // Non-fatal.
+    }
+  }, []);
+
+  const withdrawStory = useCallback(
+    async (id: number) => {
+      const res = await fetch('/api/testimonials', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      if (res.ok) {
+        toast.success(t('record.stories.withdrawn'));
+        await loadStories();
+      } else {
+        toast.error(t('record.stories.withdrawFailed'));
+      }
+    },
+    [loadStories, t],
+  );
+
   useEffect(() => {
     if (authLoading || !isAuthenticated) return;
     void loadRecord();
     void loadLinks();
-  }, [authLoading, isAuthenticated, loadRecord, loadLinks]);
+    void loadBadges();
+    void loadStories();
+  }, [authLoading, isAuthenticated, loadRecord, loadLinks, loadBadges, loadStories]);
 
   const createLink = useCallback(async () => {
     setCreating(true);
@@ -165,7 +210,7 @@ export default function RecordPage() {
         </div>
       ) : (
         <>
-          <CircleRecordView record={record} />
+          <CircleRecordView record={record} badges={badges} />
 
           <section className="mx-auto mt-10 w-full max-w-3xl rounded-xl border border-[#e6ddd1] bg-white p-5 print:hidden">
             <h2 className="text-sm font-bold uppercase tracking-wide text-[#111827]">
@@ -248,6 +293,42 @@ export default function RecordPage() {
               </ul>
             ) : null}
           </section>
+
+          {stories.some((s) => s.status !== 'withdrawn') ? (
+            <section className="mx-auto mt-6 w-full max-w-3xl rounded-xl border border-[#e6ddd1] bg-white p-5 print:hidden">
+              <h2 className="text-sm font-bold uppercase tracking-wide text-[#111827]">
+                {t('record.stories.heading')}
+              </h2>
+              <p className="mt-2 text-xs leading-relaxed text-[#556070]">
+                {t('record.stories.blurb')}
+              </p>
+              <ul className="mt-4 space-y-2">
+                {stories
+                  .filter((s) => s.status !== 'withdrawn')
+                  .map((s) => (
+                    <li
+                      key={s.id}
+                      className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-[#eee9e1] bg-[#fbfaf7] px-3 py-2"
+                    >
+                      <span className="max-w-[70%] text-xs leading-relaxed text-[#374151]">
+                        “{s.quote}”
+                        <span className="ml-2 text-[11px] text-[#8a8578]">
+                          {t(`record.stories.status.${s.status}`)}
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void withdrawStory(s.id)}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#8E2F3C]"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        {t('record.stories.withdraw')}
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+            </section>
+          ) : null}
         </>
       )}
     </main>
