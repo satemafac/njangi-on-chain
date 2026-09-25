@@ -1,0 +1,176 @@
+<title>One Tradition, Many Names</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Njangi On-Chain — Instagram carousel, Tradition pillar.
+     Slide 1 of the actual post is the "Nobody Holds the Pot" animation;
+     these are slides 2-11. Each frame is 1080x1080 — screenshot one at a
+     time, or print to PDF and split.
+     Single-theme by intent: social exports have fixed appearance. Tokens
+     mirror tailwind.config.ts — the product's system, not a new one. */
+  :root {
+    --ink:        #0a0a0c;
+    --ink-deep:   #0d0c12;
+    --ink-surface:#13121a;
+    --ink-border: #2a2620;
+    --gold:       #E8B04B;
+    --gold-hi:    #f6d99a;
+    --cream:      #f5f1e8;
+    --sand:       #a8a294;
+    --sand-dim:   #8b8578;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #050506;
+    color: var(--cream);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 28px;
+    padding: 28px;
+  }
+
+  .slide {
+    width: min(1080px, 92vmin);
+    aspect-ratio: 1;
+    background: radial-gradient(120% 90% at 50% 6%, #14121b 0%, var(--ink-deep) 55%, var(--ink) 100%);
+    border: 1px solid var(--ink-border);
+    border-radius: 12px;
+    position: relative;
+    overflow: hidden;
+    container-type: inline-size;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    padding: 7cqw;
+  }
+  .idx {
+    position: absolute;
+    top: 7cqw; right: 7cqw;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 1.5cqw;
+    letter-spacing: 0.18em;
+    color: var(--sand-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 1.55cqw;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin: 0;
+  }
+  .mark {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 1.6cqw;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--sand-dim);
+    margin: 0;
+    align-self: end;
+  }
+  .body { display: grid; align-content: center; gap: 2.6cqw; }
+
+  /* Opener + closer carry the argument; name cards carry the evidence. */
+  h1 {
+    margin: 0;
+    font-size: 11cqw;
+    line-height: 0.94;
+    letter-spacing: -0.04em;
+    font-weight: 600;
+    text-wrap: balance;
+  }
+  h1 em { font-style: normal; color: var(--gold); }
+  .lede {
+    margin: 0;
+    font-size: 2.5cqw;
+    line-height: 1.5;
+    color: var(--sand);
+    max-width: 46ch;
+  }
+
+  /* A name card: the word is the whole slide. */
+  .name {
+    margin: 0;
+    font-size: 15cqw;
+    line-height: 0.9;
+    letter-spacing: -0.045em;
+    font-weight: 600;
+    color: var(--cream);
+  }
+  .where {
+    margin: 0;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 1.9cqw;
+    line-height: 1.5;
+    color: var(--gold-hi);
+    letter-spacing: 0.04em;
+  }
+  .what {
+    margin: 0;
+    font-size: 2.2cqw;
+    line-height: 1.55;
+    color: var(--sand);
+    max-width: 40ch;
+  }
+  .rule { height: 1px; background: var(--ink-border); margin: 1.2cqw 0; }
+
+  .cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 1.4cqw;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 2cqw;
+    letter-spacing: 0.08em;
+    color: var(--gold);
+  }
+
+  /* Generated grounds sit under a scrim so type keeps AA contrast over
+     photography. Only the opener and closer carry an image — putting one
+     behind every slide would fight the typography, which is the point of
+     the name cards. */
+  .slide.has-bg::before {
+    content: "";
+    position: absolute; inset: 0;
+    background-image: var(--bg);
+    background-size: cover;
+    background-position: center;
+    opacity: 0.55;
+    z-index: 0;
+  }
+  .slide.has-bg::after {
+    content: "";
+    position: absolute; inset: 0;
+    background: linear-gradient(180deg,
+      rgba(10,10,12,0.86) 0%,
+      rgba(10,10,12,0.72) 42%,
+      rgba(10,10,12,0.90) 100%);
+    z-index: 0;
+  }
+  .slide.has-bg > * { position: relative; z-index: 1; }
+  /* .idx is absolutely positioned; the rule above would drop it into the
+     grid as a fourth item and shift every row. Restore it explicitly. */
+  .slide.has-bg > .idx { position: absolute; }
+
+  @media print {
+    body { background: none; gap: 0; padding: 0; }
+    .slide { border: none; border-radius: 0; page-break-after: always; width: 1080px; }
+  }
+</style>
+
+
+<style>
+  body { padding:0 !important; margin:0 !important; gap:0 !important; background:#0a0a0c !important; display:block !important; }
+  .slide { width:1080px !important; height:1080px !important; aspect-ratio:auto !important;
+           border:none !important; border-radius:0 !important; }
+</style>
+<section class="slide">
+  <p class="eyebrow">Mexico · and Mexican communities in the US</p><span class="idx">07</span>
+  <div class="body">
+    <p class="name">Tanda</p><div class="rule"></div>
+    <p class="where">Cundina in the northern border states</p>
+    <p class="what">Everyone pays the same amount on the same day. Two names, one arrangement, one border between them.</p>
+  </div>
+  <p class="mark">Njangi On-Chain</p>
+</section>

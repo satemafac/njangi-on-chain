@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '\n📦 njangi-on-chain Development Environment\n💡 Use /test-contracts, /build-deploy, /verify-circle\n🔑 Use /start-zklogin for auth services, /check-env for config\n' || true",
+            "command": "echo '\n\ud83d\udce6 njangi-on-chain Development Environment\n\ud83d\udca1 Use /test-contracts, /build-deploy, /verify-circle\n\ud83d\udd11 Use /start-zklogin for auth services, /check-env for config\n' || true",
             "timeout": 2
           }
         ]
@@ -56,6 +56,11 @@
           }
         ]
       }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(python3 marketing/tools/ax.py:*)"
     ]
   }
 }

@@ -1,0 +1,94 @@
+{
+  "total": 79.75,
+  "clips": [
+    {
+      "id": "tax",
+      "start": 436.5,
+      "end": 443.7,
+      "eyebrow": "The poverty tax",
+      "visual": "quote",
+      "keywords": [
+        "poverty",
+        "tax",
+        "poorer",
+        "expensive"
+      ],
+      "t0": 4.2,
+      "t1": 11.4,
+      "dur": 7.2
+    },
+    {
+      "id": "unbanked",
+      "start": 120.95,
+      "end": 133.75,
+      "eyebrow": "Who the bank leaves out",
+      "visual": "stat",
+      "stat": "70%",
+      "stat_label": "of Africans, no bank account \u00b7 rural: 95%",
+      "stat_at": 1.4,
+      "keywords": [
+        "70",
+        "95",
+        "%",
+        "banked",
+        "excluded",
+        "rural"
+      ],
+      "t0": 11.95,
+      "t1": 24.75,
+      "dur": 12.8
+    },
+    {
+      "id": "route",
+      "start": 307.05,
+      "end": 320.9,
+      "eyebrow": "Togo to Ghana. Neighbours.",
+      "visual": "route",
+      "keywords": [
+        "togo",
+        "ghana",
+        "europe",
+        "intermediary",
+        "time",
+        "money",
+        "neighboring"
+      ],
+      "t0": 25.3,
+      "t1": 39.15,
+      "dur": 13.85
+    },
+    {
+      "id": "fees",
+      "start": 333.4,
+      "end": 348.65,
+      "eyebrow": "What moving money costs",
+      "visual": "fees",
+      "keywords": [
+        "17",
+        "billion",
+        "2%",
+        "16%",
+        "remittance",
+        "fees"
+      ],
+      "t0": 39.7,
+      "t1": 54.95,
+      "dur": 15.25
+    },
+    {
+      "id": "own",
+      "start": 549.9,
+      "end": 554.65,
+      "eyebrow": "What Africa already had",
+      "visual": "quote",
+      "keywords": [
+        "solution",
+        "own",
+        "way"
+      ],
+      "t0": 55.5,
+      "t1": 60.25,
+      "dur": 4.75
+    }
+  ]
+}
