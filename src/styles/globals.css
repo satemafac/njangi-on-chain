@@ -156,6 +156,94 @@ body {
   }
 }
 
+/* ---- Reading column (BlogPost, prose articles) ----
+   Apple Newsroom-style long-form type for plain semantic article bodies.
+   Every selector goes through :where() so it carries no extra specificity:
+   bare elements get the prose look, while anything with its own utility
+   classes (callouts, figures, links styled on purpose) keeps them. Body
+   copy sits at #d2d2d7 rather than the secondary grey — long reading on
+   black needs more light than a caption does. */
+@layer components {
+  .prose-apple {
+    color: theme('colors.cream.muted');
+    font-size: 1.1875rem;
+    line-height: 1.6;
+    letter-spacing: 0.004em;
+  }
+  .prose-apple :where(p) {
+    margin: 0 0 1.35em;
+  }
+  .prose-apple :where(p:last-child) {
+    margin-bottom: 0;
+  }
+  .prose-apple :where(.lead) {
+    color: theme('colors.cream.DEFAULT');
+    font-size: clamp(1.25rem, 1.15rem + 0.35vw, 1.375rem);
+    line-height: 1.5;
+  }
+  .prose-apple :where(h2) {
+    color: theme('colors.cream.DEFAULT');
+    font-size: clamp(1.625rem, 1.3rem + 1vw, 2rem);
+    font-weight: 600;
+    line-height: 1.15;
+    letter-spacing: 0;
+    margin: 2.1em 0 0.7em;
+    text-wrap: balance;
+  }
+  .prose-apple :where(h3) {
+    color: theme('colors.cream.DEFAULT');
+    font-size: clamp(1.25rem, 1.15rem + 0.4vw, 1.4375rem);
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: 0.006em;
+    margin: 1.8em 0 0.6em;
+  }
+  .prose-apple :where(strong) {
+    color: theme('colors.cream.DEFAULT');
+    font-weight: 600;
+  }
+  .prose-apple :where(a) {
+    color: theme('colors.gold.DEFAULT');
+    text-decoration: underline;
+    text-decoration-color: rgba(232, 176, 75, 0.4);
+    text-underline-offset: 3px;
+    transition: text-decoration-color 0.2s;
+  }
+  .prose-apple :where(a:hover) {
+    text-decoration-color: currentColor;
+  }
+  /* Physical padding on purpose: the build polyfills `padding-inline-start`
+     with `:not(:lang(ar, he, …))` selectors, which lifts the rule above a
+     plain utility and stops ProseBlocks' `p-0` from resetting it. */
+  .prose-apple :where(ul, ol) {
+    margin: 0 0 1.5em;
+    padding-left: 1.25em;
+  }
+  .prose-apple :where(ul) {
+    list-style: disc;
+  }
+  .prose-apple :where(ol) {
+    list-style: decimal;
+  }
+  .prose-apple :where(li) {
+    margin: 0.6em 0;
+    padding-left: 0.25em;
+  }
+  .prose-apple :where(li)::marker {
+    color: theme('colors.gold.DEFAULT');
+  }
+  .prose-apple :where(blockquote) {
+    margin: 2.2em 0;
+    padding-inline-start: 1.1em;
+    border-inline-start: 3px solid theme('colors.gold.DEFAULT');
+    color: theme('colors.cream.DEFAULT');
+    font-size: clamp(1.375rem, 1.2rem + 0.6vw, 1.625rem);
+    font-weight: 600;
+    line-height: 1.35;
+    letter-spacing: 0.004em;
+  }
+}
+
 /* Radix sheets on the landing: the scrim fades, the sheet settles from 96%.
    Uses the individual `scale` property so it composes with the centring
    translate on the element instead of overwriting it. */

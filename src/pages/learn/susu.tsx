@@ -1,14 +1,11 @@
-import Link from 'next/link';
-import { useState } from 'react';
 import { Seo } from '../../components/Seo';
 import { article, breadcrumbs, definedTerm } from '../../lib/structured-data';
-import { MarketingShell } from '../../components/marketing/ArticleLayout';
+import { GuideSection, LearnGuide } from '../../components/marketing/LearnGuide';
+import { CodeBlock, KeyPoints, ProseAction, SideBySide, Steps } from '../../components/marketing/ProseBlocks';
 import { SourcedStat, PlainStat } from '../../components/marketing/SourcedStat';
 import { REMITTANCES_LAC, REMITTANCE_COST_GLOBAL } from '../../content/sourced-facts';
 
 export default function SouSouCryptoPage() {
-  const [activeSection, setActiveSection] = useState('overview');
-
   return (
     <>
       <Seo
@@ -53,271 +50,198 @@ export default function SouSouCryptoPage() {
         ]}
       />
 
-      <MarketingShell>
-        {/* Navigation */}
-        <nav className="bg-ink-surface border-b">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center space-x-2 py-3 text-sm text-sand">
-              <Link href="/" className="hover:text-gold transition-colors">Home</Link>
-              <span>/</span>
-              <Link href="/learn" className="hover:text-gold transition-colors">Learn</Link>
-              <span>/</span>
-              <span className="text-cream font-medium">Susu</span>
-            </div>
-          </div>
-        </nav>
+      <LearnGuide
+        crumb="Susu"
+        title="What is a Susu? Caribbean and West African Savings Circles"
+        standfirst={
+          <p>
+            Explore how traditional Caribbean <strong>Sou Sou</strong>, Jamaican <strong>Partner</strong>, and{' '}
+            <strong>Susu</strong>, sou-sou and Partner are the Caribbean and West African names for one
+            practice: everyone pays in, and each member takes the pot in turn.
+          </p>
+        }
+        actions={{
+          primary: { label: 'Start Your Digital Sou Sou', href: '/create-circle' },
+          secondary: { label: 'Explore Platform', href: '/dashboard' },
+        }}
+        figures={
+          <>
+            {/* Sourced figures only. The block this replaced asserted a diaspora
+                population, a share of circles led by women, and a Caribbean
+                remittance total, none of them sourced. The regional total below is
+                for Latin America and the Caribbean together, which is how the World
+                Bank reports it — deliberately not narrowed to the Caribbean alone,
+                since that would invent a breakdown the source does not give. */}
+            <SourcedStat fact={REMITTANCES_LAC} />
+            <SourcedStat fact={REMITTANCE_COST_GLOBAL} />
+            <PlainStat
+              value="One tradition"
+              label="Susu, sou-sou and Partner name the same practice across the Caribbean and West Africa"
+            />
+          </>
+        }
+        toc={[
+          { id: 'overview', label: 'What is Sou Sou?' },
+          { id: 'regional', label: 'Regional Variations' },
+          { id: 'blockchain', label: 'How It Works Here' },
+          { id: 'diaspora', label: 'Diaspora Communities' },
+        ]}
+        related={[
+          {
+            href: '/learn/what-is-njangi',
+            title: 'What is Njangi? Cameroon’s Savings Circle',
+            description: 'Cameroon’s savings circle: how it works, and why it has lasted.',
+          },
+          {
+            href: '/learn/rosca',
+            title: 'What is a ROSCA? Rotating Savings, Explained',
+            description: 'The structure behind njangi, tontine, susu and chit funds.',
+          },
+          {
+            href: '/learn/tontine',
+            title: 'What is a Tontine? African Savings Circles',
+            description: 'The rotating savings circle across West and Central Africa.',
+          },
+        ]}
+        cta={{
+          title: 'Ready to Join the Caribbean Savings Revolution?',
+          body: 'Connect with Caribbean and West African diaspora communities worldwide through sou sou circles where nobody holds the pot and every member can check the record.',
+          primary: { label: 'Start Your Sou Sou', href: '/create-circle' },
+          secondary: { label: 'Find Your Circle', href: '/dashboard' },
+        }}
+      >
+        <GuideSection id="overview" title="What is Sou Sou?">
+          <p className="lead">
+            <strong>Sou Sou</strong> (also spelled &ldquo;Susu&rdquo;) is a Caribbean and West African
+            community savings practice where trusted groups of people contribute fixed amounts regularly
+            to a collective fund. Members take turns receiving the full amount, creating a rotating
+            credit system that enables access to larger sums without traditional banking.
+          </p>
 
-        {/* Hero */}
-        <section className="bg-gradient-to-r from-ink-surface to-ink-deep text-cream py-20">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-            <h1 className="text-4xl md:text-5xl font-bold mb-6">
-              What is a Susu? Caribbean and West African Savings Circles
-            </h1>
-            <p className="text-xl md:text-2xl mb-8 text-cream-muted">
-              Explore how traditional Caribbean <strong>Sou Sou</strong>, Jamaican <strong>Partner</strong>, and 
-              <strong>Susu</strong>, sou-sou and Partner are the Caribbean and West African names for one
-              practice: everyone pays in, and each member takes the pot in turn.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4">
-              <Link 
-                href="/create-circle" 
-                className="bg-ink-surface text-gold px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface transition-colors text-center"
-              >
-                Start Your Digital Sou Sou →
-              </Link>
-              <Link 
-                href="/dashboard" 
-                className="border border-gold-deep/55 text-cream px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface hover:text-gold transition-colors text-center"
-              >
-                Explore Platform
-              </Link>
-            </div>
-          </div>
-        </section>
+          <SideBySide
+            columns={[
+              {
+                title: 'Cultural Heritage',
+                points: [
+                  'Brought to Caribbean by enslaved Africans',
+                  'Maintained through oral tradition',
+                  'Cornerstone of community resilience',
+                  'Informal financial institution for generations',
+                  'Gender-inclusive economic empowerment',
+                ],
+              },
+              {
+                title: 'Modern Importance',
+                points: [
+                  'Bridge for unbanked populations',
+                  'Connects diaspora to homeland',
+                  'Enables microenterprise development',
+                  'Emergency financial support network',
+                  'Preserves cultural identity abroad',
+                ],
+              },
+            ]}
+          />
 
-        {/* Sourced figures only. The block this replaced asserted a diaspora
-            population, a share of circles led by women, and a Caribbean
-            remittance total, none of them sourced. The regional total below is
-            for Latin America and the Caribbean together, which is how the World
-            Bank reports it — deliberately not narrowed to the Caribbean alone,
-            since that would invent a breakdown the source does not give. */}
-        <section className="bg-ink-surface border-b border-ink-border">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-8">
-              <SourcedStat fact={REMITTANCES_LAC} />
-              <SourcedStat fact={REMITTANCE_COST_GLOBAL} />
-              <PlainStat
-                value="One tradition"
-                label="Susu, sou-sou and Partner name the same practice across the Caribbean and West Africa"
-              />
-            </div>
-          </div>
-        </section>
+          <h3>Traditional Sou Sou Structure</h3>
+          <Steps
+            items={[
+              { title: 'Community Formation', body: 'Trusted friends and family join' },
+              { title: 'Regular Contributions', body: 'Weekly or monthly fixed amounts' },
+              { title: 'Rotating “Hand”', body: 'Members receive full amount in turn' },
+              { title: 'Cycle Renewal', body: 'Process repeats until all members served' },
+            ]}
+          />
+        </GuideSection>
 
-        {/* Navigation Tabs */}
-        <section className="bg-ink-surface border-b">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-            <div className="flex flex-wrap gap-4">
-              {[
-                { id: 'overview', label: 'What is Sou Sou?' },
-                { id: 'regional', label: 'Regional Variations' },
-                { id: 'blockchain', label: 'How It Works Here' },
-                { id: 'diaspora', label: 'Diaspora Communities' }
-              ].map((tab) => (
-                <button 
-                  key={tab.id}
-                  onClick={() => setActiveSection(tab.id)}
-                  className={`px-4 py-2 rounded-lg transition-colors ${
-                    activeSection === tab.id 
-                      ? 'bg-gold/[0.07] text-gold' 
-                      : 'hover:bg-ink-surface'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </section>
+        <GuideSection id="regional" title="Regional Variations Across the Caribbean & West Africa">
+          <SideBySide
+            columns={[
+              {
+                title: 'Greater Antilles',
+                points: [
+                  <><strong>Jamaica</strong> - Partner/Pardner</>,
+                  <><strong>Haiti</strong> - Sol/Association</>,
+                  <><strong>Dominican Republic</strong> - San/Caja</>,
+                  <><strong>Puerto Rico</strong> - Vaca</>,
+                  <><strong>Cuba</strong> - Vaca (Historical)</>,
+                ],
+              },
+              {
+                title: 'Lesser Antilles',
+                points: [
+                  <><strong>Trinidad & Tobago</strong> - Sou Sou</>,
+                  <><strong>Barbados</strong> - Meeting Turn</>,
+                  <><strong>Grenada</strong> - Box Money</>,
+                  <><strong>St. Lucia</strong> - Cooperative</>,
+                  <><strong>Dominica</strong> - Sou Sou Circle</>,
+                ],
+              },
+              {
+                title: 'West Africa Origins',
+                points: [
+                  <><strong>Ghana</strong> - Susu</>,
+                  <><strong>Sierra Leone</strong> - Osusu</>,
+                  <><strong>Nigeria</strong> - Esusu (Yoruba)</>,
+                  <><strong>Gambia</strong> - Osusu</>,
+                  <><strong>Liberia</strong> - Susu (Kru)</>,
+                ],
+              },
+            ]}
+          />
 
-        {/* Main Content */}
-        <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-          <div
-            id="overview"
-            role="tabpanel"
-            className={activeSection === 'overview' ? '' : 'hidden'}
-          >
-            <section className="space-y-8">
-              <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">What is Sou Sou?</h2>
-                <p className="text-lg text-sand mb-6">
-                  <strong>Sou Sou</strong> (also spelled &ldquo;Susu&rdquo;) is a Caribbean and West African 
-                  community savings practice where trusted groups of people contribute fixed amounts regularly 
-                  to a collective fund. Members take turns receiving the full amount, creating a rotating 
-                  credit system that enables access to larger sums without traditional banking.
-                </p>
-                
-                <div className="grid md:grid-cols-2 gap-8 mb-8">
-                  <div className="bg-gold/[0.07] p-6 rounded-lg">
-                    <h3 className="text-xl font-semibold text-gold mb-4">Cultural Heritage</h3>
-                    <ul className="space-y-2 text-gold">
-                      <li>• Brought to Caribbean by enslaved Africans</li>
-                      <li>• Maintained through oral tradition</li>
-                      <li>• Cornerstone of community resilience</li>
-                      <li>• Informal financial institution for generations</li>
-                      <li>• Gender-inclusive economic empowerment</li>
-                    </ul>
-                  </div>
-                  
-                  <div className="bg-gold/[0.07] p-6 rounded-lg">
-                    <h3 className="text-xl font-semibold text-gold mb-4">Modern Importance</h3>
-                    <ul className="space-y-2 text-gold">
-                      <li>• Bridge for unbanked populations</li>
-                      <li>• Connects diaspora to homeland</li>
-                      <li>• Enables microenterprise development</li>
-                      <li>• Emergency financial support network</li>
-                      <li>• Preserves cultural identity abroad</li>
-                    </ul>
-                  </div>
-                </div>
+          <h3>Unique Caribbean Adaptations</h3>
+          <SideBySide
+            columns={[
+              {
+                title: 'Social Elements',
+                points: [
+                  'Monthly “cook-up” celebration meals',
+                  'Integration with church communities',
+                  'Seasonal agricultural timing',
+                  'Hurricane emergency protocols',
+                ],
+              },
+              {
+                title: 'Economic Features',
+                points: [
+                  'Tourism worker seasonal adaptations',
+                  'Remittance integration for families',
+                  'Small business funding networks',
+                  'Education expense sharing',
+                ],
+              },
+            ]}
+          />
 
-                <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6">
-                  <h3 className="text-lg font-semibold text-gold mb-3">Traditional Sou Sou Structure</h3>
-                  <div className="grid md:grid-cols-4 gap-4 text-sm text-gold">
-                    <div className="text-center">
-                      <div className="bg-gold text-cream rounded-full w-8 h-8 flex items-center justify-center mx-auto mb-2 font-bold">1</div>
-                      <div className="font-medium">Community Formation</div>
-                      <div className="text-xs">Trusted friends and family join</div>
-                    </div>
-                    <div className="text-center">
-                      <div className="bg-gold text-cream rounded-full w-8 h-8 flex items-center justify-center mx-auto mb-2 font-bold">2</div>
-                      <div className="font-medium">Regular Contributions</div>
-                      <div className="text-xs">Weekly or monthly fixed amounts</div>
-                    </div>
-                    <div className="text-center">
-                      <div className="bg-gold text-cream rounded-full w-8 h-8 flex items-center justify-center mx-auto mb-2 font-bold">3</div>
-                      <div className="font-medium">Rotating &ldquo;Hand&rdquo;</div>
-                      <div className="text-xs">Members receive full amount in turn</div>
-                    </div>
-                    <div className="text-center">
-                      <div className="bg-gold text-cream rounded-full w-8 h-8 flex items-center justify-center mx-auto mb-2 font-bold">4</div>
-                      <div className="font-medium">Cycle Renewal</div>
-                      <div className="text-xs">Process repeats until all members served</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </div>
+          <h3>Modern Challenges & Adaptations</h3>
+          <SideBySide
+            columns={[
+              {
+                title: 'Traditional Challenges',
+                points: [
+                  'Geographic dispersion of families',
+                  'Currency exchange complications',
+                  'Trust issues with new members',
+                  'Limited emergency protections',
+                ],
+              },
+              {
+                title: 'Digital Solutions',
+                points: [
+                  'Virtual meetings and ceremonies',
+                  'Multi-currency support',
+                  'The rotation runs to the agreed schedule, not to memory',
+                  'Insurance and security features',
+                ],
+              },
+            ]}
+          />
+        </GuideSection>
 
-          <div
-            id="regional"
-            role="tabpanel"
-            className={activeSection === 'regional' ? '' : 'hidden'}
-          >
-            <section className="space-y-8">
-              <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">Regional Variations Across the Caribbean & West Africa</h2>
-                
-                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-                  <div className="border border-ink-border rounded-lg p-4">
-                    <h3 className="font-semibold text-lg mb-2 text-gold">Greater Antilles</h3>
-                    <ul className="text-sm space-y-1">
-                      <li><strong>Jamaica</strong> - Partner/Pardner</li>
-                      <li><strong>Haiti</strong> - Sol/Association</li>
-                      <li><strong>Dominican Republic</strong> - San/Caja</li>
-                      <li><strong>Puerto Rico</strong> - Vaca</li>
-                      <li><strong>Cuba</strong> - Vaca (Historical)</li>
-                    </ul>
-                  </div>
-                  
-                  <div className="border border-ink-border rounded-lg p-4">
-                    <h3 className="font-semibold text-lg mb-2 text-gold">Lesser Antilles</h3>
-                    <ul className="text-sm space-y-1">
-                      <li><strong>Trinidad & Tobago</strong> - Sou Sou</li>
-                      <li><strong>Barbados</strong> - Meeting Turn</li>
-                      <li><strong>Grenada</strong> - Box Money</li>
-                      <li><strong>St. Lucia</strong> - Cooperative</li>
-                      <li><strong>Dominica</strong> - Sou Sou Circle</li>
-                    </ul>
-                  </div>
-                  
-                  <div className="border border-ink-border rounded-lg p-4">
-                    <h3 className="font-semibold text-lg mb-2 text-gold">West Africa Origins</h3>
-                    <ul className="text-sm space-y-1">
-                      <li><strong>Ghana</strong> - Susu</li>
-                      <li><strong>Sierra Leone</strong> - Osusu</li>
-                      <li><strong>Nigeria</strong> - Esusu (Yoruba)</li>
-                      <li><strong>Gambia</strong> - Osusu</li>
-                      <li><strong>Liberia</strong> - Susu (Kru)</li>
-                    </ul>
-                  </div>
-                </div>
-
-                <div className="bg-gold/[0.07] p-6 rounded-lg mb-6">
-                  <h3 className="text-lg font-semibold text-gold mb-3">Unique Caribbean Adaptations</h3>
-                  <div className="grid md:grid-cols-2 gap-4 text-sm text-gold">
-                    <div>
-                      <h4 className="font-medium">Social Elements</h4>
-                      <ul className="mt-2 space-y-1">
-                        <li>• Monthly &ldquo;cook-up&rdquo; celebration meals</li>
-                        <li>• Integration with church communities</li>
-                        <li>• Seasonal agricultural timing</li>
-                        <li>• Hurricane emergency protocols</li>
-                      </ul>
-                    </div>
-                    <div>
-                      <h4 className="font-medium">Economic Features</h4>
-                      <ul className="mt-2 space-y-1">
-                        <li>• Tourism worker seasonal adaptations</li>
-                        <li>• Remittance integration for families</li>
-                        <li>• Small business funding networks</li>
-                        <li>• Education expense sharing</li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-gold/[0.07] p-6 rounded-lg">
-                  <h3 className="text-lg font-semibold text-gold mb-3">Modern Challenges & Adaptations</h3>
-                  <div className="grid md:grid-cols-2 gap-4 text-sm text-gold">
-                    <div>
-                      <h4 className="font-medium text-gold">Traditional Challenges</h4>
-                      <ul className="mt-2 space-y-1">
-                        <li>• Geographic dispersion of families</li>
-                        <li>• Currency exchange complications</li>
-                        <li>• Trust issues with new members</li>
-                        <li>• Limited emergency protections</li>
-                      </ul>
-                    </div>
-                    <div>
-                      <h4 className="font-medium text-gold">Digital Solutions</h4>
-                      <ul className="mt-2 space-y-1">
-                        <li>• Virtual meetings and ceremonies</li>
-                        <li>• Multi-currency support</li>
-                        <li>• The rotation runs to the agreed schedule, not to memory</li>
-                        <li>• Insurance and security features</li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </div>
-
-          <div
-            id="blockchain"
-            role="tabpanel"
-            className={activeSection === 'blockchain' ? '' : 'hidden'}
-          >
-            <section className="space-y-8">
-              <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">Rules the group cannot quietly change</h2>
-                
-                <div className="mb-8">
-                  <h3 className="text-2xl font-bold mb-4">The rules, written down</h3>
-                  <div className="bg-ink-surface p-4 rounded-lg font-mono text-sm overflow-x-auto">
-                    <pre>{`// A simplified sketch of the sou sou rules
+        <GuideSection id="blockchain" title="Rules the group cannot quietly change">
+          <h3>The rules, written down</h3>
+          <CodeBlock>{`// A simplified sketch of the sou sou rules
 struct SouSouCircle {
     members: vector<SouSouMember>,
     contribution_amount: Balance<USDC>,
@@ -338,270 +262,121 @@ public fun make_contribution(
     // Check if all members contributed for this round
     // Trigger payout to current "hand" recipient
     // Schedule next cycle and cultural activities
-}`}</pre>
-                  </div>
-                </div>
+}`}</CodeBlock>
 
-                <div className="grid md:grid-cols-2 gap-8 mb-8">
-                  <div>
-                    <h3 className="text-xl font-bold mb-4 text-gold">Traditional Limitations</h3>
-                    <div className="space-y-3">
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Geographic Barriers</h4>
-                          <p className="text-sm text-sand">Physical meetings, local-only membership</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Currency Exchange</h4>
-                          <p className="text-sm text-sand">Complex remittance fees and delays</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Trust Dependencies</h4>
-                          <p className="text-sm text-sand">Single coordinator risk, fraud potential</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+          <h3>Traditional Limitations</h3>
+          <KeyPoints
+            columns={3}
+            items={[
+              { title: 'Geographic Barriers', body: 'Physical meetings, local-only membership' },
+              { title: 'Currency Exchange', body: 'Complex remittance fees and delays' },
+              { title: 'Trust Dependencies', body: 'Single coordinator risk, fraud potential' },
+            ]}
+          />
 
-                  <div>
-                    <h3 className="text-xl font-bold mb-4 text-gold">What changes</h3>
-                    <div className="space-y-3">
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Global Accessibility</h4>
-                          <p className="text-sm text-sand">24/7 participation from anywhere</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Instant Settlements</h4>
-                          <p className="text-sm text-sand">Immediate transfers, minimal fees</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Automated Trust</h4>
-                          <p className="text-sm text-sand">Contract rules apply equally to every member</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+          <h3>What changes</h3>
+          <KeyPoints
+            columns={3}
+            items={[
+              { title: 'Global Accessibility', body: '24/7 participation from anywhere' },
+              { title: 'Instant Settlements', body: 'Immediate transfers, minimal fees' },
+              { title: 'Automated Trust', body: 'Contract rules apply equally to every member' },
+            ]}
+          />
 
-                <div className="bg-gold/[0.07] p-6 rounded-lg">
-                  <h3 className="text-lg font-semibold text-gold mb-3">Built for circles spread across countries</h3>
-                  <div className="grid md:grid-cols-3 gap-4 text-sm text-gold">
-                    <div>
-                      <h4 className="font-medium">Multi-Currency Support</h4>
-                      <p>Digital dollars, so the pot holds its value across borders</p>
-                    </div>
-                    <div>
-                      <h4 className="font-medium">Virtual Ceremonies</h4>
-                      <p>Online cultural celebrations and community meetings</p>
-                    </div>
-                    <div>
-                      <h4 className="font-medium">Automated Escrow</h4>
-                      <p>The pot is held in escrow and released on schedule, to the scheduled member only</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </div>
+          <h3>Built for circles spread across countries</h3>
+          <KeyPoints
+            columns={3}
+            items={[
+              { title: 'Multi-Currency Support', body: 'Digital dollars, so the pot holds its value across borders' },
+              { title: 'Virtual Ceremonies', body: 'Online cultural celebrations and community meetings' },
+              {
+                title: 'Automated Escrow',
+                body: 'The pot is held in escrow and released on schedule, to the scheduled member only',
+              },
+            ]}
+          />
+        </GuideSection>
 
-          <div
-            id="diaspora"
-            role="tabpanel"
-            className={activeSection === 'diaspora' ? '' : 'hidden'}
-          >
-            <section className="space-y-8">
-              <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">Connecting Caribbean Diaspora Communities</h2>
-                
-                <div className="grid md:grid-cols-2 gap-8 mb-8">
-                  <div>
-                    <h3 className="text-xl font-bold mb-4">Global Caribbean Diaspora</h3>
-                    <div className="space-y-4">
-                      <div className="border border-ink-border rounded-lg p-4">
-                        <h4 className="font-semibold text-gold mb-2">North America</h4>
-                        <ul className="text-sm text-sand space-y-1">
-                          <li>• Long-established communities in New York, Florida and California</li>
-                          <li>• Toronto and Montreal in Canada</li>
-                          <li>• Dense remittance corridors back to the islands</li>
-                        </ul>
-                      </div>
-                      <div className="border border-ink-border rounded-lg p-4">
-                        <h4 className="font-semibold text-gold mb-2">United Kingdom</h4>
-                        <ul className="text-sm text-sand space-y-1">
-                          <li>• Caribbean-heritage communities since the Windrush generation</li>
-                          <li>• Established community institutions</li>
-                          <li>• Pardna kept going alongside formal banking</li>
-                        </ul>
-                      </div>
-                      <div className="border border-ink-border rounded-lg p-4">
-                        <h4 className="font-semibold text-gold mb-2">Other Regions</h4>
-                        <ul className="text-sm text-sand space-y-1">
-                          <li>• Netherlands (Surinamese communities)</li>
-                          <li>• France (Martinique/Guadeloupe diaspora)</li>
-                          <li>• Other Caribbean islands (migration)</li>
-                        </ul>
-                      </div>
-                    </div>
-                  </div>
+        <GuideSection id="diaspora" title="Connecting Caribbean Diaspora Communities">
+          <h3>Global Caribbean Diaspora</h3>
+          <SideBySide
+            columns={[
+              {
+                title: 'North America',
+                points: [
+                  'Long-established communities in New York, Florida and California',
+                  'Toronto and Montreal in Canada',
+                  'Dense remittance corridors back to the islands',
+                ],
+              },
+              {
+                title: 'United Kingdom',
+                points: [
+                  'Caribbean-heritage communities since the Windrush generation',
+                  'Established community institutions',
+                  'Pardna kept going alongside formal banking',
+                ],
+              },
+              {
+                title: 'Other Regions',
+                points: [
+                  'Netherlands (Surinamese communities)',
+                  'France (Martinique/Guadeloupe diaspora)',
+                  'Other Caribbean islands (migration)',
+                ],
+              },
+            ]}
+          />
 
-                  <div>
-                    <h3 className="text-xl font-bold mb-4">Digital Platform Benefits</h3>
-                    <div className="bg-ink-deep p-6 rounded-lg space-y-4">
-                      <div>
-                        <h4 className="font-semibold text-cream">Cultural Connection</h4>
-                        <p className="text-sm text-sand mt-1">
-                          Virtual meetups preserving Caribbean traditions and language, 
-                          enabling cultural transmission to new generations.
-                        </p>
-                      </div>
-                      <div>
-                        <h4 className="font-semibold text-cream">Economic Empowerment</h4>
-                        <p className="text-sm text-sand mt-1">
-                          Pooled savings for education, business investment, property 
-                          purchase, and family support across borders.
-                        </p>
-                      </div>
-                      <div>
-                        <h4 className="font-semibold text-cream">Emergency Support</h4>
-                        <p className="text-sm text-sand mt-1">
-                          Rapid response fund for natural disasters, family emergencies, 
-                          and unexpected financial hardships.
-                        </p>
-                      </div>
-                    </div>
+          <h3>Digital Platform Benefits</h3>
+          <KeyPoints
+            columns={3}
+            items={[
+              {
+                title: 'Cultural Connection',
+                body: 'Virtual meetups preserving Caribbean traditions and language, enabling cultural transmission to new generations.',
+              },
+              {
+                title: 'Economic Empowerment',
+                body: 'Pooled savings for education, business investment, property purchase, and family support across borders.',
+              },
+              {
+                title: 'Emergency Support',
+                body: 'Rapid response fund for natural disasters, family emergencies, and unexpected financial hardships.',
+              },
+            ]}
+          />
 
-                    <div className="mt-6 space-y-3">
-                      <Link 
-                        href="/create-circle"
-                        className="w-full bg-gold text-cream py-3 px-6 rounded-lg font-semibold hover:bg-gold transition-colors flex items-center justify-center"
-                      >
-                        Join Diaspora Network
-                      </Link>
-                      <Link 
-                        href="/dashboard"
-                        className="w-full border border-gold/45 text-gold py-3 px-6 rounded-lg font-semibold hover:bg-gold/[0.07] transition-colors flex items-center justify-center"
-                      >
-                        Find Your Community
-                      </Link>
-                    </div>
-                  </div>
-                </div>
+          <ProseAction href="/create-circle" secondary={{ label: 'Find Your Community', href: '/dashboard' }}>
+            Join Diaspora Network
+          </ProseAction>
 
-                <div className="bg-gold/[0.07] p-6 rounded-lg">
-                  <h3 className="text-lg font-semibold text-gold mb-3">Success Stories & Use Cases</h3>
-                  <div className="grid md:grid-cols-2 gap-4 text-sm text-gold">
-                    <div>
-                      <h4 className="font-medium">Family Support</h4>
-                      <ul className="mt-2 space-y-1">
-                        <li>• Grandparents&rsquo; medical expenses</li>
-                        <li>• Children&rsquo;s university tuition</li>
-                        <li>• Hurricane reconstruction funds</li>
-                        <li>• Wedding and celebration costs</li>
-                      </ul>
-                    </div>
-                    <div>
-                      <h4 className="font-medium">Business Development</h4>
-                      <ul className="mt-2 space-y-1">
-                        <li>• Caribbean restaurant startups</li>
-                        <li>• Tourism and hospitality ventures</li>
-                        <li>• Import/export businesses</li>
-                        <li>• Real estate investments</li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </div>
-
-          {/* Related Content Links */}
-          <section className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8 mt-12">
-            <h2 className="text-2xl font-bold mb-6 text-cream">Related Content</h2>
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-              <Link href="/learn/what-is-njangi" className="group">
-                <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is Njangi? Cameroon&rsquo;s Savings Circle
-                  </h3>
-                  <p className="text-sm text-sand">
-                    Cameroon&rsquo;s savings circle: how it works, and why it has lasted.
-                  </p>
-                </div>
-              </Link>
-              
-              <Link href="/learn/rosca" className="group">
-                <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is a ROSCA? Rotating Savings, Explained
-                  </h3>
-                  <p className="text-sm text-sand">
-                    The structure behind njangi, tontine, susu and chit funds.
-                  </p>
-                </div>
-              </Link>
-              
-              <Link href="/learn/tontine" className="group">
-                <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is a Tontine? African Savings Circles
-                  </h3>
-                  <p className="text-sm text-sand">
-                    The rotating savings circle across West and Central Africa.
-                  </p>
-                </div>
-              </Link>
-            </div>
-          </section>
-
-          {/* CTA Section */}
-          <section className="bg-gradient-to-r from-ink-surface to-ink-deep rounded-lg text-cream p-8 mt-12 text-center">
-            <h2 className="text-2xl font-bold mb-4">Ready to Join the Caribbean Savings Revolution?</h2>
-            <p className="text-cream-muted mb-6">
-              Connect with Caribbean and West African diaspora communities worldwide through 
-              sou sou circles where nobody holds the pot and every member can check the record.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Link 
-                href="/create-circle"
-                className="bg-ink-surface text-gold px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface transition-colors"
-              >
-                Start Your Sou Sou
-              </Link>
-              <Link 
-                href="/dashboard"
-                className="border border-gold-deep/55 text-cream px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface hover:text-gold transition-colors"
-              >
-                Find Your Circle
-              </Link>
-            </div>
-          </section>
-        </main>
-
-        {/* Footer */}
-        <footer className="bg-ink-surface mt-16">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <p className="text-sm text-sand text-center">
-              <strong>Disclaimer:</strong> This content is for educational purposes only and does not constitute financial advice. 
-              Njangi On-Chain is coordination software for savings circles: it never holds your money, never offers an investment, and never pays a return. Take part only with an amount your group can commit to the schedule.
-            </p>
-          </div>
-        </footer>
-      </MarketingShell>
+          <h3>Success Stories & Use Cases</h3>
+          <SideBySide
+            columns={[
+              {
+                title: 'Family Support',
+                points: [
+                  'Grandparents’ medical expenses',
+                  'Children’s university tuition',
+                  'Hurricane reconstruction funds',
+                  'Wedding and celebration costs',
+                ],
+              },
+              {
+                title: 'Business Development',
+                points: [
+                  'Caribbean restaurant startups',
+                  'Tourism and hospitality ventures',
+                  'Import/export businesses',
+                  'Real estate investments',
+                ],
+              },
+            ]}
+          />
+        </GuideSection>
+      </LearnGuide>
     </>
   );
-} 
+}
