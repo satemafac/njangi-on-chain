@@ -113,6 +113,22 @@ export function getSharedPgPool(): Pool {
     max: Number(process.env.PG_POOL_MAX ?? '5'),
     idleTimeoutMillis: Number(process.env.PG_POOL_IDLE_TIMEOUT_MS ?? '10000'),
   });
+  // pg emits 'error' on the pool when an IDLE client's connection dies: Neon
+  // closes idle connections, and a Vercel instance that slept between
+  // invocations wakes up holding sockets the server already dropped. pg evicts
+  // that client itself; the listener only has to exist, because an 'error'
+  // event with no listener is an uncaught exception that takes the whole
+  // function instance down (Sentry JAVASCRIPT-NEXTJS-8: "Connection terminated
+  // unexpectedly", fatal, 187 events since 2026-08-27).
+  pool.on('error', (err) => {
+    console.warn(`[pg-pool] discarded a dropped idle connection: ${err.message}`);
+  });
+  // A checked-out client can lose its connection between the statements of a
+  // transaction (sanctions refresh, Walrus renewal). Its listener stays quiet:
+  // the failure already surfaces as that transaction's rejected query.
+  pool.on('connect', (client) => {
+    client.on('error', () => {});
+  });
   globalStore[GLOBAL_POOL_KEY] = pool;
   return pool;
 }
