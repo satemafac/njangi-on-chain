@@ -123,6 +123,57 @@ function surfaceLines(color: THREE.Color, opacity: number, radius: number) {
   });
 }
 
+type CompiledProgram = { isReady(): boolean };
+
+/**
+ * Compiles the scene's shaders, then calls `done` once the driver reports them
+ * linked: `renderer.compileAsync`, but cancellable.
+ *
+ * three's compileAsync polls each material's program on a 10ms timer that
+ * can't be stopped, and reads `properties.get(material).currentProgram
+ * .isReady()` unguarded. Dispose the scene while it is still polling and the
+ * next tick throws on the torn-down state (Sentry JAVASCRIPT-NEXTJS-9, iOS
+ * Safari). The landing does exactly that for a signed-in visitor: it
+ * redirects to /dashboard as soon as the session loads, often mid-compile.
+ * Returns a cancel function; call it before disposing anything.
+ */
+function whenCompiled(
+  renderer: THREE.WebGLRenderer,
+  scene: THREE.Scene,
+  camera: THREE.Camera,
+  done: () => void
+): () => void {
+  const pending = renderer.compile(scene, camera);
+  // A lost context never reports a program ready; stop waiting and let the
+  // context-loss handling take over.
+  const giveUpAt = performance.now() + 5000;
+  let timer = 0;
+  let cancelled = false;
+  const check = () => {
+    if (cancelled) return;
+    pending.forEach((material) => {
+      const { currentProgram } = (renderer.properties.get(material) ?? {}) as {
+        currentProgram?: CompiledProgram;
+      };
+      // No program means the context was reset under us: nothing to wait for,
+      // the first render compiles it again.
+      if (!currentProgram || currentProgram.isReady()) pending.delete(material);
+    });
+    if (pending.size === 0 || performance.now() > giveUpAt) done();
+    else timer = window.setTimeout(check, 10);
+  };
+  // With KHR_parallel_shader_compile the driver links in the background and
+  // can be asked without blocking. Without it compile() has already blocked
+  // until linked, and the timer only lets the browser breathe between the
+  // compile and the first frame.
+  if (renderer.extensions.has('KHR_parallel_shader_compile')) check();
+  else timer = window.setTimeout(check, 10);
+  return () => {
+    cancelled = true;
+    window.clearTimeout(timer);
+  };
+}
+
 /**
  * Builds the scene into `mount` and starts it; returns the teardown. Split
  * out of the component so the (long, synchronous) setup can be scheduled
@@ -811,10 +862,11 @@ function mountScene(mount: HTMLDivElement, progress?: MotionValue<number>): (() 
   // Compile the scene's shaders off the main thread where the driver allows
   // (KHR_parallel_shader_compile) before the first frame, instead of stalling
   // inside it.
-  renderer.compileAsync(scene, camera).then(begin, begin);
+  const cancelCompile = whenCompiled(renderer, scene, camera, begin);
 
   return () => {
     tornDown = true;
+    cancelCompile();
     stop();
     cancelAnimationFrame(raf);
     window.removeEventListener('pointermove', onPointer);
