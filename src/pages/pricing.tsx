@@ -30,7 +30,6 @@ import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import type { GetStaticProps } from 'next';
-import { Instrument_Serif, Manrope } from 'next/font/google';
 import {
   ArrowRight,
   Check,
@@ -47,17 +46,8 @@ import { useTranslation } from '@/hooks/useTranslation';
 import type { Entitlements } from '@/lib/entitlement-gate';
 import { Seo } from '../components/Seo';
 import { breadcrumbs } from '../lib/structured-data';
-
-const wordmarkFont = Instrument_Serif({
-  subsets: ['latin'],
-  weight: '400',
-  display: 'swap',
-});
-
-const bodyFont = Manrope({
-  subsets: ['latin'],
-  display: 'swap',
-});
+import { Breadcrumbs, MarketingShell } from '../components/marketing/ArticleLayout';
+import { goldButtonClass, quietButtonClass } from '../components/landing/ui';
 
 // Inline static read so Next.js substitutes the build-time value in the
 // client bundle (same one-line check as entitlement-gate.isBillingEnabled).
@@ -85,15 +75,12 @@ export const getStaticProps: GetStaticProps<PricingPageProps> = async () => {
   };
 };
 
-const sectionEyebrowClass =
-  'text-[11px] font-semibold uppercase tracking-[0.28em] text-[#717784]';
-const shellCardClass =
-  'rounded-[30px] border border-[#ddd5c9] bg-white/88 shadow-[0_30px_90px_-62px_rgba(15,23,42,0.42)] backdrop-blur';
-const mutedCardClass = 'rounded-[24px] border border-[#e9e1d6] bg-[#fbfaf7]';
-const primaryButtonClass =
-  'inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#1d2533] px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_44px_-34px_rgba(15,23,42,0.45)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#101723] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0';
-const secondaryButtonClass =
-  'inline-flex w-full items-center justify-center gap-2 rounded-full border border-[#d5ccbf] bg-white px-5 py-3 text-sm font-semibold text-[#334155] transition-colors duration-200 hover:bg-[#f6f3ee]';
+// Apple pricing tiles on the public site's black system (see ArticleLayout).
+const planTileClass = 'relative flex flex-col rounded-[28px] bg-ink-surface p-7 sm:p-9';
+const noteTileClass = 'rounded-[20px] bg-white/[0.05]';
+const badgeClass = 'rounded-full px-3 py-1 text-[12px] font-medium';
+const primaryButtonClass = `${goldButtonClass} w-full`;
+const secondaryButtonClass = `${quietButtonClass} w-full`;
 
 export default function PricingPage({ freeTier, premiumTier }: PricingPageProps) {
   const { isAuthenticated, account } = useAuth();
@@ -220,7 +207,9 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
   let premiumCta: React.ReactNode;
   if (!BILLING_ENABLED) {
     premiumCta = (
-      <button type="button" disabled className={primaryButtonClass}>
+      // Not a dimmed gold (reads as a broken primary) — a quiet, plainly
+      // unavailable control.
+      <button type="button" disabled className={secondaryButtonClass}>
         {t('pricing.ctaComingSoon')}
       </button>
     );
@@ -287,60 +276,61 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
           url: '/og/pricing.png',
           alt: 'Njangi On-Chain pricing — free to run a circle, pay only for coordination',
         }}
-        themeColor="#f6f3ee"
+        themeColor="#000000"
         jsonLd={[breadcrumbs([{ name: 'Home', path: '/' }, { name: 'Pricing' }])]}
       />
 
-      <div
-        className={`${bodyFont.className} relative min-h-screen overflow-hidden bg-[#f6f3ee] text-[#171923]`}
-      >
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-[520px] bg-[radial-gradient(circle_at_top_left,_rgba(108,122,147,0.18),_transparent_36%),radial-gradient(circle_at_85%_10%,_rgba(218,204,178,0.34),_transparent_26%),linear-gradient(180deg,_rgba(255,255,255,0.58)_0%,_rgba(246,243,238,0)_72%)]" />
-
-        {/* Breadcrumb */}
-        <nav className="relative border-b border-[#e9e1d6] bg-white/60 backdrop-blur">
-          <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between gap-3 py-3 text-sm text-[#596170]">
-              <div className="flex items-center space-x-2">
-                <Link href="/" className="transition-colors hover:text-[#171923]">
-                  {t('pricing.breadcrumbHome')}
-                </Link>
-                <span>/</span>
-                <span className="font-medium text-[#171923]">{t('pricing.breadcrumbPricing')}</span>
-              </div>
-              <LocaleSwitcher compact />
-            </div>
+      <MarketingShell
+        legacy={false}
+        headerControls={<LocaleSwitcher compact variant="glass" />}
+        sheetExtras={() => (
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-[13px] text-mist-3">Language</span>
+            <LocaleSwitcher compact variant="glass" />
           </div>
-        </nav>
-
-        {/* Hero */}
-        <section className="relative">
-          <div className="mx-auto max-w-4xl px-4 pb-12 pt-16 text-center sm:px-6 lg:px-8">
-            <p className={sectionEyebrowClass}>{t('pricing.eyebrow')}</p>
-            <h1
-              className={`${wordmarkFont.className} mt-4 text-4xl tracking-[-0.03em] text-[#171923] sm:text-5xl`}
-            >
+        )}
+      >
+        {/* ================= HERO ================= */}
+        <header className="relative overflow-hidden">
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 bg-[radial-gradient(900px_460px_at_50%_-12%,rgba(232,176,75,0.10),transparent_64%)]"
+          />
+          <div className="relative mx-auto max-w-[980px] px-5 pb-14 pt-8 text-center sm:px-8 md:pb-20 md:pt-12">
+            <Breadcrumbs
+              className="flex justify-center"
+              items={[
+                { label: t('pricing.breadcrumbHome'), href: '/' },
+                { label: t('pricing.breadcrumbPricing') },
+              ]}
+            />
+            <p className="type-eyebrow mt-12 text-gold">{t('pricing.eyebrow')}</p>
+            <h1 className="type-hero mx-auto mt-3 max-w-[16ch] text-balance text-mist">
               {t('pricing.title')}
             </h1>
-            <p className="mx-auto mt-5 max-w-2xl text-base leading-7 text-[#596170] sm:text-lg">
+            <p className="type-intro mx-auto mt-6 max-w-[40rem] text-balance text-mist-2">
               {t('pricing.subtitle')}
             </p>
             {!BILLING_ENABLED && (
-              <div className="mt-6 inline-flex items-center gap-2 rounded-full border border-[#d8b66a]/60 bg-[#fdf6e7] px-4 py-2 text-sm font-medium text-[#8a5a21]">
-                <Sparkles className="h-4 w-4" />
+              <p className="mt-8 inline-flex items-center gap-2 rounded-full bg-gold/[0.12] px-4 py-2 text-[14px] font-medium text-gold-hi">
+                <Sparkles aria-hidden className="h-4 w-4" />
                 {t('pricing.comingSoonBanner')}
-              </div>
+              </p>
             )}
           </div>
-        </section>
+        </header>
 
         {showCancelledNotice && (
-          <div className="relative mx-auto max-w-4xl px-4 sm:px-6 lg:px-8">
-            <div className="mb-8 flex items-start justify-between gap-4 rounded-[20px] border border-[#e0cfae] bg-[#fdf6e7] px-5 py-4 text-sm leading-6 text-[#8a5a21]">
+          <div className="mx-auto max-w-[980px] px-5 sm:px-8">
+            <div
+              role="status"
+              className="mb-8 flex items-start justify-between gap-4 rounded-[20px] bg-gold/[0.1] px-5 py-4 text-[14px] leading-6 text-gold-hi"
+            >
               <p>{t('pricing.cancelledNotice')}</p>
               <button
                 type="button"
                 onClick={() => setShowCancelledNotice(false)}
-                className="rounded-full p-1 text-[#8a5a21] transition-colors hover:bg-[#f4e8cf]"
+                className="rounded-full p-1 text-gold-hi transition-colors hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold/80"
               >
                 <X className="h-4 w-4" />
                 <span className="sr-only">Dismiss</span>
@@ -349,49 +339,43 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
           </div>
         )}
 
-        {/* Plans */}
-        <main className="relative mx-auto max-w-5xl px-4 pb-16 sm:px-6 lg:px-8">
-          <div className="grid gap-6 md:grid-cols-2">
+        {/* ================= PLANS ================= */}
+        <main className="mx-auto max-w-[980px] px-5 pb-24 sm:px-8 md:pb-32">
+          <div className="grid gap-4 md:grid-cols-2 md:gap-5">
             {/* Free tier */}
-            <section className={`${shellCardClass} flex flex-col p-7 sm:p-8`}>
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold tracking-[-0.02em] text-[#171923]">
-                  {t('pricing.free')}
-                </h2>
-                <span className="rounded-full border border-[#e9e1d6] bg-[#fbfaf7] px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-[#717784]">
+            <section className={planTileClass}>
+              <div className="flex items-center justify-between gap-4">
+                <h2 className="type-tile text-mist">{t('pricing.free')}</h2>
+                <span className={`${badgeClass} bg-white/[0.08] text-mist-2`}>
                   {t('pricing.alwaysFreeBadge')}
                 </span>
               </div>
-              <div className="mt-4 flex items-baseline gap-2">
-                <span className="text-4xl font-semibold tracking-[-0.04em] text-[#171923]">
+              <div className="mt-6 flex items-baseline gap-2">
+                <span className="text-[3.5rem] font-semibold leading-none tracking-[-0.02em] text-mist">
                   $0
                 </span>
-                <span className="text-sm text-[#596170]">{t('pricing.forever')}</span>
+                <span className="type-caption text-mist-3">{t('pricing.forever')}</span>
               </div>
-              <p className="mt-3 text-sm leading-6 text-[#596170]">
-                {t('pricing.freeBlurb')}
-              </p>
+              <p className="type-body mt-4 text-mist-2">{t('pricing.freeBlurb')}</p>
 
-              <ul className="mt-6 flex-1 space-y-3">
+              <ul className="mt-7 flex-1 space-y-3 border-t border-white/[0.08] pt-7">
                 {freeFeatures.map((feature) => (
-                  <li key={feature} className="flex items-start gap-3 text-sm leading-6 text-[#334155]">
-                    <Check className="mt-0.5 h-4 w-4 flex-shrink-0 text-[#3f7d54]" />
+                  <li key={feature} className="type-caption flex items-start gap-3 text-mist-2">
+                    <Check aria-hidden className="mt-0.5 h-4 w-4 flex-shrink-0 text-mist-3" strokeWidth={2.2} />
                     <span>{feature}</span>
                   </li>
                 ))}
               </ul>
 
-              <div className={`${mutedCardClass} mt-6 flex items-start gap-3 p-4`}>
-                <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-[#3f7d54]" />
-                <p className="text-xs leading-5 text-[#4b5565]">
-                  <span className="font-semibold text-[#171923]">
-                    {t('pricing.alwaysFreeNoteLabel')}
-                  </span>{' '}
+              <div className={`${noteTileClass} mt-7 flex items-start gap-3 p-4`}>
+                <ShieldCheck aria-hidden className="mt-0.5 h-4 w-4 flex-shrink-0 text-gold" />
+                <p className="type-fine text-mist-2">
+                  <span className="font-semibold text-mist">{t('pricing.alwaysFreeNoteLabel')}</span>{' '}
                   {t('pricing.alwaysFreeNoteBody')}
                 </p>
               </div>
 
-              <div className="mt-6">
+              <div className="mt-7">
                 {isAuthenticated ? (
                   <Link href="/dashboard" className={secondaryButtonClass}>
                     {t('pricing.ctaGoToDashboard')}
@@ -405,123 +389,92 @@ export default function PricingPage({ freeTier, premiumTier }: PricingPageProps)
             </section>
 
             {/* Premium tier */}
-            <section
-              className={`${shellCardClass} relative flex flex-col border-[#c9bda7] p-7 ring-1 ring-[#d8cdb8] sm:p-8`}
-            >
-              <div className="flex items-center justify-between">
-                <h2 className="flex items-center gap-2 text-lg font-semibold tracking-[-0.02em] text-[#171923]">
-                  <Crown className="h-4 w-4 text-[#a07b2f]" />
+            <section className={`${planTileClass} ring-1 ring-gold/35`}>
+              <div
+                aria-hidden
+                className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full"
+                style={{ background: 'radial-gradient(closest-side, rgba(232,176,75,0.14), transparent)' }}
+              />
+              <div className="relative flex items-center justify-between gap-4">
+                <h2 className="type-tile flex items-center gap-2 text-mist">
+                  <Crown aria-hidden className="h-5 w-5 text-gold" />
                   {t('pricing.premium')}
                 </h2>
                 {!BILLING_ENABLED ? (
-                  <span className="rounded-full border border-[#d8b66a]/60 bg-[#fdf6e7] px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-[#8a5a21]">
+                  <span className={`${badgeClass} bg-gold/[0.14] text-gold-hi`}>
                     {t('pricing.comingSoon')}
                   </span>
                 ) : currentPlan === 'premium' ? (
-                  <span className="rounded-full border border-[#bcd6c4] bg-[#eef6f0] px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-[#3f7d54]">
+                  <span className={`${badgeClass} bg-[#30d158]/[0.14] text-[#30d158]`}>
                     {t('pricing.yourPlan')}
                   </span>
                 ) : (
-                  <span className="rounded-full border border-[#d8cdb8] bg-[#faf7f0] px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-[#7a6a45]">
+                  <span className={`${badgeClass} bg-white/[0.08] text-mist-2`}>
                     {t('pricing.forOrganizers')}
                   </span>
                 )}
               </div>
-              <div className="mt-4 flex items-baseline gap-2">
-                <span className="text-4xl font-semibold tracking-[-0.04em] text-[#171923]">
+              <div className="relative mt-6 flex items-baseline gap-2">
+                <span className="text-[3.5rem] font-semibold leading-none tracking-[-0.02em] text-mist">
                   {PREMIUM_PRICE_LABEL}
                 </span>
-                <span className="text-sm text-[#596170]">{t('pricing.perMonth')}</span>
+                <span className="type-caption text-mist-3">{t('pricing.perMonth')}</span>
               </div>
-              <p className="mt-3 text-sm leading-6 text-[#596170]">
-                {t('pricing.premiumBlurb')}
-              </p>
+              <p className="type-body relative mt-4 text-mist-2">{t('pricing.premiumBlurb')}</p>
 
-              <ul className="mt-6 flex-1 space-y-3">
+              <ul className="relative mt-7 flex-1 space-y-3 border-t border-white/[0.08] pt-7">
                 {premiumFeatures.map((feature) => (
-                  <li key={feature} className="flex items-start gap-3 text-sm leading-6 text-[#334155]">
-                    <Check className="mt-0.5 h-4 w-4 flex-shrink-0 text-[#a07b2f]" />
+                  <li key={feature} className="type-caption flex items-start gap-3 text-mist-2">
+                    <Check aria-hidden className="mt-0.5 h-4 w-4 flex-shrink-0 text-gold" strokeWidth={2.2} />
                     <span>{feature}</span>
                   </li>
                 ))}
               </ul>
 
-              <p className="mt-6 text-xs leading-5 text-[#717784]">
-                {t('pricing.billedMonthly')}
-              </p>
+              <p className="type-fine relative mt-7 text-mist-3">{t('pricing.billedMonthly')}</p>
 
-              <div className="mt-4">{premiumCta}</div>
+              <div className="relative mt-4">{premiumCta}</div>
             </section>
           </div>
 
           {/* Non-custodial assurance */}
-          <section className={`${mutedCardClass} mt-10 p-6 sm:p-8`}>
+          <section className="mt-5 rounded-[28px] bg-ink-surface p-7 sm:p-9">
             <div className="flex items-start gap-4">
-              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border border-[#dcd3c4] bg-white">
-                <ShieldCheck className="h-5 w-5 text-[#3f7d54]" />
-              </div>
+              <span className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full bg-gold/[0.12] text-gold">
+                <ShieldCheck aria-hidden className="h-5 w-5" />
+              </span>
               <div>
-                <h2 className="text-lg font-semibold tracking-[-0.02em] text-[#171923]">
+                <h2 className="text-[21px] font-semibold tracking-[0.011em] text-mist">
                   {t('pricing.assuranceTitle')}
                 </h2>
-                <p className="mt-2 max-w-3xl text-sm leading-6 text-[#596170]">
-                  {t('pricing.assuranceBody')}
-                </p>
+                <p className="type-body mt-2 max-w-3xl text-mist-2">{t('pricing.assuranceBody')}</p>
               </div>
             </div>
           </section>
 
           {/* Mini FAQ */}
-          <section className="mt-12">
-            <h2 className="text-center text-2xl font-semibold tracking-[-0.03em] text-[#171923]">
-              {t('pricing.faqTitle')}
-            </h2>
-            <div className="mt-6 grid gap-4 md:grid-cols-3">
-              <div className={`${shellCardClass} p-5`}>
-                <h3 className="text-sm font-semibold text-[#171923]">
-                  {t('pricing.faq.whoPays.q')}
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-[#596170]">
-                  {t('pricing.faq.whoPays.a')}
-                </p>
-              </div>
-              <div className={`${shellCardClass} p-5`}>
-                <h3 className="text-sm font-semibold text-[#171923]">
-                  {t('pricing.faq.cancel.q')}
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-[#596170]">
-                  {t('pricing.faq.cancel.a')}
-                </p>
-              </div>
-              <div className={`${shellCardClass} p-5`}>
-                <h3 className="text-sm font-semibold text-[#171923]">
-                  {t('pricing.faq.fees.q')}
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-[#596170]">
-                  {t('pricing.faq.fees.a')}
-                </p>
-              </div>
-              <div className={`${shellCardClass} p-5`}>
-                <h3 className="text-sm font-semibold text-[#171923]">
-                  {t('pricing.faq.gasFree.q')}
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-[#596170]">
-                  {t('pricing.faq.gasFree.a')}
-                </p>
-              </div>
+          <section className="mt-24 md:mt-32">
+            <h2 className="type-section text-center text-balance text-mist">{t('pricing.faqTitle')}</h2>
+            <div className="mt-12 grid gap-4 md:grid-cols-2 md:gap-5">
+              {(['whoPays', 'cancel', 'fees', 'gasFree'] as const).map((key) => (
+                <div key={key} className="rounded-[28px] bg-ink-surface p-7 sm:p-8">
+                  <h3 className="text-[19px] font-semibold tracking-[0.012em] text-mist">
+                    {t(`pricing.faq.${key}.q`)}
+                  </h3>
+                  <p className="type-body mt-3 text-mist-2">{t(`pricing.faq.${key}.a`)}</p>
+                </div>
+              ))}
             </div>
           </section>
         </main>
 
-        {/* Footer */}
-        <footer className="relative border-t border-[#e9e1d6] bg-white/60">
-          <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
-            <p className="text-center text-xs leading-5 text-[#717784]">
-              {t('pricing.footerDisclaimer')}
-            </p>
-          </div>
-        </footer>
-      </div>
+        {/* ================= DISCLAIMER ================= */}
+        <aside className="px-5 pb-16 sm:px-8">
+          <p className="type-fine mx-auto max-w-[44rem] text-center text-mist-3">
+            {t('pricing.footerDisclaimer')}
+          </p>
+        </aside>
+      </MarketingShell>
     </>
   );
 }

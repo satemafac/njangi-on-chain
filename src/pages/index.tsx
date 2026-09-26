@@ -1,18 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import Head from 'next/head';
-import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Instrument_Serif, Inter } from 'next/font/google';
 import { MotionConfig } from 'framer-motion';
 import {
   ArrowRight,
   Check,
-  ChevronRight,
   Coins,
   Globe2,
-  Plus,
   Shield,
   type LucideIcon,
   Users,
@@ -22,7 +18,6 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { LoginButton } from '../components/LoginButton';
-import { LegalFooter } from '../components/LegalFooter';
 import { useTranslation } from '../hooks/useTranslation';
 import { getNetworkConfig, setCurrentNetwork } from '../services/network-config';
 import { SUPPORT_MAILTO } from '../lib/constants';
@@ -42,6 +37,18 @@ import RotationStory from '../components/landing/RotationStory';
 import CircleMock from '../components/landing/CircleMock';
 import FeatureBento, { type Feature } from '../components/landing/FeatureBento';
 import NamesLight from '../components/landing/NamesLight';
+import SiteFooter from '../components/landing/SiteFooter';
+import { sansFont, serifFont } from '../components/landing/fonts';
+import {
+  ChevronLink,
+  FaqList,
+  eyebrowClass,
+  focusRing,
+  goldButtonClass,
+  quietButtonClass,
+  sectionBodyClass,
+  sectionTitleClass,
+} from '../components/landing/ui';
 
 declare global {
   interface Window {
@@ -58,24 +65,6 @@ declare global {
     };
   }
 }
-
-// Brand serif: the wordmark and the tradition's names (heritage voice).
-const serifFont = Instrument_Serif({
-  subsets: ['latin'],
-  weight: '400',
-  display: 'swap',
-});
-
-// Everything else speaks SF Pro on Apple devices (see `.apple` in
-// globals.css). Inter is the stand-in elsewhere; preload is off so Apple
-// devices, which never use it, never download it.
-const sansFont = Inter({
-  subsets: ['latin'],
-  axes: ['opsz'],
-  display: 'swap',
-  preload: false,
-  variable: '--font-landing-sans',
-});
 
 const CULTURAL_NAMES = [
   'Adaji',
@@ -236,46 +225,6 @@ const FAQ_ITEMS = [
   { id: 'do-i-need-crypto', questionKey: 'landing.faq.q3', answerKey: 'landing.faq.a3' },
   { id: 'network-switching', questionKey: 'landing.faq.q4', answerKey: 'landing.faq.a4' },
 ];
-
-// ---- Shared class strings (Apple controls: pill buttons, chevron links) ----
-const focusRing =
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold/80 focus-visible:ring-offset-2 focus-visible:ring-offset-black';
-const goldButtonClass = `inline-flex h-12 items-center justify-center gap-1.5 rounded-full bg-gold px-7 text-[17px] font-medium tracking-[-0.022em] text-[#1d1d1f] transition-[background-color,transform] duration-200 hover:bg-[#f0bd5e] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60 ${focusRing}`;
-const quietButtonClass = `inline-flex h-12 items-center justify-center rounded-full bg-white/[0.1] px-6 text-[17px] font-medium tracking-[-0.022em] text-mist transition-[background-color,transform] duration-200 hover:bg-white/[0.16] active:scale-[0.97] ${focusRing}`;
-const chevronLinkClass = `group inline-flex items-center gap-0.5 rounded text-[17px] tracking-[-0.022em] text-gold underline-offset-4 hover:underline ${focusRing}`;
-const eyebrowClass = 'type-eyebrow text-gold';
-const sectionTitleClass = 'type-section mt-3 text-balance text-mist';
-const sectionBodyClass = 'type-intro mx-auto mt-5 max-w-[42rem] text-balance text-mist-2';
-
-function ChevronLink({
-  href,
-  children,
-  onClick,
-}: {
-  href: string;
-  children: React.ReactNode;
-  onClick?: React.MouseEventHandler<HTMLAnchorElement>;
-}) {
-  const content = (
-    <>
-      {children}
-      <ChevronRight
-        aria-hidden
-        className="h-[1.05em] w-[1.05em] transition-transform duration-200 group-hover:translate-x-0.5 rtl:rotate-180 rtl:group-hover:-translate-x-0.5"
-        strokeWidth={2}
-      />
-    </>
-  );
-  return href.startsWith('#') ? (
-    <a href={href} onClick={onClick} className={chevronLinkClass}>
-      {content}
-    </a>
-  ) : (
-    <Link href={href} className={chevronLinkClass}>
-      {content}
-    </Link>
-  );
-}
 
 export default function Home() {
   const router = useRouter();
@@ -737,8 +686,6 @@ export default function Home() {
             onSwitchNetwork={switchNetwork}
             onLogin={() => openSignIn('login')}
             t={t}
-            serifClassName={serifFont.className}
-            fontVariables={sansFont.variable}
           />
 
           <main>
@@ -1121,52 +1068,16 @@ export default function Home() {
                   </RevealItem>
                 </Reveal>
 
-                <div className="mt-14 border-b border-white/[0.1]">
-                  {FAQ_ITEMS.map((item) => {
-                    const open = !!openFaqItems[item.id];
-                    return (
-                      <div key={item.id} className="border-t border-white/[0.1]">
-                        <h3>
-                          <button
-                            type="button"
-                            id={`faq-q-${item.id}`}
-                            onClick={() => toggleFaqItem(item.id)}
-                            aria-expanded={open}
-                            aria-controls={`faq-panel-${item.id}`}
-                            className={`group flex w-full items-center justify-between gap-6 rounded-lg py-6 text-start ${focusRing}`}
-                          >
-                            <span className="text-[clamp(1.1875rem,1.08rem+0.45vw,1.5rem)] font-semibold leading-snug tracking-[0.009em] text-mist">
-                              {t(item.questionKey)}
-                            </span>
-                            <span
-                              aria-hidden
-                              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-mist-2 transition-colors duration-200 group-hover:bg-white/[0.14] group-hover:text-mist"
-                            >
-                              <Plus
-                                className={`h-4 w-4 transition-transform duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1)] ${
-                                  open ? 'rotate-45' : ''
-                                }`}
-                                strokeWidth={2.2}
-                              />
-                            </span>
-                          </button>
-                        </h3>
-                        <div
-                          id={`faq-panel-${item.id}`}
-                          role="region"
-                          aria-labelledby={`faq-q-${item.id}`}
-                          inert={!open}
-                          className={`grid transition-[grid-template-rows,opacity] duration-500 ease-[cubic-bezier(0.28,0.11,0.32,1)] ${
-                            open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
-                          }`}
-                        >
-                          <div className="overflow-hidden">
-                            <p className="type-body max-w-[46rem] pb-7 text-mist-2">{t(item.answerKey)}</p>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                <div className="mt-14">
+                  <FaqList
+                    items={FAQ_ITEMS.map((item) => ({
+                      id: item.id,
+                      question: t(item.questionKey),
+                      answer: t(item.answerKey),
+                    }))}
+                    open={openFaqItems}
+                    onToggle={toggleFaqItem}
+                  />
                 </div>
 
                 <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row sm:gap-10">
@@ -1177,69 +1088,17 @@ export default function Home() {
             </section>
           </main>
 
-          <footer className="border-t border-white/[0.08]">
-            <div className="mx-auto max-w-[1100px] px-5 py-12 sm:px-8">
-              <div className="flex flex-col gap-8 md:flex-row md:items-center md:justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-white/[0.06]">
-                    <Image
-                      src="/njangi-on-chain-logo.png"
-                      alt=""
-                      width={72}
-                      height={72}
-                      className="h-full w-full object-contain"
-                      unoptimized
-                    />
-                  </span>
-                  <span className="flex items-baseline gap-1.5">
-                    <span
-                      className={`${serifFont.className} text-[1.6rem] leading-none tracking-[-0.03em] text-mist`}
-                    >
-                      Njangi
-                    </span>
-                    <span className="text-[0.58rem] font-semibold uppercase tracking-[0.3em] text-gold">
-                      On-chain
-                    </span>
-                  </span>
-                </div>
-
-                <nav aria-label="Footer" className="flex flex-wrap items-center gap-x-7 gap-y-1">
-                  {[
-                    { href: '/learn', label: t('nav.learn'), external: false },
-                    { href: '/faq', label: t('nav.faq'), external: false },
-                    { href: 'https://x.com/njangi_on_chain', label: 'X', external: true },
-                    { href: 'https://www.instagram.com/njangionchain', label: 'Instagram', external: true },
-                    { href: SUPPORT_MAILTO, label: 'Email', external: false },
-                  ].map((link) =>
-                    link.href.startsWith('/') ? (
-                      <Link
-                        key={link.label}
-                        href={link.href}
-                        className={`type-caption rounded py-2.5 text-mist-2 transition-colors duration-200 hover:text-mist ${focusRing}`}
-                      >
-                        {link.label}
-                      </Link>
-                    ) : (
-                      <a
-                        key={link.label}
-                        href={link.href}
-                        {...(link.external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-                        className={`type-caption rounded py-2.5 text-mist-2 transition-colors duration-200 hover:text-mist ${focusRing}`}
-                      >
-                        {link.label}
-                      </a>
-                    )
-                  )}
-                </nav>
-              </div>
-
-              <div className="type-fine mt-8 flex flex-col gap-3 border-t border-white/[0.08] pt-6 text-mist-3 md:flex-row md:items-center md:justify-between">
-                <p>{t('landing.footer.rights', { year: new Date().getFullYear() })}</p>
-                <LegalFooter tone="dark" className="text-[12px]" />
-                <p>{t('landing.footer.tagline')}</p>
-              </div>
-            </div>
-          </footer>
+          <SiteFooter
+            links={[
+              { href: '/learn', label: t('nav.learn') },
+              { href: '/faq', label: t('nav.faq') },
+              { href: 'https://x.com/njangi_on_chain', label: 'X', external: true },
+              { href: 'https://www.instagram.com/njangionchain', label: 'Instagram', external: true },
+              { href: SUPPORT_MAILTO, label: 'Email' },
+            ]}
+            rights={t('landing.footer.rights', { year: new Date().getFullYear() })}
+            tagline={t('landing.footer.tagline')}
+          />
         </div>
       </MotionConfig>
     </>

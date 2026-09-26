@@ -104,6 +104,58 @@ body {
   animation-delay: var(--d, 0ms);
 }
 
+/* ---- Legacy long-form content adapter (MarketingShell / ArticleLayout) ----
+   The article bodies under /learn and /blog were built on a SaaS template
+   and later recoloured, so they still carry its habits: bold headings, 8px
+   corners, heavy drop shadows, and colourless `border-*` rules that fall
+   back to Tailwind's light grey (#e5e7eb — a bright line on a black page).
+   Scoped to `.mkt-legacy`, this brings them onto the Apple system without
+   rewriting every article. In @layer components so explicit border-colour
+   utilities still win; the heading/radius/shadow rules win on specificity. */
+@layer components {
+  .mkt-legacy *,
+  .mkt-legacy ::before,
+  .mkt-legacy ::after {
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+  .mkt-legacy h1,
+  .mkt-legacy h2,
+  .mkt-legacy h3,
+  .mkt-legacy h4 {
+    font-weight: 600;
+    text-wrap: balance;
+  }
+  .mkt-legacy h1 {
+    letter-spacing: -0.02em;
+    line-height: 1.08;
+  }
+  .mkt-legacy h2 {
+    letter-spacing: -0.012em;
+    line-height: 1.12;
+  }
+  .mkt-legacy h3,
+  .mkt-legacy h4 {
+    letter-spacing: -0.005em;
+  }
+  .mkt-legacy .rounded {
+    border-radius: 8px;
+  }
+  .mkt-legacy .rounded-lg {
+    border-radius: 18px;
+  }
+  .mkt-legacy .rounded-xl,
+  .mkt-legacy .rounded-2xl {
+    border-radius: 22px;
+  }
+  .mkt-legacy [class*='shadow-['],
+  .mkt-legacy .shadow,
+  .mkt-legacy .shadow-md,
+  .mkt-legacy .shadow-lg,
+  .mkt-legacy .shadow-xl {
+    box-shadow: none;
+  }
+}
+
 /* Radix sheets on the landing: the scrim fades, the sheet settles from 96%.
    Uses the individual `scale` property so it composes with the centring
    translate on the element instead of overwriting it. */

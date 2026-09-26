@@ -13,33 +13,36 @@ export default {
         background: "var(--background)",
         foreground: "var(--foreground)",
 
-        // The landing palette, promoted from inline arbitrary values.
-        // Before this, every brand colour in the app was written as an
-        // arbitrary hex (`text-[#E8B04B]`) with no shared definition, which is
-        // how /learn, /faq and /blog drifted onto a different colour system
-        // from the landing. Prefer these names in new work; the arbitrary
-        // values still in place elsewhere are equivalent, not different.
+        // The public-site palette. Every public page (landing, /learn, /faq,
+        // /pricing, /blog) sits on Apple's dark-page system: a pure-black
+        // canvas, tiles lifted a few steps above it, labels stepping down in
+        // contrast rather than hue, gold the single accent.
+        //
+        // `ink` / `cream` / `sand` are the names the long-form marketing pages
+        // were written against (2026-08); `night` / `mist` below are the
+        // landing's names for the same values. Both resolve to one set of
+        // neutrals so the pages cannot drift onto different greys again.
         ink: {
-          DEFAULT: "#0a0a0c", // page background, and the theme-color meta
-          deep: "#0d0c12",
-          surface: "#13121a", // cards
-          border: "#2a2620",
-          inner: "#221f29",
+          DEFAULT: "#000000", // page background, and the theme-color meta
+          deep: "#0b0b0d",
+          surface: "#141416", // cards
+          border: "#2c2c2e",
+          inner: "#1d1d1f",
         },
         gold: {
           DEFAULT: "#E8B04B", // accents, eyebrows, active states
           hi: "#f6d99a", // highlights and focus rings
           deep: "#C8902F", // gradient end
-          on: "#1a1304", // text on a gold fill
+          on: "#1d1d1f", // text on a gold fill
         },
         cream: {
-          DEFAULT: "#f5f1e8", // headings
-          muted: "#cfc8ba", // secondary text and links
-          cowrie: "#EDE4D3",
+          DEFAULT: "#f5f5f7", // headings, primary labels
+          muted: "#d2d2d7", // secondary text and links
+          cowrie: "#EDE4D3", // the heritage accent — cultural names
         },
         sand: {
-          DEFAULT: "#a8a294", // body text
-          dim: "#8b8578", // captions
+          DEFAULT: "#a1a1a6", // body text
+          dim: "#86868b", // captions
         },
         sui: "#4DA2FF",
 
