@@ -154,7 +154,7 @@ export default function BlockchainRoscaPage() {
             <li><strong>Tontines</strong> - French Africa</li>
             <li><strong>Susu</strong> - Ghana, Sierra Leone</li>
             <li><strong>Stokvels</strong> - South Africa</li>
-            <li><strong>Chit Funds</strong> - Kenya</li>
+            <li><strong>Chamas</strong> - Kenya</li>
           </ul>
 
           <h3>Asia</h3>
@@ -170,8 +170,8 @@ export default function BlockchainRoscaPage() {
           <ul>
             <li><strong>Sou Sou</strong> - Caribbean</li>
             <li><strong>Tandas</strong> - Mexico</li>
-            <li><strong>Susus</strong> - Guyana</li>
-            <li><strong>Juntas</strong> - Colombia</li>
+            <li><strong>Box Hand</strong> - Guyana</li>
+            <li><strong>Juntas</strong> - Peru</li>
             <li><strong>Partners</strong> - Jamaica</li>
           </ul>
 
@@ -219,8 +219,8 @@ public fun make_contribution(
 ) {
     // Verify contribution amount and member status
     // Record contribution automatically
-    // Trigger payout when round complete
-    // Advance the rotation to the next member
+    // Nothing is paid out here: once everyone has paid, the scheduled
+    // member collects the whole pot and the rotation moves on
 }`}</CodeBlock>
 
           <h3>Traditional ROSCA Problems</h3>
@@ -258,7 +258,7 @@ public fun make_contribution(
                 title: 'Automation',
                 body: 'Contribution tracking and payout order run from contract rules, not memory',
               },
-              { title: 'Scalability', body: 'No size limits, global membership possible' },
+              { title: 'Circle Size', body: '3 to 20 members per circle, each approved by the organiser' },
             ]}
           />
         </GuideSection>
@@ -270,7 +270,7 @@ public fun make_contribution(
             items={[
               {
                 title: 'Multi-Cultural Support',
-                body: 'Supporting traditional ROSCA formats from around the world with culturally appropriate features and ceremonies.',
+                body: 'The rotating format that njangi, tontine, susu and tanda groups share: a fixed amount, a fixed schedule and an agreed order.',
               },
               {
                 title: 'Stablecoin Settlement',
@@ -287,13 +287,13 @@ public fun make_contribution(
           <ol>
             <li>Sign in with Google, Facebook or Apple &mdash; no seed phrase</li>
             <li>Agree the contribution amount, member count and rotation order</li>
-            <li>Browse available circles or create your own</li>
+            <li>Create your own circle, or join one from its invite link</li>
             <li>Post your security deposit and pay in each cycle</li>
           </ol>
 
           <ProseAction
             href="/create-circle"
-            secondary={{ label: 'Browse Existing Circles', href: '/dashboard' }}
+            secondary={{ label: 'View Dashboard', href: '/dashboard' }}
           >
             Create Your Circle
           </ProseAction>

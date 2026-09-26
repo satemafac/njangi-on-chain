@@ -270,20 +270,16 @@ export default function WhatIsNjangiPage() {
           <Steps
             items={[
               {
-                title: 'Account Creation',
-                body: 'Download the Njangi On-Chain mobile app, complete identity verification, and set up secure authentication.',
-              },
-              {
                 title: 'Sign In',
                 body: 'Sign in with Google, Facebook or Apple. No seed phrase to write down and no token to buy first.',
               },
               {
-                title: 'Circle Discovery',
-                body: 'Browse circles by contribution amount, duration and location. Members are people your group already knows — we do not score anyone.',
+                title: 'Join or Start a Circle',
+                body: 'Join from the invite link an organiser shares, or start your own. Members are people your group already knows — we do not score anyone.',
               },
               {
                 title: 'Active Participation',
-                body: 'Set up automatic payments, participate in meetings, and engage with circle community features.',
+                body: 'Pay in each round yourself (nothing is taken automatically), and collect the whole pot when your turn comes.',
               },
             ]}
           />
@@ -294,16 +290,15 @@ export default function WhatIsNjangiPage() {
               {
                 title: 'Technical',
                 points: [
-                  'Smartphone (iOS 12+ or Android 8+)',
+                  'A web browser on a phone or computer',
                   'A Google, Facebook or Apple account to sign in',
                   'No identity documents — we do not ask for your ID',
-                  'Email and phone number',
                 ],
               },
               {
                 title: 'Financial',
                 points: [
-                  'Security deposit (1-2x monthly contribution)',
+                  'Security deposit (at least half of one contribution)',
                   'Monthly contribution amount',
                   'Small amount of SUI tokens for fees',
                   'Emergency fund for penalties',
