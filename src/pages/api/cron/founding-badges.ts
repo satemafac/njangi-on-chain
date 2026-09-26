@@ -192,12 +192,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             circleId,
             sourceTx: event.id.txDigest,
           });
-          if (!badge) return 'skipped'; // already awarded (idempotent replay)
-          await grantPremiumMonths({
+          // The reward is granted even when the badge already existed: both
+          // writes are idempotent on their own keys, so a tick that awarded
+          // the badge and then failed on the grant (as the first prod tick
+          // did on 2026-09-25) is repaired by the next tick instead of
+          // leaving the member with a badge and no Premium month.
+          const reward = await grantPremiumMonths({
             userAddress: admin,
             months: PREMIUM_MONTHS_FOR_FOUNDERS,
             source: `founding_circle:${circleId.toLowerCase()}`,
           });
+          if (!badge && !reward) return 'skipped'; // full idempotent replay
           awarded += 1;
           return 'sent';
         } catch (err) {

@@ -91,8 +91,12 @@ export async function grantPremiumMonths(input: {
   const months = Math.max(1, Math.min(12, Math.floor(input.months)));
   await ensureTable();
   const { rows } = await getSharedPgPool().query<Row>(
+    // $2 is cast explicitly on every use: Postgres deduces one type per
+    // parameter, and the first version of this statement used $2 as both an
+    // INTEGER and a text operand ("inconsistent types deduced for parameter
+    // $2"), which silently lost the first Founding Circle grant in prod.
     `INSERT INTO member_rewards (user_address, reward_type, months, source, starts_at, ends_at)
-     VALUES ($1, 'premium_month', $2, $3, NOW(), NOW() + ($2 || ' months')::interval)
+     VALUES ($1, 'premium_month', $2::int, $3, NOW(), NOW() + make_interval(months => $2::int))
      ON CONFLICT (user_address, source) DO NOTHING
      RETURNING *`,
     [input.userAddress.toLowerCase(), months, input.source],
