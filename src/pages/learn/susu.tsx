@@ -55,9 +55,9 @@ export default function SouSouCryptoPage() {
         title="What is a Susu? Caribbean and West African Savings Circles"
         standfirst={
           <p>
-            Explore how traditional Caribbean <strong>Sou Sou</strong>, Jamaican <strong>Partner</strong>, and{' '}
-            <strong>Susu</strong>, sou-sou and Partner are the Caribbean and West African names for one
-            practice: everyone pays in, and each member takes the pot in turn.
+            <strong>Susu</strong>, <strong>sou-sou</strong> and <strong>Partner</strong> are the Caribbean
+            and West African names for one practice: everyone pays in, and each member takes the pot in
+            turn.
           </p>
         }
         actions={{
@@ -107,7 +107,7 @@ export default function SouSouCryptoPage() {
           title: 'Ready to Join the Caribbean Savings Revolution?',
           body: 'Connect with Caribbean and West African diaspora communities worldwide through sou sou circles where nobody holds the pot and every member can check the record.',
           primary: { label: 'Start Your Sou Sou', href: '/create-circle' },
-          secondary: { label: 'Find Your Circle', href: '/dashboard' },
+          secondary: { label: 'Explore Platform', href: '/dashboard' },
         }}
       >
         <GuideSection id="overview" title="What is Sou Sou?">
@@ -229,10 +229,9 @@ export default function SouSouCryptoPage() {
               {
                 title: 'Digital Solutions',
                 points: [
-                  'Virtual meetings and ceremonies',
+                  'Members in different countries pay into the same pot',
                   'Multi-currency support',
                   'The rotation runs to the agreed schedule, not to memory',
-                  'Insurance and security features',
                 ],
               },
             ]}
@@ -242,26 +241,34 @@ export default function SouSouCryptoPage() {
         <GuideSection id="blockchain" title="Rules the group cannot quietly change">
           <h3>The rules, written down</h3>
           <CodeBlock>{`// A simplified sketch of the sou sou rules
-struct SouSouCircle {
-    members: vector<SouSouMember>,
-    contribution_amount: Balance<USDC>,
-    cultural_activities_fund: Balance<USDC>,
-    emergency_reserve: Balance<USDC>,
-    current_hand: u64,
-    meeting_schedule: u64, // Weekly = 1, Monthly = 4
-    diaspora_features: bool
+// Every round gets its own escrow, and only that round's "hand" can collect it
+struct CycleEscrow<phantom T> {
+    recipient: address,          // whose hand it is, fixed when the round opens
+    members: vector<address>,
+    contribution_amount: u64,    // one exact amount, the same for every member
+    contributed: Table<address, bool>,
+    balance: Balance<T>,         // the pot
 }
 
-public fun make_contribution(
-    circle: &mut SouSouCircle,
-    payment: Coin<USDC>,
-    ctx: &TxContext
+public fun contribute<T>(
+    escrow: &mut CycleEscrow<T>,
+    payment: Coin<T>,
+    ctx: &mut TxContext
 ) {
-    // Verify member status and contribution amount
-    // Allocate 90% to main fund, 5% cultural, 5% emergency
-    // Check if all members contributed for this round
-    // Trigger payout to current "hand" recipient
-    // Schedule next cycle and cultural activities
+    // Members only, once per round, the exact amount
+    // The member whose hand it is does not pay into their own round
+    // The whole payment goes into the pot; nothing is set aside
+}
+
+public fun finalize_and_redeem<T>(
+    escrow: &mut CycleEscrow<T>,
+    clock: &Clock,
+    ctx: &mut TxContext
+) {
+    // Only the member whose hand it is can collect,
+    // and only once everyone else has paid
+    // They receive the entire pot, and advance_circle_after_claim
+    // then moves the rotation to the next hand
 }`}</CodeBlock>
 
           <h3>Traditional Limitations</h3>
@@ -278,8 +285,11 @@ public fun make_contribution(
           <KeyPoints
             columns={3}
             items={[
-              { title: 'Global Accessibility', body: '24/7 participation from anywhere' },
-              { title: 'Instant Settlements', body: 'Immediate transfers, minimal fees' },
+              { title: 'Global Accessibility', body: '24/7 participation across borders' },
+              {
+                title: 'One Currency',
+                body: 'Everyone pays in the same digital currency, so the pot never mixes currencies',
+              },
               { title: 'Automated Trust', body: 'Contract rules apply equally to every member' },
             ]}
           />
@@ -289,7 +299,10 @@ public fun make_contribution(
             columns={3}
             items={[
               { title: 'Multi-Currency Support', body: 'Digital dollars, so the pot holds its value across borders' },
-              { title: 'Virtual Ceremonies', body: 'Online cultural celebrations and community meetings' },
+              {
+                title: 'Invite by Link',
+                body: 'The organiser shares one link; members sign in and ask to join, and the organiser approves each one',
+              },
               {
                 title: 'Automated Escrow',
                 body: 'The pot is held in escrow and released on schedule, to the scheduled member only',
@@ -335,24 +348,24 @@ public fun make_contribution(
             items={[
               {
                 title: 'Cultural Connection',
-                body: 'Virtual meetups preserving Caribbean traditions and language, enabling cultural transmission to new generations.',
+                body: 'Run the same sou sou your family has always run, with members in different countries.',
               },
               {
                 title: 'Economic Empowerment',
-                body: 'Pooled savings for education, business investment, property purchase, and family support across borders.',
+                body: 'Pooled savings for education, a small business, property purchase, and family support across borders.',
               },
               {
-                title: 'Emergency Support',
-                body: 'Rapid response fund for natural disasters, family emergencies, and unexpected financial hardships.',
+                title: 'Easy Sign-In',
+                body: 'Relatives sign in with Google, Facebook or Apple — no seed phrase to write down and no wallet to install.',
               },
             ]}
           />
 
-          <ProseAction href="/create-circle" secondary={{ label: 'Find Your Community', href: '/dashboard' }}>
-            Join Diaspora Network
+          <ProseAction href="/create-circle" secondary={{ label: 'View Dashboard', href: '/dashboard' }}>
+            Start Your Sou Sou
           </ProseAction>
 
-          <h3>Success Stories & Use Cases</h3>
+          <h3>Common Uses</h3>
           <SideBySide
             columns={[
               {
@@ -370,7 +383,7 @@ public fun make_contribution(
                   'Caribbean restaurant startups',
                   'Tourism and hospitality ventures',
                   'Import/export businesses',
-                  'Real estate investments',
+                  'Property purchases',
                 ],
               },
             ]}

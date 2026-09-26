@@ -104,7 +104,7 @@ export default function TontineBlockchainPage() {
               {
                 title: 'Cultural Significance',
                 points: [
-                  'Ubuntu philosophy: Community interdependence',
+                  'Community interdependence',
                   'Collective prosperity benefits entire group',
                   'Social capital building beyond finance',
                   'Cultural preservation in modern contexts',
@@ -143,9 +143,9 @@ export default function TontineBlockchainPage() {
         <GuideSection id="regional" title="Tontine Traditions Across Francophone Africa">
           <h3>West Africa</h3>
           <ul>
-            <li><strong>Senegal</strong> - Tontines & Nawétanes</li>
+            <li><strong>Senegal</strong> - Tontines</li>
             <li><strong>Mali</strong> - Ton & Community Savings</li>
-            <li><strong>Burkina Faso</strong> - Caisses Populaires</li>
+            <li><strong>Burkina Faso</strong> - Tontines</li>
             <li><strong>Côte d&rsquo;Ivoire</strong> - Urban Professional Groups</li>
           </ul>
 
@@ -181,7 +181,6 @@ export default function TontineBlockchainPage() {
                 title: 'Gender-Specific Adaptations',
                 points: [
                   'Women’s tontines for household needs',
-                  'Men’s groups for larger investments',
                   'Mixed professional neighborhoods',
                   'Youth circles for education funding',
                 ],
@@ -215,24 +214,32 @@ export default function TontineBlockchainPage() {
           />
 
           <CodeBlock>{`// A simplified sketch of the tontine rules
-struct AfricanTontine {
-    members: vector<TontineMember>,
-    contribution_amount: u64,
-    cultural_fund: Balance<USDC>,
-    rotation_position: u64, // whose turn receives the payout
-    current_cycle: u64,
-    is_active: bool
+// Every round gets its own escrow, paid out only to that round's recipient
+struct CycleEscrow<phantom T> {
+    recipient: address,          // whose turn it is, fixed when the round opens
+    members: vector<address>,
+    contribution_amount: u64,    // the same exact amount for every member
+    contributed: Table<address, bool>,
+    balance: Balance<T>,         // the pot
 }
 
-public fun make_monthly_contribution(
-    tontine: &mut AfricanTontine,
-    payment: Coin<USDC>,
-    ctx: &TxContext
+public fun contribute<T>(
+    escrow: &mut CycleEscrow<T>,
+    payment: Coin<T>,
+    ctx: &mut TxContext
 ) {
-    // Verify member and amount
-    // Allocate 95% to main fund, 5% to cultural activities
-    // Check if all members contributed
-    // Process payout when round complete
+    // Verify member and amount; one contribution per member per round
+    // The full payment goes into the pot; nothing is set aside
+}
+
+public fun finalize_to_recipient<T>(
+    escrow: &mut CycleEscrow<T>,
+    clock: &Clock,
+    ctx: &mut TxContext
+) {
+    // Anyone may call this once the round is fully paid
+    // It sends a claim on the entire pot to this round's recipient,
+    // and only the recipient can redeem it
 }`}</CodeBlock>
 
           <h3>What that gives the circle</h3>
@@ -240,7 +247,10 @@ public fun make_monthly_contribution(
             columns={3}
             items={[
               { title: 'Enhanced Security', body: 'A shared record that no one member can quietly edit' },
-              { title: 'Cultural Preservation', body: 'Virtual ceremonies and digital community spaces' },
+              {
+                title: 'Cultural Preservation',
+                body: 'The amount, schedule and turn order your group agreed, recorded on-chain where any member can check them',
+              },
               { title: 'Diaspora Integration', body: 'Global participation maintaining cultural connections' },
             ]}
           />
@@ -251,20 +261,16 @@ public fun make_monthly_contribution(
           <Steps
             items={[
               {
-                title: 'Cultural Registration',
-                body: 'Select your region (Senegal, Mali, Cameroon, etc.) and cultural preferences.',
-              },
-              {
                 title: 'Financial Setup',
                 body: 'Sign in with Google, Facebook or Apple — no seed phrase — and add funds when you are ready.',
               },
               {
-                title: 'Community Matching',
-                body: 'Find tontines based on contribution amount, duration, and cultural background.',
+                title: 'Invite or Join',
+                body: 'Start a tontine and share its invite link, or join one from the link its organiser sends you; the organiser approves each member.',
               },
               {
                 title: 'Active Participation',
-                body: 'Set up automatic payments and engage with virtual community features.',
+                body: 'Pay in each round yourself (nothing is taken automatically), and collect the whole pot when your turn comes.',
               },
             ]}
           />
@@ -274,12 +280,12 @@ public fun make_monthly_contribution(
             columns={3}
             items={[
               {
-                title: 'Multi-Currency Support',
-                body: 'USDC, CFA francs, and other African currencies with automatic conversion.',
+                title: 'Local-Currency Amounts',
+                body: 'The organiser can set the amount in Central African CFA francs or another listed currency; the circle settles in USDC or SUI, and the app never holds or converts cash.',
               },
               {
-                title: 'Cultural Integration',
-                body: 'Virtual ceremonies, traditional greetings, and community celebrations.',
+                title: 'Shared Record',
+                body: 'Every member can see who has paid this round and whose turn it is.',
               },
               {
                 title: 'Stablecoin Settlement',
@@ -290,7 +296,7 @@ public fun make_monthly_contribution(
 
           <ProseAction
             href="/create-circle"
-            secondary={{ label: 'Browse Existing Tontines', href: '/dashboard' }}
+            secondary={{ label: 'View Dashboard', href: '/dashboard' }}
           >
             Create Your Tontine
           </ProseAction>

@@ -349,7 +349,7 @@ export default function LearnIndexPage() {
               <Link href="/create-circle" className={goldButtonClass}>
                 Create Your Circle
               </Link>
-              <ChevronLink href="/dashboard">Browse Existing Circles</ChevronLink>
+              <ChevronLink href="/dashboard">View Dashboard</ChevronLink>
             </div>
           </div>
         </section>
