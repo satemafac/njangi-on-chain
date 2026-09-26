@@ -1,0 +1,158 @@
+{
+  "name": "circles-ep01-tontine",
+  "source": "marketing/handoff/inbox/004-traditions-ep1-tontine (SCRIPT-V2 + MOTION-BRIEF + VO-SCRIPT, drafted by Muse)",
+  "script_changes": [
+    "Scene 1 on-screen: '1653. Italy.' -> '1653. France.' Lorenzo de Tonti was Italian, but he proposed the tontine in France (to Cardinal Mazarin, 1653). The VO keeps 'an Italian banker'.",
+    "Scene 2 VO: 'Africa took the same word and built the opposite' -> 'in Africa, the same word came to mean the opposite'. Rotating circles in Africa are far older than the French word; the old line implied they were built after 1653."
+  ],
+  "fps": 30,
+  "voice": {
+    "model": "gemini-3.8-flash-tts",
+    "voice": "Fola",
+    "temperature": 1.0,
+    "direction": "Deep, warm documentary voice. Measured, unhurried pace, around 130 words per minute. Confident but never hypey. Think heritage documentary trailer, not a commercial. Minimal processing, natural room tone.",
+    "pronunciation": "tontine = ton-TEEN; Douala = doo-AH-lah; susu = SOO-soo; francs = frahn (soft, French)",
+    "whisper_hint": "Tontine. Douala, Cameroon. Susu. Francs. Circles of the World."
+  },
+  "params": {
+    "eyebrow": "CIRCLES OF THE WORLD · NO. 1",
+    "year": "1653",
+    "place": "France.",
+    "word": "tontine",
+    "detail": "10,000 francs · every Monday",
+    "plate": "circles-ep01-plate-douala.html",
+    "series_title": "Circles\nof the World",
+    "episode_label": "NO. 1 · THE TONTINE",
+    "next": "Next week: the Susu",
+    "link": "LINK IN BIO · NJANGIONCHAIN.COM",
+    "cover_title": "The Tontine",
+    "cover_tag": "Nobody holds the pot."
+  },
+  "scenes": [
+    {
+      "id": "origin",
+      "visual": "year",
+      "headline": "",
+      "vo": "In 1653, | an Italian banker invented the tontine. | Everyone paid in. | The last one alive took everything.",
+      "delivery": "somber, regal, slow",
+      "lead": 1.1,
+      "tail": 0.9,
+      "keywords": [
+        "1653",
+        "tontine",
+        "everything"
+      ]
+    },
+    {
+      "id": "rewrite",
+      "visual": "rewrite",
+      "cut": true,
+      "headline": "Africa *rewrote* it.",
+      "vo": "Three centuries later, | in Africa, the same word | came to mean the opposite: | a circle | where everyone gets their turn.",
+      "delivery": "revelation, slight lift on \"opposite\"",
+      "lead": 0.5,
+      "tail": 0.9,
+      "keywords": [
+        "opposite",
+        "circle",
+        "turn"
+      ]
+    },
+    {
+      "id": "payin",
+      "visual": "payin",
+      "headline": "*Everyone* pays in.",
+      "vo": "It works like this. | Everyone pays in.",
+      "delivery": "crisp, rhythmic, one punch",
+      "lead": 0.3,
+      "tail": 0.7,
+      "keywords": [
+        "everyone"
+      ]
+    },
+    {
+      "id": "takepot",
+      "visual": "takepot",
+      "headline": "One takes *the pot.*",
+      "vo": "One person takes the whole pot.",
+      "delivery": "crisp, rhythmic, one punch",
+      "lead": 0.25,
+      "tail": 0.8,
+      "keywords": [
+        "whole",
+        "pot"
+      ]
+    },
+    {
+      "id": "round",
+      "visual": "round",
+      "headline": "It goes *round.*",
+      "vo": "Then it goes round, | until every member | has had a turn.",
+      "delivery": "crisp, rhythmic, one punch",
+      "lead": 0.25,
+      "tail": 0.8,
+      "keywords": [
+        "round",
+        "every",
+        "turn"
+      ]
+    },
+    {
+      "id": "douala",
+      "visual": "plate",
+      "headline": "Douala, *Cameroon.*",
+      "vo": "In Douala, | a market woman puts in | ten thousand francs every Monday. | When her turn comes, | she stocks her entire stall. | No bank. | No paperwork. | Just trust.",
+      "delivery": "warm, human, unhurried; this is the heart of the film",
+      "lead": 0.7,
+      "tail": 1.0,
+      "keywords": [
+        "trust"
+      ]
+    },
+    {
+      "id": "catch",
+      "visual": "catch",
+      "headline": "*The catch:*\nsomeone holds the pot.",
+      "vo": "One catch. | Someone has to hold the pot. | And when the circle | stretches across oceans, | trust has further to travel.",
+      "delivery": "tension, slow down on the last line",
+      "lead": 0.45,
+      "tail": 0.8,
+      "keywords": [
+        "hold",
+        "pot",
+        "oceans"
+      ]
+    },
+    {
+      "id": "nobody",
+      "visual": "nobody",
+      "headline": "*Nobody* holds the pot.",
+      "headline_at": "nobody",
+      "big": true,
+      "vo": "We kept the circle | and removed that one risk. | Same tontine, | one new rule: | nobody holds the pot. | It runs on rules | nobody can quietly break.",
+      "delivery": "confident lift, peak conviction on \"nobody holds the pot\"",
+      "lead": 0.45,
+      "tail": 1.0,
+      "keywords": [
+        "nobody",
+        "holds",
+        "pot",
+        "rules"
+      ]
+    },
+    {
+      "id": "title",
+      "visual": "title",
+      "headline": "",
+      "captions": false,
+      "vo": "Circles of the World. Next week: the susu. Link in bio to start your circle.",
+      "delivery": "clean sign-off",
+      "lead": 0.35,
+      "tail": 2.2,
+      "keywords": []
+    }
+  ],
+  "caption_breaks": "' | ' in a scene's vo marks a caption break. The markers are stripped before TTS and Whisper QA.",
+  "film_page": "assets/circles/film.html",
+  "packet": "marketing/handoff/inbox/004-traditions-ep1-tontine"
+}

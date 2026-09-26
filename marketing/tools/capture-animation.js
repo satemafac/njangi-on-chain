@@ -10,6 +10,11 @@
  *   --size N sets a square. --width W --height H sets any frame (Reels: 1080x1920).
  *   --probe t1,t2,... renders only those timestamps (seconds) — for layout checks.
  *
+ * If the page defines window.__seek(ms), it is called once per frame instead
+ * (pages that compute every frame from time in JS, e.g. the Circles of the
+ * World series template). Negative probe times are passed through, which is
+ * how such a page renders its cover (render(-1)).
+ *
  * Seeking uses the Web Animations API (animation.currentTime), NOT
  * animation-delay. Setting a delay on an already-running animation does not
  * reseek it — it resolves against the original start time, so the same
@@ -58,7 +63,11 @@ function arg(name, fallback) {
               .frame{width:${width}px!important;height:${height}px!important;aspect-ratio:auto!important;
                      border:none!important;border-radius:0!important}`,
   });
-  await page.evaluate(() => document.fonts.ready);
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await Promise.all([...document.images].map((i) => (i.complete ? 0 : new Promise((r) => { i.onload = i.onerror = r; }))));
+  });
+  const hasSeek = await page.evaluate(() => typeof window.__seek === 'function');
 
   // Pause every animation once, up front.
   await page.evaluate(() => {
@@ -71,9 +80,10 @@ function arg(name, fallback) {
   const total = times.length;
   for (let i = 0; i < total; i++) {
     const ms = times[i];
-    await page.evaluate((t) => {
-      document.getAnimations().forEach((a) => { a.currentTime = t; });
-    }, ms);
+    await page.evaluate((t, seek) => {
+      if (seek) window.__seek(t);
+      document.getAnimations().forEach((a) => { a.currentTime = Math.max(0, t); });
+    }, ms, hasSeek);
     await page.screenshot({
       path: path.join(outDir, probe ? `probe-${(ms / 1000).toFixed(2)}s.png` : `f${String(i).padStart(4, '0')}.png`),
       omitBackground: false,

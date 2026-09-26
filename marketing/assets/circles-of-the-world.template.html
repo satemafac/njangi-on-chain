@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Circles of the World</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500;1,600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&display=block">
+<style>
+  /* Circles of the World: the series template (locked design system).
+     marketing/tools/build-circles-episode.py injects one episode's timeline
+     and writes marketing/assets/<episode>.html. Edit THIS file, not the
+     generated page.
+
+     Every visual is a pure function of time, render(t). The capture tool
+     calls window.__seek(ms) once per frame, so any frame is reproducible,
+     and render(-1) draws the cover. Palette: brand ink / gold / ivory.
+     Type: Cormorant Garamond (heritage serif headlines), IBM Plex Sans
+     (word-timed captions), IBM Plex Mono (labels). */
+  :root { --ink:#0a0a0c; --gold:#E8B04B; --gold-hi:#f6d99a; --ivory:#f5f1e8; --sand:#a8a294; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; background:#050506; }
+  body { min-height:100vh; display:grid; place-items:center; overflow:hidden; }
+  #vp { position:relative; }
+  .frame { position:relative; width:1080px; height:1920px; overflow:hidden; background:var(--ink); transform-origin:0 0; color:var(--ivory); }
+  .layer { position:absolute; inset:0; }
+  .serif { font-family:"Cormorant Garamond", Georgia, serif; }
+  .mono { font-family:"IBM Plex Mono", ui-monospace, monospace; }
+  .sans { font-family:"IBM Plex Sans", system-ui, sans-serif; }
+  .abs { position:absolute; left:0; right:0; text-align:center; white-space:pre-line; will-change:transform, opacity; }
+  #bg { background:radial-gradient(95% 58% at 50% 44%, #17151d 0%, #0d0c11 56%, #070709 100%); }
+  #ledger { opacity:0; }
+  #plate { opacity:0; overflow:hidden; }
+  #plateImg { position:absolute; left:50%; top:50%; width:1296px; height:2304px; transform-origin:50% 46%; }
+  #plateShade { background:linear-gradient(180deg, rgba(8,7,9,.94) 0%, rgba(8,7,9,.78) 15%, rgba(8,7,9,.18) 28%, rgba(8,7,9,0) 36%, rgba(8,7,9,0) 58%, rgba(8,7,9,.72) 68%, rgba(8,7,9,.95) 80%, rgba(8,7,9,.97) 100%); }
+  #year { top:548px; font-size:340px; font-weight:600; line-height:1; color:var(--gold); letter-spacing:-.01em; }
+  #yearRule { position:absolute; left:50%; top:922px; height:3px; width:360px; margin-left:-180px; background:linear-gradient(90deg, rgba(232,176,75,0), var(--gold) 18%, var(--gold) 82%, rgba(232,176,75,0)); }
+  #place { top:952px; font-size:96px; font-style:italic; font-weight:500; color:var(--ivory); }
+  #wordWrap { position:absolute; left:0; right:0; top:826px; display:flex; justify-content:center; }
+  #wordInner { position:relative; display:inline-block; }
+  #word { font-size:184px; font-style:italic; font-weight:600; color:var(--gold); line-height:1; padding:0 12px; }
+  #strike { position:absolute; left:-18px; right:-18px; top:57%; height:8px; background:var(--ivory); border-radius:4px; transform-origin:0 50%; }
+  .hl { position:absolute; left:64px; right:64px; top:292px; text-align:center; font-size:112px; font-weight:600; line-height:1.0; letter-spacing:-.012em; color:var(--ivory); white-space:pre-line; text-wrap:balance; will-change:transform, opacity; }
+  .hl em { font-style:italic; color:var(--gold); }
+  .hl.two { font-size:98px; top:282px; line-height:1.04; }
+  .hl.big { font-size:128px; top:300px; }
+  #eyebrow { top:210px; font-size:25px; letter-spacing:.32em; color:var(--gold); font-weight:500; }
+  #brand { top:1534px; font-size:22px; letter-spacing:.36em; color:rgba(245,241,232,.6); font-weight:500; }
+  #caps { position:absolute; left:96px; right:96px; top:1318px; height:190px; }
+  .chunk { position:absolute; left:0; right:0; top:0; text-align:center; font-size:62px; line-height:1.17; font-weight:600; letter-spacing:-.012em; text-wrap:balance; opacity:0; will-change:transform, opacity; }
+  #detail { top:612px; }
+  #detail span { display:inline-block; padding:15px 32px; border:2px solid rgba(232,176,75,.6); border-radius:999px; font-size:30px; letter-spacing:.14em; color:var(--gold-hi); background:rgba(10,10,12,.62); }
+  #tTitle { top:936px; font-size:140px; font-weight:600; line-height:.96; color:var(--ivory); }
+  #tEp { top:1246px; font-size:27px; letter-spacing:.32em; color:var(--gold); font-weight:500; }
+  #tRule { position:absolute; left:50%; top:1306px; width:150px; margin-left:-75px; height:2px; background:rgba(232,176,75,.75); }
+  #tNext { top:1330px; font-size:74px; font-style:italic; font-weight:500; color:var(--ivory); }
+  #tLink { top:1440px; font-size:25px; letter-spacing:.22em; color:var(--sand); }
+  #cTitle { top:392px; font-size:176px; font-weight:600; line-height:1; color:var(--ivory); letter-spacing:-.01em; }
+  #cTag { top:1372px; font-size:84px; font-style:italic; font-weight:600; color:var(--gold); }
+  #vignette { background:radial-gradient(125% 82% at 50% 46%, rgba(0,0,0,0) 56%, rgba(0,0,0,.52) 100%); pointer-events:none; }
+  #black { background:#000; pointer-events:none; }
+  #play { position:fixed; left:16px; bottom:16px; z-index:9; font:600 14px system-ui, sans-serif; padding:10px 14px; border-radius:10px; border:1px solid #333; background:#111; color:#eee; cursor:pointer; }
+</style>
+</head>
+<body>
+<div id="vp"><div class="frame" id="frame">
+  <div class="layer" id="bg"></div>
+  <svg class="layer" id="ledger" viewBox="0 0 1080 1920" width="1080" height="1920" aria-hidden="true"></svg>
+  <div class="layer" id="plate"><img id="plateImg" alt="" src="__PLATE__"><div class="layer" id="plateShade"></div></div>
+  <svg class="layer" id="stage" viewBox="0 0 1080 1920" width="1080" height="1920" aria-hidden="true">
+    <defs>
+      <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+        <feGaussianBlur stdDeviation="7" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+      <filter id="glowSoft" x="-60%" y="-60%" width="220%" height="220%">
+        <feGaussianBlur stdDeviation="3.5" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+      <radialGradient id="potFill" cx=".4" cy=".36" r=".72">
+        <stop offset="0" stop-color="#fff0c8"/>
+        <stop offset=".45" stop-color="#f0c05e"/>
+        <stop offset="1" stop-color="#b57a22"/>
+      </radialGradient>
+    </defs>
+    <g id="row"></g>
+    <g id="motif">
+      <g id="mesh"></g>
+      <g id="spokes"></g>
+      <ellipse id="ringTrack" cx="540" cy="930" rx="290" ry="290" fill="none" stroke="rgba(245,241,232,.08)" stroke-width="2"/>
+      <ellipse id="ring" cx="540" cy="930" rx="290" ry="290" fill="none" stroke="#E8B04B" stroke-width="4" stroke-linecap="round" pathLength="1000" transform="rotate(-90 540 930)" filter="url(#glowSoft)"/>
+      <circle id="arc" cx="540" cy="930" r="290" fill="none" stroke="#f6d99a" stroke-width="7" stroke-linecap="round" pathLength="1000" transform="rotate(-90 540 930)" filter="url(#glow)"/>
+      <circle id="potRing" cx="540" cy="930" r="24" fill="none" stroke="#f6d99a"/>
+      <g id="nodes"></g>
+      <g id="dots"></g>
+      <circle id="pot" cx="540" cy="930" r="0" fill="url(#potFill)" filter="url(#glow)"/>
+      <circle id="traveler" cx="540" cy="640" r="11" fill="#fff3d6" filter="url(#glow)"/>
+    </g>
+  </svg>
+  <div class="abs serif" id="year"></div>
+  <div id="yearRule"></div>
+  <div class="abs serif" id="place"></div>
+  <div id="wordWrap"><div id="wordInner"><div class="serif" id="word"></div><div id="strike"></div></div></div>
+  <div id="heads"></div>
+  <div class="abs mono" id="detail"><span></span></div>
+  <div id="caps" class="sans"></div>
+  <div class="abs serif" id="tTitle"></div>
+  <div class="abs mono" id="tEp"></div>
+  <div id="tRule"></div>
+  <div class="abs serif" id="tNext"></div>
+  <div class="abs mono" id="tLink"></div>
+  <div class="abs serif" id="cTitle"></div>
+  <div class="abs serif" id="cTag"></div>
+  <div class="abs mono" id="eyebrow"></div>
+  <div class="abs mono" id="brand">NJANGI ON-CHAIN</div>
+  <div class="layer" id="vignette"></div>
+  <div class="layer" id="black"></div>
+</div></div>
+<button id="play" hidden>&#9654; Play with sound</button>
+<audio id="aud" src="__AUDIO__" preload="auto"></audio>
+<script>
+const TL = /*__TIMELINE__*/null;
+
+// ---------- helpers ----------
+const $ = (id) => document.getElementById(id);
+const NS = 'http://www.w3.org/2000/svg';
+const clamp = (x, a = 0, b = 1) => (x < a ? a : x > b ? b : x);
+const E = {
+  lin: (x) => x,
+  inOutSine: (x) => -(Math.cos(Math.PI * x) - 1) / 2,
+  outCubic: (x) => 1 - Math.pow(1 - x, 3),
+  inOutCubic: (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2),
+  outQuint: (x) => 1 - Math.pow(1 - x, 5),
+  outBack: (x) => { const c1 = 1.3, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); },
+};
+// eased progress of t through [a, b]
+const P = (t, a, b, e = E.inOutCubic) => (b <= a ? (t >= b ? 1 : 0) : e(clamp((t - a) / (b - a))));
+const L = (a, b, p) => a + (b - a) * p;
+const rgb = (c1, c2, p) => `rgb(${c1.map((v, k) => Math.round(L(v, c2[k], p))).join(',')})`;
+const C = { ink2: [30, 28, 36], gold: [232, 176, 75], hi: [246, 217, 154], dim: [150, 142, 124], ivory: [245, 241, 232], sand: [168, 162, 148] };
+const norm = (w) => w.toLowerCase().replace(/[^a-z0-9]/g, '');
+const set = (el, attrs) => { for (const k in attrs) el.setAttribute(k, attrs[k]); };
+const mk = (tag, attrs, parent) => { const el = document.createElementNS(NS, tag); set(el, attrs); parent.appendChild(el); return el; };
+
+// ---------- episode data ----------
+const SC = TL.scenes.map((s, i) => ({ ...s, i }));
+const VIS = Object.fromEntries(SC.map((s) => [s.visual, s]));
+const PR = TL.params;
+function wt(visual, word, n = 0, frac = 0.5) {
+  const s = VIS[visual]; if (!s) return 1e9;
+  const k = norm(word); let c = 0;
+  for (const w of s.words) { if (norm(w.w) === k) { if (c === n) return w.t; c++; } }
+  return L(s.v0, s.v1, frac);
+}
+// scene visibility with eased crossfades; `cut` scenes switch on a hard cut
+function vis(i, t) {
+  const s = SC[i], next = SC[i + 1], X = 0.38;
+  const a = i === 0 ? 1 : s.cut ? (t >= s.t0 ? 1 : 0) : P(t, s.t0 - X, s.t0 + X, E.inOutSine);
+  const b = !next ? 1 : next.cut ? (t < next.t0 ? 1 : 0) : 1 - P(t, s.t1 - X, s.t1 + X, E.inOutSine);
+  return Math.min(a, b);
+}
+
+// ---------- static build ----------
+$('year').textContent = PR.year || '';
+$('place').textContent = PR.place || '';
+$('word').textContent = PR.word || '';
+$('detail').firstElementChild.textContent = PR.detail || '';
+$('tTitle').textContent = PR.series_title || '';
+$('tEp').textContent = PR.episode_label || '';
+$('tNext').textContent = PR.next || '';
+$('tLink').textContent = PR.link || '';
+$('cTitle').textContent = PR.cover_title || '';
+$('cTag').textContent = PR.cover_tag || '';
+$('eyebrow').textContent = PR.eyebrow || '';
+
+// ledger texture (scene 1): faint ruled lines + a double margin rule
+(() => {
+  const g = $('ledger');
+  for (let y = 300; y <= 1640; y += 52) mk('line', { x1: 60, x2: 1020, y1: y, y2: y, stroke: 'rgba(232,176,75,.075)', 'stroke-width': 1.5 }, g);
+  mk('line', { x1: 150, x2: 150, y1: 250, y2: 1700, stroke: 'rgba(200,90,60,.16)', 'stroke-width': 2 }, g);
+  mk('line', { x1: 158, x2: 158, y1: 250, y2: 1700, stroke: 'rgba(200,90,60,.12)', 'stroke-width': 1.5 }, g);
+})();
+
+// headlines: *gold italic*, \n = line break
+const heads = SC.map((s) => {
+  if (!s.headline) return null;
+  const d = document.createElement('div');
+  d.className = 'hl serif' + (s.big ? ' big' : '') + (s.headline.includes('\n') ? ' two' : '');
+  d.innerHTML = s.headline.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])).replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  d.style.opacity = 0;
+  $('heads').appendChild(d);
+  return d;
+});
+
+// captions: chunks of <= 6 words, each word lights as it is spoken
+const caps = SC.map((s) => {
+  if (s.captions === false) return [];
+  return s.chunks.map((ch) => {
+    const d = document.createElement('div');
+    d.className = 'chunk';
+    const spans = [];
+    for (let j = ch.i0; j <= ch.i1; j++) {
+      const sp = document.createElement('span');
+      sp.textContent = s.words[j].w;
+      d.appendChild(sp);
+      if (j < ch.i1) d.appendChild(document.createTextNode(' '));
+      spans.push({ el: sp, w: s.words[j] });
+    }
+    $('caps').appendChild(d);
+    return { el: d, a: ch.a, b: ch.b, spans };
+  });
+});
+
+// motif geometry
+const CX = 540, CY = 930, R = 290, N = 8;
+const ANG = Array.from({ length: N }, (_, i) => ((-90 + (i * 360) / N) * Math.PI) / 180);
+const HOLDER = 6;                         // the member who ends up holding the pot (left)
+const nodes = Array.from({ length: N }, (_, i) => {
+  const g = mk('g', {}, $('nodes'));
+  const pulse = mk('circle', { r: 20, fill: 'none', stroke: '#E8B04B', 'stroke-width': 3, opacity: 0 }, g);
+  const pulse2 = mk('circle', { r: 20, fill: 'none', stroke: '#E8B04B', 'stroke-width': 3, opacity: 0 }, g);
+  const dot = mk('circle', { r: 20, 'stroke-width': 3 }, g);
+  return { g, pulse, pulse2, dot };
+});
+const dots = Array.from({ length: N }, () => mk('circle', { r: 12, fill: '#f0c05e', filter: 'url(#glowSoft)', opacity: 0 }, $('dots')));
+const spokes = Array.from({ length: N }, () => mk('line', { 'stroke-linecap': 'round', pathLength: 1, opacity: 0 }, $('spokes')));
+const chords = Array.from({ length: N }, () => mk('line', { stroke: '#E8B04B', 'stroke-width': 2.2, 'stroke-linecap': 'round', pathLength: 1, opacity: 0 }, $('mesh')));
+const ROW_ORDER = [0, 6, 2, 7, 1, 5, 3];  // scene 1: the order the others vanish; dot 4 is "the last one alive"
+const SURVIVOR = 4;
+const row = Array.from({ length: 8 }, (_, i) => mk('circle', { cx: 540 + (i - 3.5) * 72, cy: 1182, r: 0, fill: '#f5f1e8' }, $('row')));
+
+// pulse helper: ring expanding from a node at time tp
+function pulse(el, t, tp, base = 20, grow = 40, dur = 0.8) {
+  if (t < tp || t > tp + dur) { el.setAttribute('opacity', 0); return; }
+  const q = (t - tp) / dur;
+  set(el, { r: base + grow * E.outCubic(q), opacity: 0.85 * (1 - q) });
+}
+// time at which an inOutSine ramp over [a,b] reaches y
+const sineAt = (a, b, y) => a + (Math.acos(1 - 2 * y) / Math.PI) * (b - a);
+
+// ---------- render(t) ----------
+function render(t) {
+  const cover = t < 0;
+  const V = (visual) => (cover ? 0 : VIS[visual] ? vis(VIS[visual].i, t) : 0);
+
+  $('black').style.opacity = cover ? 0 : 1 - P(t, 0, 0.9, E.inOutSine);
+  const vTitle = V('title');
+  $('eyebrow').style.opacity = cover ? 1 : P(t, 0.4, 1.4, E.inOutSine) * (1 - vTitle);
+  $('eyebrow').style.top = cover ? '300px' : '210px';
+  $('brand').style.opacity = cover ? 1 : P(t, 0.8, 1.8, E.inOutSine);
+
+  // ---- scene: year ----
+  const sy = VIS.year, vy = V('year');
+  if (sy) {
+    const a = sy.t0;
+    $('ledger').style.opacity = vy;
+    const y = $('year');
+    y.style.opacity = vy * P(t, a + 0.1, a + 1.7, E.inOutSine);
+    y.style.transform = `scale(${L(1.08, 1, P(t, a + 0.1, a + 2.6, E.outCubic))})`;
+    y.style.filter = `blur(${L(12, 0, P(t, a + 0.1, a + 1.5, E.outCubic)).toFixed(2)}px)`;
+    const rule = $('yearRule');
+    rule.style.opacity = vy;
+    rule.style.transform = `scaleX(${P(t, a + 1.0, a + 2.2, E.inOutCubic)})`;
+    const pl = $('place');
+    pl.style.opacity = vy * P(t, a + 1.4, a + 2.3, E.inOutSine);
+    pl.style.transform = `translateY(${L(22, 0, P(t, a + 1.4, a + 2.5, E.outCubic))}px)`;
+    const tE = wt('year', 'everyone'), tLast = wt('year', 'last'), tX = wt('year', 'everything');
+    $('row').setAttribute('opacity', vy);
+    row.forEach((c, i) => {
+      const pin = P(t, tE - 0.1 + i * 0.07, tE + 0.4 + i * 0.07, E.outBack);
+      const k = ROW_ORDER.indexOf(i);
+      let r = 11 * pin, o = 1, g = 0;
+      if (k >= 0) {
+        const gone = P(t, tLast - 0.05 + k * 0.15, tLast + 0.45 + k * 0.15, E.inOutCubic);
+        o = 1 - gone; r *= L(1, 0.4, gone);
+      } else {
+        g = P(t, tX - 0.15, tX + 0.6, E.outCubic);
+        r = L(r, 17, g);
+      }
+      set(c, { r: Math.max(0, r).toFixed(2), opacity: o.toFixed(3), fill: rgb(C.ivory, C.gold, g) });
+      if (g > 0.01) c.setAttribute('filter', 'url(#glow)'); else c.removeAttribute('filter');
+    });
+  }
+
+  // ---- scene: rewrite (the word becomes the circle) ----
+  const sr = VIS.rewrite, vr = V('rewrite');
+  let ringDraw = 1, nodeIn = Array(N).fill(1);
+  if (sr) {
+    const tOpp = wt('rewrite', 'opposite');
+    const strike = P(t, tOpp - 0.05, tOpp + 0.45, E.inOutCubic);
+    const fadeW = P(t, tOpp + 0.65, tOpp + 1.45, E.inOutSine);
+    const pin = P(t, sr.t0, sr.t0 + 0.7, E.outCubic);
+    const w = $('wordInner');
+    w.style.opacity = vr * P(t, sr.t0, sr.t0 + 0.2, E.lin) * (1 - fadeW);
+    w.style.transform = `scale(${L(1.05, 1, pin) * L(1, 0.94, fadeW)})`;
+    w.style.filter = `blur(${(fadeW * 7).toFixed(2)}px)`;
+    $('strike').style.transform = `scaleX(${strike})`;
+    const ringStart = Math.max(wt('rewrite', 'circle') - 0.15, tOpp + 0.85);
+    ringDraw = cover ? 1 : P(t, ringStart, ringStart + 1.5, E.inOutCubic);
+    const nodesStart = Math.max(wt('rewrite', 'everyone') - 0.05, ringStart + 0.55);
+    nodeIn = nodeIn.map((_, i) => (cover ? 1 : P(t, nodesStart + i * 0.085, nodesStart + i * 0.085 + 0.55, E.outBack)));
+  }
+
+  // stage visibility: every scene that shows the motif
+  const vStage = cover ? 1 : clamp(['rewrite', 'payin', 'takepot', 'round', 'catch', 'nobody', 'title'].reduce((acc, k) => acc + V(k), 0));
+  $('motif').setAttribute('opacity', vStage.toFixed(3));
+
+  // ---- ellipse (stretch in 'catch', restore in 'nobody') ----
+  const sc = VIS.catch, sn = VIS.nobody;
+  let rx = R, ry = R, stretch = 0, restore = 0;
+  if (sc && !cover) {
+    const tStr = wt('catch', 'stretches');
+    stretch = P(t, tStr - 0.1, tStr + 1.9, E.inOutCubic);
+  }
+  if (sn && !cover) restore = P(t, wt('nobody', 'kept') - 0.05, wt('nobody', 'kept') + 1.2, E.outBack);
+  if (cover) { stretch = 0; restore = 1; }
+  rx = L(L(R, 400, stretch), R, restore);
+  ry = L(L(R, 214, stretch), R, restore);
+  const pos = (i) => [CX + rx * Math.cos(ANG[i]), CY + ry * Math.sin(ANG[i])];
+  set($('ringTrack'), { rx: rx.toFixed(2), ry: ry.toFixed(2) });
+  set($('ring'), { rx: ry.toFixed(2), ry: rx.toFixed(2) });   // rotated -90deg (draw starts at 12 o'clock), so axes swap
+  set($('ring'), { 'stroke-dasharray': '1000 1000', 'stroke-dashoffset': (1000 * (1 - ringDraw)).toFixed(2) });
+  $('ringTrack').setAttribute('opacity', ringDraw);
+
+  // ---- per-scene motif state ----
+  const lit = Array(N).fill(0);
+  let potR = 0, potX = CX, potY = CY, potO = 0;
+  const sp = VIS.payin, sk = VIS.takepot, so = VIS.round;
+  $('arc').setAttribute('opacity', 0);
+  $('traveler').setAttribute('opacity', 0);
+  nodes.forEach((n) => { n.pulse.setAttribute('opacity', 0); n.pulse2.setAttribute('opacity', 0); });
+  // pulses belong to the mechanic scenes only (takepot + round)
+  const pulsesOn = !cover && sk && t > sk.t0 - 0.5 && t < (VIS.plate ? VIS.plate.t0 : 1e9);
+
+  // payin: every member sends a dot to the centre, the pot grows
+  let arrived = 0;
+  if (sp) {
+    const f0 = wt('payin', 'everyone') - 0.05;
+    dots.forEach((d, i) => {
+      const a = f0 + i * 0.07, b = a + 0.9;
+      const p = P(t, a, b, E.inOutCubic);
+      const [nx, ny] = [CX + R * Math.cos(ANG[i]), CY + R * Math.sin(ANG[i])];
+      const o = P(t, a - 0.05, a + 0.05, E.lin) * (1 - P(t, b - 0.05, b + 0.08, E.lin));
+      set(d, { cx: L(nx, CX, p).toFixed(2), cy: L(ny, CY, p).toFixed(2), opacity: cover ? 0 : o.toFixed(3) });
+      arrived += P(t, b - 0.12, b + 0.1, E.outCubic) / N;
+    });
+    if (t >= f0 && (!sk || t < sk.t0 - 0.4)) { potR = 64 * Math.sqrt(arrived); potO = 1; }
+  }
+  // takepot: the pot condenses and travels to one member
+  let tArrive = 1e9;
+  if (sk) {
+    const tTakes = wt('takepot', 'takes');
+    const cond = P(t, tTakes - 0.15, tTakes + 0.35, E.outCubic);
+    const tm = Math.max(wt('takepot', 'whole'), tTakes + 0.35);
+    const mv = P(t, tm, tm + 0.85, E.inOutCubic);
+    tArrive = tm + 0.85;
+    if (t >= sk.t0 - 0.4 && t < tArrive + 0.4) {
+      const [nx, ny] = pos(0);
+      potR = L(64, 30, cond) * (1 - P(t, tArrive - 0.08, tArrive + 0.22, E.inOutCubic));
+      potX = L(CX, nx, mv); potY = L(CY, ny, mv); potO = 1;
+    }
+    lit[0] = P(t, tArrive - 0.1, tArrive + 0.2, E.outCubic);
+    if (pulsesOn) pulse(nodes[0].pulse, t, tArrive - 0.02);
+  }
+  // round: the turn travels the circle, lighting each member
+  let ts = 1e9, te = 1e9, pr = 0;
+  if (so) {
+    ts = wt('round', 'round') - 0.15;
+    te = Math.max(wt('round', 'turn') + 0.3, ts + 2.6);
+    pr = P(t, ts, te, E.inOutSine);
+    for (let i = 1; i < N; i++) {
+      lit[i] = clamp((pr * N - i + 0.25) / 0.5);
+      if (pulsesOn) pulse(nodes[i].pulse, t, sineAt(ts, te, i / N));
+    }
+    if (pulsesOn) pulse(nodes[0].pulse2, t, te - 0.02, 20, 52, 1.0);
+    const th = ANG[0] + pr * 2 * Math.PI;
+    set($('traveler'), {
+      cx: (CX + R * Math.cos(th)).toFixed(2), cy: (CY + R * Math.sin(th)).toFixed(2),
+      opacity: cover ? 0 : (P(t, ts - 0.2, ts, E.lin) * (1 - P(t, te - 0.05, te + 0.3, E.lin))).toFixed(3),
+    });
+    const arcO = cover ? 0 : P(t, ts - 0.1, ts + 0.1, E.lin) * (1 - (sc ? P(t, sc.t0 - 1.2, sc.t0 - 0.9, E.lin) : 0));
+    set($('arc'), { 'stroke-dasharray': '1000 1000', 'stroke-dashoffset': (1000 * (1 - pr)).toFixed(2), opacity: arcO.toFixed(3) });
+  }
+  // catch: the pot sits with one member; the circle stretches thin
+  let holdAmt = 0;
+  const spokeDraw = Array(N).fill(0);
+  if (sc && !cover && t > sc.t0 - 1) {
+    for (let i = 0; i < N; i++) lit[i] = 0;          // a fresh round
+    const tS = wt('catch', 'someone'), tH = wt('catch', 'hold');
+    const [hx, hy] = pos(HOLDER);
+    const toHolder = P(t, tS + 0.1, tS + 1.0, E.inOutCubic);
+    holdAmt = toHolder;
+    potR = L(40, 22, toHolder); potX = L(CX, hx, toHolder); potY = L(CY, hy, toHolder);
+    potO = P(t, sc.t0 - 0.2, sc.t0 + 0.4, E.inOutSine);
+    for (let i = 0, k = 0; i < N; i++) {
+      if (i === HOLDER) continue;
+      spokeDraw[i] = P(t, tH + 0.05 + k * 0.05, tH + 0.65 + k * 0.05, E.inOutCubic);
+      k++;
+    }
+  }
+  // nobody: restore the circle, the pot becomes the ring itself, members connect directly
+  let meshStart = 1e9, tN = 1e9;
+  if (sn && !cover && t > sn.t0 - 0.5) {
+    const tK = wt('nobody', 'kept');
+    tN = wt('nobody', 'nobody', 0);
+    const back = P(t, tK + 0.1, tK + 1.0, E.inOutCubic);
+    const retract = P(t, tK, tK + 0.6, E.inOutCubic);
+    for (let i = 0; i < N; i++) spokeDraw[i] *= 1 - retract;
+    const [hx, hy] = pos(HOLDER);
+    holdAmt *= 1 - back;
+    potX = L(hx, CX, back); potY = L(hy, CY, back); potR = L(22, 34, back);
+    const burst = P(t, tN - 0.1, tN + 0.75, E.outCubic);
+    potO = 1 - P(t, tN - 0.12, tN + 0.05, E.lin);
+    set($('potRing'), {
+      r: L(26, R, burst).toFixed(2), 'stroke-width': L(26, 3, burst).toFixed(2),
+      opacity: (burst > 0 ? 1 - P(t, tN + 0.5, tN + 0.95, E.inOutSine) : 0).toFixed(3),
+    });
+    meshStart = tN + 0.45;
+  } else {
+    $('potRing').setAttribute('opacity', 0);
+  }
+  if (cover) meshStart = -1e9;
+  if (sn && (cover || t > sn.t0 - 0.5)) {
+    for (let i = 0; i < N; i++) lit[i] = cover ? 1 : P(t, meshStart + i * 0.07 + 0.2, meshStart + i * 0.07 + 0.6, E.outCubic);
+  }
+
+  // spokes
+  const [hx, hy] = pos(HOLDER);
+  const wob = sc && !cover ? P(t, wt('catch', 'stretches') + 0.6, wt('catch', 'stretches') + 1.4, E.inOutSine) * (1 - restore) : 0;
+  const hxW = hx + 3.2 * wob * Math.sin(2 * Math.PI * 2.3 * t), hyW = hy + 2.4 * wob * Math.sin(2 * Math.PI * 1.7 * t + 1);
+  spokes.forEach((ln, i) => {
+    const [x, y] = pos(i);
+    const d = spokeDraw[i];
+    if (d <= 0) { ln.setAttribute('opacity', 0); return; }
+    const dash = stretch;                                    // solid -> dashed as trust thins
+    set(ln, {
+      x1: x.toFixed(2), y1: y.toFixed(2), x2: hxW.toFixed(2), y2: hyW.toFixed(2),
+      stroke: rgb(C.gold, C.sand, stretch), 'stroke-width': L(3, 1.5, stretch).toFixed(2),
+      'stroke-dasharray': dash > 0.02 && d >= 1 ? `${L(1, 0.022, dash).toFixed(4)} ${L(0, 0.032, dash).toFixed(4)}` : '1 1',
+      'stroke-dashoffset': d >= 1 && dash > 0.02 ? 0 : (1 - d).toFixed(4),
+      opacity: (L(0.9, 0.5, stretch) * (1 + 0.12 * wob * Math.sin(2 * Math.PI * 3.1 * t))).toFixed(3),
+    });
+  });
+
+  // mesh chords: each member tied to the members three places on (an {8/3} star)
+  chords.forEach((ln, i) => {
+    const d = P(t, meshStart + i * 0.07, meshStart + i * 0.07 + 0.9, E.inOutCubic);
+    if (d <= 0) { ln.setAttribute('opacity', 0); return; }
+    const [x1, y1] = pos(i), [x2, y2] = pos((i + 3) % N);
+    const shimmer = sn && !cover ? 0.25 * P(t, wt('nobody', 'rules') - 0.1, wt('nobody', 'rules') + 0.3, E.outCubic) * (1 - P(t, wt('nobody', 'rules') + 0.3, wt('nobody', 'rules') + 1.2, E.inOutSine)) : 0;
+    set(ln, { x1, y1, x2, y2, 'stroke-dasharray': '1 1', 'stroke-dashoffset': (1 - d).toFixed(4), opacity: (0.62 + shimmer).toFixed(3) });
+  });
+
+  // ring flash when the pot becomes the ring, and when a lap completes
+  const flash = Math.max(
+    P(t, tN + 0.55, tN + 0.8, E.outCubic) * (1 - P(t, tN + 0.8, tN + 1.8, E.inOutSine)),
+    P(t, te - 0.1, te + 0.2, E.outCubic) * (1 - P(t, te + 0.2, te + 1.0, E.inOutSine)),
+  );
+  set($('ring'), { stroke: rgb(C.gold, C.hi, flash), 'stroke-width': L(4, 7.5, flash).toFixed(2) });
+
+  // nodes
+  nodes.forEach((n, i) => {
+    const [x, y] = i === HOLDER ? [hxW, hyW] : pos(i);
+    n.g.setAttribute('transform', `translate(${x.toFixed(2)} ${y.toFixed(2)})`);
+    const s = nodeIn[i];
+    const h = i === HOLDER ? holdAmt : 0;
+    const l = Math.max(lit[i], h);
+    const r = (L(18, 21, l) + 10 * h) * s;
+    set(n.dot, { r: Math.max(0, r).toFixed(2), fill: rgb(C.ink2, C.gold, l), stroke: rgb(C.dim, C.gold, l) });
+    if (l > 0.5) n.dot.setAttribute('filter', 'url(#glowSoft)'); else n.dot.removeAttribute('filter');
+  });
+
+  set($('pot'), { cx: potX.toFixed(2), cy: potY.toFixed(2), r: Math.max(0, potR).toFixed(2), opacity: (cover ? 0 : potO).toFixed(3) });
+
+  // ---- title card: the motif becomes the series mark ----
+  const st = VIS.title;
+  let mScale = 1, mY = CY, rot = 0;
+  if (st && !cover) {
+    const q = P(t, st.t0 - 0.35, st.t0 + 1.05, E.inOutCubic);
+    mScale = L(1, 0.44, q); mY = L(CY, 690, q); rot = 7 * Math.max(0, t - st.t0) * q;
+    const tC = wt('title', 'circles'), tNx = wt('title', 'next'), tLk = wt('title', 'link');
+    const show = (el, a, dy = 26) => {
+      const p = P(t, a, a + 0.9, E.outCubic);
+      el.style.opacity = (vTitle * P(t, a, a + 0.6, E.inOutSine)).toFixed(3);
+      el.style.transform = `translateY(${L(dy, 0, p).toFixed(2)}px)`;
+    };
+    show($('tTitle'), tC - 0.15);
+    show($('tEp'), tC + 0.35, 16);
+    $('tRule').style.opacity = vTitle * P(t, tC + 0.5, tC + 1.1, E.inOutSine);
+    $('tRule').style.transform = `scaleX(${P(t, tC + 0.5, tC + 1.2, E.inOutCubic)})`;
+    show($('tNext'), tNx - 0.12);
+    show($('tLink'), tLk - 0.1, 14);
+  }
+  if (cover) { mScale = 0.86; mY = 1010; }
+  $('motif').setAttribute('transform', `translate(540 ${mY.toFixed(2)}) rotate(${rot.toFixed(3)}) scale(${mScale.toFixed(4)}) translate(-540 -930)`);
+  for (const id of ['tTitle', 'tEp', 'tRule', 'tNext', 'tLink']) if (cover || !st) $(id).style.opacity = 0;
+  $('cTitle').style.opacity = cover ? 1 : 0;
+  $('cTag').style.opacity = cover ? 1 : 0;
+
+  // ---- plate (Douala) ----
+  const sm = VIS.plate, vm = V('plate');
+  $('plate').style.opacity = vm;
+  if (sm) {
+    const kp = P(t, sm.t0 - 0.5, sm.t1 + 0.5, E.lin);
+    $('plateImg').style.transform = `translate(-50%, -50%) scale(${L(1.0, 1.085, kp).toFixed(4)}) translateY(${L(14, -26, kp).toFixed(2)}px)`;
+    const tTen = wt('plate', 'ten');
+    const d = $('detail');
+    d.style.opacity = (vm * P(t, tTen - 0.1, tTen + 0.5, E.inOutSine)).toFixed(3);
+    d.style.transform = `translateY(${L(16, 0, P(t, tTen - 0.1, tTen + 0.7, E.outCubic)).toFixed(2)}px)`;
+  }
+
+  // ---- headlines ----
+  SC.forEach((s, i) => {
+    const el = heads[i]; if (!el) return;
+    if (cover) { el.style.opacity = 0; return; }
+    const a = s.headline_at ? wt(s.visual, s.headline_at) - 0.08 : s.t0 + (s.cut ? 0.25 : 0.2);
+    const p = P(t, a, a + 0.95, E.outCubic);
+    el.style.opacity = (vis(i, t) * P(t, a, a + 0.6, E.inOutSine)).toFixed(3);
+    el.style.transform = `translateY(${L(30, 0, p).toFixed(2)}px) scale(${L(s.big ? 1.04 : 1.0, 1, p).toFixed(4)})`;
+  });
+
+  // ---- captions ----
+  SC.forEach((s, i) => {
+    const vs = cover ? 0 : vis(i, t);
+    caps[i].forEach((c) => {
+      if (vs <= 0 || t < c.a - 0.2 || t > c.b + 0.2) { c.el.style.opacity = 0; return; }
+      const o = P(t, c.a, c.a + 0.16, E.outCubic) * (1 - P(t, c.b - 0.12, c.b, E.inOutSine)) * vs;
+      c.el.style.opacity = o.toFixed(3);
+      c.el.style.transform = `translateY(${L(16, 0, P(t, c.a, c.a + 0.3, E.outCubic)).toFixed(2)}px)`;
+      c.spans.forEach(({ el, w }) => {
+        const on = P(t, w.t - 0.04, w.t + 0.1, E.lin);
+        el.style.color = w.k ? `rgba(232,176,75,${L(0.34, 1, on).toFixed(3)})` : `rgba(245,241,232,${L(0.3, 1, on).toFixed(3)})`;
+      });
+    });
+  });
+}
+
+window.__seek = (ms) => render(ms / 1000);
+window.__total = TL.total;
+render(0);
+
+// ---------- preview mode (a normal browser, not the capture tool) ----------
+if (!navigator.webdriver) {
+  const frame = $('frame'), vp = $('vp');
+  const fit = () => {
+    const k = Math.min(innerWidth / 1080, innerHeight / 1920);
+    frame.style.transform = `scale(${k})`;
+    vp.style.width = 1080 * k + 'px'; vp.style.height = 1920 * k + 'px';
+  };
+  fit(); addEventListener('resize', fit);
+  const btn = $('play'), aud = $('aud');
+  btn.hidden = false;
+  btn.onclick = () => {
+    if (aud.paused) { aud.currentTime = 0; aud.play(); btn.textContent = 'Stop'; }
+    else { aud.pause(); btn.textContent = '▶ Play with sound'; }
+    const loop = () => { render(aud.currentTime); if (!aud.paused) requestAnimationFrame(loop); };
+    requestAnimationFrame(loop);
+  };
+}
+</script>
+</body>
+</html>

@@ -210,6 +210,8 @@ Project-specific slash commands available in `.claude/skills/`:
 - `/verify-circle` - Check circle state on-chain
 - `/check-env` - Validate environment configuration
 - `/deploy-testnet` - Full testnet deployment workflow
+- `/cinematic-reel` - iPhone-ad-quality 3D brand films / Reels (three.js on the GPU,
+  Gemini TTS voice, Lyria score cued to picture); "Circles of the World" episodes
 
 (The yield module and its skill were retired in the Phase 1 compliance redesign.
 `/start-zklogin` went with the local Docker prover: Enoki serves salts and

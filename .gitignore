@@ -171,3 +171,22 @@ src/services/*.db
 
 # switch-network.sh artifacts
 *.backup
+
+# cinematic-reel pipeline (.claude/skills/cinematic-reel): heavy render outputs stay local.
+# GitHub rejects files over 100 MB; film masters are ~200-300 MB.
+marketing/tools/.venv/
+marketing/tools/__pycache__/
+marketing/assets/export/**/*.wav
+marketing/assets/export/**/*-master.mp4
+marketing/assets/export/**/*-upload.mp4
+marketing/assets/export/**/probe*/
+marketing/assets/export/**/frames/
+marketing/assets/export/**/vo-gemini/*.take*
+marketing/handoff/**/*-upload.mp4
+# circles pipeline: every output is reproducible from the spec; deliverables live in the handoff packet
+marketing/assets/export/circles-*/
+marketing/assets/circles-ep[0-9][0-9]-*.html
+!marketing/assets/circles-ep[0-9][0-9]-plate-*.html
+marketing/handoff/**/*.mp4
+marketing/handoff/**/*.mp3
+marketing/handoff/**/*.jpg

@@ -292,6 +292,34 @@ member"; AI label off (audio is a real recording, visuals are HTML); no
 location tag (see the Douala discussion on 1.6: it narrows a global-diaspora
 message and implies a presence we don't have).
 
+### 1.8 · Instagram Reel · 78.5s · Tradition · **Circles of the World, Ep. 1: The Tontine** — SCHEDULED Sat 2026-09-26 11:00 AM ET
+
+The first episode of the weekly series, and the first film made with the
+`cinematic-reel` skill: a 3D film rendered on the GPU (gold coins for 1653,
+the strike-through that bends into the circle, pay-in, the turn going round,
+a wax-print drape for Douala, the circle stretching across water, then
+"nobody holds the pot" with every member tied to every other). Voice: Gemini
+TTS (Fola); music: Lyria RealTime, cued to each scene. Script by Muse, two
+fact-fixes approved by the founder ("1653. France."; in Africa "the same
+word came to mean the opposite").
+
+Scheduled by Muse through Meta Business Suite (post ID 2053692878620804);
+packet `marketing/handoff/inbox/004-traditions-ep1-tontine/` (RESULT.md has the
+details). Slot: Saturdays 11:00 AM ET = 16:00 Douala/Lagos/London, the series
+slot from now on; Insights had no hourly data at 34 followers.
+
+**Caption:** `CAPTION.txt` in the packet (the 1653 hook, "in Cameroon we also
+call it njangi, which is where our name comes from", Douala, the catch,
+"nobody holds the pot", next week the susu).
+`#CirclesOfTheWorld #tontine #njangi #susu #africandiaspora`
+
+**Settings:** custom cover (The Tontine, gold star mark); original audio, no
+Instagram music; no location, no tags, no Facebook cross-post (no Page is
+connected). AI label: off. Business Suite's Reel composer has no "Made with
+AI" toggle, and the founder chose to schedule without it.
+
+**Next:** Ep. 2, the susu, same slot on 2026-10-03.
+
 ---
 
 # Week 2 — establish the contrast
