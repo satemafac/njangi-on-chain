@@ -81,7 +81,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
         ]}
         cta={{
           title: 'Ready to Experience the Difference?',
-          body: 'Join thousands of people worldwide who are using blockchain technology to enhance their savings circles with security, transparency, and automation.',
+          body: 'Bring your savings circle on-chain: a pot no single person holds, and a record every member can check.',
           primary: { label: 'Start Your Circle', href: '/create-circle' },
           secondary: { label: 'Learn More', href: '/learn' },
         }}
@@ -174,7 +174,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
         </p>
 
         <p>
-          Blockchain systems break down geographic barriers entirely. A{' '}
+          Blockchain systems break down geographic barriers. A{' '}
           <Link href="/learn/susu">digital Sou Sou circle</Link> can include members from New York,
           London, Toronto, and Kingston simultaneously, all participating in the same rotating savings
           system while maintaining cultural connections.
@@ -212,9 +212,9 @@ export default function TraditionalSavingsVsBlockchainPost() {
                 'Monthly pool: $2,000',
                 'Each member receives: $2,000 (once per 20 months)',
                 'Total program value: $40,000',
-                'Returns generated: $0',
+                'Custody: one treasurer holds the cash',
                 'Coordinator risk: High',
-                'Time investment: 2-3 hours/month meetings',
+                'Time spent: 2-3 hours/month meetings',
               ],
             },
             {
@@ -226,7 +226,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
                 'Total program value: $40,000',
                 'Custody: smart-contract escrow, not a treasurer',
                 'Coordinator discretion over funds: none',
-                'Time investment: 15 minutes/month',
+                'Time spent: 15 minutes/month',
               ],
             },
           ]}
@@ -241,14 +241,10 @@ export default function TraditionalSavingsVsBlockchainPost() {
           financial transactions.
         </p>
 
-        <p>However, modern blockchain platforms are addressing this by incorporating cultural features:</p>
-
-        <ul>
-          <li>Virtual community spaces for cultural celebrations</li>
-          <li>Automated allocation of funds for cultural activities</li>
-          <li>Digital preservation of traditional ceremonies</li>
-          <li>Integration with diaspora community networks</li>
-        </ul>
+        <p>
+          Njangi On-Chain does not try to recreate them online. The smart contract holds the pot and
+          keeps the record; the meetings, the meals and the ceremonies stay with the group.
+        </p>
 
         <h2>Which Approach Is Right for You?</h2>
 
@@ -265,7 +261,6 @@ export default function TraditionalSavingsVsBlockchainPost() {
         <Callout icon={CheckCircle2} title="Consider Blockchain Savings Circles If:">
           <ul>
             <li>Your community is geographically dispersed</li>
-            <li>Maximizing financial returns is important</li>
             <li>You want to reduce coordinator and fraud risks</li>
             <li>24/7 accessibility and transparency appeal to you</li>
             <li>You&rsquo;re comfortable with digital platforms</li>
@@ -280,10 +275,10 @@ export default function TraditionalSavingsVsBlockchainPost() {
         </p>
 
         <p>
-          These systems use blockchain technology for the financial infrastructure while maintaining
-          traditional cultural and social elements through digital community features, virtual ceremonies,
-          and diaspora connections. Members get the security and automation of blockchain with
-          the cultural richness of traditional practices.
+          These systems use blockchain technology for the financial infrastructure and leave the
+          traditional cultural and social elements with the group, where they have always lived. Members
+          get the security and automation of blockchain with the cultural richness of traditional
+          practices.
         </p>
 
         <h2>Getting Started</h2>
@@ -324,7 +319,7 @@ export default function TraditionalSavingsVsBlockchainPost() {
                   <Link href="/create-circle">Start your digital circle</Link>
                 </li>
                 <li>
-                  <Link href="/dashboard">Explore existing circles</Link>
+                  <Link href="/dashboard">View your circles</Link>
                 </li>
               </ul>
             </div>
