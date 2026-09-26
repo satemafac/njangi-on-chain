@@ -1,14 +1,11 @@
-import Link from 'next/link';
-import { useState } from 'react';
 import { Seo } from '../../components/Seo';
 import { article, breadcrumbs } from '../../lib/structured-data';
-import { MarketingShell } from '../../components/marketing/ArticleLayout';
+import { GuideSection, LearnGuide } from '../../components/marketing/LearnGuide';
+import { CodeBlock, KeyPoints, ProseAction, SideBySide, Steps } from '../../components/marketing/ProseBlocks';
 import { SourcedStat, PlainStat } from '../../components/marketing/SourcedStat';
 import { REMITTANCE_COST_AFRICA, SAVINGS_CLUB_PARTICIPATION } from '../../content/sourced-facts';
 
 export default function BlockchainRoscaPage() {
-  const [activeTab, setActiveTab] = useState('overview');
-
   return (
     <>
       <Seo
@@ -45,255 +42,167 @@ export default function BlockchainRoscaPage() {
         ]}
       />
 
-      <MarketingShell>
-        {/* Navigation Breadcrumb */}
-        <nav className="bg-ink-surface border-b">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center space-x-2 py-3 text-sm text-sand">
-              <Link href="/" className="hover:text-gold transition-colors">Home</Link>
-              <span>/</span>
-              <Link href="/learn" className="hover:text-gold transition-colors">Learn</Link>
-              <span>/</span>
-              <span className="text-cream font-medium">ROSCA</span>
-            </div>
-          </div>
-        </nav>
+      <LearnGuide
+        crumb="ROSCA"
+        title="What is a ROSCA? Rotating Savings and Credit Associations Explained"
+        standfirst={
+          <p>
+            The <strong>rotating savings and credit association</strong> is one of the oldest ways
+            people save together: everyone pays in on a schedule, and each member takes the whole pot
+            in turn. Here is how the model works, where it appears, and how to run one where nobody
+            has to hold the money.
+          </p>
+        }
+        actions={{
+          primary: { label: 'Start a circle', href: '/create-circle' },
+          secondary: { label: 'Explore Platform', href: '/dashboard' },
+        }}
+        figures={
+          <>
+            {/* Every figure links to its source. The previous block asserted a
+                global participant count, a country count and an annual ROSCA
+                volume, none of them sourced. Nobody measures global ROSCA volume —
+                the whole point of a ROSCA is that it leaves no institutional
+                record — so there is no honest number to replace it with. */}
+            <SourcedStat fact={SAVINGS_CLUB_PARTICIPATION} />
+            <SourcedStat fact={REMITTANCE_COST_AFRICA} />
+            <PlainStat
+              value="Every cycle"
+              label="Contributions, payout order and approvals stay visible to the whole circle for the life of the circle"
+            />
+          </>
+        }
+        toc={[
+          { id: 'overview', label: 'ROSCA Overview' },
+          { id: 'global', label: 'Global Systems' },
+          { id: 'blockchain', label: 'How It Works Here' },
+          { id: 'implementation', label: 'Implementation' },
+        ]}
+        related={[
+          {
+            href: '/learn/what-is-njangi',
+            title: 'What is Njangi? Cameroon’s Savings Circle',
+            description: 'Cameroon’s savings circle: how it works, and why it has lasted.',
+          },
+          {
+            href: '/learn/tontine',
+            title: 'What is a Tontine? African Savings Circles',
+            description: 'The rotating savings circle across West and Central Africa.',
+          },
+          {
+            href: '/learn/susu',
+            title: 'What is a Susu? Caribbean & West African Circles',
+            description: 'Susu, sou-sou and Partner — the same circle under three names.',
+          },
+        ]}
+        cta={{
+          title: 'Run the circle your family already trusts',
+          body: 'The same rotation, the same people — with a pot that nobody, including us, can move, and a record every member can check for themselves.',
+          primary: { label: 'Start Your Circle', href: '/create-circle' },
+          secondary: { label: 'Explore Platform', href: '/dashboard' },
+        }}
+      >
+        <GuideSection id="overview" title="What are ROSCAs?">
+          <p className="lead">
+            <strong>Rotating Savings and Credit Associations (ROSCAs)</strong> are informal financial
+            cooperatives where groups of individuals contribute fixed amounts regularly to a common
+            fund. Members take turns receiving the entire pooled amount, creating a rotating credit
+            system that provides access to larger sums of money without traditional banking
+            requirements.
+          </p>
 
-        {/* Hero Section */}
-        <section className="relative bg-gradient-to-r from-ink-surface to-ink-deep text-cream py-20">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-            <h1 className="text-4xl md:text-5xl font-bold mb-6">
-              What is a ROSCA? Rotating Savings and Credit Associations Explained
-            </h1>
-            <p className="text-xl md:text-2xl mb-8 text-cream-muted">
-              The <strong>rotating savings and credit association</strong> is one of the oldest ways people
-              save together: everyone pays in on a schedule, and each member takes the whole pot in turn.
-              Here is how the model works, where it appears, and how to run one where nobody has to hold the money.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4">
-              <Link 
-                href="/create-circle" 
-                className="bg-ink-surface text-gold px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface transition-colors text-center"
-              >
-                Start a circle →
-              </Link>
-              <Link 
-                href="/dashboard" 
-                className="border border-gold-deep/55 text-cream px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface hover:text-gold transition-colors text-center"
-              >
-                Explore Platform
-              </Link>
-            </div>
-          </div>
-        </section>
+          <SideBySide
+            columns={[
+              {
+                title: 'Core Characteristics',
+                points: [
+                  'Fixed, regular contributions from all members',
+                  'Rotating payout system ensuring fair distribution',
+                  'Trust-based community membership',
+                  'No interest charges or traditional banking requirements',
+                  'Social and financial support network',
+                ],
+              },
+              {
+                title: 'Global Impact',
+                points: [
+                  'Found independently on every inhabited continent',
+                  'Works without a bank, a credit history or paperwork',
+                  'A common source of working capital for market traders',
+                  'Frequently organised and led by women',
+                  'Carried abroad intact by diaspora communities',
+                ],
+              },
+            ]}
+          />
 
-        {/* Every figure links to its source. The previous block asserted a
-            global participant count, a country count and an annual ROSCA
-            volume, none of them sourced. Nobody measures global ROSCA volume —
-            the whole point of a ROSCA is that it leaves no institutional
-            record — so there is no honest number to replace it with. */}
-        <section className="bg-ink-surface border-b border-ink-border">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-8">
-              <SourcedStat fact={SAVINGS_CLUB_PARTICIPATION} />
-              <SourcedStat fact={REMITTANCE_COST_AFRICA} />
-              <PlainStat
-                value="Every cycle"
-                label="Contributions, payout order and approvals stay visible to the whole circle for the life of the circle"
-              />
-            </div>
-          </div>
-        </section>
+          <h3>How Traditional ROSCAs Work</h3>
+          <Steps
+            items={[
+              { title: 'Group Formation', body: '8-20 trusted members agree to participate' },
+              { title: 'Regular Contributions', body: 'Fixed amounts collected weekly/monthly' },
+              { title: 'Rotating Payouts', body: 'Members take turns receiving full amount' },
+              { title: 'Cycle Completion', body: 'Process continues until all receive payouts' },
+            ]}
+          />
+        </GuideSection>
 
-        {/* Main Navigation */}
-        <section className="bg-ink-surface border-b">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-            <div className="flex flex-wrap gap-4">
-              <button 
-                onClick={() => setActiveTab('overview')}
-                className={`px-4 py-2 rounded-lg transition-colors ${activeTab === 'overview' ? 'bg-gold/[0.07] text-gold' : 'hover:bg-ink-surface'}`}
-              >
-                ROSCA Overview
-              </button>
-              <button 
-                onClick={() => setActiveTab('global')}
-                className={`px-4 py-2 rounded-lg transition-colors ${activeTab === 'global' ? 'bg-gold/[0.07] text-gold' : 'hover:bg-ink-surface'}`}
-              >
-                Global Systems
-              </button>
-              <button 
-                onClick={() => setActiveTab('blockchain')}
-                className={`px-4 py-2 rounded-lg transition-colors ${activeTab === 'blockchain' ? 'bg-gold/[0.07] text-gold' : 'hover:bg-ink-surface'}`}
-              >
-                How It Works Here
-              </button>
-              <button 
-                onClick={() => setActiveTab('implementation')}
-                className={`px-4 py-2 rounded-lg transition-colors ${activeTab === 'implementation' ? 'bg-gold/[0.07] text-gold' : 'hover:bg-ink-surface'}`}
-              >
-                Implementation
-              </button>
-            </div>
-          </div>
-        </section>
+        <GuideSection id="global" title="ROSCAs Around the World">
+          <h3>Africa</h3>
+          <ul>
+            <li><strong>Njangi</strong> - Cameroon</li>
+            <li><strong>Tontines</strong> - French Africa</li>
+            <li><strong>Susu</strong> - Ghana, Sierra Leone</li>
+            <li><strong>Stokvels</strong> - South Africa</li>
+            <li><strong>Chit Funds</strong> - Kenya</li>
+          </ul>
 
-        {/* Main Content */}
-        <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-          {/* Overview Section */}
-          <div
-            id="overview"
-            role="tabpanel"
-            className={activeTab === 'overview' ? '' : 'hidden'}
-          >
-            <section className="space-y-8">
-              <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">What are ROSCAs?</h2>
-                <p className="text-lg text-sand mb-6">
-                  <strong>Rotating Savings and Credit Associations (ROSCAs)</strong> are informal financial cooperatives 
-                  where groups of individuals contribute fixed amounts regularly to a common fund. Members take turns 
-                  receiving the entire pooled amount, creating a rotating credit system that provides access to larger 
-                  sums of money without traditional banking requirements.
-                </p>
-                
-                <div className="grid md:grid-cols-2 gap-8 mb-8">
-                  <div className="bg-gold/[0.07] p-6 rounded-lg">
-                    <h3 className="text-xl font-semibold text-gold mb-4">Core Characteristics</h3>
-                    <ul className="space-y-2 text-gold">
-                      <li>• Fixed, regular contributions from all members</li>
-                      <li>• Rotating payout system ensuring fair distribution</li>
-                      <li>• Trust-based community membership</li>
-                      <li>• No interest charges or traditional banking requirements</li>
-                      <li>• Social and financial support network</li>
-                    </ul>
-                  </div>
-                  
-                  <div className="bg-gold/[0.07] p-6 rounded-lg">
-                    <h3 className="text-xl font-semibold text-gold mb-4">Global Impact</h3>
-                    <ul className="space-y-2 text-gold">
-                      <li>• Found independently on every inhabited continent</li>
-                      <li>• Works without a bank, a credit history or paperwork</li>
-                      <li>• A common source of working capital for market traders</li>
-                      <li>• Frequently organised and led by women</li>
-                      <li>• Carried abroad intact by diaspora communities</li>
-                    </ul>
-                  </div>
-                </div>
+          <h3>Asia</h3>
+          <ul>
+            <li><strong>Chit Funds</strong> - India</li>
+            <li><strong>Hui</strong> - China</li>
+            <li><strong>Kye</strong> - Korea</li>
+            <li><strong>Paluwagan</strong> - Philippines</li>
+            <li><strong>Arisan</strong> - Indonesia</li>
+          </ul>
 
-                <h3 className="text-2xl font-bold mb-4">How Traditional ROSCAs Work</h3>
-                <div className="bg-ink-deep p-6 rounded-lg">
-                  <div className="grid md:grid-cols-4 gap-4 text-center">
-                    <div>
-                      <div className="bg-gold text-cream rounded-full w-12 h-12 flex items-center justify-center mx-auto mb-2 text-lg font-bold">1</div>
-                      <h4 className="font-semibold">Group Formation</h4>
-                      <p className="text-sm text-sand">8-20 trusted members agree to participate</p>
-                    </div>
-                    <div>
-                      <div className="bg-gold text-cream rounded-full w-12 h-12 flex items-center justify-center mx-auto mb-2 text-lg font-bold">2</div>
-                      <h4 className="font-semibold">Regular Contributions</h4>
-                      <p className="text-sm text-sand">Fixed amounts collected weekly/monthly</p>
-                    </div>
-                    <div>
-                      <div className="bg-gold text-cream rounded-full w-12 h-12 flex items-center justify-center mx-auto mb-2 text-lg font-bold">3</div>
-                      <h4 className="font-semibold">Rotating Payouts</h4>
-                      <p className="text-sm text-sand">Members take turns receiving full amount</p>
-                    </div>
-                    <div>
-                      <div className="bg-gold text-cream rounded-full w-12 h-12 flex items-center justify-center mx-auto mb-2 text-lg font-bold">4</div>
-                      <h4 className="font-semibold">Cycle Completion</h4>
-                      <p className="text-sm text-sand">Process continues until all receive payouts</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </div>
+          <h3>Americas</h3>
+          <ul>
+            <li><strong>Sou Sou</strong> - Caribbean</li>
+            <li><strong>Tandas</strong> - Mexico</li>
+            <li><strong>Susus</strong> - Guyana</li>
+            <li><strong>Juntas</strong> - Colombia</li>
+            <li><strong>Partners</strong> - Jamaica</li>
+          </ul>
 
-          {/* Global Systems Section */}
-          <div
-            id="global"
-            role="tabpanel"
-            className={activeTab === 'global' ? '' : 'hidden'}
-          >
-            <section className="space-y-8">
-              <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">ROSCAs Around the World</h2>
-                
-                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-                  <div className="border border-ink-border rounded-lg p-4">
-                    <h3 className="font-semibold text-lg mb-2">Africa</h3>
-                    <ul className="text-sm space-y-1">
-                      <li><strong>Njangi</strong> - Cameroon</li>
-                      <li><strong>Tontines</strong> - French Africa</li>
-                      <li><strong>Susu</strong> - Ghana, Sierra Leone</li>
-                      <li><strong>Stokvels</strong> - South Africa</li>
-                      <li><strong>Chit Funds</strong> - Kenya</li>
-                    </ul>
-                  </div>
-                  
-                  <div className="border border-ink-border rounded-lg p-4">
-                    <h3 className="font-semibold text-lg mb-2">Asia</h3>
-                    <ul className="text-sm space-y-1">
-                      <li><strong>Chit Funds</strong> - India</li>
-                      <li><strong>Hui</strong> - China</li>
-                      <li><strong>Kye</strong> - Korea</li>
-                      <li><strong>Paluwagan</strong> - Philippines</li>
-                      <li><strong>Arisan</strong> - Indonesia</li>
-                    </ul>
-                  </div>
-                  
-                  <div className="border border-ink-border rounded-lg p-4">
-                    <h3 className="font-semibold text-lg mb-2">Americas</h3>
-                    <ul className="text-sm space-y-1">
-                      <li><strong>Sou Sou</strong> - Caribbean</li>
-                      <li><strong>Tandas</strong> - Mexico</li>
-                      <li><strong>Susus</strong> - Guyana</li>
-                      <li><strong>Juntas</strong> - Colombia</li>
-                      <li><strong>Partners</strong> - Jamaica</li>
-                    </ul>
-                  </div>
-                </div>
+          <h3>Common Challenges Across All Systems</h3>
+          <SideBySide
+            columns={[
+              {
+                title: 'Trust and Security Issues',
+                points: [
+                  'Member default risks',
+                  'Organizer fraud potential',
+                  'Cash handling vulnerabilities',
+                  'Limited legal recourse',
+                ],
+              },
+              {
+                title: 'Operational Limitations',
+                points: [
+                  'Geographic constraints',
+                  'Manual record keeping',
+                  'Cash sits with one treasurer',
+                  'Limited scalability',
+                ],
+              },
+            ]}
+          />
+        </GuideSection>
 
-                <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6">
-                  <h3 className="text-lg font-semibold text-gold mb-3">Common Challenges Across All Systems</h3>
-                  <div className="grid md:grid-cols-2 gap-4 text-sm text-gold">
-                    <div>
-                      <h4 className="font-medium">Trust and Security Issues</h4>
-                      <ul className="mt-2 space-y-1">
-                        <li>• Member default risks</li>
-                        <li>• Organizer fraud potential</li>
-                        <li>• Cash handling vulnerabilities</li>
-                        <li>• Limited legal recourse</li>
-                      </ul>
-                    </div>
-                    <div>
-                      <h4 className="font-medium">Operational Limitations</h4>
-                      <ul className="mt-2 space-y-1">
-                        <li>• Geographic constraints</li>
-                        <li>• Manual record keeping</li>
-                        <li>• Cash sits with one treasurer</li>
-                        <li>• Limited scalability</li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </div>
-
-          {/* Blockchain Revolution Section */}
-          <div
-            id="blockchain"
-            role="tabpanel"
-            className={activeTab === 'blockchain' ? '' : 'hidden'}
-          >
-            <section className="space-y-8">
-              <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">Rules the group cannot quietly change</h2>
-                
-                <div className="mb-8">
-                  <h3 className="text-2xl font-bold mb-4">The rules, written down</h3>
-                  <div className="bg-ink-surface p-4 rounded-lg font-mono text-sm overflow-x-auto">
-                    <pre>{`// A simplified sketch of the circle rules
+        <GuideSection id="blockchain" title="Rules the group cannot quietly change">
+          <h3>The rules, written down</h3>
+          <CodeBlock>{`// A simplified sketch of the circle rules
 struct ROSCACircle {
     members: vector<address>,
     contribution_amount: u64,
@@ -312,239 +221,84 @@ public fun make_contribution(
     // Record contribution automatically
     // Trigger payout when round complete
     // Advance the rotation to the next member
-}`}</pre>
-                  </div>
-                </div>
+}`}</CodeBlock>
 
-                <div className="grid md:grid-cols-2 gap-8 mb-8">
-                  <div>
-                    <h3 className="text-xl font-bold mb-4 text-gold">Traditional ROSCA Problems</h3>
-                    <div className="space-y-3">
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Trust Vulnerabilities</h4>
-                          <p className="text-sm text-sand">Single points of failure, fraud risks</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Geographic Limitations</h4>
-                          <p className="text-sm text-sand">Physical meetings, local membership only</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Treasurer Risk</h4>
-                          <p className="text-sm text-sand">One person physically holds the pooled cash</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+          <h3>Traditional ROSCA Problems</h3>
+          <KeyPoints
+            columns={3}
+            items={[
+              { title: 'Trust Vulnerabilities', body: 'Single points of failure, fraud risks' },
+              { title: 'Geographic Limitations', body: 'Physical meetings, local membership only' },
+              { title: 'Treasurer Risk', body: 'One person physically holds the pooled cash' },
+            ]}
+          />
 
-                  <div>
-                    <h3 className="text-xl font-bold mb-4 text-gold">What changes</h3>
-                    <div className="space-y-3">
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Nobody holds the pot</h4>
-                          <p className="text-sm text-sand">No operator function can move a circle&rsquo;s money</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Global Accessibility</h4>
-                          <p className="text-sm text-sand">24/7 availability, cross-border participation</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Automated Escrow</h4>
-                          <p className="text-sm text-sand">Contributions held in escrow and released on schedule, to the scheduled member only</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+          <h3>What changes</h3>
+          <KeyPoints
+            columns={3}
+            items={[
+              { title: 'Nobody holds the pot', body: 'No operator function can move a circle’s money' },
+              { title: 'Global Accessibility', body: '24/7 availability, cross-border participation' },
+              {
+                title: 'Automated Escrow',
+                body: 'Contributions held in escrow and released on schedule, to the scheduled member only',
+              },
+            ]}
+          />
 
-                <div className="bg-gold/[0.07] p-6 rounded-lg">
-                  <h3 className="text-lg font-semibold text-gold mb-3">What that gives the circle</h3>
-                  <div className="grid md:grid-cols-3 gap-4 text-sm text-gold">
-                    <div>
-                      <h4 className="font-medium">Transparency</h4>
-                      <p>Every contribution and payout sits on a public record any member can check</p>
-                    </div>
-                    <div>
-                      <h4 className="font-medium">Automation</h4>
-                      <p>Contribution tracking and payout order run from contract rules, not memory</p>
-                    </div>
-                    <div>
-                      <h4 className="font-medium">Scalability</h4>
-                      <p>No size limits, global membership possible</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </div>
+          <h3>What that gives the circle</h3>
+          <KeyPoints
+            columns={3}
+            items={[
+              {
+                title: 'Transparency',
+                body: 'Every contribution and payout sits on a public record any member can check',
+              },
+              {
+                title: 'Automation',
+                body: 'Contribution tracking and payout order run from contract rules, not memory',
+              },
+              { title: 'Scalability', body: 'No size limits, global membership possible' },
+            ]}
+          />
+        </GuideSection>
 
-          {/* Implementation Section */}
-          <div
-            id="implementation"
-            role="tabpanel"
-            className={activeTab === 'implementation' ? '' : 'hidden'}
+        <GuideSection id="implementation" title="Getting started">
+          <h3>Platform Features</h3>
+          <KeyPoints
+            columns={3}
+            items={[
+              {
+                title: 'Multi-Cultural Support',
+                body: 'Supporting traditional ROSCA formats from around the world with culturally appropriate features and ceremonies.',
+              },
+              {
+                title: 'Stablecoin Settlement',
+                body: 'Contribute in USD-pegged stablecoins so the pot’s value stays predictable across borders.',
+              },
+              {
+                title: 'Global Accessibility',
+                body: 'Cross-border participation enabling diaspora communities to maintain connections with home countries.',
+              },
+            ]}
+          />
+
+          <h3>Quick Start Guide</h3>
+          <ol>
+            <li>Sign in with Google, Facebook or Apple &mdash; no seed phrase</li>
+            <li>Agree the contribution amount, member count and rotation order</li>
+            <li>Browse available circles or create your own</li>
+            <li>Post your security deposit and pay in each cycle</li>
+          </ol>
+
+          <ProseAction
+            href="/create-circle"
+            secondary={{ label: 'Browse Existing Circles', href: '/dashboard' }}
           >
-            <section className="space-y-8">
-              <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">Getting started</h2>
-                
-                <div className="grid md:grid-cols-2 gap-8 mb-8">
-                  <div>
-                    <h3 className="text-xl font-bold mb-4">Platform Features</h3>
-                    <div className="space-y-4">
-                      <div className="border border-ink-border rounded-lg p-4">
-                        <h4 className="font-semibold text-gold mb-2">Multi-Cultural Support</h4>
-                        <p className="text-sm text-sand">
-                          Supporting traditional ROSCA formats from around the world with 
-                          culturally appropriate features and ceremonies.
-                        </p>
-                      </div>
-                      <div className="border border-ink-border rounded-lg p-4">
-                        <h4 className="font-semibold text-gold mb-2">Stablecoin Settlement</h4>
-                        <p className="text-sm text-sand">
-                          Contribute in USD-pegged stablecoins so the pot&rsquo;s value
-                          stays predictable across borders.
-                        </p>
-                      </div>
-                      <div className="border border-ink-border rounded-lg p-4">
-                        <h4 className="font-semibold text-gold mb-2">Global Accessibility</h4>
-                        <p className="text-sm text-sand">
-                          Cross-border participation enabling diaspora communities 
-                          to maintain connections with home countries.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <h3 className="text-xl font-bold mb-4">Quick Start Guide</h3>
-                    <div className="space-y-3">
-                      <div className="flex items-center space-x-3">
-                        <div className="bg-gold text-cream rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">1</div>
-                        <span className="text-sm">Sign in with Google, Facebook or Apple &mdash; no seed phrase</span>
-                      </div>
-                      <div className="flex items-center space-x-3">
-                        <div className="bg-gold text-cream rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">2</div>
-                        <span className="text-sm">Agree the contribution amount, member count and rotation order</span>
-                      </div>
-                      <div className="flex items-center space-x-3">
-                        <div className="bg-gold text-cream rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">3</div>
-                        <span className="text-sm">Browse available circles or create your own</span>
-                      </div>
-                      <div className="flex items-center space-x-3">
-                        <div className="bg-gold text-cream rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">4</div>
-                        <span className="text-sm">Post your security deposit and pay in each cycle</span>
-                      </div>
-                    </div>
-
-                    <div className="mt-6 space-y-3">
-                      <Link 
-                        href="/create-circle"
-                        className="w-full bg-gold text-cream py-3 px-6 rounded-lg font-semibold hover:bg-gold transition-colors flex items-center justify-center"
-                      >
-                        Create Your Circle
-                      </Link>
-                      <Link 
-                        href="/dashboard"
-                        className="w-full border border-gold/45 text-gold py-3 px-6 rounded-lg font-semibold hover:bg-gold/[0.07] transition-colors flex items-center justify-center"
-                      >
-                        Browse Existing Circles
-                      </Link>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </div>
-
-          {/* Related Content Links */}
-          <section className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8 mt-12">
-            <h2 className="text-2xl font-bold mb-6 text-cream">Related Content</h2>
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-              <Link href="/learn/what-is-njangi" className="group">
-                <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is Njangi? Cameroon&rsquo;s Savings Circle
-                  </h3>
-                  <p className="text-sm text-sand">
-                    Cameroon&rsquo;s savings circle: how it works, and why it has lasted.
-                  </p>
-                </div>
-              </Link>
-              
-              <Link href="/learn/tontine" className="group">
-                <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is a Tontine? African Savings Circles
-                  </h3>
-                  <p className="text-sm text-sand">
-                    The rotating savings circle across West and Central Africa.
-                  </p>
-                </div>
-              </Link>
-              
-              <Link href="/learn/susu" className="group">
-                <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is a Susu? Caribbean &amp; West African Circles
-                  </h3>
-                  <p className="text-sm text-sand">
-                    Susu, sou-sou and Partner &mdash; the same circle under three names.
-                  </p>
-                </div>
-              </Link>
-            </div>
-          </section>
-
-          {/* CTA Section */}
-          <section className="bg-gradient-to-r from-ink-surface to-ink-deep rounded-lg text-cream p-8 mt-12 text-center">
-            <h2 className="text-2xl font-bold mb-4">Run the circle your family already trusts</h2>
-            <p className="text-cream-muted mb-6">
-              The same rotation, the same people &mdash; with a pot that nobody, including us, can move,
-              and a record every member can check for themselves.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Link 
-                href="/create-circle"
-                className="bg-ink-surface text-gold px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface transition-colors"
-              >
-                Start Your Circle
-              </Link>
-              <Link 
-                href="/dashboard"
-                className="border border-gold-deep/55 text-cream px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface hover:text-gold transition-colors"
-              >
-                Explore Platform
-              </Link>
-            </div>
-          </section>
-        </main>
-
-        {/* Footer Disclaimer */}
-        <footer className="bg-ink-surface mt-16">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <p className="text-sm text-sand text-center">
-              <strong>Disclaimer:</strong> This content is for educational purposes only and does not constitute financial advice. 
-              Njangi On-Chain is coordination software for savings circles: it never holds your money, never offers an investment, and never pays a return. Take part only with an amount your group can commit to the schedule.
-            </p>
-          </div>
-        </footer>
-      </MarketingShell>
+            Create Your Circle
+          </ProseAction>
+        </GuideSection>
+      </LearnGuide>
     </>
   );
-} 
+}

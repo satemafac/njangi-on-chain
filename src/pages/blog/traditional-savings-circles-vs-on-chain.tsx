@@ -1,7 +1,9 @@
 import Link from 'next/link';
+import { BookOpen, CheckCircle2, CircleHelp, Coins, Lightbulb } from 'lucide-react';
 import { Seo } from '../../components/Seo';
 import { article, breadcrumbs } from '../../lib/structured-data';
-import { MarketingShell } from '../../components/marketing/ArticleLayout';
+import { BlogPost } from '../../components/marketing/BlogPost';
+import { Callout, SideBySide } from '../../components/marketing/ProseBlocks';
 
 export default function TraditionalSavingsVsBlockchainPost() {
   return (
@@ -43,410 +45,299 @@ export default function TraditionalSavingsVsBlockchainPost() {
         ]}
       />
 
-      <MarketingShell>
-        {/* Navigation */}
-        <nav className="bg-ink-surface border-b">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center space-x-2 py-3 text-sm text-sand">
-              <Link href="/" className="hover:text-gold transition-colors">Home</Link>
-              <span>/</span>
-              <Link href="/blog" className="hover:text-gold transition-colors">Blog</Link>
-              <span>/</span>
-              <span className="text-cream font-medium">Traditional vs. On-Chain</span>
-            </div>
-          </div>
-        </nav>
+      <BlogPost
+        crumb="Traditional vs. On-Chain"
+        category="Technology"
+        meta="8 min read · 5 June 2025"
+        title="Traditional Savings Circles vs. On-Chain: What Actually Changes"
+        dek={
+          <>
+            A side-by-side on how a njangi, tontine or susu works traditionally, what changes when the
+            record is shared, and what deliberately does not.
+          </>
+        }
+        byline="Published 5 June 2025 · updated 2 August 2026"
+        relatedTitle="Related Articles"
+        related={[
+          {
+            href: '/learn/rosca',
+            category: 'Learn',
+            title: 'What is a ROSCA? Rotating Savings, Explained',
+            description: 'The structure behind njangi, tontine, susu and chit funds.',
+          },
+          {
+            href: '/learn/rosca',
+            category: 'Education',
+            title: 'ROSCAs on the Blockchain: A Complete Guide',
+            description: 'How rotating savings circles work on-chain — escrow, schedules, and transparency.',
+          },
+          {
+            href: '/blog/women-led-savings-circles-africa',
+            category: 'Social Impact',
+            title: 'Women-Led Savings Circles: The Backbone of African Finance',
+            description:
+              'Across chamas, stokvels and tontines the organiser is very often a woman. What that role actually involves.',
+          },
+        ]}
+        cta={{
+          title: 'Ready to Experience the Difference?',
+          body: 'Join thousands of people worldwide who are using blockchain technology to enhance their savings circles with security, transparency, and automation.',
+          primary: { label: 'Start Your Circle', href: '/create-circle' },
+          secondary: { label: 'Learn More', href: '/learn' },
+        }}
+      >
+        <p className="lead">
+          For centuries, communities around the world have relied on rotating savings and credit
+          associations (ROSCAs) to pool resources, build wealth, and support each other through
+          financial challenges. From <strong>Njangi circles in Cameroon</strong> to{' '}
+          <strong>Tontines across French-speaking Africa</strong>, from{' '}
+          <strong>Sou Sou networks in the Caribbean</strong> to countless other variations, these
+          systems have proven remarkably resilient and effective.
+        </p>
 
-        {/* Article Header */}
-        <article className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-          <header className="mb-12">
-            <div className="flex items-center mb-6">
-              <span className="bg-gold/[0.07] text-gold text-sm font-semibold px-3 py-1 rounded-full">
-                Technology
-              </span>
-              <span className="text-sand-dim ml-4 text-sm">8 min read &bull; 5 June 2025</span>
-            </div>
-            
-            <h1 className="text-4xl md:text-5xl font-bold text-cream mb-6 leading-tight">
-              Traditional Savings Circles vs. On-Chain: What Actually Changes
-            </h1>
-            
-            <p className="text-xl text-sand mb-8 leading-relaxed">
-              A side-by-side on how a njangi, tontine or susu works traditionally, what changes when the
-              record is shared, and what deliberately does not.
-            </p>
-            
-            <div className="flex items-center space-x-4 border-b border-ink-border border-ink-border pb-8">
-              <div className="w-12 h-12 bg-gradient-to-br from-ink-surface to-ink-deep rounded-full flex items-center justify-center text-cream font-semibold text-lg">
-                N
-              </div>
-              <div>
-                <div className="font-semibold text-cream">Njangi On-Chain</div>
-                <div className="text-sm text-sand">Published 5 June 2025 &middot; updated 2 August 2026</div>
-              </div>
-            </div>
-          </header>
+        <p>
+          But now, blockchain technology promises to revolutionize these age-old practices. The question
+          isn&rsquo;t whether blockchain savings circles are better or worse than traditional ones—it&rsquo;s
+          about understanding how they&rsquo;re different and which approach works best for your specific
+          community needs.
+        </p>
 
-          {/* Article Content */}
-          <div className="prose prose-lg max-w-none">
-            <p className="text-lg text-sand leading-relaxed mb-8">
-              For centuries, communities around the world have relied on rotating savings and credit 
-              associations (ROSCAs) to pool resources, build wealth, and support each other through 
-              financial challenges. From <strong>Njangi circles in Cameroon</strong> to <strong>Tontines 
-              across French-speaking Africa</strong>, from <strong>Sou Sou networks in the Caribbean</strong> to 
-              countless other variations, these systems have proven remarkably resilient and effective.
-            </p>
+        <Callout icon={Lightbulb} title="New to savings circles?">
+          <p>
+            Start with our foundational guides to understand the basics before diving into this
+            comparison:
+          </p>
+          <ul>
+            <li>
+              <Link href="/learn/what-is-njangi">What is Njangi? (Cameroon savings circles)</Link>
+            </li>
+            <li>
+              <Link href="/learn/rosca">Blockchain ROSCA overview</Link>
+            </li>
+            <li>
+              <Link href="/learn/tontine">Tontine blockchain transformation</Link>
+            </li>
+            <li>
+              <Link href="/learn/susu">Sou Sou crypto integration</Link>
+            </li>
+          </ul>
+        </Callout>
 
-            <p className="text-lg text-sand leading-relaxed mb-8">
-              But now, blockchain technology promises to revolutionize these age-old practices. The question 
-              isn&rsquo;t whether blockchain savings circles are better or worse than traditional ones—it&rsquo;s 
-              about understanding how they&rsquo;re different and which approach works best for your specific 
-              community needs.
-            </p>
+        <h2>The Core Differences</h2>
 
-            <div className="bg-gold/[0.07] border-l-4 border-gold/45 p-6 my-8">
-              <p className="text-gold font-medium">
-                💡 <strong>New to savings circles?</strong> Start with our foundational guides to understand 
-                the basics before diving into this comparison:
-              </p>
-              <div className="mt-4 space-y-2">
-                <Link href="/learn/what-is-njangi" className="block text-gold hover:text-gold text-sm">
-                  → What is Njangi? (Cameroon savings circles)
-                </Link>
-                <Link href="/learn/rosca" className="block text-gold hover:text-gold text-sm">
-                  → Blockchain ROSCA overview
-                </Link>
-                <Link href="/learn/tontine" className="block text-gold hover:text-gold text-sm">
-                  → Tontine blockchain transformation
-                </Link>
-                <Link href="/learn/susu" className="block text-gold hover:text-gold text-sm">
-                  → Sou Sou crypto integration
-                </Link>
-              </div>
-            </div>
+        <h3>1. Trust Mechanisms</h3>
 
-            <h2 className="text-3xl font-bold text-cream mt-12 mb-6">The Core Differences</h2>
+        <SideBySide
+          columns={[
+            {
+              title: 'Traditional Approach',
+              points: [
+                'Relies on personal relationships and social pressure',
+                'Single coordinator manages all funds',
+                'Trust built through face-to-face interactions',
+                'Community reputation as primary enforcement',
+              ],
+            },
+            {
+              title: 'Blockchain Approach',
+              highlight: true,
+              points: [
+                'Smart contracts eliminate need for intermediaries',
+                'Cryptographic security protects all transactions',
+                'Trust is “trustless”—built into the code',
+                'Transparent, immutable transaction records',
+              ],
+            },
+          ]}
+        />
 
-            <h3 className="text-2xl font-semibold text-cream mt-8 mb-4">1. Trust Mechanisms</h3>
-            
-            <div className="grid md:grid-cols-2 gap-8 my-8">
-              <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6">
-                <h4 className="text-lg font-semibold text-gold mb-3">Traditional Approach</h4>
-                <ul className="space-y-2 text-gold text-sm">
-                  <li>• Relies on personal relationships and social pressure</li>
-                  <li>• Single coordinator manages all funds</li>
-                  <li>• Trust built through face-to-face interactions</li>
-                  <li>• Community reputation as primary enforcement</li>
-                </ul>
-              </div>
-              
-              <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6">
-                <h4 className="text-lg font-semibold text-gold mb-3">Blockchain Approach</h4>
-                <ul className="space-y-2 text-gold text-sm">
-                  <li>• Smart contracts eliminate need for intermediaries</li>
-                  <li>• Cryptographic security protects all transactions</li>
-                  <li>• Trust is &ldquo;trustless&rdquo;—built into the code</li>
-                  <li>• Transparent, immutable transaction records</li>
-                </ul>
-              </div>
-            </div>
+        <p>
+          The most fundamental difference lies in how trust is established and maintained. Traditional
+          systems rely heavily on social capital—your reputation within the community, family connections,
+          and face-to-face relationships. This creates strong community bonds but limits scalability.
+        </p>
 
-            <p className="text-lg text-sand leading-relaxed mb-8">
-              The most fundamental difference lies in how trust is established and maintained. Traditional 
-              systems rely heavily on social capital—your reputation within the community, family connections, 
-              and face-to-face relationships. This creates strong community bonds but limits scalability.
-            </p>
+        <p>
+          Blockchain systems, by contrast, embed trust directly into the technology. Smart contracts
+          automatically execute agreements without human intervention, so no coordinator holds the pooled
+          cash or decides where it goes. This enables participation by people who don&rsquo;t know each other
+          personally but want to benefit from collective savings.
+        </p>
 
-            <p className="text-lg text-sand leading-relaxed mb-8">
-              Blockchain systems, by contrast, embed trust directly into the technology. Smart contracts 
-              automatically execute agreements without human intervention, so no coordinator holds the pooled 
-              cash or decides where it goes. This enables participation by people who don&rsquo;t know each other 
-              personally but want to benefit from collective savings.
-            </p>
+        <h3>2. Geographic and Accessibility Constraints</h3>
 
-            <h3 className="text-2xl font-semibold text-cream mt-8 mb-4">2. Geographic and Accessibility Constraints</h3>
+        <p>
+          Traditional savings circles typically require physical proximity.{' '}
+          <Link href="/learn/what-is-njangi">Njangi meetings in Cameroon</Link>, for example, often
+          include social elements like shared meals and community discussions. This creates strong social
+          bonds but excludes diaspora communities.
+        </p>
 
-            <p className="text-lg text-sand leading-relaxed mb-6">
-              Traditional savings circles typically require physical proximity. <Link href="/learn/what-is-njangi" className="text-gold hover:text-gold underline">Njangi meetings in Cameroon</Link>, 
-              for example, often include social elements like shared meals and community discussions. 
-              This creates strong social bonds but excludes diaspora communities.
-            </p>
+        <p>
+          Blockchain systems break down geographic barriers entirely. A{' '}
+          <Link href="/learn/susu">digital Sou Sou circle</Link> can include members from New York,
+          London, Toronto, and Kingston simultaneously, all participating in the same rotating savings
+          system while maintaining cultural connections.
+        </p>
 
-            <p className="text-lg text-sand leading-relaxed mb-8">
-              Blockchain systems break down geographic barriers entirely. A <Link href="/learn/susu" className="text-gold hover:text-gold underline">digital Sou Sou circle</Link> 
-              can include members from New York, London, Toronto, and Kingston simultaneously, all 
-              participating in the same rotating savings system while maintaining cultural connections.
-            </p>
+        <h3>3. Fund Custody and Safety</h3>
 
-            <h3 className="text-2xl font-semibold text-cream mt-8 mb-4">3. Fund Custody and Safety</h3>
+        <Callout icon={Coins} title="The Money Factor">
+          <p>
+            In a traditional circle, the pooled cash physically sits with one treasurer until
+            distribution — a single point of trust and a single point of failure. In a blockchain
+            circle, contributions are held by a smart-contract escrow that nobody (not even the
+            platform) can redirect, and released to the scheduled recipient automatically.
+          </p>
+        </Callout>
 
-            <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 my-8">
-              <h4 className="text-lg font-semibold text-gold mb-3">💰 The Money Factor</h4>
-              <p className="text-gold text-sm">
-                In a traditional circle, the pooled cash physically sits with one treasurer until
-                distribution — a single point of trust and a single point of failure. In a blockchain
-                circle, contributions are held by a smart-contract escrow that nobody (not even the
-                platform) can redirect, and released to the scheduled recipient automatically.
-              </p>
-            </div>
+        <p>
+          This might be the most compelling practical difference. When your traditional savings circle
+          pools $10,000 per month, everyone is trusting one person to hold and hand over that money.
+          In a blockchain system, the same funds sit in transparent escrow the whole group can verify,
+          and the payout goes to the right member on schedule without anyone touching the cash.
+        </p>
 
-            <p className="text-lg text-sand leading-relaxed mb-8">
-              This might be the most compelling practical difference. When your traditional savings circle
-              pools $10,000 per month, everyone is trusting one person to hold and hand over that money.
-              In a blockchain system, the same funds sit in transparent escrow the whole group can verify,
-              and the payout goes to the right member on schedule without anyone touching the cash.
-            </p>
+        <h2>Real-World Examples</h2>
 
-            <h2 className="text-3xl font-bold text-cream mt-12 mb-6">Real-World Examples</h2>
+        <h3>Case Study: Nigerian Esusu vs. Blockchain ROSCA</h3>
 
-            <h3 className="text-2xl font-semibold text-cream mt-8 mb-4">Case Study: Nigerian Esusu vs. Blockchain ROSCA</h3>
+        <p>Consider two groups of 20 Nigerian professionals, each contributing $100 monthly:</p>
 
-            <p className="text-lg text-sand leading-relaxed mb-6">
-              Consider two groups of 20 Nigerian professionals, each contributing $100 monthly:
-            </p>
+        <SideBySide
+          columns={[
+            {
+              title: 'Traditional Esusu',
+              points: [
+                'Monthly pool: $2,000',
+                'Each member receives: $2,000 (once per 20 months)',
+                'Total program value: $40,000',
+                'Returns generated: $0',
+                'Coordinator risk: High',
+                'Time investment: 2-3 hours/month meetings',
+              ],
+            },
+            {
+              title: 'Blockchain ROSCA',
+              highlight: true,
+              points: [
+                'Monthly pool: $2,000',
+                'Each member receives: $2,000 (on a verifiable schedule)',
+                'Total program value: $40,000',
+                'Custody: smart-contract escrow, not a treasurer',
+                'Coordinator discretion over funds: none',
+                'Time investment: 15 minutes/month',
+              ],
+            },
+          ]}
+        />
 
-            <div className="grid md:grid-cols-2 gap-8 my-8">
-              <div className="bg-ink-deep border border-ink-border rounded-lg p-6">
-                <h4 className="text-lg font-semibold text-cream mb-3">Traditional Esusu</h4>
-                <div className="space-y-3 text-sm text-sand">
-                  <div>• Monthly pool: $2,000</div>
-                  <div>• Each member receives: $2,000 (once per 20 months)</div>
-                  <div>• Total program value: $40,000</div>
-                  <div>• Returns generated: $0</div>
-                  <div>• Coordinator risk: High</div>
-                  <div>• Time investment: 2-3 hours/month meetings</div>
-                </div>
-              </div>
-              
-              <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6">
-                <h4 className="text-lg font-semibold text-gold mb-3">Blockchain ROSCA</h4>
-                <div className="space-y-3 text-sm text-gold">
-                  <div>• Monthly pool: $2,000</div>
-                  <div>• Each member receives: $2,000 (on a verifiable schedule)</div>
-                  <div>• Total program value: $40,000</div>
-                  <div>• Custody: smart-contract escrow, not a treasurer</div>
-                  <div>• Coordinator discretion over funds: none</div>
-                  <div>• Time investment: 15 minutes/month</div>
-                </div>
-              </div>
-            </div>
+        <h2>Cultural Considerations</h2>
 
-            <h2 className="text-3xl font-bold text-cream mt-12 mb-6">Cultural Considerations</h2>
+        <p>
+          One concern often raised about blockchain savings circles is the loss of cultural and
+          social elements. Traditional <Link href="/learn/tontine">African tontines</Link>, for
+          example, often include ceremonies, shared meals, and community support beyond just
+          financial transactions.
+        </p>
 
-            <p className="text-lg text-sand leading-relaxed mb-6">
-              One concern often raised about blockchain savings circles is the loss of cultural and 
-              social elements. Traditional <Link href="/learn/tontine" className="text-gold hover:text-gold underline">African tontines</Link>, 
-              for example, often include ceremonies, shared meals, and community support beyond just 
-              financial transactions.
-            </p>
+        <p>However, modern blockchain platforms are addressing this by incorporating cultural features:</p>
 
-            <p className="text-lg text-sand leading-relaxed mb-8">
-              However, modern blockchain platforms are addressing this by incorporating cultural features:
-            </p>
+        <ul>
+          <li>Virtual community spaces for cultural celebrations</li>
+          <li>Automated allocation of funds for cultural activities</li>
+          <li>Digital preservation of traditional ceremonies</li>
+          <li>Integration with diaspora community networks</li>
+        </ul>
 
-            <ul className="list-disc pl-6 space-y-2 text-lg text-sand mb-8">
-              <li>Virtual community spaces for cultural celebrations</li>
-              <li>Automated allocation of funds for cultural activities</li>
-              <li>Digital preservation of traditional ceremonies</li>
-              <li>Integration with diaspora community networks</li>
-            </ul>
+        <h2>Which Approach Is Right for You?</h2>
 
-            <h2 className="text-3xl font-bold text-cream mt-12 mb-6">Which Approach Is Right for You?</h2>
+        <Callout icon={CircleHelp} title="Consider Traditional Savings Circles If:">
+          <ul>
+            <li>Your community is geographically concentrated</li>
+            <li>Social interaction and relationship-building are primary goals</li>
+            <li>Members prefer face-to-face accountability</li>
+            <li>Technology adoption is low in your community</li>
+            <li>Cultural traditions require physical presence</li>
+          </ul>
+        </Callout>
 
-            <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 my-8">
-              <h4 className="text-lg font-semibold text-gold mb-3">🤔 Consider Traditional Savings Circles If:</h4>
-              <ul className="space-y-2 text-gold text-sm">
-                <li>• Your community is geographically concentrated</li>
-                <li>• Social interaction and relationship-building are primary goals</li>
-                <li>• Members prefer face-to-face accountability</li>
-                <li>• Technology adoption is low in your community</li>
-                <li>• Cultural traditions require physical presence</li>
+        <Callout icon={CheckCircle2} title="Consider Blockchain Savings Circles If:">
+          <ul>
+            <li>Your community is geographically dispersed</li>
+            <li>Maximizing financial returns is important</li>
+            <li>You want to reduce coordinator and fraud risks</li>
+            <li>24/7 accessibility and transparency appeal to you</li>
+            <li>You&rsquo;re comfortable with digital platforms</li>
+          </ul>
+        </Callout>
+
+        <h2>The Future: Hybrid Approaches</h2>
+
+        <p>
+          The most exciting development isn&rsquo;t the replacement of traditional systems with
+          blockchain ones—it&rsquo;s the emergence of hybrid approaches that combine the best of both worlds.
+        </p>
+
+        <p>
+          These systems use blockchain technology for the financial infrastructure while maintaining
+          traditional cultural and social elements through digital community features, virtual ceremonies,
+          and diaspora connections. Members get the security and automation of blockchain with
+          the cultural richness of traditional practices.
+        </p>
+
+        <h2>Getting Started</h2>
+
+        <p>
+          Whether you choose traditional or blockchain savings circles, the most important step
+          is starting. Both approaches have proven effective for building wealth and strengthening
+          communities—the key is finding the one that best fits your specific needs and circumstances.
+        </p>
+
+        <Callout icon={BookOpen} title="Learn More">
+          <p>
+            Ready to dive deeper? Explore our comprehensive guides to understand how different
+            savings circle traditions work and how blockchain technology is transforming them.
+          </p>
+          <div className="mt-5 grid gap-6 sm:grid-cols-2">
+            <div>
+              <p className="mb-2 font-semibold text-mist">Traditional Systems:</p>
+              <ul>
+                <li>
+                  <Link href="/learn/what-is-njangi">Njangi (Cameroon)</Link>
+                </li>
+                <li>
+                  <Link href="/learn/tontine">Tontines (French Africa)</Link>
+                </li>
+                <li>
+                  <Link href="/learn/susu">Sou Sou (Caribbean)</Link>
+                </li>
               </ul>
             </div>
-
-            <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6 my-8">
-              <h4 className="text-lg font-semibold text-gold mb-3">✅ Consider Blockchain Savings Circles If:</h4>
-              <ul className="space-y-2 text-gold text-sm">
-                <li>• Your community is geographically dispersed</li>
-                <li>• Maximizing financial returns is important</li>
-                <li>• You want to reduce coordinator and fraud risks</li>
-                <li>• 24/7 accessibility and transparency appeal to you</li>
-                <li>• You&rsquo;re comfortable with digital platforms</li>
+            <div>
+              <p className="mb-2 font-semibold text-mist">Blockchain Innovation:</p>
+              <ul>
+                <li>
+                  <Link href="/learn/rosca">Blockchain ROSCA overview</Link>
+                </li>
+                <li>
+                  <Link href="/create-circle">Start your digital circle</Link>
+                </li>
+                <li>
+                  <Link href="/dashboard">Explore existing circles</Link>
+                </li>
               </ul>
             </div>
-
-            <h2 className="text-3xl font-bold text-cream mt-12 mb-6">The Future: Hybrid Approaches</h2>
-
-            <p className="text-lg text-sand leading-relaxed mb-6">
-              The most exciting development isn&rsquo;t the replacement of traditional systems with 
-              blockchain ones—it&rsquo;s the emergence of hybrid approaches that combine the best of both worlds.
-            </p>
-
-            <p className="text-lg text-sand leading-relaxed mb-8">
-              These systems use blockchain technology for the financial infrastructure while maintaining
-              traditional cultural and social elements through digital community features, virtual ceremonies,
-              and diaspora connections. Members get the security and automation of blockchain with
-              the cultural richness of traditional practices.
-            </p>
-
-            <h2 className="text-3xl font-bold text-cream mt-12 mb-6">Getting Started</h2>
-
-            <p className="text-lg text-sand leading-relaxed mb-6">
-              Whether you choose traditional or blockchain savings circles, the most important step 
-              is starting. Both approaches have proven effective for building wealth and strengthening 
-              communities—the key is finding the one that best fits your specific needs and circumstances.
-            </p>
-
-            <div className="bg-ink-surface border border-ink-border rounded-lg p-6 my-8">
-              <h4 className="text-lg font-semibold text-cream mb-3">📚 Learn More</h4>
-              <p className="text-sand text-sm mb-4">
-                Ready to dive deeper? Explore our comprehensive guides to understand how different 
-                savings circle traditions work and how blockchain technology is transforming them.
-              </p>
-              <div className="grid md:grid-cols-2 gap-4">
-                <div>
-                  <h5 className="font-medium text-cream mb-2">Traditional Systems:</h5>
-                  <div className="space-y-1">
-                    <Link href="/learn/what-is-njangi" className="block text-gold hover:text-gold text-sm">
-                      • Njangi (Cameroon)
-                    </Link>
-                    <Link href="/learn/tontine" className="block text-gold hover:text-gold text-sm">
-                      • Tontines (French Africa)
-                    </Link>
-                    <Link href="/learn/susu" className="block text-gold hover:text-gold text-sm">
-                      • Sou Sou (Caribbean)
-                    </Link>
-                  </div>
-                </div>
-                <div>
-                  <h5 className="font-medium text-cream mb-2">Blockchain Innovation:</h5>
-                  <div className="space-y-1">
-                    <Link href="/learn/rosca" className="block text-gold hover:text-gold text-sm">
-                      • Blockchain ROSCA overview
-                    </Link>
-                    <Link href="/create-circle" className="block text-gold hover:text-gold text-sm">
-                      • Start your digital circle
-                    </Link>
-                    <Link href="/dashboard" className="block text-gold hover:text-gold text-sm">
-                      • Explore existing circles
-                    </Link>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <p className="text-lg text-sand leading-relaxed">
-              The goal isn&rsquo;t to abandon traditional practices but to enhance them with modern technology 
-              where it makes sense. Whether you choose a traditional approach, a fully blockchain-based 
-              system, or something in between, you&rsquo;re participating in a tradition that has helped 
-              build wealth and strengthen communities for generations.
-            </p>
           </div>
+        </Callout>
 
-          {/* Related Articles */}
-          <section className="mt-16 pt-8 border-t border-ink-border border-ink-border">
-            <h3 className="text-2xl font-bold text-cream mb-6">Related Articles</h3>
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-              <Link href="/learn/rosca" className="group">
-                <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <span className="bg-gold/[0.07] text-gold text-xs font-semibold px-2 py-1 rounded-full">
-                    Learn
-                  </span>
-                  <h4 className="font-semibold text-cream group-hover:text-gold mt-3 mb-2">
-                    What is a ROSCA? Rotating Savings, Explained
-                  </h4>
-                  <p className="text-sm text-sand">
-                    The structure behind njangi, tontine, susu and chit funds.
-                  </p>
-                </div>
-              </Link>
-              
-              <Link href="/learn/rosca" className="group">
-                <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <span className="bg-gold/[0.07] text-gold text-xs font-semibold px-2 py-1 rounded-full">
-                    Education
-                  </span>
-                  <h4 className="font-semibold text-cream group-hover:text-gold mt-3 mb-2">
-                    ROSCAs on the Blockchain: A Complete Guide
-                  </h4>
-                  <p className="text-sm text-sand">
-                    How rotating savings circles work on-chain — escrow, schedules, and transparency.
-                  </p>
-                </div>
-              </Link>
-              
-              <Link href="/blog/women-led-savings-circles-africa" className="group">
-                <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <span className="bg-gold/[0.07] text-gold text-xs font-semibold px-2 py-1 rounded-full">
-                    Social Impact
-                  </span>
-                  <h4 className="font-semibold text-cream group-hover:text-gold mt-3 mb-2">
-                    Women-Led Savings Circles: The Backbone of African Finance
-                  </h4>
-                  <p className="text-sm text-sand">
-                    Across chamas, stokvels and tontines the organiser is very often a woman. What that role actually involves.
-                  </p>
-                </div>
-              </Link>
-            </div>
-          </section>
-
-          {/* Author Bio */}
-          <section className="mt-16 pt-8 border-t border-ink-border border-ink-border">
-            <div className="flex items-start space-x-4">
-              <div className="w-16 h-16 bg-gradient-to-br from-ink-surface to-ink-deep rounded-full flex items-center justify-center text-cream font-semibold text-xl">
-                N
-              </div>
-              <div className="flex-1">
-                <h4 className="text-lg font-semibold text-cream">Njangi On-Chain</h4>
-                <p className="text-sm text-sand mb-3">
-                  We build coordination software for rotating savings circles. We write about how
-                  these circles work, what changes when the record is shared, and what deliberately
-                  does not.
-                </p>
-                <div className="flex space-x-4 text-sm">
-                  <span className="text-sand-dim">Follow:</span>
-                  <a href="https://x.com/njangi_on_chain" className="text-gold hover:text-gold">X</a>
-                  <a href="https://www.instagram.com/njangionchain" className="text-gold hover:text-gold">Instagram</a>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* CTA */}
-          <section className="mt-16 bg-gradient-to-r from-ink-surface to-ink-deep rounded-lg text-cream p-8 text-center">
-            <h3 className="text-2xl font-bold mb-4">Ready to Experience the Difference?</h3>
-            <p className="text-cream-muted mb-6">
-              Join thousands of people worldwide who are using blockchain technology to enhance
-              their savings circles with security, transparency, and automation.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Link 
-                href="/learn"
-                className="bg-ink-surface text-gold px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface transition-colors"
-              >
-                Learn More
-              </Link>
-              <Link 
-                href="/create-circle"
-                className="border border-gold-deep/55 text-cream px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface hover:text-gold transition-colors"
-              >
-                Start Your Circle
-              </Link>
-            </div>
-          </section>
-        </article>
-
-        {/* Footer */}
-        <footer className="bg-ink-surface mt-16">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <p className="text-sm text-sand text-center">
-              <strong>Disclaimer:</strong> This content is for educational purposes only and does not constitute financial advice. 
-              Njangi On-Chain is coordination software for savings circles: it never holds your money, never offers an investment, and never pays a return. Take part only with an amount your group can commit to the schedule.
-            </p>
-          </div>
-        </footer>
-      </MarketingShell>
+        <p>
+          The goal isn&rsquo;t to abandon traditional practices but to enhance them with modern technology
+          where it makes sense. Whether you choose a traditional approach, a fully blockchain-based
+          system, or something in between, you&rsquo;re participating in a tradition that has helped
+          build wealth and strengthen communities for generations.
+        </p>
+      </BlogPost>
     </>
   );
-} 
+}

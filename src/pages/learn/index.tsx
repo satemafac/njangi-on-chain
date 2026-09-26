@@ -1,10 +1,42 @@
 import Link from 'next/link';
+import { Check } from 'lucide-react';
 import { Seo } from '../../components/Seo';
 import { breadcrumbs, definedTermSet } from '../../lib/structured-data';
 import { ROSCA_TERMS } from '../../content/rosca-terms';
-import { MarketingShell } from '../../components/marketing/ArticleLayout';
+import { Breadcrumbs, MarketingShell } from '../../components/marketing/ArticleLayout';
 import { SourcedStat, PlainStat } from '../../components/marketing/SourcedStat';
 import { REMITTANCES_AFRICA, REMITTANCE_COST_AFRICA, SAVINGS_CLUB_PARTICIPATION } from '../../content/sourced-facts';
+import { ChevronLink, focusRing, goldButtonClass } from '../../components/landing/ui';
+
+const TOPICS = [
+  {
+    title: 'Traditional Systems',
+    points: [
+      'Historical origins and cultural significance',
+      'How rotating savings circles work',
+      'Regional variations worldwide',
+      'Common challenges and limitations',
+    ],
+  },
+  {
+    title: 'What Makes One Safer',
+    points: [
+      'Nobody holds the pot \u2014 not even us',
+      'Every contribution visible to every member',
+      'Members can vote to stop a circle',
+      'No seed phrase, no token to buy first',
+    ],
+  },
+  {
+    title: 'Partner-led Fiat Ramps',
+    points: [
+      'Coinbase, MoonPay and Transak on-ramps',
+      'Multi-currency support (USD, EUR, XAF, NGN, KES\u2026)',
+      'KYC and AML handled by licensed partners',
+      'Geo-aware provider selection',
+    ],
+  },
+];
 
 export default function LearnIndexPage() {
   // Card copy follows the page it links to. The slug migration updated these
@@ -24,8 +56,7 @@ export default function LearnIndexPage() {
       description: "Where the word comes from, how a njangi actually runs, and what it means in English.",
       href: "/learn/what-is-njangi",
       tag: "Fundamentals",
-      readTime: "5 min read",
-      color: "green"
+      readTime: "5 min read"
     },
     {
       title: "What is a ROSCA?",
@@ -34,7 +65,6 @@ export default function LearnIndexPage() {
       href: "/learn/rosca",
       tag: "Fundamentals",
       readTime: "7 min read",
-      color: "blue"
     },
     {
       title: "What is a Tontine?",
@@ -43,7 +73,6 @@ export default function LearnIndexPage() {
       href: "/learn/tontine",
       tag: "Regional Focus",
       readTime: "9 min read",
-      color: "purple"
     },
     {
       title: "What is a Susu?",
@@ -52,7 +81,6 @@ export default function LearnIndexPage() {
       href: "/learn/susu",
       tag: "Cultural Traditions",
       readTime: "8 min read",
-      color: "orange"
     },
     {
       title: "What is a Chit Fund?",
@@ -61,7 +89,6 @@ export default function LearnIndexPage() {
       href: "/learn/chit-fund",
       tag: "Fundamentals",
       readTime: "9 min read",
-      color: "blue"
     },
     {
       title: "What is a Chama?",
@@ -70,7 +97,6 @@ export default function LearnIndexPage() {
       href: "/learn/chama",
       tag: "Regional Focus",
       readTime: "8 min read",
-      color: "green"
     },
     {
       title: "What is Esusu?",
@@ -79,39 +105,8 @@ export default function LearnIndexPage() {
       href: "/learn/esusu",
       tag: "Cultural Traditions",
       readTime: "8 min read",
-      color: "orange"
     }
   ];
-
-  const getColorClasses = (color: string) => {
-    const colors = {
-      green: {
-        border: "border-gold/45",
-        bg: "bg-gold/[0.07]",
-        text: "text-gold",
-        hover: "hover:border-gold/45"
-      },
-      blue: {
-        border: "border-gold/45",
-        bg: "bg-gold/[0.07]",
-        text: "text-gold",
-        hover: "hover:border-gold/45"
-      },
-      purple: {
-        border: "border-gold/45",
-        bg: "bg-gold/[0.07]",
-        text: "text-gold",
-        hover: "hover:border-gold/45"
-      },
-      orange: {
-        border: "border-gold/45",
-        bg: "bg-gold/[0.07]",
-        text: "text-gold",
-        hover: "hover:border-gold/45"
-      }
-    };
-    return colors[color as keyof typeof colors] || colors.blue;
-  };
 
   return (
     <>
@@ -140,112 +135,87 @@ export default function LearnIndexPage() {
         ]}
       />
 
-      <MarketingShell>
-        {/* Navigation Breadcrumb */}
-        <nav className="bg-ink-surface border-b">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center space-x-2 py-3 text-sm text-sand">
-              <Link href="/" className="hover:text-gold transition-colors">Home</Link>
-              <span>/</span>
-              <span className="text-cream font-medium">Learn</span>
+      <MarketingShell legacy={false}>
+        {/* ================= HERO ================= */}
+        <header className="relative overflow-hidden">
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 bg-[radial-gradient(900px_460px_at_50%_-12%,rgba(232,176,75,0.10),transparent_64%)]"
+          />
+          <div className="relative mx-auto max-w-[1100px] px-5 pb-16 pt-8 text-center sm:px-8 md:pb-24 md:pt-12">
+            <Breadcrumbs
+              className="flex justify-center"
+              items={[{ label: 'Home', href: '/' }, { label: 'Learn' }]}
+            />
+            <h1 className="type-hero mx-auto mt-12 max-w-[14ch] text-balance text-mist">
+              One tradition, many names.
+            </h1>
+            <p className="type-intro mx-auto mt-6 max-w-[44rem] text-balance text-mist-2">
+              Njangi, tontine, susu, chama, stokvel &mdash; the same practice, wherever it is found.
+              How it works, where it comes from, and how to run one where nobody has to hold the
+              money.
+            </p>
+            <div className="mt-10 flex flex-col items-center justify-center gap-5 sm:flex-row sm:gap-8">
+              <Link href="/create-circle" className={goldButtonClass}>
+                Start Learning by Doing
+              </Link>
+              <ChevronLink href="#articles">Browse Articles</ChevronLink>
             </div>
           </div>
-        </nav>
-
-        {/* Hero Section */}
-        <section className="relative bg-gradient-to-r from-ink-surface to-ink-deep text-cream py-20">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="text-center">
-              <h1 className="text-4xl md:text-6xl font-bold mb-6">
-                One tradition, many names.
-              </h1>
-              <p className="text-xl md:text-2xl mb-8 text-cream-muted max-w-4xl mx-auto">
-                Njangi, tontine, susu, chama, stokvel &mdash; the same practice, wherever it is found.
-                How it works, where it comes from, and how to run one where nobody has to hold the money.
-              </p>
-              <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <Link 
-                  href="/create-circle" 
-                  className="bg-ink-surface text-gold px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface transition-colors"
-                >
-                  Start Learning by Doing →
-                </Link>
-                <Link 
-                  href="#articles" 
-                  className="border border-gold-deep/55 text-cream px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface hover:text-gold transition-colors"
-                >
-                  Browse Articles
-                </Link>
-              </div>
-            </div>
-          </div>
-        </section>
+        </header>
 
         {/* Figures carry their source. The block this replaced showed four big
             round numbers — a global participant count, an annual volume, and a
             country count that exceeded the number of countries that exist —
             with nothing behind any of them. */}
-        <section className="bg-ink-surface border-b border-ink-border">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
-              <SourcedStat fact={REMITTANCES_AFRICA} />
-              <SourcedStat fact={REMITTANCE_COST_AFRICA} />
-              <SourcedStat fact={SAVINGS_CLUB_PARTICIPATION} />
-              <PlainStat
-                value="Self-custodied"
-                label="No operator function can move member funds — the contract has no admin path to a circle's balance"
-              />
-            </div>
+        <section aria-label="Savings circles, by the numbers" className="px-5 pb-24 sm:px-8 md:pb-32">
+          <div className="mx-auto grid max-w-[1100px] grid-cols-1 gap-y-12 border-y border-white/[0.08] py-12 sm:grid-cols-2 sm:gap-x-10 lg:grid-cols-4">
+            <SourcedStat fact={REMITTANCES_AFRICA} />
+            <SourcedStat fact={REMITTANCE_COST_AFRICA} />
+            <SourcedStat fact={SAVINGS_CLUB_PARTICIPATION} />
+            <PlainStat
+              value="Self-custodied"
+              label="No operator function can move member funds — the contract has no admin path to a circle's balance"
+            />
           </div>
         </section>
 
-        {/* Main Learning Articles */}
-        <section id="articles" className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-          <div className="text-center mb-12">
-            <h2 className="text-3xl font-bold text-cream mb-4">Educational Articles</h2>
-            <p className="text-lg text-sand max-w-3xl mx-auto">
-              Start with the fundamentals and work through the regional variations &mdash; how these
-              circles work, and what changes when the rules cannot be quietly rewritten.
-            </p>
-          </div>
+        {/* ================= ARTICLES ================= */}
+        <section id="articles" className="scroll-mt-[72px] px-5 pb-24 sm:px-8 md:pb-32">
+          <div className="mx-auto max-w-[1100px]">
+            <div className="mx-auto max-w-[44rem] text-center">
+              <h2 className="type-section text-balance text-mist">Educational Articles</h2>
+              <p className="type-intro mt-5 text-balance text-mist-2">
+                Start with the fundamentals and work through the regional variations &mdash; how
+                these circles work, and what changes when the rules cannot be quietly rewritten.
+              </p>
+            </div>
 
-          <div className="grid md:grid-cols-2 gap-8">
-            {articles.map((article, index) => {
-              const colorClasses = getColorClasses(article.color);
-              return (
-                <Link key={index} href={article.href} className="group">
-                  <article className={`border ${colorClasses.border} ${colorClasses.hover} rounded-lg overflow-hidden shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] hover:shadow-xl transition-all duration-300`}>
-                    <div className={`${colorClasses.bg} p-4`}>
-                      <div className="flex items-center justify-between mb-2">
-                        <span className={`text-xs font-semibold ${colorClasses.text} bg-ink-surface px-2 py-1 rounded`}>
-                          {article.tag}
-                        </span>
-                        <span className="text-xs text-sand-dim">{article.readTime}</span>
-                      </div>
-                    </div>
-                    
-                    <div className="p-6">
-                      <h3 className="text-xl font-bold text-cream mb-2 group-hover:text-gold transition-colors">
-                        {article.title}
-                      </h3>
-                      <h4 className={`text-lg font-semibold ${colorClasses.text} mb-3`}>
-                        {article.subtitle}
-                      </h4>
-                      <p className="text-sand text-sm leading-relaxed">
-                        {article.description}
-                      </p>
-                      
-                      <div className="mt-4 flex items-center text-sm text-gold group-hover:text-gold">
-                        Read Article
-                        <svg className="ml-2 w-4 h-4 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                        </svg>
-                      </div>
-                    </div>
-                  </article>
+            <div className="mt-14 grid gap-4 md:grid-cols-2 md:gap-5">
+              {articles.map((article) => (
+                <Link
+                  key={article.href}
+                  href={article.href}
+                  className={`group flex flex-col rounded-[28px] bg-ink-surface p-7 transition-colors duration-200 hover:bg-[#1b1b1e] sm:p-9 ${focusRing}`}
+                >
+                  <span className="flex items-center justify-between gap-4">
+                    <span className="text-[13px] font-semibold text-gold">{article.tag}</span>
+                    <span className="text-[13px] text-mist-3">{article.readTime}</span>
+                  </span>
+                  <h3 className="type-tile mt-5 text-mist">{article.title}</h3>
+                  <p className="mt-2 text-[17px] font-medium tracking-[-0.022em] text-mist-2">
+                    {article.subtitle}
+                  </p>
+                  <p className="type-body mt-3 flex-1 text-mist-3">{article.description}</p>
+                  <span className="mt-7 inline-flex items-center gap-0.5 text-[15px] text-gold">
+                    Read Article
+                    <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-0.5 rtl:rotate-180">
+                      ›
+                    </span>
+                  </span>
                 </Link>
-              );
-            })}
+              ))}
+            </div>
           </div>
         </section>
 
@@ -257,37 +227,33 @@ export default function LearnIndexPage() {
             from the sitemap. Shipping 14 more sitemap-only URLs would repeat
             exactly that. Internal links from an already-indexed page are how
             crawl priority is actually allocated, and /learn is indexed. */}
-        <section id="glossary" className="bg-ink-deep border-t border-ink-border">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-            <div className="mb-10">
-              <h2 className="text-3xl font-bold text-cream mb-4">
-                One tradition, many names
-              </h2>
-              <p className="text-lg text-sand max-w-3xl">
+        <section id="glossary" className="scroll-mt-[72px] px-5 pb-24 sm:px-8 md:pb-32">
+          <div className="mx-auto max-w-[1100px]">
+            <div className="max-w-[44rem]">
+              <h2 className="type-section text-balance text-mist">One tradition, many names</h2>
+              <p className="type-intro mt-5 text-mist-2">
                 The same rotating savings circle runs on every inhabited continent under a
                 different name. Each entry covers where it comes from, how the turn order gets
                 decided, and what makes that version distinct.
               </p>
             </div>
 
-            <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <ul className="mt-12 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {ROSCA_TERMS.filter((term) => !term.hasPillarPage).map((term) => (
                 <li key={term.slug}>
                   <Link
                     href={`/learn/${term.slug}`}
-                    className="group flex h-full flex-col rounded-2xl border border-ink-border bg-ink-surface/70 p-5 transition-colors duration-200 hover:border-gold/45"
+                    className={`group flex h-full flex-col rounded-[22px] bg-ink-surface p-6 transition-colors duration-200 hover:bg-[#1b1b1e] ${focusRing}`}
                   >
                     <span className="flex items-baseline justify-between gap-3">
-                      <span className="text-lg font-semibold text-cream group-hover:text-gold-hi">
+                      <span className="text-[19px] font-semibold tracking-[0.012em] text-mist">
                         {term.term}
                       </span>
-                      <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-gold">
+                      <span className="shrink-0 text-[12px] font-medium text-gold">
                         {term.region.split(',')[0]}
                       </span>
                     </span>
-                    <span className="mt-2 text-sm leading-6 text-sand">
-                      {term.shortDefinition}
-                    </span>
+                    <span className="type-caption mt-2 text-mist-3">{term.shortDefinition}</span>
                   </Link>
                 </li>
               ))}
@@ -295,141 +261,109 @@ export default function LearnIndexPage() {
           </div>
         </section>
 
-        {/* Learning Path */}
-        <section className="bg-ink-surface">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-            <div className="text-center mb-12">
-              <h2 className="text-3xl font-bold text-cream mb-4">Recommended Learning Path</h2>
-              <p className="text-lg text-sand">
-                Follow this sequence to build a complete picture of how rotating savings circles work.
+        {/* ================= LEARNING PATH ================= */}
+        <section className="px-5 pb-24 sm:px-8 md:pb-32">
+          <div className="mx-auto max-w-[860px]">
+            <div className="text-center">
+              <h2 className="type-section text-balance text-mist">Recommended Learning Path</h2>
+              <p className="type-intro mx-auto mt-5 max-w-[40rem] text-balance text-mist-2">
+                Follow this sequence to build a complete picture of how rotating savings circles
+                work.
               </p>
             </div>
 
-            <div className="relative">
-              {/* Learning path line */}
-              <div className="hidden md:block absolute left-1/2 transform -translate-x-1/2 w-1 bg-gradient-to-b from-ink-surface via-ink-surface via-ink-surface to-ink-deep h-full"></div>
-              
-              <div className="space-y-12">
-                {articles.map((article, index) => {
-                  const colorClasses = getColorClasses(article.color);
-                  const isEven = index % 2 === 0;
-                  
-                  return (
-                    <div key={index} className={`flex items-center ${isEven ? 'md:flex-row' : 'md:flex-row-reverse'}`}>
-                      <div className={`flex-1 ${isEven ? 'md:pr-8' : 'md:pl-8'}`}>
-                        <div className={`bg-ink-surface border ${colorClasses.border} rounded-lg p-6 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)]`}>
-                          <div className="flex items-center mb-3">
-                            <div className={`w-8 h-8 ${colorClasses.bg} ${colorClasses.text} rounded-full flex items-center justify-center font-bold text-sm mr-3`}>
-                              {index + 1}
-                            </div>
-                            <span className={`text-xs font-semibold ${colorClasses.text} bg-ink-surface px-2 py-1 rounded`}>
-                              {article.tag}
-                            </span>
-                          </div>
-                          <h3 className="text-xl font-bold text-cream mb-2">{article.title}</h3>
-                          <p className="text-sand text-sm mb-4">{article.description}</p>
-                          <Link 
-                            href={article.href}
-                            className={`inline-flex items-center text-sm font-semibold ${colorClasses.text} hover:underline`}
-                          >
-                            Start Reading
-                            <svg className="ml-1 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                            </svg>
-                          </Link>
-                        </div>
-                      </div>
-                      
-                      {/* Center dot - only visible on larger screens */}
-                      <div className="hidden md:flex w-4 h-4 bg-ink-surface border-4 border-gold/45 rounded-full relative z-10"></div>
-                      
-                      <div className="flex-1"></div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            <ol className="mt-14 border-b border-white/[0.1]">
+              {articles.map((article, index) => (
+                <li key={article.href} className="border-t border-white/[0.1]">
+                  <Link
+                    href={article.href}
+                    className={`group flex items-start gap-6 rounded-lg py-7 sm:gap-10 ${focusRing}`}
+                  >
+                    <span className="w-10 shrink-0 text-[28px] font-semibold leading-none tracking-[-0.01em] text-gold tabular-nums sm:w-14 sm:text-[40px]">
+                      {String(index + 1).padStart(2, '0')}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[13px] font-medium text-mist-3">{article.tag}</span>
+                      <span className="mt-1 block text-[21px] font-semibold tracking-[0.011em] text-mist">
+                        {article.title}
+                      </span>
+                      <span className="type-caption mt-2 block text-mist-3">{article.description}</span>
+                      <span className="mt-3 inline-flex items-center gap-0.5 text-[15px] text-gold">
+                        Start Reading
+                        <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-0.5 rtl:rotate-180">
+                          ›
+                        </span>
+                      </span>
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ol>
           </div>
         </section>
 
-        {/* Topics Overview */}
-        <section className="bg-ink-deep">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-            <div className="text-center mb-12">
-              <h2 className="text-3xl font-bold text-cream mb-4">Topics Covered</h2>
-              <p className="text-lg text-sand">
+        {/* ================= TOPICS ================= */}
+        <section className="px-5 pb-24 sm:px-8 md:pb-32">
+          <div className="mx-auto max-w-[1100px]">
+            <div className="text-center">
+              <h2 className="type-section text-balance text-mist">Topics Covered</h2>
+              <p className="type-intro mx-auto mt-5 max-w-[40rem] text-balance text-mist-2">
                 How these circles work, where they come from, and what makes one safer to run.
               </p>
             </div>
 
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-              <div className="bg-ink-surface rounded-lg p-6 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)]">
-                <h3 className="text-lg font-semibold text-cream mb-3">Traditional Systems</h3>
-                <ul className="space-y-2 text-sm text-sand">
-                  <li>• Historical origins and cultural significance</li>
-                  <li>• How rotating savings circles work</li>
-                  <li>• Regional variations worldwide</li>
-                  <li>• Common challenges and limitations</li>
-                </ul>
-              </div>
-
-              <div className="bg-ink-surface rounded-lg p-6 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)]">
-                <h3 className="text-lg font-semibold text-cream mb-3">What Makes One Safer</h3>
-                <ul className="space-y-2 text-sm text-sand">
-                  <li>• Nobody holds the pot — not even us</li>
-                  <li>• Every contribution visible to every member</li>
-                  <li>• Members can vote to stop a circle</li>
-                  <li>• No seed phrase, no token to buy first</li>
-                </ul>
-              </div>
-
-              <div className="bg-ink-surface rounded-lg p-6 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)]">
-                <h3 className="text-lg font-semibold text-cream mb-3">Partner-led Fiat Ramps</h3>
-                <ul className="space-y-2 text-sm text-sand">
-                  <li>• Coinbase, MoonPay and Transak on-ramps</li>
-                  <li>• Multi-currency support (USD, EUR, XAF, NGN, KES…)</li>
-                  <li>• KYC and AML handled by licensed partners</li>
-                  <li>• Geo-aware provider selection</li>
-                </ul>
-              </div>
+            <div className="mt-14 grid gap-4 md:grid-cols-3 md:gap-5">
+              {TOPICS.map((topic) => (
+                <div key={topic.title} className="rounded-[28px] bg-ink-surface p-7 sm:p-9">
+                  <h3 className="text-[21px] font-semibold tracking-[0.011em] text-mist">{topic.title}</h3>
+                  <ul className="mt-5 space-y-3">
+                    {topic.points.map((point) => (
+                      <li key={point} className="type-caption flex items-start gap-2.5 text-mist-2">
+                        <Check aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-gold" strokeWidth={2.2} />
+                        <span>{point}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
             </div>
           </div>
         </section>
 
-        {/* CTA Section */}
-        <section className="bg-gradient-to-r from-ink-surface to-ink-deep text-cream">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-center">
-            <h2 className="text-3xl font-bold mb-4">Ready to Apply What You&rsquo;ve Learned?</h2>
-            <p className="text-xl text-cream-muted mb-8 max-w-3xl mx-auto">
-              Run the circle your family already trusts &mdash; with a pot that nobody, including us,
-              can move, and a record every member can check for themselves.
+        {/* ================= CTA ================= */}
+        <section className="px-5 pb-24 sm:px-8 md:pb-32">
+          <div className="relative mx-auto max-w-[1100px] overflow-hidden rounded-[32px] bg-ink-surface px-7 py-16 text-center sm:px-12 md:py-24">
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-x-0 -top-40 mx-auto h-80 max-w-[720px] rounded-full"
+              style={{ background: 'radial-gradient(closest-side, rgba(232,176,75,0.16), transparent)' }}
+            />
+            <h2 className="type-section relative mx-auto max-w-[18ch] text-balance text-mist">
+              Ready to Apply What You&rsquo;ve Learned?
+            </h2>
+            <p className="type-intro relative mx-auto mt-5 max-w-[40rem] text-balance text-mist-2">
+              Run the circle your family already trusts &mdash; with a pot that nobody, including
+              us, can move, and a record every member can check for themselves.
             </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Link 
-                href="/create-circle"
-                className="bg-ink-surface text-gold px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface transition-colors"
-              >
+            <div className="relative mt-10 flex flex-col items-center justify-center gap-5 sm:flex-row sm:gap-8">
+              <Link href="/create-circle" className={goldButtonClass}>
                 Create Your Circle
               </Link>
-              <Link 
-                href="/dashboard"
-                className="border border-gold-deep/55 text-cream px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface hover:text-gold transition-colors"
-              >
-                Browse Existing Circles
-              </Link>
+              <ChevronLink href="/dashboard">Browse Existing Circles</ChevronLink>
             </div>
           </div>
         </section>
 
-        {/* Footer */}
-        <footer className="bg-ink-surface">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <p className="text-sm text-sand text-center">
-              <strong>Educational Disclaimer:</strong> This content is for educational purposes only and does not constitute financial advice. 
-              Njangi On-Chain is coordination software for savings circles: it never holds your money, never offers an investment, and never pays a return. Take part only with an amount your group can commit to the schedule.
-            </p>
-          </div>
-        </footer>
+        {/* ================= DISCLAIMER ================= */}
+        <aside className="px-5 pb-16 sm:px-8">
+          <p className="type-fine mx-auto max-w-[44rem] text-center text-mist-3">
+            <strong className="font-semibold text-mist-2">Educational Disclaimer:</strong> This
+            content is for educational purposes only and does not constitute financial advice.
+            Njangi On-Chain is coordination software for savings circles: it never holds your money,
+            never offers an investment, and never pays a return. Take part only with an amount your
+            group can commit to the schedule.
+          </p>
+        </aside>
       </MarketingShell>
     </>
   );

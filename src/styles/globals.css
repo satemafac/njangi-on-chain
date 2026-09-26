@@ -12,7 +12,258 @@ body {
   background: rgb(var(--background-rgb));
 }
 
-/* ---- Animated landing: shared helpers (cinematic near-black + gold) ---- */
+/* ---- Landing: Apple-style type system (scoped to the .apple page root) ----
+   SF Pro on Apple devices (the system font IS the design language there);
+   everyone else gets Inter with optical sizing, loaded lazily by next/font
+   only when the system font doesn't match. Sizes + tracking follow Apple's
+   marketing scale: display sizes track tighter, body copy sits at 17px. */
+.apple {
+  font-family: -apple-system, BlinkMacSystemFont, var(--font-landing-sans, Inter), 'Helvetica Neue',
+    Helvetica, Arial, sans-serif;
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+.type-hero {
+  font-size: clamp(2.5rem, 1.1rem + 5.2vw, 5.25rem);
+  line-height: 1.05;
+  letter-spacing: -0.015em;
+  font-weight: 600;
+}
+.type-section {
+  font-size: clamp(2.25rem, 1.35rem + 3.6vw, 4rem);
+  line-height: 1.0625;
+  letter-spacing: -0.009em;
+  font-weight: 600;
+}
+.type-tile {
+  font-size: clamp(1.5rem, 1.25rem + 0.8vw, 2rem);
+  line-height: 1.125;
+  letter-spacing: 0.004em;
+  font-weight: 600;
+}
+.type-headline {
+  font-size: clamp(1.75rem, 1.3rem + 1.6vw, 2.5rem);
+  line-height: 1.1;
+  letter-spacing: 0;
+  font-weight: 600;
+}
+.type-intro {
+  font-size: clamp(1.1875rem, 1.08rem + 0.35vw, 1.3125rem);
+  line-height: 1.381;
+  letter-spacing: 0.011em;
+  font-weight: 400;
+}
+.type-body {
+  font-size: 1.0625rem;
+  line-height: 1.47;
+  letter-spacing: -0.022em;
+  font-weight: 400;
+}
+.type-eyebrow {
+  font-size: clamp(1.0625rem, 1rem + 0.25vw, 1.3125rem);
+  line-height: 1.19;
+  letter-spacing: 0.011em;
+  font-weight: 600;
+}
+.type-caption {
+  font-size: 0.875rem;
+  line-height: 1.43;
+  letter-spacing: -0.016em;
+}
+.type-fine {
+  font-size: 0.75rem;
+  line-height: 1.33;
+  letter-spacing: -0.01em;
+}
+/* Big figures (proof numbers) — tabular so count-ups don't jitter. */
+.type-figure {
+  font-size: clamp(3rem, 2rem + 4vw, 5rem);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* First-paint entrance for the hero. CSS (not JS) so it runs before
+   hydration and never hides the LCP headline behind a script. */
+@keyframes landing-rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, var(--rise, 22px), 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.rise {
+  animation: landing-rise 1.1s cubic-bezier(0.28, 0.11, 0.32, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+
+/* ---- Legacy long-form content adapter (MarketingShell / ArticleLayout) ----
+   The article bodies under /learn and /blog were built on a SaaS template
+   and later recoloured, so they still carry its habits: bold headings, 8px
+   corners, heavy drop shadows, and colourless `border-*` rules that fall
+   back to Tailwind's light grey (#e5e7eb — a bright line on a black page).
+   Scoped to `.mkt-legacy`, this brings them onto the Apple system without
+   rewriting every article. In @layer components so explicit border-colour
+   utilities still win; the heading/radius/shadow rules win on specificity. */
+@layer components {
+  .mkt-legacy *,
+  .mkt-legacy ::before,
+  .mkt-legacy ::after {
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+  .mkt-legacy h1,
+  .mkt-legacy h2,
+  .mkt-legacy h3,
+  .mkt-legacy h4 {
+    font-weight: 600;
+    text-wrap: balance;
+  }
+  .mkt-legacy h1 {
+    letter-spacing: -0.02em;
+    line-height: 1.08;
+  }
+  .mkt-legacy h2 {
+    letter-spacing: -0.012em;
+    line-height: 1.12;
+  }
+  .mkt-legacy h3,
+  .mkt-legacy h4 {
+    letter-spacing: -0.005em;
+  }
+  .mkt-legacy .rounded {
+    border-radius: 8px;
+  }
+  .mkt-legacy .rounded-lg {
+    border-radius: 18px;
+  }
+  .mkt-legacy .rounded-xl,
+  .mkt-legacy .rounded-2xl {
+    border-radius: 22px;
+  }
+  .mkt-legacy [class*='shadow-['],
+  .mkt-legacy .shadow,
+  .mkt-legacy .shadow-md,
+  .mkt-legacy .shadow-lg,
+  .mkt-legacy .shadow-xl {
+    box-shadow: none;
+  }
+}
+
+/* ---- Reading column (BlogPost, prose articles) ----
+   Apple Newsroom-style long-form type for plain semantic article bodies.
+   Every selector goes through :where() so it carries no extra specificity:
+   bare elements get the prose look, while anything with its own utility
+   classes (callouts, figures, links styled on purpose) keeps them. Body
+   copy sits at #d2d2d7 rather than the secondary grey — long reading on
+   black needs more light than a caption does. */
+@layer components {
+  .prose-apple {
+    color: theme('colors.cream.muted');
+    font-size: 1.1875rem;
+    line-height: 1.6;
+    letter-spacing: 0.004em;
+  }
+  .prose-apple :where(p) {
+    margin: 0 0 1.35em;
+  }
+  .prose-apple :where(p:last-child) {
+    margin-bottom: 0;
+  }
+  .prose-apple :where(.lead) {
+    color: theme('colors.cream.DEFAULT');
+    font-size: clamp(1.25rem, 1.15rem + 0.35vw, 1.375rem);
+    line-height: 1.5;
+  }
+  .prose-apple :where(h2) {
+    color: theme('colors.cream.DEFAULT');
+    font-size: clamp(1.625rem, 1.3rem + 1vw, 2rem);
+    font-weight: 600;
+    line-height: 1.15;
+    letter-spacing: 0;
+    margin: 2.1em 0 0.7em;
+    text-wrap: balance;
+  }
+  .prose-apple :where(h3) {
+    color: theme('colors.cream.DEFAULT');
+    font-size: clamp(1.25rem, 1.15rem + 0.4vw, 1.4375rem);
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: 0.006em;
+    margin: 1.8em 0 0.6em;
+  }
+  .prose-apple :where(strong) {
+    color: theme('colors.cream.DEFAULT');
+    font-weight: 600;
+  }
+  .prose-apple :where(a) {
+    color: theme('colors.gold.DEFAULT');
+    text-decoration: underline;
+    text-decoration-color: rgba(232, 176, 75, 0.4);
+    text-underline-offset: 3px;
+    transition: text-decoration-color 0.2s;
+  }
+  .prose-apple :where(a:hover) {
+    text-decoration-color: currentColor;
+  }
+  /* Physical padding on purpose: the build polyfills `padding-inline-start`
+     with `:not(:lang(ar, he, …))` selectors, which lifts the rule above a
+     plain utility and stops ProseBlocks' `p-0` from resetting it. */
+  .prose-apple :where(ul, ol) {
+    margin: 0 0 1.5em;
+    padding-left: 1.25em;
+  }
+  .prose-apple :where(ul) {
+    list-style: disc;
+  }
+  .prose-apple :where(ol) {
+    list-style: decimal;
+  }
+  .prose-apple :where(li) {
+    margin: 0.6em 0;
+    padding-left: 0.25em;
+  }
+  .prose-apple :where(li)::marker {
+    color: theme('colors.gold.DEFAULT');
+  }
+  .prose-apple :where(blockquote) {
+    margin: 2.2em 0;
+    padding-inline-start: 1.1em;
+    border-inline-start: 3px solid theme('colors.gold.DEFAULT');
+    color: theme('colors.cream.DEFAULT');
+    font-size: clamp(1.375rem, 1.2rem + 0.6vw, 1.625rem);
+    font-weight: 600;
+    line-height: 1.35;
+    letter-spacing: 0.004em;
+  }
+}
+
+/* Radix sheets on the landing: the scrim fades, the sheet settles from 96%.
+   Uses the individual `scale` property so it composes with the centring
+   translate on the element instead of overwriting it. */
+@keyframes sheet-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+.sheet-scrim[data-state='open'] {
+  animation: sheet-fade 0.3s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+.sheet[data-state='open'] {
+  animation: sheet-in 0.45s cubic-bezier(0.28, 0.11, 0.32, 1);
+}
 
 /* Gradient text for kinetic display headlines */
 .text-gold-gradient {
@@ -20,46 +271,6 @@ body {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-}
-
-/* Subtle film grain so dark sections have tooth, not flat black */
-.bg-grain::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.05;
-  z-index: 1;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-
-/* Woven-ledger lattice — the crypto x heritage hinge (a ledger is a grid, so is
-   weaving). Kept at 5-6% so it reads as texture, never as a visible pattern. */
-.bg-weave {
-  background-image:
-    repeating-linear-gradient(45deg, rgba(156, 139, 106, 0.08) 0 1px, transparent 1px 16px),
-    repeating-linear-gradient(135deg, rgba(200, 144, 47, 0.07) 0 1px, transparent 1px 16px);
-}
-
-/* Concentric "gathering" rings — echoes the hero orbit; radial-masked to fade
-   out before it reaches text. */
-.bg-rings {
-  background-image: repeating-radial-gradient(
-    circle at 50% 38%,
-    rgba(232, 176, 75, 0.1) 0 1px,
-    transparent 1px 48px
-  );
-  -webkit-mask-image: radial-gradient(circle at 50% 38%, #000 0%, transparent 72%);
-  mask-image: radial-gradient(circle at 50% 38%, #000 0%, transparent 72%);
-}
-
-/* Slow drift for ambient marquee rows */
-@keyframes njangi-marquee {
-  from { transform: translateX(0); }
-  to { transform: translateX(-50%); }
-}
-.animate-marquee {
-  animation: njangi-marquee 38s linear infinite;
 }
 
 /* Reduced-motion safety net — global guarantee on top of per-component guards */
@@ -71,8 +282,5 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
-  }
-  .animate-marquee {
-    animation: none !important;
   }
 }

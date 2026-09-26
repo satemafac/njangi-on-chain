@@ -11,22 +11,35 @@ const LEGAL_FOOTER_LINKS: Array<{ href: string; label: string }> = [
   { href: '/legal/data-deletion', label: 'Data Deletion' },
 ];
 
-export function LegalFooter({ className }: { className?: string }) {
+export function LegalFooter({
+  className,
+  tone = 'light',
+}: {
+  className?: string;
+  /** 'dark' for black surfaces (the landing): hover lightens instead of
+   *  darkening, which on black would make the link vanish. */
+  tone?: 'light' | 'dark';
+}) {
+  const dark = tone === 'dark';
   return (
     <nav
       aria-label="Legal"
-      className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-[#6b7280] ${className ?? ''}`}
+      className={`flex flex-wrap items-center gap-x-2 gap-y-1 ${
+        dark ? 'text-mist-3' : 'text-sm text-[#6b7280]'
+      } ${className ?? ''}`}
     >
       {LEGAL_FOOTER_LINKS.map((link, index) => (
         <React.Fragment key={link.href}>
           {index > 0 && (
-            <span aria-hidden="true" className="text-[#9ca3af]">
+            <span aria-hidden="true" className={dark ? 'text-mist-4' : 'text-[#9ca3af]'}>
               ·
             </span>
           )}
           <Link
             href={link.href}
-            className="underline-offset-4 transition-colors hover:text-[#111827] hover:underline"
+            className={`underline-offset-4 transition-colors hover:underline ${
+              dark ? 'hover:text-mist' : 'hover:text-[#111827]'
+            }`}
           >
             {link.label}
           </Link>

@@ -1,88 +1,50 @@
 // ArticleLayout — the shell for every public content page.
 //
-// Two problems this solves at once:
+// Two problems this has solved since 2026-08:
 //
-// 1. Brand split. The landing and /pricing use the dark + gold system; /learn,
-//    /faq and /blog were white pages with a different coloured gradient hero
-//    each (green, indigo, purple, orange, blue). Search traffic lands on those
-//    pages first, so a visitor's first impression of the product was a page
-//    that looked nothing like the homepage.
+// 1. Brand split. /learn, /faq and /blog were white template pages with a
+//    different coloured gradient hero each; search traffic lands on them
+//    first, so a visitor's first impression looked nothing like the homepage.
+//    They now share the landing's Apple system: SF Pro (`.apple`), the black
+//    canvas, the frosted global bar, gold as the single accent.
 //
-// 2. No shared navigation. src/pages/_app.tsx only renders <Navbar> when the
-//    user is authenticated, so marketing pages had no site nav at all — each
-//    page hand-rolled its own breadcrumb strip and nothing else. Beyond the
-//    obvious UX cost, an internal link graph is what Google uses to work out
-//    site structure, which is a precondition for sitelinks.
+// 2. No shared navigation. src/pages/_app.tsx only renders <Navbar> for
+//    signed-in users, so marketing pages had no site nav at all. An internal
+//    link graph is also what Google uses to work out site structure (a
+//    precondition for sitelinks), so the bar and footer link every section.
 //
-// Colours are the promoted Tailwind tokens (tailwind.config.ts): ink, gold,
-// cream, sand.
+// Colours are the Tailwind tokens (tailwind.config.ts) — ink/cream/sand here
+// resolve to the same neutrals as the landing's night/mist.
 
-import Image from 'next/image';
+import Head from 'next/head';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { Instrument_Serif, Manrope } from 'next/font/google';
 
-import { LegalFooter } from '../LegalFooter';
+import SiteHeader, { type SiteNavLink } from '../landing/SiteHeader';
+import SiteFooter from '../landing/SiteFooter';
+import { sansFont } from '../landing/fonts';
+import {
+  ChevronLink,
+  eyebrowClass as appleEyebrowClass,
+  goldButtonClass as appleGoldButtonClass,
+  quietButtonClass,
+} from '../landing/ui';
 
-const wordmarkFont = Instrument_Serif({ subsets: ['latin'], weight: '400', display: 'swap' });
-const bodyFont = Manrope({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  display: 'swap',
-});
-
-const NAV_LINKS = [
+const NAV_LINKS: SiteNavLink[] = [
   { href: '/learn', label: 'Learn' },
   { href: '/faq', label: 'FAQ' },
   { href: '/pricing', label: 'Pricing' },
   { href: '/blog', label: 'Writing' },
 ];
 
-const navLinkClass =
-  'text-sm font-medium text-cream-muted transition-colors duration-200 hover:text-gold-hi focus-visible:outline-none focus-visible:underline focus-visible:underline-offset-4';
-
-export const goldButtonClass =
-  'inline-flex items-center justify-center gap-2 rounded-full bg-gradient-to-r from-gold-hi via-gold to-gold-deep px-6 py-3 text-sm font-semibold text-gold-on shadow-[0_14px_44px_-14px_rgba(232,176,75,0.6)] transition-transform duration-200 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-hi focus-visible:ring-offset-2 focus-visible:ring-offset-ink';
-
-export const ghostButtonClass =
-  'inline-flex items-center justify-center gap-2 rounded-full border border-gold-deep/55 bg-white/[0.03] px-6 py-3 text-sm font-semibold text-gold-hi backdrop-blur transition-colors duration-200 hover:border-gold hover:bg-gold/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-hi focus-visible:ring-offset-2 focus-visible:ring-offset-ink';
-
-export const cardClass =
-  'rounded-3xl border border-ink-border bg-ink-surface/85 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] backdrop-blur-sm';
-
+// Shared by the article bodies. Apple-style: pill buttons that press rather
+// than lift, tiles lifted a few steps off black with no drop shadow.
+export const goldButtonClass = appleGoldButtonClass;
+export const ghostButtonClass = quietButtonClass;
+export const cardClass = 'rounded-[28px] bg-ink-surface ring-1 ring-white/[0.06]';
 export const chipClass =
-  'inline-flex items-center gap-2 rounded-full border border-ink-border bg-ink-surface/70 px-4 py-2 text-sm font-medium text-cream-muted';
-
-export const eyebrowClass =
-  'text-[11px] font-semibold uppercase tracking-[0.32em] text-gold';
-
-export function Wordmark({ className = '' }: { className?: string }) {
-  return (
-    <Link href="/" className={`flex min-w-0 items-center gap-3 ${className}`}>
-      {/* The generated icon tile rather than njangi-on-chain-logo.png: same
-          artwork, but pre-trimmed and on an opaque ground, so it fills its box
-          without the scale-[2.25] hack the untrimmed file used to need. */}
-      <Image
-        src="/icons/icon-192.png"
-        alt=""
-        width={48}
-        height={48}
-        className="h-12 w-12 shrink-0 rounded-2xl border border-white/10"
-        priority
-      />
-      <span className="min-w-0">
-        <span
-          className={`${wordmarkFont.className} block truncate text-[1.9rem] leading-none tracking-[-0.04em] text-cream`}
-        >
-          Njangi
-        </span>
-        <span className="mt-1 block truncate pl-0.5 text-[0.62rem] font-semibold uppercase tracking-[0.42em] text-gold">
-          On-chain
-        </span>
-      </span>
-    </Link>
-  );
-}
+  'inline-flex items-center gap-2 rounded-full bg-white/[0.06] px-4 py-2 text-sm font-medium text-cream-muted';
+export const eyebrowClass = appleEyebrowClass;
 
 export interface Crumb {
   label: string;
@@ -94,26 +56,26 @@ export interface Crumb {
  * page's <Seo jsonLd>; keep the two in step — Google expects the markup to
  * describe a trail the user can actually see.
  */
-function Breadcrumbs({ items }: { items: Crumb[] }) {
+export function Breadcrumbs({ items, className = '' }: { items: Crumb[]; className?: string }) {
   return (
-    <nav aria-label="Breadcrumb" className="border-b border-ink-border/60">
-      <ol className="mx-auto flex max-w-4xl flex-wrap items-center gap-x-2 gap-y-1 px-5 py-3 text-sm text-sand sm:px-8">
+    <nav aria-label="Breadcrumb" className={className}>
+      <ol className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] text-mist-3">
         {items.map((item, index) => (
-          <li key={item.href ?? item.label} className="flex items-center gap-2">
+          <li key={item.href ?? item.label} className="flex items-center gap-1.5">
             {index > 0 && (
-              <span aria-hidden="true" className="text-ink-border">
-                /
+              <span aria-hidden="true" className="text-mist-4 rtl:rotate-180">
+                ›
               </span>
             )}
             {item.href ? (
               <Link
                 href={item.href}
-                className="transition-colors duration-200 hover:text-gold-hi"
+                className="rounded transition-colors duration-200 hover:text-mist focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold/80"
               >
                 {item.label}
               </Link>
             ) : (
-              <span className="font-medium text-cream" aria-current="page">
+              <span className="text-mist-2" aria-current="page">
                 {item.label}
               </span>
             )}
@@ -125,77 +87,67 @@ function Breadcrumbs({ items }: { items: Crumb[] }) {
 }
 
 /**
- * Header + footer only, no hero.
+ * Header + footer only, no hero — for pages that own their layout.
  *
- * For the legacy long-form pages (/learn/*, /faq, /blog/*) which already have
- * their own hero, table of contents and section structure. They get the shared
- * navigation and the dark ground without their content being restructured;
- * their internal markup is recoloured onto the same tokens. New pages should
- * use ArticleLayout instead, which owns the hero too.
+ * `legacy` (default on) scopes the `.mkt-legacy` content adapter from
+ * globals.css to the children: the older long-form pages (/learn/*, /blog/*)
+ * keep their markup and are lifted onto the Apple system around it. Pages
+ * rebuilt natively on the system pass `legacy={false}`.
  */
-export function MarketingShell({ children }: { children: ReactNode }) {
+export function MarketingShell({
+  children,
+  legacy = true,
+  headerControls,
+  sheetExtras,
+}: {
+  children: ReactNode;
+  legacy?: boolean;
+  /** Desktop controls in the global bar (e.g. the language switcher). */
+  headerControls?: ReactNode;
+  /** Extra rows for the mobile menu sheet. */
+  sheetExtras?: (close: () => void) => ReactNode;
+}) {
   return (
     <div
-      className={`${bodyFont.className} relative min-h-screen overflow-x-clip bg-ink text-cream`}
+      className={`apple ${sansFont.variable} relative min-h-screen overflow-x-clip bg-black text-mist`}
     >
+      <Head>
+        {/* Dark page: tint iOS safe areas / overscroll black instead of the
+            app's global white body. Same key as <Seo>'s theme-color so the
+            two never duplicate. */}
+        <meta name="color-scheme" content="dark" />
+        <meta key="seo:theme-color" name="theme-color" content="#000000" />
+        <style>{`html,body{background-color:#000!important}`}</style>
+      </Head>
+
       <a
         href="#main"
-        className="sr-only rounded-full focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:bg-gold focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-gold-on"
+        className="sr-only rounded-full focus:not-sr-only focus:fixed focus:left-4 focus:top-3 focus:z-[60] focus:bg-gold focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-[#1d1d1f]"
       >
         Skip to content
       </a>
 
-      <header className="sticky top-0 z-30 border-b border-ink-border/80 bg-ink/70 backdrop-blur-md">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-4 sm:px-8">
-          <Wordmark />
-          <div className="flex flex-wrap items-center gap-5">
-            <nav aria-label="Main" className="flex flex-wrap items-center gap-5">
-              {NAV_LINKS.map((link) => (
-                <Link key={link.href} href={link.href} className={navLinkClass}>
-                  {link.label}
-                </Link>
-              ))}
-            </nav>
-            <Link href="/create-circle" className={`${goldButtonClass} !px-5 !py-2`}>
-              Start a circle
-            </Link>
-          </div>
-        </div>
-      </header>
+      <SiteHeader
+        links={NAV_LINKS}
+        primary={{ label: 'Start a circle', href: '/create-circle' }}
+        controls={headerControls}
+        sheetExtras={sheetExtras}
+      />
 
-      {children}
-
-      <SiteFooter />
-    </div>
-  );
-}
-
-function SiteFooter() {
-  return (
-    <footer className="border-t border-ink-border bg-ink/80">
-      <div className="mx-auto flex max-w-6xl flex-col gap-8 px-5 py-12 sm:px-8">
-        <div className="flex flex-wrap items-start justify-between gap-8">
-          <div className="max-w-sm">
-            <Wordmark />
-            <p className="mt-4 text-sm leading-6 text-sand-dim">
-              Coordination software for rotating savings circles. Built on Sui with zkLogin, so
-              joining takes a social sign-in rather than a seed phrase.
-            </p>
-          </div>
-          <nav aria-label="Footer" className="flex flex-col gap-2">
-            {NAV_LINKS.map((link) => (
-              <Link key={link.href} href={link.href} className={navLinkClass}>
-                {link.label}
-              </Link>
-            ))}
-          </nav>
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-4 border-t border-ink-border pt-6">
-          <LegalFooter className="!text-sand-dim [&_a:hover]:!text-gold-hi [&_span]:!text-ink-border" />
-          <p className="text-xs text-sand-dim">© {new Date().getFullYear()} Njangi On-Chain</p>
-        </div>
+      <div id="main" tabIndex={-1} className={`pt-[52px] focus:outline-none ${legacy ? 'mkt-legacy' : ''}`}>
+        {children}
       </div>
-    </footer>
+
+      <SiteFooter
+        links={[
+          ...NAV_LINKS,
+          { href: 'https://x.com/njangi_on_chain', label: 'X', external: true },
+          { href: 'https://www.instagram.com/njangionchain', label: 'Instagram', external: true },
+        ]}
+        description="Coordination software for rotating savings circles. Built on Sui with zkLogin, so joining takes a social sign-in rather than a seed phrase."
+        rights={`© ${new Date().getFullYear()} Njangi On-Chain`}
+      />
+    </div>
   );
 }
 
@@ -211,6 +163,7 @@ export interface ArticleLayoutProps {
   hideCta?: boolean;
 }
 
+/** MarketingShell plus an Apple article hero and a closing call to action. */
 export function ArticleLayout({
   eyebrow,
   title,
@@ -221,87 +174,57 @@ export function ArticleLayout({
   hideCta = false,
 }: ArticleLayoutProps) {
   return (
-    <div
-      className={`${bodyFont.className} relative min-h-screen overflow-x-clip bg-ink text-cream`}
-    >
-      <a
-        href="#main"
-        className="sr-only rounded-full focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:bg-gold focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-gold-on"
-      >
-        Skip to content
-      </a>
-
-      <header className="sticky top-0 z-30 border-b border-ink-border/80 bg-ink/70 backdrop-blur-md">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-4 sm:px-8">
-          <Wordmark />
-          <div className="flex flex-wrap items-center gap-5">
-            <nav aria-label="Main" className="flex flex-wrap items-center gap-5">
-              {NAV_LINKS.map((link) => (
-                <Link key={link.href} href={link.href} className={navLinkClass}>
-                  {link.label}
-                </Link>
-              ))}
-            </nav>
-            <Link href="/create-circle" className={`${goldButtonClass} !px-5 !py-2`}>
-              Start a circle
-            </Link>
-          </div>
-        </div>
-      </header>
-
-      {breadcrumbs?.length ? <Breadcrumbs items={breadcrumbs} /> : null}
-
-      <main id="main">
-        <div className="relative overflow-hidden border-b border-ink-border">
-          {/* Single warm bloom, matching the OG cards and the landing hero. */}
+    <MarketingShell legacy={false}>
+      <main>
+        <header className="relative overflow-hidden">
+          {/* One warm bloom, matching the landing's horizon. */}
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-0 bg-[radial-gradient(900px_460px_at_78%_-10%,rgba(232,176,75,0.14),transparent_64%)]"
+            className="pointer-events-none absolute inset-0 bg-[radial-gradient(900px_460px_at_78%_-10%,rgba(232,176,75,0.10),transparent_64%)]"
           />
-          <div className="relative mx-auto max-w-4xl px-5 py-16 sm:px-8 sm:py-20">
-            {eyebrow && <p className={eyebrowClass}>{eyebrow}</p>}
-            <h1
-              className={`${wordmarkFont.className} mt-4 text-[clamp(2.2rem,5vw,3.4rem)] font-normal leading-[1.06] tracking-[-0.01em] text-cream`}
-            >
+          <div className="relative mx-auto max-w-[980px] px-5 pb-14 pt-8 sm:px-8 md:pb-20 md:pt-12">
+            {breadcrumbs?.length ? <Breadcrumbs items={breadcrumbs} /> : null}
+            {eyebrow && <p className={`${eyebrowClass} mt-10`}>{eyebrow}</p>}
+            <h1 className={`type-section max-w-[22ch] text-balance text-mist ${eyebrow ? 'mt-3' : 'mt-10'}`}>
               {title}
             </h1>
             {standfirst && (
-              <div className="mt-6 max-w-3xl text-lg leading-8 text-sand">{standfirst}</div>
+              <div className="type-intro mt-6 max-w-[42rem] text-mist-2">{standfirst}</div>
             )}
             {meta && <div className="mt-8">{meta}</div>}
           </div>
-        </div>
+        </header>
 
-        <div className="mx-auto max-w-4xl px-5 py-14 sm:px-8">{children}</div>
+        {/* The hero and CTA are native; only the article body is legacy markup. */}
+        <div className="mkt-legacy mx-auto max-w-4xl px-5 pb-16 sm:px-8">{children}</div>
 
         {!hideCta && (
-          <section className="mx-auto max-w-4xl px-5 pb-20 sm:px-8">
-            <div className={`${cardClass} px-7 py-9 sm:px-10`}>
-              <h2
-                className={`${wordmarkFont.className} text-[clamp(1.6rem,3vw,2.2rem)] leading-tight text-cream`}
-              >
+          <section className="mx-auto max-w-[980px] px-5 pb-24 sm:px-8">
+            <div className="relative overflow-hidden rounded-[28px] bg-ink-surface px-7 py-14 text-center sm:px-12">
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 -top-32 mx-auto h-64 max-w-[640px] rounded-full"
+                style={{ background: 'radial-gradient(closest-side, rgba(232,176,75,0.14), transparent)' }}
+              />
+              <h2 className="type-headline relative text-balance text-mist">
                 Run your circle with the rules in the open
               </h2>
-              <p className="mt-4 max-w-2xl text-base leading-7 text-sand">
+              <p className="type-body relative mx-auto mt-4 max-w-[36rem] text-mist-2">
                 Njangi On-Chain keeps the tradition exactly as it is — everyone contributes on
                 schedule, everyone takes a turn — and puts the schedule, the order, and the full
                 history where the whole circle can see them. No treasurer holding the money.
               </p>
-              <div className="mt-7 flex flex-wrap gap-3">
+              <div className="relative mt-8 flex flex-col items-center justify-center gap-5 sm:flex-row sm:gap-8">
                 <Link href="/create-circle" className={goldButtonClass}>
                   Start a circle
                 </Link>
-                <Link href="/learn" className={ghostButtonClass}>
-                  Browse the traditions
-                </Link>
+                <ChevronLink href="/learn">Browse the traditions</ChevronLink>
               </div>
             </div>
           </section>
         )}
       </main>
-
-      <SiteFooter />
-    </div>
+    </MarketingShell>
   );
 }
 

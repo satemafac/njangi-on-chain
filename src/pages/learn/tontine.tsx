@@ -1,12 +1,9 @@
-import Link from 'next/link';
-import { useState } from 'react';
 import { Seo } from '../../components/Seo';
 import { article, breadcrumbs, definedTerm } from '../../lib/structured-data';
-import { MarketingShell } from '../../components/marketing/ArticleLayout';
+import { GuideSection, LearnGuide } from '../../components/marketing/LearnGuide';
+import { CodeBlock, KeyPoints, ProseAction, SideBySide, Steps } from '../../components/marketing/ProseBlocks';
 
 export default function TontineBlockchainPage() {
-  const [activeSection, setActiveSection] = useState('overview');
-
   return (
     <>
       <Seo
@@ -51,283 +48,173 @@ export default function TontineBlockchainPage() {
         ]}
       />
 
-      <MarketingShell>
-        {/* Navigation */}
-        <nav className="bg-ink-surface border-b">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center space-x-2 py-3 text-sm text-sand">
-              <Link href="/" className="hover:text-gold transition-colors">Home</Link>
-              <span>/</span>
-              <Link href="/learn" className="hover:text-gold transition-colors">Learn</Link>
-              <span>/</span>
-              <span className="text-cream font-medium">Tontine</span>
-            </div>
-          </div>
-        </nav>
+      <LearnGuide
+        crumb="Tontine"
+        title="What is a Tontine? Rotating Savings Circles in Francophone Africa"
+        standfirst={
+          <p>
+            How the tontine works across West and Central Africa—community savings circles that have
+            powered grassroots finance across French-speaking Africa for centuries.
+          </p>
+        }
+        actions={{
+          primary: { label: 'Start Your Digital Tontine', href: '/create-circle' },
+          secondary: { label: 'Explore Platform', href: '/dashboard' },
+        }}
+        toc={[
+          { id: 'overview', label: 'What is Tontine?' },
+          { id: 'regional', label: 'Regional Traditions' },
+          { id: 'blockchain', label: 'How It Works Here' },
+          { id: 'implementation', label: 'Getting Started' },
+        ]}
+        related={[
+          {
+            href: '/learn/what-is-njangi',
+            title: 'What is Njangi? Cameroon’s Savings Circle',
+            description: 'Cameroon’s savings circle: how it works, and why it has lasted.',
+          },
+          {
+            href: '/learn/rosca',
+            title: 'What is a ROSCA? Rotating Savings, Explained',
+            description: 'The structure behind njangi, tontine, susu and chit funds.',
+          },
+          {
+            href: '/learn/susu',
+            title: 'What is a Susu? Caribbean & West African Circles',
+            description: 'Susu, sou-sou and Partner — the same circle under three names.',
+          },
+        ]}
+        cta={{
+          title: 'Ready to Join the African Finance Revolution?',
+          body: 'Start your digital tontine journey today and connect with African communities worldwide while preserving cultural traditions through transparent, non-custodial coordination.',
+          primary: { label: 'Start Your Tontine', href: '/create-circle' },
+          secondary: { label: 'Explore Platform', href: '/dashboard' },
+        }}
+      >
+        <GuideSection id="overview" title="What is a Tontine?">
+          <p className="lead">
+            A <strong>tontine</strong> is a traditional rotating savings and credit association
+            prevalent throughout French-speaking Africa, where community members regularly contribute
+            fixed amounts to a common fund. Each cycle, one member receives the entire collected
+            amount, continuing until all participants have received their payout.
+          </p>
 
-        {/* Hero */}
-        <section className="bg-gradient-to-r from-ink-surface to-ink-deep text-cream py-20">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-            <h1 className="text-4xl md:text-5xl font-bold mb-6">
-              What is a Tontine? Rotating Savings Circles in Francophone Africa
-            </h1>
-            <p className="text-xl md:text-2xl mb-8 text-cream-muted">
-              How the tontine works across West and Central Africa—community 
-              savings circles that have powered grassroots finance across French-speaking Africa for centuries.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4">
-              <Link 
-                href="/create-circle" 
-                className="bg-ink-surface text-gold px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface transition-colors text-center"
-              >
-                Start Your Digital Tontine →
-              </Link>
-              <Link 
-                href="/dashboard" 
-                className="border border-gold-deep/55 text-cream px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface hover:text-gold transition-colors text-center"
-              >
-                Explore Platform
-              </Link>
-            </div>
-          </div>
-        </section>
+          <SideBySide
+            columns={[
+              {
+                title: 'Cultural Significance',
+                points: [
+                  'Ubuntu philosophy: Community interdependence',
+                  'Collective prosperity benefits entire group',
+                  'Social capital building beyond finance',
+                  'Cultural preservation in modern contexts',
+                ],
+              },
+              /* This block previously asserted a participant count, an annual sum
+                 mobilised, a share of members who are women and a share of
+                 businesses funded — four precise-looking figures with no
+                 source behind any of them. Tontines are informal by
+                 definition and leave no institutional record, so there is
+                 no aggregate to cite; the claims below are qualitative and
+                 hold without a number. */
+              {
+                title: 'Why it matters',
+                points: [
+                  'Reaches people no bank will underwrite',
+                  'Turns a small regular income into a usable lump sum',
+                  'Often organised and led by women',
+                  'A common way to start or restock a small business',
+                ],
+              },
+            ]}
+          />
 
-        {/* Navigation Tabs */}
-        <section className="bg-ink-surface border-b">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-            <div className="flex flex-wrap gap-4">
-              {[
-                { id: 'overview', label: 'What is Tontine?' },
-                { id: 'regional', label: 'Regional Traditions' },
-                { id: 'blockchain', label: 'How It Works Here' },
-                { id: 'implementation', label: 'Getting Started' }
-              ].map((tab) => (
-                <button 
-                  key={tab.id}
-                  onClick={() => setActiveSection(tab.id)}
-                  className={`px-4 py-2 rounded-lg transition-colors ${
-                    activeSection === tab.id 
-                      ? 'bg-gold/[0.07] text-gold' 
-                      : 'hover:bg-ink-surface'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </section>
+          <h3>Traditional Tontine Process</h3>
+          <Steps
+            items={[
+              { title: 'Group Formation', body: 'Trusted community members join' },
+              { title: 'Regular Contributions', body: 'Fixed amounts collected' },
+              { title: 'Rotating Payouts', body: 'Members receive full amount' },
+              { title: 'Cycle Completion', body: 'Process continues until all paid' },
+            ]}
+          />
+        </GuideSection>
 
-        {/* Main Content */}
-        <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-          <div
-            id="overview"
-            role="tabpanel"
-            className={activeSection === 'overview' ? '' : 'hidden'}
-          >
-            <section className="space-y-8">
-              <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">What is a Tontine?</h2>
-                <p className="text-lg text-sand mb-6">
-                  A <strong>tontine</strong> is a traditional rotating savings and credit association prevalent 
-                  throughout French-speaking Africa, where community members regularly contribute fixed amounts 
-                  to a common fund. Each cycle, one member receives the entire collected amount, continuing 
-                  until all participants have received their payout.
-                </p>
-                
-                <div className="grid md:grid-cols-2 gap-8 mb-8">
-                  <div className="bg-gold/[0.07] p-6 rounded-lg">
-                    <h3 className="text-xl font-semibold text-gold mb-4">Cultural Significance</h3>
-                    <ul className="space-y-2 text-gold">
-                      <li>• Ubuntu philosophy: Community interdependence</li>
-                      <li>• Collective prosperity benefits entire group</li>
-                      <li>• Social capital building beyond finance</li>
-                      <li>• Cultural preservation in modern contexts</li>
-                    </ul>
-                  </div>
-                  
-                  {/* This block previously asserted a participant count, an annual sum
-                      mobilised, a share of members who are women and a share of
-                      businesses funded — four precise-looking figures with no
-                      source behind any of them. Tontines are informal by
-                      definition and leave no institutional record, so there is
-                      no aggregate to cite; the claims below are qualitative and
-                      hold without a number. */}
-                  <div className="bg-gold/[0.07] p-6 rounded-lg">
-                    <h3 className="text-xl font-semibold text-gold mb-4">Why it matters</h3>
-                    <ul className="space-y-2 text-gold">
-                      <li>• Reaches people no bank will underwrite</li>
-                      <li>• Turns a small regular income into a usable lump sum</li>
-                      <li>• Often organised and led by women</li>
-                      <li>• A common way to start or restock a small business</li>
-                    </ul>
-                  </div>
-                </div>
+        <GuideSection id="regional" title="Tontine Traditions Across Francophone Africa">
+          <h3>West Africa</h3>
+          <ul>
+            <li><strong>Senegal</strong> - Tontines & Nawétanes</li>
+            <li><strong>Mali</strong> - Ton & Community Savings</li>
+            <li><strong>Burkina Faso</strong> - Caisses Populaires</li>
+            <li><strong>Côte d&rsquo;Ivoire</strong> - Urban Professional Groups</li>
+          </ul>
 
-                <div className="bg-gold/[0.07] border border-gold/45 rounded-lg p-6">
-                  <h3 className="text-lg font-semibold text-gold mb-3">Traditional Tontine Process</h3>
-                  <div className="grid md:grid-cols-4 gap-4 text-sm text-gold">
-                    <div className="text-center">
-                      <div className="bg-gold text-cream rounded-full w-8 h-8 flex items-center justify-center mx-auto mb-2 font-bold">1</div>
-                      <div className="font-medium">Group Formation</div>
-                      <div className="text-xs">Trusted community members join</div>
-                    </div>
-                    <div className="text-center">
-                      <div className="bg-gold text-cream rounded-full w-8 h-8 flex items-center justify-center mx-auto mb-2 font-bold">2</div>
-                      <div className="font-medium">Regular Contributions</div>
-                      <div className="text-xs">Fixed amounts collected</div>
-                    </div>
-                    <div className="text-center">
-                      <div className="bg-gold text-cream rounded-full w-8 h-8 flex items-center justify-center mx-auto mb-2 font-bold">3</div>
-                      <div className="font-medium">Rotating Payouts</div>
-                      <div className="text-xs">Members receive full amount</div>
-                    </div>
-                    <div className="text-center">
-                      <div className="bg-gold text-cream rounded-full w-8 h-8 flex items-center justify-center mx-auto mb-2 font-bold">4</div>
-                      <div className="font-medium">Cycle Completion</div>
-                      <div className="text-xs">Process continues until all paid</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </div>
+          <h3>Central Africa</h3>
+          <ul>
+            <li><strong>Cameroon</strong> - Tontines & Njangis</li>
+            <li><strong>CAR</strong> - Community Solidarity</li>
+            <li><strong>Gabon</strong> - Associations Tournantes</li>
+            <li><strong>Chad</strong> - Cross-border Networks</li>
+          </ul>
 
-          <div
-            id="regional"
-            role="tabpanel"
-            className={activeSection === 'regional' ? '' : 'hidden'}
-          >
-            <section className="space-y-8">
-              <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">Tontine Traditions Across Francophone Africa</h2>
-                
-                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-                  <div className="border border-ink-border rounded-lg p-4">
-                    <h3 className="font-semibold text-lg mb-2 text-gold">West Africa</h3>
-                    <ul className="text-sm space-y-1">
-                      <li><strong>Senegal</strong> - Tontines & Nawétanes</li>
-                      <li><strong>Mali</strong> - Ton & Community Savings</li>
-                      <li><strong>Burkina Faso</strong> - Caisses Populaires</li>
-                      <li><strong>Côte d&rsquo;Ivoire</strong> - Urban Professional Groups</li>
-                    </ul>
-                  </div>
-                  
-                  <div className="border border-ink-border rounded-lg p-4">
-                    <h3 className="font-semibold text-lg mb-2 text-gold">Central Africa</h3>
-                    <ul className="text-sm space-y-1">
-                      <li><strong>Cameroon</strong> - Tontines & Njangis</li>
-                      <li><strong>CAR</strong> - Community Solidarity</li>
-                      <li><strong>Gabon</strong> - Associations Tournantes</li>
-                      <li><strong>Chad</strong> - Cross-border Networks</li>
-                    </ul>
-                  </div>
-                  
-                  <div className="border border-ink-border rounded-lg p-4">
-                    <h3 className="font-semibold text-lg mb-2 text-gold">Island Nations</h3>
-                    <ul className="text-sm space-y-1">
-                      <li><strong>Madagascar</strong> - Fihavanana Circles</li>
-                      <li><strong>Comoros</strong> - Islamic Tontines</li>
-                      <li><strong>Mauritius</strong> - Multi-cultural Groups</li>
-                      <li><strong>Seychelles</strong> - Tourism Worker Circles</li>
-                    </ul>
-                  </div>
-                </div>
+          <h3>Island Nations</h3>
+          <ul>
+            <li><strong>Madagascar</strong> - Fihavanana Circles</li>
+            <li><strong>Comoros</strong> - Islamic Tontines</li>
+            <li><strong>Mauritius</strong> - Multi-cultural Groups</li>
+            <li><strong>Seychelles</strong> - Tourism Worker Circles</li>
+          </ul>
 
-                <div className="bg-gold/[0.07] p-6 rounded-lg">
-                  <h3 className="text-lg font-semibold text-gold mb-3">Regional Specializations</h3>
-                  <div className="grid md:grid-cols-2 gap-4 text-sm text-gold">
-                    <div>
-                      <h4 className="font-medium">Professional Tontines</h4>
-                      <ul className="mt-2 space-y-1">
-                        <li>• Teacher associations in education sectors</li>
-                        <li>• Market trader networks in urban centers</li>
-                        <li>• Civil servant groups in government</li>
-                        <li>• Transport cooperatives for drivers</li>
-                      </ul>
-                    </div>
-                    <div>
-                      <h4 className="font-medium">Gender-Specific Adaptations</h4>
-                      <ul className="mt-2 space-y-1">
-                        <li>• Women&rsquo;s tontines for household needs</li>
-                        <li>• Men&rsquo;s groups for larger investments</li>
-                        <li>• Mixed professional neighborhoods</li>
-                        <li>• Youth circles for education funding</li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </div>
+          <h3>Regional Specializations</h3>
+          <SideBySide
+            columns={[
+              {
+                title: 'Professional Tontines',
+                points: [
+                  'Teacher associations in education sectors',
+                  'Market trader networks in urban centers',
+                  'Civil servant groups in government',
+                  'Transport cooperatives for drivers',
+                ],
+              },
+              {
+                title: 'Gender-Specific Adaptations',
+                points: [
+                  'Women’s tontines for household needs',
+                  'Men’s groups for larger investments',
+                  'Mixed professional neighborhoods',
+                  'Youth circles for education funding',
+                ],
+              },
+            ]}
+          />
+        </GuideSection>
 
-          <div
-            id="blockchain"
-            role="tabpanel"
-            className={activeSection === 'blockchain' ? '' : 'hidden'}
-          >
-            <section className="space-y-8">
-              <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">Rules the group cannot quietly change</h2>
-                
-                <div className="grid md:grid-cols-2 gap-8 mb-8">
-                  <div>
-                    <h3 className="text-xl font-bold mb-4 text-gold">Traditional Challenges</h3>
-                    <div className="space-y-3">
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Trust Vulnerabilities</h4>
-                          <p className="text-sm text-sand">Single treasurer risk, potential fraud</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Geographic Constraints</h4>
-                          <p className="text-sm text-sand">Physical meetings required, distance barriers</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Cash Custody Risk</h4>
-                          <p className="text-sm text-sand">One treasurer physically holds everyone&rsquo;s money</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+        <GuideSection id="blockchain" title="Rules the group cannot quietly change">
+          <h3>Traditional Challenges</h3>
+          <KeyPoints
+            columns={3}
+            items={[
+              { title: 'Trust Vulnerabilities', body: 'Single treasurer risk, potential fraud' },
+              { title: 'Geographic Constraints', body: 'Physical meetings required, distance barriers' },
+              { title: 'Cash Custody Risk', body: 'One treasurer physically holds everyone’s money' },
+            ]}
+          />
 
-                  <div>
-                    <h3 className="text-xl font-bold mb-4 text-gold">What changes</h3>
-                    <div className="space-y-3">
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Trustless Architecture</h4>
-                          <p className="text-sm text-sand">No treasurer has to hold the cash</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Global Accessibility</h4>
-                          <p className="text-sm text-sand">24/7 availability, cross-border participation</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start space-x-3">
-                        <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
-                        <div>
-                          <h4 className="font-semibold text-cream">Automated Escrow</h4>
-                          <p className="text-sm text-sand">Contributions held in escrow and released on schedule, to the scheduled member only</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+          <h3>What changes</h3>
+          <KeyPoints
+            columns={3}
+            items={[
+              { title: 'Trustless Architecture', body: 'No treasurer has to hold the cash' },
+              { title: 'Global Accessibility', body: '24/7 availability, cross-border participation' },
+              {
+                title: 'Automated Escrow',
+                body: 'Contributions held in escrow and released on schedule, to the scheduled member only',
+              },
+            ]}
+          />
 
-                <div className="bg-ink-surface p-4 rounded-lg font-mono text-sm overflow-x-auto mb-6">
-                  <pre>{`// A simplified sketch of the tontine rules
+          <CodeBlock>{`// A simplified sketch of the tontine rules
 struct AfricanTontine {
     members: vector<TontineMember>,
     contribution_amount: u64,
@@ -346,186 +233,69 @@ public fun make_monthly_contribution(
     // Allocate 95% to main fund, 5% to cultural activities
     // Check if all members contributed
     // Process payout when round complete
-}`}</pre>
-                </div>
+}`}</CodeBlock>
 
-                <div className="bg-gold/[0.07] p-6 rounded-lg">
-                  <h3 className="text-lg font-semibold text-gold mb-3">What that gives the circle</h3>
-                  <div className="grid md:grid-cols-3 gap-4 text-sm text-gold">
-                    <div>
-                      <h4 className="font-medium">Enhanced Security</h4>
-                      <p>A shared record that no one member can quietly edit</p>
-                    </div>
-                    <div>
-                      <h4 className="font-medium">Cultural Preservation</h4>
-                      <p>Virtual ceremonies and digital community spaces</p>
-                    </div>
-                    <div>
-                      <h4 className="font-medium">Diaspora Integration</h4>
-                      <p>Global participation maintaining cultural connections</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </div>
+          <h3>What that gives the circle</h3>
+          <KeyPoints
+            columns={3}
+            items={[
+              { title: 'Enhanced Security', body: 'A shared record that no one member can quietly edit' },
+              { title: 'Cultural Preservation', body: 'Virtual ceremonies and digital community spaces' },
+              { title: 'Diaspora Integration', body: 'Global participation maintaining cultural connections' },
+            ]}
+          />
+        </GuideSection>
 
-          <div
-            id="implementation"
-            role="tabpanel"
-            className={activeSection === 'implementation' ? '' : 'hidden'}
+        <GuideSection id="implementation" title="Getting Started with Digital Tontines">
+          <h3>Step-by-Step Process</h3>
+          <Steps
+            items={[
+              {
+                title: 'Cultural Registration',
+                body: 'Select your region (Senegal, Mali, Cameroon, etc.) and cultural preferences.',
+              },
+              {
+                title: 'Financial Setup',
+                body: 'Sign in with Google, Facebook or Apple — no seed phrase — and add funds when you are ready.',
+              },
+              {
+                title: 'Community Matching',
+                body: 'Find tontines based on contribution amount, duration, and cultural background.',
+              },
+              {
+                title: 'Active Participation',
+                body: 'Set up automatic payments and engage with virtual community features.',
+              },
+            ]}
+          />
+
+          <h3>Platform Features</h3>
+          <KeyPoints
+            columns={3}
+            items={[
+              {
+                title: 'Multi-Currency Support',
+                body: 'USDC, CFA francs, and other African currencies with automatic conversion.',
+              },
+              {
+                title: 'Cultural Integration',
+                body: 'Virtual ceremonies, traditional greetings, and community celebrations.',
+              },
+              {
+                title: 'Stablecoin Settlement',
+                body: 'USD-pegged contributions keep the pot’s value steady across borders.',
+              },
+            ]}
+          />
+
+          <ProseAction
+            href="/create-circle"
+            secondary={{ label: 'Browse Existing Tontines', href: '/dashboard' }}
           >
-            <section className="space-y-8">
-              <div className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8">
-                <h2 className="text-3xl font-bold mb-6 text-cream">Getting Started with Digital Tontines</h2>
-                
-                <div className="grid md:grid-cols-2 gap-8 mb-8">
-                  <div>
-                    <h3 className="text-xl font-bold mb-4">Step-by-Step Process</h3>
-                    <div className="space-y-4">
-                      <div className="border border-ink-border rounded-lg p-4">
-                        <h4 className="font-semibold text-gold mb-2">1. Cultural Registration</h4>
-                        <p className="text-sm text-sand">
-                          Select your region (Senegal, Mali, Cameroon, etc.) and cultural preferences.
-                        </p>
-                      </div>
-                      <div className="border border-ink-border rounded-lg p-4">
-                        <h4 className="font-semibold text-gold mb-2">2. Financial Setup</h4>
-                        <p className="text-sm text-sand">
-                          Sign in with Google, Facebook or Apple &mdash; no seed phrase &mdash; and add funds when you are ready.
-                        </p>
-                      </div>
-                      <div className="border border-ink-border rounded-lg p-4">
-                        <h4 className="font-semibold text-gold mb-2">3. Community Matching</h4>
-                        <p className="text-sm text-sand">
-                          Find tontines based on contribution amount, duration, and cultural background.
-                        </p>
-                      </div>
-                      <div className="border border-ink-border rounded-lg p-4">
-                        <h4 className="font-semibold text-gold mb-2">4. Active Participation</h4>
-                        <p className="text-sm text-sand">
-                          Set up automatic payments and engage with virtual community features.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <h3 className="text-xl font-bold mb-4">Platform Features</h3>
-                    <div className="bg-ink-deep p-6 rounded-lg space-y-4">
-                      <div>
-                        <h4 className="font-semibold text-cream">Multi-Currency Support</h4>
-                        <p className="text-sm text-sand mt-1">
-                          USDC, CFA francs, and other African currencies with automatic conversion.
-                        </p>
-                      </div>
-                      <div>
-                        <h4 className="font-semibold text-cream">Cultural Integration</h4>
-                        <p className="text-sm text-sand mt-1">
-                          Virtual ceremonies, traditional greetings, and community celebrations.
-                        </p>
-                      </div>
-                      <div>
-                        <h4 className="font-semibold text-cream">Stablecoin Settlement</h4>
-                        <p className="text-sm text-sand mt-1">
-                          USD-pegged contributions keep the pot&rsquo;s value steady across borders.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="mt-6 space-y-3">
-                      <Link 
-                        href="/create-circle"
-                        className="w-full bg-gold text-cream py-3 px-6 rounded-lg font-semibold hover:bg-gold transition-colors flex items-center justify-center"
-                      >
-                        Create Your Tontine
-                      </Link>
-                      <Link 
-                        href="/dashboard"
-                        className="w-full border border-gold/45 text-gold py-3 px-6 rounded-lg font-semibold hover:bg-gold/[0.07] transition-colors flex items-center justify-center"
-                      >
-                        Browse Existing Tontines
-                      </Link>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </div>
-
-          {/* Related Content Links */}
-          <section className="bg-ink-surface rounded-lg shadow-[0_20px_60px_-30px_rgba(0,0,0,0.85)] p-8 mt-12">
-            <h2 className="text-2xl font-bold mb-6 text-cream">Related Content</h2>
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-              <Link href="/learn/what-is-njangi" className="group">
-                <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is Njangi? Cameroon&rsquo;s Savings Circle
-                  </h3>
-                  <p className="text-sm text-sand">
-                    Cameroon&rsquo;s savings circle: how it works, and why it has lasted.
-                  </p>
-                </div>
-              </Link>
-              
-              <Link href="/learn/rosca" className="group">
-                <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is a ROSCA? Rotating Savings, Explained
-                  </h3>
-                  <p className="text-sm text-sand">
-                    The structure behind njangi, tontine, susu and chit funds.
-                  </p>
-                </div>
-              </Link>
-              
-              <Link href="/learn/susu" className="group">
-                <div className="border border-ink-border rounded-lg p-4 hover:border-gold/45 hover:shadow-[0_14px_40px_-24px_rgba(0,0,0,0.8)] transition-all">
-                  <h3 className="font-semibold text-gold group-hover:text-gold mb-2">
-                    What is a Susu? Caribbean &amp; West African Circles
-                  </h3>
-                  <p className="text-sm text-sand">
-                    Susu, sou-sou and Partner &mdash; the same circle under three names.
-                  </p>
-                </div>
-              </Link>
-            </div>
-          </section>
-
-          {/* CTA Section */}
-          <section className="bg-gradient-to-r from-ink-surface to-ink-deep rounded-lg text-cream p-8 mt-12 text-center">
-            <h2 className="text-2xl font-bold mb-4">Ready to Join the African Finance Revolution?</h2>
-            <p className="text-cream-muted mb-6">
-              Start your digital tontine journey today and connect with African communities worldwide
-              while preserving cultural traditions through transparent, non-custodial coordination.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Link 
-                href="/create-circle"
-                className="bg-ink-surface text-gold px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface transition-colors"
-              >
-                Start Your Tontine
-              </Link>
-              <Link 
-                href="/dashboard"
-                className="border border-gold-deep/55 text-cream px-8 py-3 rounded-lg font-semibold hover:bg-ink-surface hover:text-gold transition-colors"
-              >
-                Explore Platform
-              </Link>
-            </div>
-          </section>
-        </main>
-
-        {/* Footer */}
-        <footer className="bg-ink-surface mt-16">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <p className="text-sm text-sand text-center">
-              <strong>Disclaimer:</strong> This content is for educational purposes only and does not constitute financial advice. 
-              Njangi On-Chain is coordination software for savings circles: it never holds your money, never offers an investment, and never pays a return. Take part only with an amount your group can commit to the schedule.
-            </p>
-          </div>
-        </footer>
-      </MarketingShell>
+            Create Your Tontine
+          </ProseAction>
+        </GuideSection>
+      </LearnGuide>
     </>
   );
-} 
+}
